@@ -54,8 +54,9 @@ func init() {
 type Deps struct {
 	SharedLibs, LateSharedLibs                  []string
 	StaticLibs, LateStaticLibs, WholeStaticLibs []string
+	HeaderLibs                                  []string
 
-	ReexportSharedLibHeaders, ReexportStaticLibHeaders []string
+	ReexportSharedLibHeaders, ReexportStaticLibHeaders, ReexportHeaderLibHeaders []string
 
 	ObjFiles []string
 
@@ -98,9 +99,11 @@ type Flags struct {
 	CppFlags    []string // Flags that apply to C++ source files
 	YaccFlags   []string // Flags that apply to Yacc source files
 	protoFlags  []string // Flags that apply to proto source files
+	aidlFlags   []string // Flags that apply to aidl source files
 	LdFlags     []string // Flags that apply to linker command lines
 	libFlags    []string // Flags to add libraries early to the link order
 	TidyFlags   []string // Flags that apply to clang-tidy
+	YasmFlags   []string // Flags that apply to yasm assembly source files
 
 	Toolchain config.Toolchain
 	Clang     bool
@@ -110,6 +113,8 @@ type Flags struct {
 	DynamicLinker          string
 
 	CFlagsDeps android.Paths // Files depended on by compiler flags
+
+	GroupStaticLibs bool
 }
 
 type ObjectLinkerProperties struct {
@@ -125,6 +130,9 @@ type BaseProperties struct {
 	// Minimum sdk version supported when compiling against the ndk
 	Sdk_version string
 
+	// Whether to compile against the VNDK
+	Use_vndk bool
+
 	// don't insert default compiler flags into asflags, cflags,
 	// cppflags, conlyflags, ldflags, or include_dirs
 	No_default_compiler_flags *bool
@@ -132,6 +140,7 @@ type BaseProperties struct {
 	AndroidMkSharedLibs []string `blueprint:"mutated"`
 	HideFromMake        bool     `blueprint:"mutated"`
 	PreventInstall      bool     `blueprint:"mutated"`
+	Vndk_version        string   `blueprint:"mutated"`
 }
 
 type UnusedProperties struct {
@@ -147,6 +156,7 @@ type ModuleContextIntf interface {
 	noDefaultCompilerFlags() bool
 	sdk() bool
 	sdkVersion() string
+	vndk() bool
 	selectedStl() string
 	baseModuleName() string
 }
@@ -161,16 +171,21 @@ type BaseModuleContext interface {
 	ModuleContextIntf
 }
 
+type DepsContext interface {
+	android.BottomUpMutatorContext
+	ModuleContextIntf
+}
+
 type feature interface {
 	begin(ctx BaseModuleContext)
-	deps(ctx BaseModuleContext, deps Deps) Deps
+	deps(ctx DepsContext, deps Deps) Deps
 	flags(ctx ModuleContext, flags Flags) Flags
 	props() []interface{}
 }
 
 type compiler interface {
 	compilerInit(ctx BaseModuleContext)
-	compilerDeps(ctx BaseModuleContext, deps Deps) Deps
+	compilerDeps(ctx DepsContext, deps Deps) Deps
 	compilerFlags(ctx ModuleContext, flags Flags) Flags
 	compilerProps() []interface{}
 
@@ -181,7 +196,7 @@ type compiler interface {
 
 type linker interface {
 	linkerInit(ctx BaseModuleContext)
-	linkerDeps(ctx BaseModuleContext, deps Deps) Deps
+	linkerDeps(ctx DepsContext, deps Deps) Deps
 	linkerFlags(ctx ModuleContext, flags Flags) Flags
 	linkerProps() []interface{}
 
@@ -212,6 +227,8 @@ var (
 	staticExportDepTag    = dependencyTag{name: "static", library: true, reexportFlags: true}
 	lateStaticDepTag      = dependencyTag{name: "late static", library: true}
 	wholeStaticDepTag     = dependencyTag{name: "whole static", library: true, reexportFlags: true}
+	headerDepTag          = dependencyTag{name: "header", library: true}
+	headerExportDepTag    = dependencyTag{name: "header", library: true, reexportFlags: true}
 	genSourceDepTag       = dependencyTag{name: "gen source"}
 	genHeaderDepTag       = dependencyTag{name: "gen header"}
 	genHeaderExportDepTag = dependencyTag{name: "gen header", reexportFlags: true}
@@ -296,6 +313,11 @@ type baseModuleContext struct {
 	moduleContextImpl
 }
 
+type depsContext struct {
+	android.BottomUpMutatorContext
+	moduleContextImpl
+}
+
 type moduleContext struct {
 	android.ModuleContext
 	moduleContextImpl
@@ -345,9 +367,20 @@ func (ctx *moduleContextImpl) sdk() bool {
 
 func (ctx *moduleContextImpl) sdkVersion() string {
 	if ctx.ctx.Device() {
-		return ctx.mod.Properties.Sdk_version
+		if ctx.mod.Properties.Use_vndk {
+			return ctx.mod.Properties.Vndk_version
+		} else {
+			return ctx.mod.Properties.Sdk_version
+		}
 	}
 	return ""
+}
+
+func (ctx *moduleContextImpl) vndk() bool {
+	if ctx.ctx.Device() {
+		return ctx.mod.Properties.Use_vndk
+	}
+	return false
 }
 
 func (ctx *moduleContextImpl) selectedStl() string {
@@ -493,15 +526,26 @@ func (c *Module) begin(ctx BaseModuleContext) {
 		feature.begin(ctx)
 	}
 	if ctx.sdk() {
+		if ctx.vndk() {
+			ctx.PropertyErrorf("use_vndk",
+				"sdk_version and use_vndk cannot be used at the same time")
+		}
+
 		version, err := normalizeNdkApiLevel(ctx.sdkVersion(), ctx.Arch())
 		if err != nil {
 			ctx.PropertyErrorf("sdk_version", err.Error())
 		}
 		c.Properties.Sdk_version = version
+	} else if ctx.vndk() {
+		version, err := normalizeNdkApiLevel(ctx.DeviceConfig().VndkVersion(), ctx.Arch())
+		if err != nil {
+			ctx.ModuleErrorf("Bad BOARD_VNDK_VERSION: %s", err.Error())
+		}
+		c.Properties.Vndk_version = version
 	}
 }
 
-func (c *Module) deps(ctx BaseModuleContext) Deps {
+func (c *Module) deps(ctx DepsContext) Deps {
 	deps := Deps{}
 
 	if c.compiler != nil {
@@ -525,6 +569,7 @@ func (c *Module) deps(ctx BaseModuleContext) Deps {
 	deps.LateStaticLibs = lastUniqueElements(deps.LateStaticLibs)
 	deps.SharedLibs = lastUniqueElements(deps.SharedLibs)
 	deps.LateSharedLibs = lastUniqueElements(deps.LateSharedLibs)
+	deps.HeaderLibs = lastUniqueElements(deps.HeaderLibs)
 
 	for _, lib := range deps.ReexportSharedLibHeaders {
 		if !inList(lib, deps.SharedLibs) {
@@ -535,6 +580,12 @@ func (c *Module) deps(ctx BaseModuleContext) Deps {
 	for _, lib := range deps.ReexportStaticLibHeaders {
 		if !inList(lib, deps.StaticLibs) {
 			ctx.PropertyErrorf("export_static_lib_headers", "Static library not in static_libs: '%s'", lib)
+		}
+	}
+
+	for _, lib := range deps.ReexportHeaderLibHeaders {
+		if !inList(lib, deps.HeaderLibs) {
+			ctx.PropertyErrorf("export_header_lib_headers", "Header library not in header_libs: '%s'", lib)
 		}
 	}
 
@@ -564,8 +615,8 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		return
 	}
 
-	ctx := &baseModuleContext{
-		BaseContext: actx,
+	ctx := &depsContext{
+		BottomUpMutatorContext: actx,
 		moduleContextImpl: moduleContextImpl{
 			mod: c,
 		},
@@ -579,7 +630,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	variantNdkLibs := []string{}
 	variantLateNdkLibs := []string{}
-	if ctx.sdk() {
+	if ctx.sdk() || ctx.vndk() {
 		version := ctx.sdkVersion()
 
 		// Rewrites the names of shared libraries into the names of the NDK
@@ -611,6 +662,14 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 		deps.SharedLibs, variantNdkLibs = rewriteNdkLibs(deps.SharedLibs)
 		deps.LateSharedLibs, variantLateNdkLibs = rewriteNdkLibs(deps.LateSharedLibs)
+	}
+
+	for _, lib := range deps.HeaderLibs {
+		depTag := headerDepTag
+		if inList(lib, deps.ReexportHeaderLibHeaders) {
+			depTag = headerExportDepTag
+		}
+		actx.AddVariationDependencies(nil, depTag, lib)
 	}
 
 	actx.AddVariationDependencies([]blueprint.Variation{{"link", "static"}}, wholeStaticDepTag,
@@ -774,7 +833,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		cc, _ := m.(*Module)
 		if cc == nil {
 			switch tag {
-			case android.DefaultsDepTag:
+			case android.DefaultsDepTag, android.SourceDepTag:
 			case genSourceDepTag:
 				if genRule, ok := m.(genrule.SourceFileGenerator); ok {
 					depPaths.GeneratedSources = append(depPaths.GeneratedSources,
@@ -803,7 +862,11 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if !a.Enabled() {
-			ctx.ModuleErrorf("depends on disabled module %q", name)
+			if ctx.AConfig().AllowMissingDependencies() {
+				ctx.AddMissingDependencies([]string{name})
+			} else {
+				ctx.ModuleErrorf("depends on disabled module %q", name)
+			}
 			return
 		}
 
@@ -818,8 +881,10 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if tag == reuseObjTag {
-			depPaths.Objs = depPaths.Objs.Append(cc.compiler.(libraryInterface).reuseObjs())
-			return
+			if l, ok := cc.compiler.(libraryInterface); ok {
+				depPaths.Objs = depPaths.Objs.Append(l.reuseObjs())
+				return
+			}
 		}
 
 		if t, ok := tag.(dependencyTag); ok && t.library {
@@ -873,6 +938,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				ctx.AddMissingDependencies(missingDeps)
 			}
 			depPaths.WholeStaticLibObjs = depPaths.WholeStaticLibObjs.Append(staticLib.objs())
+		case headerDepTag:
+			// Nothing
 		case objDepTag:
 			depPaths.Objs.objFiles = append(depPaths.Objs.objFiles, linkFile.Path())
 		case crtBeginDepTag:

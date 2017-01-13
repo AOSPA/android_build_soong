@@ -55,6 +55,11 @@ type LibraryProperties struct {
 	// rename host libraries to prevent overlap with system installed libraries
 	Unique_host_soname *bool
 
+	Aidl struct {
+		// export headers generated from .aidl sources
+		Export_aidl_headers bool
+	}
+
 	Proto struct {
 		// export headers generated from .proto sources
 		Export_proto_headers bool
@@ -85,36 +90,48 @@ func init() {
 	android.RegisterModuleType("cc_library", libraryFactory)
 	android.RegisterModuleType("cc_library_host_static", libraryHostStaticFactory)
 	android.RegisterModuleType("cc_library_host_shared", libraryHostSharedFactory)
+	android.RegisterModuleType("cc_library_headers", libraryHeaderFactory)
 }
 
 // Module factory for combined static + shared libraries, device by default but with possible host
 // support
 func libraryFactory() (blueprint.Module, []interface{}) {
-	module, _ := NewLibrary(android.HostAndDeviceSupported, true, true)
+	module, _ := NewLibrary(android.HostAndDeviceSupported)
 	return module.Init()
 }
 
 // Module factory for static libraries
 func libraryStaticFactory() (blueprint.Module, []interface{}) {
-	module, _ := NewLibrary(android.HostAndDeviceSupported, false, true)
+	module, library := NewLibrary(android.HostAndDeviceSupported)
+	library.BuildOnlyStatic()
 	return module.Init()
 }
 
 // Module factory for shared libraries
 func librarySharedFactory() (blueprint.Module, []interface{}) {
-	module, _ := NewLibrary(android.HostAndDeviceSupported, true, false)
+	module, library := NewLibrary(android.HostAndDeviceSupported)
+	library.BuildOnlyShared()
 	return module.Init()
 }
 
 // Module factory for host static libraries
 func libraryHostStaticFactory() (blueprint.Module, []interface{}) {
-	module, _ := NewLibrary(android.HostSupported, false, true)
+	module, library := NewLibrary(android.HostSupported)
+	library.BuildOnlyStatic()
 	return module.Init()
 }
 
 // Module factory for host shared libraries
 func libraryHostSharedFactory() (blueprint.Module, []interface{}) {
-	module, _ := NewLibrary(android.HostSupported, true, false)
+	module, library := NewLibrary(android.HostSupported)
+	library.BuildOnlyShared()
+	return module.Init()
+}
+
+// Module factory for header-only libraries
+func libraryHeaderFactory() (blueprint.Module, []interface{}) {
+	module, library := NewLibrary(android.HostAndDeviceSupported)
+	library.HeaderOnly()
 	return module.Init()
 }
 
@@ -262,6 +279,19 @@ func (library *libraryDecorator) compilerFlags(ctx ModuleContext, flags Flags) F
 }
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
+	if !library.buildShared() && !library.buildStatic() {
+		if len(library.baseCompiler.Properties.Srcs) > 0 {
+			ctx.PropertyErrorf("srcs", "cc_library_headers must not have any srcs")
+		}
+		if len(library.Properties.Static.Srcs) > 0 {
+			ctx.PropertyErrorf("static.srcs", "cc_library_headers must not have any srcs")
+		}
+		if len(library.Properties.Shared.Srcs) > 0 {
+			ctx.PropertyErrorf("shared.srcs", "cc_library_headers must not have any srcs")
+		}
+		return Objects{}
+	}
+
 	objs := library.baseCompiler.compile(ctx, flags, deps)
 	library.reuseObjects = objs
 	buildFlags := flagsToBuilderFlags(flags)
@@ -321,7 +351,7 @@ func (library *libraryDecorator) linkerInit(ctx BaseModuleContext) {
 	library.relocationPacker.packingInit(ctx)
 }
 
-func (library *libraryDecorator) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
+func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	deps = library.baseLinker.linkerDeps(ctx, deps)
 
 	if library.static() {
@@ -331,7 +361,7 @@ func (library *libraryDecorator) linkerDeps(ctx BaseModuleContext, deps Deps) De
 		deps.SharedLibs = append(deps.SharedLibs, library.Properties.Static.Shared_libs...)
 	} else {
 		if ctx.toolchain().Bionic() && !Bool(library.baseLinker.Properties.Nocrt) {
-			if !ctx.sdk() {
+			if !ctx.sdk() && !ctx.vndk() {
 				deps.CrtBegin = "crtbegin_so"
 				deps.CrtEnd = "crtend_so"
 			} else {
@@ -495,8 +525,17 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 	library.reexportFlags(deps.ReexportedFlags)
 	library.reexportDeps(deps.ReexportedFlagsDeps)
 
-	if library.baseCompiler.hasSrcExt(".proto") {
-		if library.Properties.Proto.Export_proto_headers {
+	if library.Properties.Aidl.Export_aidl_headers {
+		if library.baseCompiler.hasSrcExt(".aidl") {
+			library.reexportFlags([]string{
+				"-I" + android.PathForModuleGen(ctx, "aidl").String(),
+			})
+			library.reexportDeps(library.baseCompiler.deps) // TODO: restrict to aidl deps
+		}
+	}
+
+	if library.Properties.Proto.Export_proto_headers {
+		if library.baseCompiler.hasSrcExt(".proto") {
 			library.reexportFlags([]string{
 				"-I" + protoSubDir(ctx).String(),
 				"-I" + protoDir(ctx).String(),
@@ -548,13 +587,26 @@ func (library *libraryDecorator) setStatic(static bool) {
 	library.Properties.VariantIsStatic = static
 }
 
-func NewLibrary(hod android.HostOrDeviceSupported, shared, static bool) (*Module, *libraryDecorator) {
+func (library *libraryDecorator) BuildOnlyStatic() {
+	library.Properties.BuildShared = false
+}
+
+func (library *libraryDecorator) BuildOnlyShared() {
+	library.Properties.BuildStatic = false
+}
+
+func (library *libraryDecorator) HeaderOnly() {
+	library.Properties.BuildShared = false
+	library.Properties.BuildStatic = false
+}
+
+func NewLibrary(hod android.HostOrDeviceSupported) (*Module, *libraryDecorator) {
 	module := newModule(hod, android.MultilibBoth)
 
 	library := &libraryDecorator{
 		Properties: LibraryProperties{
-			BuildShared: shared,
-			BuildStatic: static,
+			BuildShared: true,
+			BuildStatic: true,
 		},
 		baseCompiler:  NewBaseCompiler(),
 		baseLinker:    NewBaseLinker(),

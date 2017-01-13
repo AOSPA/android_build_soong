@@ -108,12 +108,11 @@ func init() {
 			"hardware/ril/include",
 			"libnativehelper/include",
 			"frameworks/native/include",
+			"frameworks/native/opengl/include",
 		})
 	pctx.PrefixedPathsForOptionalSourceVariable("CommonGlobalSystemIncludes", "-isystem ",
 		[]string{
-			"frameworks/native/opengl/include",
 			"frameworks/av/include",
-			"frameworks/base/include",
 		})
 	// This is used by non-NDK modules to get jni.h. export_include_dirs doesn't help
 	// with this, since there is no associated library.
@@ -162,4 +161,8 @@ func bionicHeaders(bionicArch, kernelArch string) string {
 		"-isystem bionic/libc/kernel/uapi/asm-" + kernelArch,
 		"-isystem bionic/libc/kernel/android/uapi",
 	}, " ")
+}
+
+func VndkLibraries() []string {
+	return []string{}
 }

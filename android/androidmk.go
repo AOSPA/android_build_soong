@@ -150,10 +150,6 @@ func translateAndroidMkModule(ctx blueprint.SingletonContext, w io.Writer, mod b
 
 	name := provider.BaseModuleName()
 	amod := mod.(Module).base()
-	data, err := provider.AndroidMk()
-	if err != nil {
-		return err
-	}
 
 	if !amod.Enabled() {
 		return nil
@@ -161,6 +157,11 @@ func translateAndroidMkModule(ctx blueprint.SingletonContext, w io.Writer, mod b
 
 	if amod.commonProperties.SkipInstall {
 		return nil
+	}
+
+	data, err := provider.AndroidMk()
+	if err != nil {
+		return err
 	}
 
 	if data.SubName != "" {
@@ -222,6 +223,9 @@ func translateAndroidMkModule(ctx blueprint.SingletonContext, w io.Writer, mod b
 		}
 		if len(amod.commonProperties.Init_rc) > 0 {
 			fmt.Fprintln(w, "LOCAL_INIT_RC := ", strings.Join(amod.commonProperties.Init_rc, " "))
+		}
+		if amod.commonProperties.Proprietary {
+			fmt.Fprintln(w, "LOCAL_PROPRIETARY_MODULE := true")
 		}
 	}
 

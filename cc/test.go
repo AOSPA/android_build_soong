@@ -33,6 +33,11 @@ type TestBinaryProperties struct {
 	// Create a separate binary for each source file.  Useful when there is
 	// global state that can not be torn down and reset between each test suite.
 	Test_per_src *bool
+
+	// Disables the creation of a test-specific directory when used with
+	// relative_install_path. Useful if several tests need to be in the same
+	// directory, but test_per_src doesn't work.
+	No_named_install_directory *bool
 }
 
 func init() {
@@ -199,7 +204,7 @@ func (test *testBinary) linkerInit(ctx BaseModuleContext) {
 	test.binaryDecorator.linkerInit(ctx)
 }
 
-func (test *testBinary) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
+func (test *testBinary) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	deps = test.testDecorator.linkerDeps(ctx, deps)
 	deps = test.binaryDecorator.linkerDeps(ctx, deps)
 	return deps
@@ -214,7 +219,13 @@ func (test *testBinary) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 func (test *testBinary) install(ctx ModuleContext, file android.Path) {
 	test.binaryDecorator.baseInstaller.dir = "nativetest"
 	test.binaryDecorator.baseInstaller.dir64 = "nativetest64"
-	test.binaryDecorator.baseInstaller.relative = ctx.ModuleName()
+
+	if !Bool(test.Properties.No_named_install_directory) {
+		test.binaryDecorator.baseInstaller.relative = ctx.ModuleName()
+	} else if test.binaryDecorator.baseInstaller.Properties.Relative_install_path == "" {
+		ctx.PropertyErrorf("no_named_install_directory", "Module install directory may only be disabled if relative_install_path is set")
+	}
+
 	test.binaryDecorator.baseInstaller.install(ctx, file)
 }
 
@@ -250,7 +261,7 @@ func (test *testLibrary) linkerInit(ctx BaseModuleContext) {
 	test.libraryDecorator.linkerInit(ctx)
 }
 
-func (test *testLibrary) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
+func (test *testLibrary) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	deps = test.testDecorator.linkerDeps(ctx, deps)
 	deps = test.libraryDecorator.linkerDeps(ctx, deps)
 	return deps
@@ -263,7 +274,7 @@ func (test *testLibrary) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 }
 
 func NewTestLibrary(hod android.HostOrDeviceSupported) *Module {
-	module, library := NewLibrary(android.HostAndDeviceSupported, true, true)
+	module, library := NewLibrary(android.HostAndDeviceSupported)
 	library.baseInstaller = NewTestInstaller()
 	test := &testLibrary{
 		testDecorator: testDecorator{
@@ -288,7 +299,7 @@ func (benchmark *benchmarkDecorator) linkerInit(ctx BaseModuleContext) {
 	benchmark.binaryDecorator.linkerInit(ctx)
 }
 
-func (benchmark *benchmarkDecorator) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
+func (benchmark *benchmarkDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	deps = benchmark.binaryDecorator.linkerDeps(ctx, deps)
 	deps.StaticLibs = append(deps.StaticLibs, "libgoogle-benchmark")
 	return deps

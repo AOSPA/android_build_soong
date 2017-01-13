@@ -158,6 +158,16 @@ var (
 			Description: "tidy $out",
 		},
 		"cFlags", "tidyFlags")
+
+	yasmCmd = pctx.SourcePathVariable("yasmCmd", "prebuilts/misc/${config.HostPrebuiltTag}/yasm/yasm")
+
+	yasm = pctx.AndroidStaticRule("yasm",
+		blueprint.RuleParams{
+			Command:     "$yasmCmd $asFlags -o $out $in",
+			CommandDeps: []string{"$yasmCmd"},
+			Description: "yasm $out",
+		},
+		"asFlags")
 )
 
 func init() {
@@ -183,9 +193,13 @@ type builderFlags struct {
 	yaccFlags   string
 	protoFlags  string
 	tidyFlags   string
+	yasmFlags   string
+	aidlFlags   string
 	toolchain   config.Toolchain
 	clang       bool
 	tidy        bool
+
+	groupStaticLibs bool
 
 	stripKeepSymbols       bool
 	stripKeepMiniDebugInfo bool
@@ -238,6 +252,19 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 
 		objFiles[i] = objFile
 
+		if srcFile.Ext() == ".asm" {
+			ctx.ModuleBuild(pctx, android.ModuleBuildParams{
+				Rule:      yasm,
+				Output:    objFile,
+				Input:     srcFile,
+				OrderOnly: deps,
+				Args: map[string]string{
+					"asFlags": flags.yasmFlags,
+				},
+			})
+			continue
+		}
+
 		var moduleCflags string
 		var ccCmd string
 		tidy := flags.tidy && flags.clang
@@ -250,7 +277,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 		case ".c":
 			ccCmd = "gcc"
 			moduleCflags = cflags
-		case ".cpp", ".cc":
+		case ".cpp", ".cc", ".mm":
 			ccCmd = "g++"
 			moduleCflags = cppflags
 		default:
@@ -439,7 +466,13 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 		}
 	}
 
+	if flags.groupStaticLibs && !ctx.Darwin() && len(staticLibs) > 0 {
+		libFlagsList = append(libFlagsList, "-Wl,--start-group")
+	}
 	libFlagsList = append(libFlagsList, staticLibs.Strings()...)
+	if flags.groupStaticLibs && !ctx.Darwin() && len(staticLibs) > 0 {
+		libFlagsList = append(libFlagsList, "-Wl,--end-group")
+	}
 
 	if groupLate && !ctx.Darwin() && len(lateStaticLibs) > 0 {
 		libFlagsList = append(libFlagsList, "-Wl,--start-group")

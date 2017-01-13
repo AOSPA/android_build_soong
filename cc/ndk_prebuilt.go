@@ -62,7 +62,7 @@ type ndkPrebuiltObjectLinker struct {
 	objectLinker
 }
 
-func (*ndkPrebuiltObjectLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
+func (*ndkPrebuiltObjectLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	// NDK objects can't have any dependencies
 	return deps
 }
@@ -96,13 +96,14 @@ func (ndk *ndkPrebuiltLibraryLinker) linkerProps() []interface{} {
 	return append(ndk.libraryDecorator.linkerProps(), &ndk.Properties, &ndk.flagExporter.Properties)
 }
 
-func (*ndkPrebuiltLibraryLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
+func (*ndkPrebuiltLibraryLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	// NDK libraries can't have any dependencies
 	return deps
 }
 
 func ndkPrebuiltLibraryFactory() (blueprint.Module, []interface{}) {
-	module, library := NewLibrary(android.DeviceSupported, true, false)
+	module, library := NewLibrary(android.DeviceSupported)
+	library.BuildOnlyShared()
 	linker := &ndkPrebuiltLibraryLinker{
 		libraryDecorator: library,
 	}
@@ -132,7 +133,8 @@ type ndkPrebuiltStlLinker struct {
 }
 
 func ndkPrebuiltSharedStlFactory() (blueprint.Module, []interface{}) {
-	module, library := NewLibrary(android.DeviceSupported, true, false)
+	module, library := NewLibrary(android.DeviceSupported)
+	library.BuildOnlyShared()
 	linker := &ndkPrebuiltStlLinker{
 		ndkPrebuiltLibraryLinker: ndkPrebuiltLibraryLinker{
 			libraryDecorator: library,
@@ -146,7 +148,8 @@ func ndkPrebuiltSharedStlFactory() (blueprint.Module, []interface{}) {
 }
 
 func ndkPrebuiltStaticStlFactory() (blueprint.Module, []interface{}) {
-	module, library := NewLibrary(android.DeviceSupported, false, true)
+	module, library := NewLibrary(android.DeviceSupported)
+	library.BuildOnlyStatic()
 	linker := &ndkPrebuiltStlLinker{
 		ndkPrebuiltLibraryLinker: ndkPrebuiltLibraryLinker{
 			libraryDecorator: library,
