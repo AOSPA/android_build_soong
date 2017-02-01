@@ -136,8 +136,14 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 			s.Undefined = boolPtr(true)
 		}
 
-		if found, globalSanitizers = removeFromList("address", globalSanitizers); found && s.Address == nil {
-			s.Address = boolPtr(true)
+		if found, globalSanitizers = removeFromList("address", globalSanitizers); found {
+			if s.Address == nil {
+				s.Address = boolPtr(true)
+			} else if *s.Address == false {
+				// Coverage w/o address is an error. If globalSanitizers includes both, and the module
+				// disables address, then disable coverage as well.
+				_, globalSanitizers = removeFromList("coverage", globalSanitizers)
+			}
 		}
 
 		if found, globalSanitizers = removeFromList("thread", globalSanitizers); found && s.Thread == nil {
@@ -159,6 +165,11 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		if len(globalSanitizers) > 0 {
 			ctx.ModuleErrorf("unknown global sanitizer option %s", globalSanitizers[0])
 		}
+	}
+
+	if !ctx.AConfig().EnableCFI() {
+		s.Cfi = nil
+		s.Diag.Cfi = nil
 	}
 
 	if ctx.staticBinary() {
@@ -302,6 +313,11 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	}
 
 	if Bool(sanitize.Properties.Sanitize.Cfi) {
+		if ctx.Arch().ArchType == android.Arm {
+			// __cfi_check needs to be built as Thumb (see the code in linker_cfi.cpp). LLVM is not set up
+			// to do this on a function basis, so force Thumb on the entire module.
+			flags.RequiredInstructionSet = "thumb"
+		}
 		sanitizers = append(sanitizers, "cfi")
 		cfiFlags := []string{"-flto", "-fsanitize=cfi", "-fsanitize-cfi-cross-dso"}
 		flags.CFlags = append(flags.CFlags, cfiFlags...)
