@@ -14,6 +14,7 @@ subdirs = [
     "androidmk",
     "cmd/*",
     "third_party/zip",
+    "ui/*",
 ]
 
 bootstrap_go_package {
@@ -128,6 +129,7 @@ bootstrap_go_package {
         "cc/tidy.go",
         "cc/util.go",
 
+        "cc/cmakelists.go",
         "cc/compiler.go",
         "cc/installer.go",
         "cc/linker.go",
@@ -145,6 +147,7 @@ bootstrap_go_package {
     ],
     testSrcs: [
         "cc/cc_test.go",
+        "cc/test_data_test.go",
     ],
     pluginFor: ["soong_build"],
 }
@@ -161,6 +164,19 @@ bootstrap_go_package {
     srcs: [
         "genrule/filegroup.go",
         "genrule/genrule.go",
+    ],
+    pluginFor: ["soong_build"],
+}
+
+bootstrap_go_package {
+    name: "soong-phony",
+    pkgPath: "android/soong/phony",
+    deps: [
+        "blueprint",
+        "soong-android",
+    ],
+    srcs: [
+        "phony/phony.go",
     ],
     pluginFor: ["soong_build"],
 }

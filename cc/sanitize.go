@@ -167,7 +167,8 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
-	if !ctx.AConfig().EnableCFI() {
+	// CFI needs gold linker, and mips toolchain does not have one.
+	if !ctx.AConfig().EnableCFI() || ctx.Arch().ArchType == android.Mips || ctx.Arch().ArchType == android.Mips64 {
 		s.Cfi = nil
 		s.Diag.Cfi = nil
 	}
@@ -280,11 +281,6 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		flags.CFlags = append(flags.CFlags, asanCflags)
 		flags.LdFlags = append(flags.LdFlags, asanLdflags)
 
-		// ASan runtime library must be the first in the link order.
-		runtimeLibrary := config.AddressSanitizerRuntimeLibrary(ctx.toolchain())
-		if runtimeLibrary != "" {
-			flags.libFlags = append([]string{"${config.ClangAsanLibDir}/" + runtimeLibrary}, flags.libFlags...)
-		}
 		if ctx.Host() {
 			// -nodefaultlibs (provided with libc++) prevents the driver from linking
 			// libraries needed with -fsanitize=address. http://b/18650275 (WAI)
@@ -317,6 +313,9 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			// __cfi_check needs to be built as Thumb (see the code in linker_cfi.cpp). LLVM is not set up
 			// to do this on a function basis, so force Thumb on the entire module.
 			flags.RequiredInstructionSet = "thumb"
+			// Workaround for b/33678192. CFI jumptables need Thumb2 codegen.  Revert when
+			// Clang is updated past r290384.
+			flags.LdFlags = append(flags.LdFlags, "-march=armv7-a")
 		}
 		sanitizers = append(sanitizers, "cfi")
 		cfiFlags := []string{"-flto", "-fsanitize=cfi", "-fsanitize-cfi-cross-dso"}

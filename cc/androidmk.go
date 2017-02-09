@@ -120,7 +120,7 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 }
 
 func (object *objectLinker) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
-	ret.Custom = func(w io.Writer, name, prefix string) error {
+	ret.Custom = func(w io.Writer, name, prefix, moduleDir string) error {
 		out := ret.OutputFile.Path()
 
 		fmt.Fprintln(w, "\n$("+prefix+"OUT_INTERMEDIATE_LIBRARIES)/"+name+objectExtension+":", out.String())
@@ -158,6 +158,23 @@ func (test *testBinary) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkDa
 	ret.Class = "NATIVE_TESTS"
 	if Bool(test.Properties.Test_per_src) {
 		ret.SubName = "_" + test.binaryDecorator.Properties.Stem
+	}
+
+	var testFiles []string
+	for _, d := range test.data {
+		rel := d.Rel()
+		path := d.String()
+		if !strings.HasSuffix(path, rel) {
+			panic(fmt.Errorf("path %q does not end with %q", path, rel))
+		}
+		path = strings.TrimSuffix(path, rel)
+		testFiles = append(testFiles, path+":"+rel)
+	}
+	if len(testFiles) > 0 {
+		ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) error {
+			fmt.Fprintln(w, "LOCAL_TEST_DATA := "+strings.Join(testFiles, " "))
+			return nil
+		})
 	}
 }
 
