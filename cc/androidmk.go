@@ -81,18 +81,7 @@ func (c *Module) AndroidMk() (ret android.AndroidMkData, err error) {
 }
 
 func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
-	if !library.static() {
-		ctx.subAndroidMk(ret, &library.stripper)
-		ctx.subAndroidMk(ret, &library.relocationPacker)
-	}
-
-	if library.static() {
-		ret.Class = "STATIC_LIBRARIES"
-	} else {
-		ret.Class = "SHARED_LIBRARIES"
-	}
-
-	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) error {
+	writeExportedIncludes := func(w io.Writer) {
 		var exportedIncludes []string
 		for _, flag := range library.exportedFlags() {
 			if strings.HasPrefix(flag, "-I") {
@@ -106,15 +95,63 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 		if len(exportedIncludeDeps) > 0 {
 			fmt.Fprintln(w, "LOCAL_EXPORT_C_INCLUDE_DEPS :=", strings.Join(exportedIncludeDeps.Strings(), " "))
 		}
+	}
+
+	if library.static() {
+		ret.Class = "STATIC_LIBRARIES"
+	} else if library.shared() {
+		ctx.subAndroidMk(ret, &library.stripper)
+		ctx.subAndroidMk(ret, &library.relocationPacker)
+
+		ret.Class = "SHARED_LIBRARIES"
+	} else if library.header() {
+		ret.Custom = func(w io.Writer, name, prefix, moduleDir string) error {
+			fmt.Fprintln(w, "\ninclude $(CLEAR_VARS)")
+			fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
+			fmt.Fprintln(w, "LOCAL_MODULE :=", name)
+
+			archStr := ctx.Target().Arch.ArchType.String()
+			var host bool
+			switch ctx.Target().Os.Class {
+			case android.Host:
+				fmt.Fprintln(w, "LOCAL_MODULE_HOST_ARCH := ", archStr)
+				host = true
+			case android.HostCross:
+				fmt.Fprintln(w, "LOCAL_MODULE_HOST_CROSS_ARCH := ", archStr)
+				host = true
+			case android.Device:
+				fmt.Fprintln(w, "LOCAL_MODULE_TARGET_ARCH := ", archStr)
+			}
+
+			if host {
+				fmt.Fprintln(w, "LOCAL_MODULE_HOST_OS :=", ctx.Target().Os.String())
+				fmt.Fprintln(w, "LOCAL_IS_HOST_MODULE := true")
+			}
+
+			writeExportedIncludes(w)
+			fmt.Fprintln(w, "include $(BUILD_HEADER_LIBRARY)")
+
+			return nil
+		}
+
+		return
+	}
+
+	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) error {
+		writeExportedIncludes(w)
 
 		fmt.Fprintln(w, "LOCAL_BUILT_MODULE_STEM := $(LOCAL_MODULE)"+outputFile.Ext())
 
 		fmt.Fprintln(w, "LOCAL_SYSTEM_SHARED_LIBRARIES :=")
 
+		if library.coverageOutputFile.Valid() {
+			fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", library.coverageOutputFile.String())
+		}
+
 		return nil
 	})
 
-	if !library.static() {
+	if library.shared() {
 		ctx.subAndroidMk(ret, library.baseInstaller)
 	}
 }
@@ -145,6 +182,9 @@ func (binary *binaryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.Andr
 			fmt.Fprintln(w, "LOCAL_MODULE_SYMLINKS := "+strings.Join(binary.symlinks, " "))
 		}
 
+		if binary.coverageOutputFile.Valid() {
+			fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", binary.coverageOutputFile.String())
+		}
 		return nil
 	})
 }
