@@ -217,7 +217,8 @@ type OsType struct {
 type OsClass int
 
 const (
-	Device OsClass = iota
+	Generic OsClass = iota
+	Device
 	Host
 	HostCross
 )
@@ -778,6 +779,10 @@ func decodeTargetProductVariables(config *config) (map[OsClass][]Target, error) 
 
 	if variables.HostSecondaryArch != nil && *variables.HostSecondaryArch != "" {
 		addTarget(BuildOs, *variables.HostSecondaryArch, nil, nil, nil)
+	}
+
+	if config.Host_bionic != nil && *config.Host_bionic {
+		addTarget(LinuxBionic, "x86_64", nil, nil, nil)
 	}
 
 	if variables.CrossHost != nil && *variables.CrossHost != "" {

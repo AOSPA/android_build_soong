@@ -357,6 +357,7 @@ func (z *zipWriter) writeRelFile(root, file string) error {
 
 func (z *zipWriter) writeFile(rel, file string) error {
 	var fileSize int64
+	var executable bool
 
 	if s, err := os.Lstat(file); err != nil {
 		return err
@@ -371,6 +372,7 @@ func (z *zipWriter) writeFile(rel, file string) error {
 		return fmt.Errorf("%s is not a file, directory, or symlink", file)
 	} else {
 		fileSize = s.Size()
+		executable = s.Mode()&0100 != 0
 	}
 
 	if z.directories {
@@ -395,6 +397,9 @@ func (z *zipWriter) writeFile(rel, file string) error {
 		},
 	}
 	ze.fh.SetModTime(z.time)
+	if executable {
+		ze.fh.SetMode(0700)
+	}
 
 	r, err := os.Open(file)
 	if err != nil {
@@ -445,7 +450,7 @@ func (z *zipWriter) writeFile(rel, file string) error {
 			f.Close()
 		}(wg, r)
 	} else {
-		go z.compressWholeFile(rel, r, exec, compressChan)
+		go z.compressWholeFile(ze, r, exec, compressChan)
 	}
 
 	return nil
@@ -514,26 +519,19 @@ func (z *zipWriter) compressBlock(r io.Reader, dict []byte, last bool) (*bytes.B
 	return buf, nil
 }
 
-func (z *zipWriter) compressWholeFile(rel string, r *os.File, exec Execution, compressChan chan *zipEntry) {
+func (z *zipWriter) compressWholeFile(ze *zipEntry, r *os.File, exec Execution, compressChan chan *zipEntry) {
 	var bufSize int
 
 	defer r.Close()
 
-	fileHeader := &zip.FileHeader{
-		Name:   rel,
-		Method: zip.Deflate,
-	}
-	fileHeader.SetModTime(z.time)
-
 	crc := crc32.NewIEEE()
-	count, err := io.Copy(crc, r)
+	_, err := io.Copy(crc, r)
 	if err != nil {
 		z.errors <- err
 		return
 	}
 
-	fileHeader.CRC32 = crc.Sum32()
-	fileHeader.UncompressedSize64 = uint64(count)
+	ze.fh.CRC32 = crc.Sum32()
 
 	_, err = r.Seek(0, 0)
 	if err != nil {
@@ -543,10 +541,7 @@ func (z *zipWriter) compressWholeFile(rel string, r *os.File, exec Execution, co
 
 	compressed, err := z.compressBlock(r, nil, true)
 
-	ze := &zipEntry{
-		fh:            fileHeader,
-		futureReaders: make(chan chan io.Reader, 1),
-	}
+	ze.futureReaders = make(chan chan io.Reader, 1)
 	futureReader := make(chan io.Reader, 1)
 	ze.futureReaders <- futureReader
 	close(ze.futureReaders)
