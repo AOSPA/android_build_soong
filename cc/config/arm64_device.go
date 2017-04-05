@@ -77,8 +77,8 @@ var (
 			"-mcpu=cortex-a53",
 		},
 		"kryo": []string{
-			// Use the cortex-a57 cpu since no compiler supports
-			// Kryo as a CPU target yet.
+			// Use the cortex-a57 cpu since some compilers
+			// don't support a Kryo specific target yet.
 			"-mcpu=cortex-a57",
 		},
 	}
@@ -97,6 +97,9 @@ func init() {
 		"denver64",
 		"kryo",
 		"kryo300")
+
+	// Clang supports specific Kryo targeting
+	replaceFirst(arm64ClangCpuVariantCflags["kryo"], "-mcpu=cortex-a57", "-mcpu=kryo")
 
 	pctx.StaticVariable("arm64GccVersion", arm64GccVersion)
 
