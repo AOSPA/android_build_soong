@@ -109,6 +109,10 @@ type Flags struct {
 	TidyFlags   []string // Flags that apply to clang-tidy
 	YasmFlags   []string // Flags that apply to yasm assembly source files
 
+	// Global include flags that apply to C, C++, and assembly source files
+	// These must be after any module include flags, which will be in GlobalFlags.
+	SystemIncludeFlags []string
+
 	Toolchain config.Toolchain
 	Clang     bool
 	Tidy      bool
@@ -135,9 +139,6 @@ type BaseProperties struct {
 	// Minimum sdk version supported when compiling against the ndk
 	Sdk_version string
 
-	// Whether to compile against the VNDK
-	Use_vndk bool
-
 	// don't insert default compiler flags into asflags, cflags,
 	// cppflags, conlyflags, ldflags, or include_dirs
 	No_default_compiler_flags *bool
@@ -145,7 +146,6 @@ type BaseProperties struct {
 	AndroidMkSharedLibs []string `blueprint:"mutated"`
 	HideFromMake        bool     `blueprint:"mutated"`
 	PreventInstall      bool     `blueprint:"mutated"`
-	Vndk_version        string   `blueprint:"mutated"`
 }
 
 type UnusedProperties struct {
@@ -379,8 +379,8 @@ func (ctx *moduleContextImpl) sdk() bool {
 
 func (ctx *moduleContextImpl) sdkVersion() string {
 	if ctx.ctx.Device() {
-		if ctx.mod.Properties.Use_vndk {
-			return ctx.mod.Properties.Vndk_version
+		if ctx.vndk() {
+			return "current"
 		} else {
 			return ctx.mod.Properties.Sdk_version
 		}
@@ -389,10 +389,7 @@ func (ctx *moduleContextImpl) sdkVersion() string {
 }
 
 func (ctx *moduleContextImpl) vndk() bool {
-	if ctx.ctx.Device() {
-		return ctx.mod.Properties.Use_vndk
-	}
-	return false
+	return ctx.ctx.Os() == android.Android && ctx.ctx.Proprietary() && ctx.ctx.DeviceConfig().CompileVndk()
 }
 
 func (ctx *moduleContextImpl) selectedStl() string {
@@ -545,22 +542,11 @@ func (c *Module) begin(ctx BaseModuleContext) {
 		feature.begin(ctx)
 	}
 	if ctx.sdk() {
-		if ctx.vndk() {
-			ctx.PropertyErrorf("use_vndk",
-				"sdk_version and use_vndk cannot be used at the same time")
-		}
-
 		version, err := normalizeNdkApiLevel(ctx.sdkVersion(), ctx.Arch())
 		if err != nil {
 			ctx.PropertyErrorf("sdk_version", err.Error())
 		}
 		c.Properties.Sdk_version = version
-	} else if ctx.vndk() {
-		version, err := normalizeNdkApiLevel(ctx.DeviceConfig().VndkVersion(), ctx.Arch())
-		if err != nil {
-			ctx.ModuleErrorf("Bad BOARD_VNDK_VERSION: %s", err.Error())
-		}
-		c.Properties.Vndk_version = version
 	}
 }
 
@@ -676,7 +662,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 						variantLibs = append(variantLibs, entry+ndkLibrarySuffix)
 					}
 				} else {
-					nonvariantLibs = append(variantLibs, entry)
+					nonvariantLibs = append(nonvariantLibs, entry)
 				}
 			}
 			return nonvariantLibs, variantLibs

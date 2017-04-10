@@ -105,6 +105,7 @@ func init() {
 			"LOCAL_AIDL_INCLUDES":         "aidl_includes",
 			"LOCAL_AAPT_FLAGS":            "aaptflags",
 			"LOCAL_PACKAGE_SPLITS":        "package_splits",
+			"LOCAL_COMPATIBILITY_SUITE":   "test_suites",
 		})
 	addStandardProperties(bpparser.BoolType,
 		map[string]string{
@@ -119,7 +120,6 @@ func init() {
 			"LOCAL_NO_STANDARD_LIBRARIES":   "no_standard_libraries",
 			"LOCAL_PACK_MODULE_RELOCATIONS": "pack_relocations",
 			"LOCAL_TIDY":                    "tidy",
-			"LOCAL_USE_VNDK":                "use_vndk",
 			"LOCAL_PROPRIETARY_MODULE":      "proprietary",
 
 			"LOCAL_EXPORT_PACKAGE_RESOURCES": "export_package_resources",
