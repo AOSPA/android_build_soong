@@ -27,11 +27,13 @@ import (
 var (
 	preprocessBionicHeaders = pctx.AndroidStaticRule("preprocessBionicHeaders",
 		blueprint.RuleParams{
-			Command:     "$versionerCmd $srcDir $depsPath -o $out",
+			// The `&& touch $out` isn't really necessary, but Blueprint won't
+			// let us have only implicit outputs.
+			Command:     "$versionerCmd -o $outDir $srcDir $depsPath && touch $out",
 			CommandDeps: []string{"$versionerCmd"},
 			Description: "versioner preprocess $in",
 		},
-		"depsPath", "srcDir")
+		"depsPath", "srcDir", "outDir")
 )
 
 func init() {
@@ -202,6 +204,10 @@ func (m *preprocessedHeaderModule) GenerateAndroidBuildActions(ctx android.Modul
 		ctx.ModuleErrorf("glob %q matched zero files", m.properties.From)
 	}
 
+	processHeadersWithVersioner(ctx, fromSrcPath, toOutputPath, srcFiles, installPaths)
+}
+
+func processHeadersWithVersioner(ctx android.ModuleContext, srcDir, outDir android.Path, srcFiles android.Paths, installPaths []android.WritablePath) android.Path {
 	// The versioner depends on a dependencies directory to simplify determining include paths
 	// when parsing headers. This directory contains architecture specific directories as well
 	// as a common directory, each of which contains symlinks to the actually directories to
@@ -229,16 +235,20 @@ func (m *preprocessedHeaderModule) GenerateAndroidBuildActions(ctx android.Modul
 		}
 	}
 
+	timestampFile := android.PathForModuleOut(ctx, "versioner.timestamp")
 	ctx.ModuleBuild(pctx, android.ModuleBuildParams{
 		Rule:            preprocessBionicHeaders,
-		Output:          toOutputPath,
+		Output:          timestampFile,
 		Implicits:       append(srcFiles, depsGlob...),
 		ImplicitOutputs: installPaths,
 		Args: map[string]string{
 			"depsPath": depsPath.String(),
-			"srcDir":   fromSrcPath.String(),
+			"srcDir":   srcDir.String(),
+			"outDir":   outDir.String(),
 		},
 	})
+
+	return timestampFile
 }
 
 func preprocessedNdkHeadersFactory() (blueprint.Module, []interface{}) {
