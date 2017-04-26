@@ -17,6 +17,7 @@ package cc
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"android/soong/android"
@@ -57,8 +58,6 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	} else {
 		ctx.Strict("BOARD_VNDK_VERSION", "")
 	}
-	ctx.Strict("VNDK_LIBRARIES", strings.Join(config.VndkLibraries(), " "))
-	ctx.Strict("LLNDK_LIBRARIES", strings.Join(config.LLndkLibraries(), " "))
 
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_CFLAGS", asanCflags)
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_LDFLAGS", asanLdflags)
@@ -108,6 +107,12 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	makeVarsToolchain(ctx, "", deviceTargets[0])
 	if len(deviceTargets) > 1 {
 		makeVarsToolchain(ctx, "2ND_", deviceTargets[1])
+	}
+
+	if config.SDClang {
+		ctx.Strict("SDCLANG", strconv.FormatBool(config.SDClang))
+		ctx.Strict("SDCLANG_PATH", "${config.SDClangBin}")
+		ctx.Strict("SDCLANG_COMMON_FLAGS", "${config.SDClangFlags}")
 	}
 }
 
