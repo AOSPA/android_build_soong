@@ -43,6 +43,7 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("RS_LLVM_PREBUILTS_VERSION", "${config.RSClangVersion}")
 	ctx.Strict("RS_LLVM_PREBUILTS_BASE", "${config.RSClangBase}")
 	ctx.Strict("RS_LLVM_PREBUILTS_PATH", "${config.RSLLVMPrebuiltsPath}")
+	ctx.Strict("RS_LLVM_INCLUDES", "${config.RSIncludePath}")
 	ctx.Strict("RS_CLANG", "${config.RSLLVMPrebuiltsPath}/clang")
 	ctx.Strict("RS_LLVM_AS", "${config.RSLLVMPrebuiltsPath}/llvm-as")
 	ctx.Strict("RS_LLVM_LINK", "${config.RSLLVMPrebuiltsPath}/llvm-link")
@@ -113,7 +114,9 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 		ctx.Strict("SDCLANG", strconv.FormatBool(config.SDClang))
 	}
 	ctx.Strict("SDCLANG_PATH", "${config.SDClangBin}")
+	ctx.Strict("SDCLANG_PATH_2", "${config.SDClangBin2}")
 	ctx.Strict("SDCLANG_COMMON_FLAGS", "${config.SDClangFlags}")
+	ctx.Strict("SDCLANG_COMMON_FLAGS_2", "${config.SDClangFlags2}")
 }
 
 func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
