@@ -12,12 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-blueprint_go_binary {
-    name: "soong_javac_filter",
-    srcs: [
-        "javac_filter.go",
-    ],
-    testSrcs: [
-        "javac_filter_test.go",
-    ],
+package python
+
+// This file contains the module types for building Python library.
+
+import (
+	"android/soong/android"
+)
+
+func init() {
+	android.RegisterModuleType("python_library_host", PythonLibraryHostFactory)
+}
+
+type PythonLibrary struct {
+	pythonBaseModule
+}
+
+var _ PythonSubModule = (*PythonLibrary)(nil)
+
+func PythonLibraryHostFactory() android.Module {
+	module := &PythonLibrary{}
+
+	return InitPythonBaseModule(&module.pythonBaseModule, module, android.HostSupportedNoCross)
 }

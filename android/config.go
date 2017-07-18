@@ -52,6 +52,10 @@ type Config struct {
 	*config
 }
 
+func (c Config) BuildDir() string {
+	return c.buildDir
+}
+
 // A DeviceConfig object represents the configuration for a particular device being built.  For
 // now there will only be one of these, but in the future there may be multiple devices being
 // built
@@ -84,8 +88,7 @@ type config struct {
 }
 
 type deviceConfig struct {
-	config  *config
-	targets []Arch
+	config *config
 	OncePer
 }
 
@@ -163,9 +166,18 @@ func saveToConfigFile(config jsonConfigurable, filename string) error {
 
 // TestConfig returns a Config object suitable for using for tests
 func TestConfig(buildDir string) Config {
-	return Config{&config{
+	config := &config{
+		ProductVariables: productVariables{
+			DeviceName: stringPtr("test_device"),
+		},
+
 		buildDir: buildDir,
-	}}
+	}
+	config.deviceConfig = &deviceConfig{
+		config: config,
+	}
+
+	return Config{config}
 }
 
 // New creates a new Config object.  The srcDir argument specifies the path to
@@ -178,15 +190,11 @@ func NewConfig(srcDir, buildDir string) (Config, error) {
 
 		srcDir:   srcDir,
 		buildDir: buildDir,
-
-		deviceConfig: &deviceConfig{},
 	}
 
-	deviceConfig := &deviceConfig{
+	config.deviceConfig = &deviceConfig{
 		config: config,
 	}
-
-	config.deviceConfig = deviceConfig
 
 	// Sanity check the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious cases.
@@ -249,6 +257,20 @@ func (c *config) BlueprintToolLocation() string {
 	return filepath.Join(c.buildDir, "host", c.PrebuiltOS(), "bin")
 }
 
+// HostSystemTool looks for non-hermetic tools from the system we're running on.
+// Generally shouldn't be used, but useful to find the XCode SDK, etc.
+func (c *config) HostSystemTool(name string) string {
+	for _, dir := range filepath.SplitList(c.Getenv("PATH")) {
+		path := filepath.Join(dir, name)
+		if s, err := os.Stat(path); err != nil {
+			continue
+		} else if m := s.Mode(); !s.IsDir() && m&0111 != 0 {
+			return path
+		}
+	}
+	return name
+}
+
 // PrebuiltOS returns the name of the host OS used in prebuilts directories
 func (c *config) PrebuiltOS() string {
 	switch runtime.GOOS {
@@ -289,7 +311,7 @@ func (c *config) Getenv(key string) string {
 		if c.envFrozen {
 			panic("Cannot access new environment variables after envdeps are frozen")
 		}
-		val = os.Getenv(key)
+		val, _ = originalEnv[key]
 		c.envDeps[key] = val
 	}
 	return val
@@ -353,6 +375,10 @@ func (c *config) PlatformSdkVersion() string {
 	return strconv.Itoa(c.PlatformSdkVersionInt())
 }
 
+func (c *config) PlatformVersionAllCodenames() []string {
+	return c.ProductVariables.Platform_version_all_codenames
+}
+
 func (c *config) BuildNumber() string {
 	return "000000"
 }
@@ -386,7 +412,12 @@ func (c *config) DevicePrefer32BitExecutables() bool {
 }
 
 func (c *config) SkipDeviceInstall() bool {
-	return c.EmbeddedInMake() || Bool(c.Mega_device)
+	return c.EmbeddedInMake()
+}
+
+func (c *config) SkipMegaDeviceInstall(path string) bool {
+	return Bool(c.Mega_device) &&
+		strings.HasPrefix(path, filepath.Join(c.buildDir, "target", "product"))
 }
 
 func (c *config) SanitizeHost() []string {
@@ -397,12 +428,20 @@ func (c *config) SanitizeDevice() []string {
 	return append([]string(nil), c.ProductVariables.SanitizeDevice...)
 }
 
+func (c *config) SanitizeDeviceDiag() []string {
+	return append([]string(nil), c.ProductVariables.SanitizeDeviceDiag...)
+}
+
 func (c *config) SanitizeDeviceArch() []string {
 	return append([]string(nil), c.ProductVariables.SanitizeDeviceArch...)
 }
 
 func (c *config) EnableCFI() bool {
-	return Bool(c.ProductVariables.EnableCFI)
+	if c.ProductVariables.EnableCFI == nil {
+		return true
+	} else {
+		return *c.ProductVariables.EnableCFI
+	}
 }
 
 func (c *config) Android64() bool {
@@ -435,11 +474,15 @@ func (c *config) LibartImgHostBaseAddress() string {
 }
 
 func (c *config) LibartImgDeviceBaseAddress() string {
-	switch c.Targets[Device][0].Arch.ArchType {
+	archType := Common
+	if len(c.Targets[Device]) > 0 {
+		archType = c.Targets[Device][0].Arch.ArchType
+	}
+	switch archType {
 	default:
 		return "0x70000000"
 	case Mips, Mips64:
-		return "0x64000000"
+		return "0x5C000000"
 	}
 }
 
@@ -471,6 +514,10 @@ func (c *deviceConfig) CompileVndk() bool {
 
 func (c *deviceConfig) BtConfigIncludeDir() string {
 	return String(c.config.ProductVariables.BtConfigIncludeDir)
+}
+
+func (c *deviceConfig) DeviceKernelHeaderDirs() []string {
+	return c.config.ProductVariables.DeviceKernelHeaders
 }
 
 func (c *deviceConfig) NativeCoverageEnabled() bool {

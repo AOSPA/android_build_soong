@@ -87,6 +87,14 @@ type BaseLinkerProperties struct {
 	// group static libraries.  This can resolve missing symbols issues with interdependencies
 	// between static libraries, but it is generally better to order them correctly instead.
 	Group_static_libs *bool `android:"arch_variant"`
+
+	Target struct {
+		Vendor struct {
+			// list of shared libs that should not be used to build
+			// the vendor variant of the C/C++ module.
+			Exclude_shared_libs []string
+		}
+	}
 }
 
 func NewBaseLinker() *baseLinker {
@@ -123,6 +131,10 @@ func (linker *baseLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
 	deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Static_libs...)
 	deps.SharedLibs = append(deps.SharedLibs, linker.Properties.Shared_libs...)
 
+	if ctx.vndk() {
+		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Vendor.Exclude_shared_libs)
+	}
+
 	deps.ReexportHeaderLibHeaders = append(deps.ReexportHeaderLibHeaders, linker.Properties.Export_header_lib_headers...)
 	deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, linker.Properties.Export_static_lib_headers...)
 	deps.ReexportSharedLibHeaders = append(deps.ReexportSharedLibHeaders, linker.Properties.Export_shared_lib_headers...)
@@ -140,11 +152,23 @@ func (linker *baseLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
 		}
 
 		if !ctx.static() {
+			// libdl should always appear after libc in dt_needed list - see below
+			// the only exception is when libc is not in linker.Properties.System_shared_libs
+			// such as for libc module itself
+			if inList("libc", linker.Properties.System_shared_libs) {
+				_, deps.SharedLibs = removeFromList("libdl", deps.SharedLibs)
+			}
+
 			if linker.Properties.System_shared_libs != nil {
+				if !inList("libdl", linker.Properties.System_shared_libs) &&
+					inList("libc", linker.Properties.System_shared_libs) {
+					linker.Properties.System_shared_libs = append(linker.Properties.System_shared_libs,
+						"libdl")
+				}
 				deps.LateSharedLibs = append(deps.LateSharedLibs,
 					linker.Properties.System_shared_libs...)
 			} else if !ctx.sdk() && !ctx.vndk() {
-				deps.LateSharedLibs = append(deps.LateSharedLibs, "libc", "libm")
+				deps.LateSharedLibs = append(deps.LateSharedLibs, "libc", "libm", "libdl")
 			}
 		}
 
@@ -152,14 +176,15 @@ func (linker *baseLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
 			deps.SharedLibs = append(deps.SharedLibs,
 				"libc",
 				"libm",
+				"libdl",
 			)
 		}
 		if ctx.vndk() {
-			deps.LateSharedLibs = append(deps.LateSharedLibs, "libc", "libm")
+			deps.LateSharedLibs = append(deps.LateSharedLibs, "libc", "libm", "libdl")
 		}
 	}
 
-	if ctx.Os() == android.Windows {
+	if ctx.Windows() {
 		deps.LateStaticLibs = append(deps.LateStaticLibs, "libwinpthread")
 	}
 

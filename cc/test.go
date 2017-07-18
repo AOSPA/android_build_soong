@@ -20,8 +20,6 @@ import (
 	"strings"
 
 	"android/soong/android"
-
-	"github.com/google/blueprint"
 )
 
 type TestProperties struct {
@@ -57,31 +55,31 @@ func init() {
 }
 
 // Module factory for tests
-func testFactory() (blueprint.Module, []interface{}) {
+func testFactory() android.Module {
 	module := NewTest(android.HostAndDeviceSupported)
 	return module.Init()
 }
 
 // Module factory for test libraries
-func testLibraryFactory() (blueprint.Module, []interface{}) {
+func testLibraryFactory() android.Module {
 	module := NewTestLibrary(android.HostAndDeviceSupported)
 	return module.Init()
 }
 
 // Module factory for benchmarks
-func benchmarkFactory() (blueprint.Module, []interface{}) {
+func benchmarkFactory() android.Module {
 	module := NewBenchmark(android.HostAndDeviceSupported)
 	return module.Init()
 }
 
 // Module factory for host tests
-func testHostFactory() (blueprint.Module, []interface{}) {
+func testHostFactory() android.Module {
 	module := NewTest(android.HostSupported)
 	return module.Init()
 }
 
 // Module factory for host benchmarks
-func benchmarkHostFactory() (blueprint.Module, []interface{}) {
+func benchmarkHostFactory() android.Module {
 	module := NewBenchmark(android.HostSupported)
 	return module.Init()
 }
@@ -299,8 +297,15 @@ func NewTestLibrary(hod android.HostOrDeviceSupported) *Module {
 	return module
 }
 
+type BenchmarkProperties struct {
+	// list of compatibility suites (for example "cts", "vts") that the module should be
+	// installed into.
+	Test_suites []string
+}
+
 type benchmarkDecorator struct {
 	*binaryDecorator
+	Properties BenchmarkProperties
 }
 
 func (benchmark *benchmarkDecorator) linkerInit(ctx BaseModuleContext) {
@@ -310,6 +315,12 @@ func (benchmark *benchmarkDecorator) linkerInit(ctx BaseModuleContext) {
 	}
 	benchmark.baseLinker.dynamicProperties.RunPaths = append(benchmark.baseLinker.dynamicProperties.RunPaths, runpath)
 	benchmark.binaryDecorator.linkerInit(ctx)
+}
+
+func (benchmark *benchmarkDecorator) linkerProps() []interface{} {
+	props := benchmark.binaryDecorator.linkerProps()
+	props = append(props, &benchmark.Properties)
+	return props
 }
 
 func (benchmark *benchmarkDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
