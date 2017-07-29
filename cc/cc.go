@@ -118,6 +118,7 @@ type Flags struct {
 
 	Toolchain config.Toolchain
 	Clang     bool
+	Sdclang   bool
 	Tidy      bool
 	Coverage  bool
 	SAbiDump  bool
@@ -139,6 +140,9 @@ type ObjectLinkerProperties struct {
 type BaseProperties struct {
 	// compile module with clang instead of gcc
 	Clang *bool `android:"arch_variant"`
+
+	// compile module with SDLLVM instead of AOSP LLVM
+	Sdclang *bool `android:"arch_variant"`
 
 	// Minimum sdk version supported when compiling against the ndk
 	Sdk_version string
@@ -490,6 +494,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	flags := Flags{
 		Toolchain: c.toolchain(ctx),
 		Clang:     c.clang(ctx),
+		Sdclang:   c.sdclang(ctx),
 	}
 	if c.compiler != nil {
 		flags = c.compiler.compilerFlags(ctx, flags)
@@ -808,6 +813,25 @@ func (c *Module) clang(ctx BaseModuleContext) bool {
 	}
 
 	return clang
+}
+
+func (c *Module) sdclang(ctx BaseModuleContext) bool {
+	sdclang := Bool(c.Properties.Sdclang)
+
+	if !c.clang(ctx) {
+		return false
+	}
+
+	// SDLLVM is not for host build
+	if ctx.Host() {
+		return false
+	}
+
+	if c.Properties.Sdclang == nil && config.SDClang {
+		return true
+	}
+
+	return sdclang
 }
 
 // Convert dependencies to paths.  Returns a PathDeps containing paths
