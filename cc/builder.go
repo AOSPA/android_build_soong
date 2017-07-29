@@ -224,6 +224,7 @@ type builderFlags struct {
 	rsFlags       string
 	toolchain     config.Toolchain
 	clang         bool
+	sdclang       bool
 	tidy          bool
 	coverage      bool
 	sAbiDump      bool
@@ -386,7 +387,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 
 		var extraFlags string
 		if flags.clang {
-			if ctx.Device() && config.SDClang {
+			if flags.sdclang {
 				ccCmd = "${config.SDClangBin}/" + ccCmd
 				extraFlags = " ${config.SDClangFlags}"
 			} else {
@@ -575,7 +576,7 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 	var ldCmd string
 	var extraFlags string
 	if flags.clang {
-		if ctx.Device() && config.SDClang {
+		if flags.sdclang {
 			ldCmd = "${config.SDClangBin}/clang++"
 			extraFlags = " ${config.SDClangFlags}"
 		} else {
@@ -727,7 +728,7 @@ func TransformObjsToObj(ctx android.ModuleContext, objFiles android.Paths,
 	var ldCmd string
         var extraFlags string
 	if flags.clang {
-		if ctx.Device() && config.SDClang {
+		if flags.sdclang {
 			ldCmd = "${config.SDClangBin}/clang++"
 			extraFlags = " ${config.SDClangFlags}"
 		} else {
