@@ -51,6 +51,7 @@ bootstrap_go_package {
         "android/paths.go",
         "android/prebuilt.go",
         "android/register.go",
+        "android/testing.go",
         "android/util.go",
         "android/variable.go",
 
@@ -123,6 +124,7 @@ bootstrap_go_package {
         "cc/strip.go",
         "cc/tidy.go",
         "cc/util.go",
+        "cc/vndk.go",
 
         "cc/cmakelists.go",
         "cc/compiler.go",
@@ -200,6 +202,9 @@ bootstrap_go_package {
         "java/gen.go",
         "java/java.go",
         "java/resources.go",
+    ],
+    testSrcs: [
+        "java/java_test.go",
     ],
     pluginFor: ["soong_build"],
 }
