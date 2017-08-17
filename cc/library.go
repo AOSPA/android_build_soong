@@ -21,7 +21,6 @@ import (
 	"github.com/google/blueprint/pathtools"
 
 	"android/soong/android"
-	"android/soong/cc/config"
 )
 
 type LibraryProperties struct {
@@ -351,7 +350,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		}
 		return Objects{}
 	}
-	if ctx.createVndkSourceAbiDump() {
+	if ctx.createVndkSourceAbiDump() || library.sabi.Properties.CreateSAbiDumps {
 		exportIncludeDirs := android.PathsForModuleSrc(ctx, library.flagExporter.Properties.Export_include_dirs)
 		var SourceAbiFlags []string
 		for _, dir := range exportIncludeDirs.Strings() {
@@ -621,7 +620,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 }
 
 func vndkVsNdk(ctx ModuleContext) bool {
-	if inList(ctx.baseModuleName(), config.LLndkLibraries()) {
+	if inList(ctx.baseModuleName(), llndkLibraries) {
 		return false
 	}
 	return true
