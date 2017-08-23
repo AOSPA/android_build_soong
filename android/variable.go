@@ -20,6 +20,8 @@ import (
 	"runtime"
 	"strings"
 
+	"pa/soong/android"
+
 	"github.com/google/blueprint/proptools"
 )
 
@@ -98,6 +100,9 @@ type variableProperties struct {
 	        Uses_generic_camera_parameter_library struct {
 		        Srcs []string
 	        }
+
+		// include PA variables
+		*android.Product_variables
 	} `android:"arch_variant"`
 }
 
@@ -176,6 +181,9 @@ type productVariables struct {
 
 	Uses_generic_camera_parameter_library  *bool `json:",omitempty"`
 	Specific_camera_parameter_library  *string `json:",omitempty"`
+
+	// include PA variables
+	*android.ProductVariables
 }
 
 func boolPtr(v bool) *bool {
