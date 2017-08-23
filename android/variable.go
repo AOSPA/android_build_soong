@@ -20,6 +20,8 @@ import (
 	"runtime"
 	"strings"
 
+	"aospa/soong/android"
+
 	"github.com/google/blueprint/proptools"
 )
 
@@ -152,6 +154,8 @@ type variableProperties struct {
 		Device_support_hwfde_perf struct {
 			Cflags []string
 		}
+		// include AOSPA variables
+		Aospa android.Product_variables
 	} `android:"arch_variant"`
 }
 
@@ -319,6 +323,9 @@ type productVariables struct {
 	ProductHiddenAPIStubsTest   []string `json:",omitempty"`
 
 	TargetFSConfigGen []string `json:",omitempty"`
+
+	// include AOSPA variables
+	Aospa android.ProductVariables
 }
 
 func boolPtr(v bool) *bool {
