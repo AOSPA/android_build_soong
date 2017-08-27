@@ -180,6 +180,7 @@ func setSdclangVars() {
 	androidRoot := os.Getenv("ANDROID_BUILD_TOP")
 	aeConfigPath := os.Getenv("SDCLANG_AE_CONFIG")
 	sdclangConfigPath := os.Getenv("SDCLANG_CONFIG")
+	sdclangSA := os.Getenv("SDCLANG_SA_ENABLED")
 
 	type sdclangAEConfig struct {
 		SDCLANG_AE_FLAG string
@@ -258,6 +259,16 @@ func setSdclangVars() {
 				if _, ok := devConfig["SDCLANG_FLAGS_2"]; ok {
 					sdclangFlags2 = devConfig["SDCLANG_FLAGS_2"].(string)
 				}
+			}
+			b, _ := strconv.ParseBool(sdclangSA)
+			if(b) {
+				androidroot_llvm := []string{androidRoot, "llvmsa"}
+				llvmsa_loc := strings.Join(androidroot_llvm, "/")
+				s := []string{sdclangFlags, "--compile-and-analyze", llvmsa_loc}
+				sdclangFlags = strings.Join(s, " ")
+				fmt.Println("Clang SA is enabled: ", sdclangFlags)
+			} else {
+				fmt.Println("Clang SA is not enabled")
 			}
 		} else {
 			panic(err)
