@@ -102,7 +102,7 @@ type variableProperties struct {
 	        }
 
 		// include PA variables
-		*android.Product_variables
+		Pa android.Product_variables
 	} `android:"arch_variant"`
 }
 
@@ -183,7 +183,7 @@ type productVariables struct {
 	Specific_camera_parameter_library  *string `json:",omitempty"`
 
 	// include PA variables
-	*android.ProductVariables
+	Pa android.ProductVariables
 }
 
 func boolPtr(v bool) *bool {
