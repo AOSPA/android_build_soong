@@ -80,6 +80,7 @@ var (
 			// Use the cortex-a57 cpu since some compilers
 			// don't support a Kryo specific target yet.
 			"-mcpu=cortex-a57",
+			"-mfpu=neon-fp-armv8",
 		},
 	}
 
