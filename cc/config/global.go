@@ -176,6 +176,7 @@ func setSdclangVars() {
 	sdclangFlags := ""
 	sdclangFlags2 := ""
 
+	board := os.Getenv("TARGET_BOARD_PLATFORM")
 	product := os.Getenv("TARGET_PRODUCT")
 	androidRoot := os.Getenv("ANDROID_BUILD_TOP")
 	aeConfigPath := os.Getenv("SDCLANG_AE_CONFIG")
@@ -238,6 +239,30 @@ func setSdclangVars() {
 			}
 			// Retrieve the device specific block if it exists in the config file
 			if dev, ok := config[product]; ok {
+				devConfig := dev.(map[string]interface{})
+				// SDCLANG is optional in the device specific block
+				if _, ok := devConfig["SDCLANG"]; ok {
+					SDClang = devConfig["SDCLANG"].(bool)
+				}
+				// SDCLANG_PATH is optional in the device specific block
+				if _, ok := devConfig["SDCLANG_PATH"]; ok {
+					sdclangPath = devConfig["SDCLANG_PATH"].(string)
+				}
+				// SDCLANG_PATH_2 is optional in the device specific block
+				if _, ok := devConfig["SDCLANG_PATH_2"]; ok {
+					sdclangPath2 = devConfig["SDCLANG_PATH_2"].(string)
+				}
+				// SDCLANG_FLAGS is optional in the device specific block
+				if _, ok := devConfig["SDCLANG_FLAGS"]; ok {
+					sdclangFlags = devConfig["SDCLANG_FLAGS"].(string)
+				}
+				// SDCLANG_FLAGS_2 is optional in the device specific block
+				if _, ok := devConfig["SDCLANG_FLAGS_2"]; ok {
+					sdclangFlags2 = devConfig["SDCLANG_FLAGS_2"].(string)
+				}
+			}
+			// Retrieve the board specific block if it exists in the config file
+			if dev, ok := config[board]; ok {
 				devConfig := dev.(map[string]interface{})
 				// SDCLANG is optional in the device specific block
 				if _, ok := devConfig["SDCLANG"]; ok {
