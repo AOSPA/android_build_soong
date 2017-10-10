@@ -371,7 +371,6 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			continue
 		}
 
-		var extraFlags string
 		if flags.clang {
 			switch ccCmd {
 			case "gcc":
@@ -385,11 +384,14 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 
 		ccDesc := ccCmd
 
-		if ctx.Device() && config.SDClang {
-			ccCmd = "${config.SDClangBin}/" + ccCmd
-			extraFlags = " ${config.SDClangFlags}"
-		} else if flags.clang {
-			ccCmd = "${config.ClangBin}/" + ccCmd
+		var extraFlags string
+		if flags.clang {
+			if ctx.Device() && config.SDClang {
+				ccCmd = "${config.SDClangBin}/" + ccCmd
+				extraFlags = " ${config.SDClangFlags}"
+			} else {
+				ccCmd = "${config.ClangBin}/" + ccCmd
+			}
 		} else {
 			ccCmd = gccCmd(flags.toolchain, ccCmd)
 		}
@@ -427,7 +429,6 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				// support exporting dependencies.
 				Implicit: objFile,
 				Args: map[string]string{
-					//"cFlags":    moduleCflags + extraFlags,
 					"cFlags":    moduleToolingCflags,
 					"tidyFlags": flags.tidyFlags,
 				},
