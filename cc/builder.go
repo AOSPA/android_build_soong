@@ -224,6 +224,7 @@ type builderFlags struct {
 	rsFlags       string
 	toolchain     config.Toolchain
 	clang         bool
+	sdclang       bool
 	tidy          bool
 	coverage      bool
 	sAbiDump      bool
@@ -371,7 +372,6 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			continue
 		}
 
-		var extraFlags string
 		if flags.clang {
 			switch ccCmd {
 			case "gcc":
@@ -385,11 +385,14 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 
 		ccDesc := ccCmd
 
-		if ctx.Device() && config.SDClang {
-			ccCmd = "${config.SDClangBin}/" + ccCmd
-			extraFlags = " ${config.SDClangFlags}"
-		} else if flags.clang {
-			ccCmd = "${config.ClangBin}/" + ccCmd
+		var extraFlags string
+		if flags.clang {
+			if flags.sdclang {
+				ccCmd = "${config.SDClangBin}/" + ccCmd
+				extraFlags = " ${config.SDClangFlags}"
+			} else {
+				ccCmd = "${config.ClangBin}/" + ccCmd
+			}
 		} else {
 			ccCmd = gccCmd(flags.toolchain, ccCmd)
 		}
@@ -427,7 +430,6 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				// support exporting dependencies.
 				Implicit: objFile,
 				Args: map[string]string{
-					//"cFlags":    moduleCflags + extraFlags,
 					"cFlags":    moduleToolingCflags,
 					"tidyFlags": flags.tidyFlags,
 				},
@@ -574,7 +576,7 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 	var ldCmd string
 	var extraFlags string
 	if flags.clang {
-		if ctx.Device() && config.SDClang {
+		if flags.sdclang {
 			ldCmd = "${config.SDClangBin}/clang++"
 			extraFlags = " ${config.SDClangFlags}"
 		} else {
@@ -726,7 +728,7 @@ func TransformObjsToObj(ctx android.ModuleContext, objFiles android.Paths,
 	var ldCmd string
         var extraFlags string
 	if flags.clang {
-		if ctx.Device() && config.SDClang {
+		if flags.sdclang {
 			ldCmd = "${config.SDClangBin}/clang++"
 			extraFlags = " ${config.SDClangFlags}"
 		} else {
