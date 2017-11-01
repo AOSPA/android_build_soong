@@ -169,6 +169,9 @@ type productVariables struct {
 	DeviceKernelHeaders []string `json:",omitempty"`
 
 	BoardUsesQTIHardware *bool `json:",omitempty"`
+
+	Uses_generic_camera_parameter_library  *bool `json:",omitempty"`
+	Specific_camera_parameter_library  *string `json:",omitempty"
 }
 
 func boolPtr(v bool) *bool {
