@@ -95,6 +95,9 @@ type BaseLinkerProperties struct {
 			Exclude_shared_libs []string
 		}
 	}
+
+	// wholely static linked libs that only work on QTI chipsets.
+	Qti_whole_static_libs []string `android:"arch_variant,variant_prepend"`
 }
 
 func NewBaseLinker() *baseLinker {
@@ -126,7 +129,12 @@ func (linker *baseLinker) linkerProps() []interface{} {
 }
 
 func (linker *baseLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
+	// check if the device uses QTI chipset
+	if (!ctx.DeviceConfig().BoardUsesQTIHardware()) {
+		linker.Properties.Qti_whole_static_libs = nil
+	}
 	deps.WholeStaticLibs = append(deps.WholeStaticLibs, linker.Properties.Whole_static_libs...)
+	deps.WholeStaticLibs = append(deps.WholeStaticLibs, linker.Properties.Qti_whole_static_libs...)
 	deps.HeaderLibs = append(deps.HeaderLibs, linker.Properties.Header_libs...)
 	deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Static_libs...)
 	deps.SharedLibs = append(deps.SharedLibs, linker.Properties.Shared_libs...)
