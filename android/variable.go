@@ -169,6 +169,8 @@ type productVariables struct {
 	DeviceKernelHeaders []string `json:",omitempty"`
 
 	BoardUsesQTIHardware *bool `json:",omitempty"`
+
+        CameraEnablesNotifyPerformanceMode *bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
@@ -201,6 +203,7 @@ func (v *productVariables) SetDefaultConfig() {
 		Malloc_not_svelte:          boolPtr(false),
 		Safestack:                  boolPtr(false),
 		BoardUsesQTIHardware:      boolPtr(false),
+                CameraEnablesNotifyPerformanceMode:      boolPtr(false),
 	}
 
 	if runtime.GOOS == "linux" {
