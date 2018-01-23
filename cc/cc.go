@@ -862,11 +862,6 @@ func (c *Module) sdclang(ctx BaseModuleContext) bool {
 		return false
 	}
 
-        // FIXME: revert this once the cfi sanitizer issue is fixed
-	if c.sanitize != nil && Bool(c.sanitize.Properties.Sanitize.Cfi) {
-		return false
-	}
-
 	if c.Properties.Sdclang == nil && config.SDClang {
 		return true
 	}
