@@ -98,6 +98,10 @@ type variableProperties struct {
 	        Uses_generic_camera_parameter_library struct {
 		        Srcs []string
 	        }
+
+		Target_Enable_QC_AV_Enhancements struct {
+			Cflags []string
+		}
 	} `android:"arch_variant"`
 }
 
@@ -176,6 +180,8 @@ type productVariables struct {
 
 	Uses_generic_camera_parameter_library  *bool `json:",omitempty"`
 	Specific_camera_parameter_library  *string `json:",omitempty"`
+
+	Target_Enable_QC_AV_Enhancements *bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
