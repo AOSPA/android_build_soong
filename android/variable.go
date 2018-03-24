@@ -172,8 +172,6 @@ type productVariables struct {
 
 	DeviceKernelHeaders []string `json:",omitempty"`
 
-	BoardUsesQTIHardware *bool `json:",omitempty"`
-
 	Uses_generic_camera_parameter_library  *bool `json:",omitempty"`
 	Specific_camera_parameter_library  *string `json:",omitempty"`
 }
@@ -207,7 +205,6 @@ func (v *productVariables) SetDefaultConfig() {
 		DeviceSecondaryAbi:         &[]string{"armeabi-v7a"},
 		Malloc_not_svelte:          boolPtr(false),
 		Safestack:                  boolPtr(false),
-		BoardUsesQTIHardware:      boolPtr(false),
 	}
 
 	if runtime.GOOS == "linux" {
