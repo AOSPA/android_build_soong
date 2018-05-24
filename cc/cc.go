@@ -543,7 +543,7 @@ func (ctx *moduleContextImpl) isVndkExt() bool {
 
 // Create source abi dumps if the module belongs to the list of VndkLibraries.
 func (ctx *moduleContextImpl) createVndkSourceAbiDump() bool {
-	skipAbiChecks := ctx.ctx.Config().IsEnvTrue("SKIP_ABI_CHECKS")
+	skipAbiChecks := true //ctx.ctx.Config().IsEnvTrue("SKIP_ABI_CHECKS")
 	isUnsanitizedVariant := true
 	sanitize := ctx.mod.sanitize
 	if sanitize != nil {
