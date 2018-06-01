@@ -27,10 +27,18 @@ var (
 		"-Werror=implicit-function-declaration",
 	}
 
+	arm64ArchVariantCflags = map[string][]string{
+		"armv8-a": []string{
+			"-march=armv8-a",
+		},
+		"armv8-2a": []string{
+			"-march=armv8.2a",
+		},
+	}
+
 	arm64Ldflags = []string{
 		"-Wl,-m,aarch64_elf64_le_vec",
 		"-Wl,--hash-style=gnu",
-		"-Wl,--fix-cortex-a53-843419",
 		"-fuse-ld=gold",
 		"-Wl,--icf=safe",
 	}
@@ -39,6 +47,17 @@ var (
 
 	arm64CpuVariantCflags = map[string][]string{
 		"cortex-a53": []string{
+			"-mcpu=cortex-a53",
+		},
+		"cortex-a55": []string{
+			// The cortex-a55 target is not yet supported,
+			// so use cortex-a53.
+			"-mcpu=cortex-a53",
+		},
+		"cortex-a75": []string{
+			// Use the cortex-a53 since it is similar to the little
+			// core (cortex-a55) and is sensitive to ordering.
+			// The cortex-a55 target is not yet supported.
 			"-mcpu=cortex-a53",
 		},
 		"kryo": []string{
@@ -80,8 +99,11 @@ func setSdclangFlags() {
 func init() {
 	android.RegisterArchVariants(android.Arm64,
 		"armv8_a",
+		"armv8_2a",
 		"cortex-a53",
+		"cortex-a55",
 		"cortex-a73",
+		"cortex-a75",
 		"kryo",
 		"kryo300",
 		"exynos-m1",
@@ -107,10 +129,18 @@ func init() {
 	pctx.StaticVariable("Arm64ClangLdflags", strings.Join(ClangFilterUnknownCflags(arm64Ldflags), " "))
 	pctx.StaticVariable("Arm64ClangCppflags", strings.Join(ClangFilterUnknownCflags(arm64Cppflags), " "))
 
+	pctx.StaticVariable("Arm64ClangArmv8ACflags", strings.Join(arm64ArchVariantCflags["armv8-a"], " "))
+	pctx.StaticVariable("Arm64ClangArmv82ACflags", strings.Join(arm64ArchVariantCflags["armv8-2a"], " "))
+
 	pctx.StaticVariable("Arm64CortexA53Cflags",
 		strings.Join(arm64CpuVariantCflags["cortex-a53"], " "))
 	pctx.StaticVariable("Arm64ClangCortexA53Cflags",
 		strings.Join(arm64ClangCpuVariantCflags["cortex-a53"], " "))
+
+	pctx.StaticVariable("Arm64CortexA55Cflags",
+		strings.Join(arm64CpuVariantCflags["cortex-a55"], " "))
+	pctx.StaticVariable("Arm64ClangCortexA55Cflags",
+		strings.Join(arm64ClangCpuVariantCflags["cortex-a55"], " "))
 
 	pctx.StaticVariable("Arm64KryoCflags",
 		strings.Join(arm64CpuVariantCflags["kryo"], " "))
@@ -132,16 +162,25 @@ var (
 	arm64CpuVariantCflagsVar = map[string]string{
 		"":           "",
 		"cortex-a53": "${config.Arm64CortexA53Cflags}",
+		"cortex-a55": "${config.Arm64CortexA55Cflags}",
 		"cortex-a73": "${config.Arm64CortexA53Cflags}",
+		"cortex-a75": "${config.Arm64CortexA55Cflags}",
 		"kryo":       "${config.Arm64KryoCflags}",
 		"exynos-m1":  "${config.Arm64ExynosM1Cflags}",
 		"exynos-m2":  "${config.Arm64ExynosM2Cflags}",
 	}
 
+	arm64ClangArchVariantCflagsVar = map[string]string{
+		"armv8-a":  "${config.Arm64ClangArmv8ACflags}",
+		"armv8-2a": "${config.Arm64ClangArmv82ACflags}",
+	}
+
 	arm64ClangCpuVariantCflagsVar = map[string]string{
 		"":           "",
 		"cortex-a53": "${config.Arm64ClangCortexA53Cflags}",
+		"cortex-a55": "${config.Arm64ClangCortexA55Cflags}",
 		"cortex-a73": "${config.Arm64ClangCortexA53Cflags}",
+		"cortex-a75": "${config.Arm64ClangCortexA55Cflags}",
 		"kryo":       "${config.Arm64ClangKryoCflags}",
 		"exynos-m1":  "${config.Arm64ClangExynosM1Cflags}",
 		"exynos-m2":  "${config.Arm64ClangExynosM2Cflags}",
@@ -151,6 +190,7 @@ var (
 type toolchainArm64 struct {
 	toolchain64Bit
 
+	ldflags              string
 	toolchainCflags      string
 	toolchainClangCflags string
 }
@@ -184,7 +224,7 @@ func (t *toolchainArm64) Cppflags() string {
 }
 
 func (t *toolchainArm64) Ldflags() string {
-	return "${config.Arm64Ldflags}"
+	return t.ldflags
 }
 
 func (t *toolchainArm64) IncludeFlags() string {
@@ -204,7 +244,7 @@ func (t *toolchainArm64) ClangCppflags() string {
 }
 
 func (t *toolchainArm64) ClangLdflags() string {
-	return "${config.Arm64Ldflags}"
+	return t.ldflags
 }
 
 func (t *toolchainArm64) ToolchainClangCflags() string {
@@ -216,13 +256,34 @@ func (toolchainArm64) SanitizerRuntimeLibraryArch() string {
 }
 
 func arm64ToolchainFactory(arch android.Arch) Toolchain {
-	if arch.ArchVariant != "armv8-a" {
+	switch arch.ArchVariant {
+	case "armv8-a":
+	case "armv8-2a":
+		// Nothing extra for armv8-a/armv8-2a
+	default:
 		panic(fmt.Sprintf("Unknown ARM architecture version: %q", arch.ArchVariant))
 	}
 
+	toolchainClangCflags := []string{arm64ClangArchVariantCflagsVar[arch.ArchVariant]}
+	toolchainClangCflags = append(toolchainClangCflags,
+		variantOrDefault(arm64ClangCpuVariantCflagsVar, arch.CpuVariant))
+
+	var extraLdflags string
+	switch arch.CpuVariant {
+	case "cortex-a53", "cortex-a73", "kryo", "exynos-m1", "exynos-m2",
+		// This variant might not need the workaround but leave it
+		// in the list since it has had the workaround on before.
+		"denver64":
+		extraLdflags = "-Wl,--fix-cortex-a53-843419"
+	}
+
 	return &toolchainArm64{
+		ldflags: strings.Join([]string{
+			"${config.Arm64Ldflags}",
+			extraLdflags,
+		}, " "),
 		toolchainCflags:      variantOrDefault(arm64CpuVariantCflagsVar, arch.CpuVariant),
-		toolchainClangCflags: variantOrDefault(arm64ClangCpuVariantCflagsVar, arch.CpuVariant),
+		toolchainClangCflags: strings.Join(toolchainClangCflags, " "),
 	}
 }
 
