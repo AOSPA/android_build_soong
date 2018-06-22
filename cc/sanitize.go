@@ -224,8 +224,8 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
-	// Enable CFI for all components in the include paths
-	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) {
+	// Enable CFI for all components in the include paths (for Aarch64 only)
+	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
 		s.Cfi = boolPtr(true)
 		if inList("cfi", ctx.Config().SanitizeDeviceDiag()) {
 			s.Diag.Cfi = boolPtr(true)
@@ -252,6 +252,12 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	// Also disable CFI for host builds.
 	if ctx.Host() {
+		s.Cfi = nil
+		s.Diag.Cfi = nil
+	}
+
+	// Also disable CFI for VNDK variants of components
+	if ctx.isVndk() && ctx.useVndk() {
 		s.Cfi = nil
 		s.Diag.Cfi = nil
 	}
@@ -424,12 +430,11 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 		if flags.Sdclang {
 			_, flags.LdFlags = removeFromList("-Wl,-plugin-opt,O1", flags.LdFlags)
-			var found bool
-			if found, flags.LdFlags = removeFromList("${config.Arm64Ldflags}", flags.LdFlags); found {
-				flags.LdFlags = append(flags.LdFlags, "${config.SdclangArm64Ldflags}")
-			}
 			flags.CFlags = append(flags.CFlags, "-fuse-ld=qcld")
 			flags.LdFlags = append(flags.LdFlags, "-fuse-ld=qcld")
+			if ctx.Target().Arch.ArchType.Name == "arm64" {
+				flags.LdFlags = append(flags.LdFlags, "-Wl,-m,aarch64linux_androideabi")
+			}
 		}
 	}
 
@@ -546,6 +551,11 @@ func (sanitize *sanitize) isUnsanitizedVariant() bool {
 	return !sanitize.isSanitizerEnabled(asan) &&
 		!sanitize.isSanitizerEnabled(tsan) &&
 		!sanitize.isSanitizerEnabled(cfi)
+}
+
+func (sanitize *sanitize) isVariantOnProductionDevice() bool {
+	return !sanitize.isSanitizerEnabled(asan) &&
+		!sanitize.isSanitizerEnabled(tsan)
 }
 
 func (sanitize *sanitize) SetSanitizer(t sanitizerType, b bool) {

@@ -96,12 +96,11 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 		}
 
 		if flags.Sdclang {
-			var found bool
-			if found, flags.LdFlags = removeFromList("${config.Arm64Ldflags}", flags.LdFlags); found {
-				flags.LdFlags = append(flags.LdFlags, "${config.SdclangArm64Ldflags}")
-			}
 			flags.CFlags = append(flags.CFlags, "-fuse-ld=qcld")
 			flags.LdFlags = append(flags.LdFlags, "-fuse-ld=qcld")
+			if ctx.Target().Arch.ArchType.Name == "arm64" {
+				flags.LdFlags = append(flags.LdFlags, "-Wl,-m,aarch64linux_androideabi")
+			}
 		}
 	}
 	return flags

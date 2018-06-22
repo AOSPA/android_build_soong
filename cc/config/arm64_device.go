@@ -80,22 +80,6 @@ const (
 	arm64GccVersion = "4.9"
 )
 
-func setSdclangFlags() {
-	sdclangArm64Ldflags := arm64Ldflags
-	s := -1
-	for i, l := range arm64Ldflags {
-		if l == "-Wl,-m,aarch64_elf64_le_vec" {
-			s = i
-			break
-		}
-	}
-	if s >= 0 {
-		sdclangArm64Ldflags = append(arm64Ldflags[:s], arm64Ldflags[s+1:]...)
-	}
-
-	pctx.StaticVariable("SdclangArm64Ldflags", strings.Join(sdclangArm64Ldflags, " "))
-}
-
 func init() {
 	android.RegisterArchVariants(android.Arm64,
 		"armv8_a",
@@ -122,8 +106,6 @@ func init() {
 	pctx.StaticVariable("Arm64Ldflags", strings.Join(arm64Ldflags, " "))
 	pctx.StaticVariable("Arm64Cppflags", strings.Join(arm64Cppflags, " "))
 	pctx.StaticVariable("Arm64IncludeFlags", bionicHeaders("arm64"))
-
-	setSdclangFlags()
 
 	pctx.StaticVariable("Arm64ClangCflags", strings.Join(ClangFilterUnknownCflags(arm64Cflags), " "))
 	pctx.StaticVariable("Arm64ClangLdflags", strings.Join(ClangFilterUnknownCflags(arm64Ldflags), " "))
