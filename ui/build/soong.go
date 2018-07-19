@@ -91,7 +91,7 @@ func runSoong(ctx Context, config Config) {
 		defer ctx.EndTrace()
 
 		cmd := Command(ctx, config, config.PrebuiltBuildTool("qssi"),
-			"vendor/qcom/opensource/core-utils/build/QSSI_violators", "out/build-sdm845.ninja")
+			"vendor/qcom/opensource/core-utils/build/QSSI_violators")
 
 		cmd.Sandbox = soongSandbox
 		cmd.Stdin = ctx.Stdin()
@@ -100,15 +100,7 @@ func runSoong(ctx Context, config Config) {
 		defer ctx.ImportNinjaLog(filepath.Join(config.OutDir(), ".ninja_log"), time.Now())
 		err := cmd.Run()
 		if err != nil {
-			ctx.Verboseln("QSSI_violators file not found, ignoring and continuing...", err)
-		} else {
-			envFile := filepath.Join(config.OutDir(), "/QSSI_violators.txt")
-			if _, err := os.Stat(envFile); err == nil {
-				//To enable QSSI enforcement
-				//Disabled for now
-				//ctx.Verboseln("Failed to build because of QSSI violators. Please look at QSSI_violators.txt file")
-				//os.Exit(-1)
-			}
+			ctx.Verboseln("QSSI_violators returned error...")
 		}
 	}()
 

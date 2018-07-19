@@ -743,6 +743,19 @@ func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 	if isVndkExt {
 		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-allow-extensions")
 	}
+	var sdclangAbiCheckIgnoreList = []string{
+		"libbinder",
+		"libhwbinder",
+		"libprotobuf-cpp-lite",
+		"libprotobuf-cpp-full",
+		"libunwindstack",
+		"libvixl-arm64",
+		"libvixl-arm",
+	}
+	if config.SDClang && !inList("-advice-only", localAbiCheckAllowFlags) &&
+		inList(ctx.ModuleName(), sdclangAbiCheckIgnoreList) {
+		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-advice-only")
+	}
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        sAbiDiff,
