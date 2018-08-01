@@ -42,11 +42,6 @@ type variableProperties struct {
 			Enabled *bool `android:"arch_variant"`
 		} `android:"arch_variant"`
 
-		Brillo struct {
-			Cflags         []string
-			Version_script *string `android:"arch_variant"`
-		} `android:"arch_variant"`
-
 		Malloc_not_svelte struct {
 			Cflags []string
 		}
@@ -64,6 +59,11 @@ type variableProperties struct {
 		}
 
 		Override_rs_driver struct {
+			Cflags []string
+		}
+
+		// Product_is_iot is true for Android Things devices.
+		Product_is_iot struct {
 			Cflags []string
 		}
 
@@ -92,6 +92,9 @@ type variableProperties struct {
 		Eng struct {
 			Cflags   []string
 			Cppflags []string
+			Lto      struct {
+				Never *bool
+			}
 		}
 
 		Pdk struct {
@@ -181,7 +184,6 @@ type productVariables struct {
 
 	Allow_missing_dependencies *bool `json:",omitempty"`
 	Unbundled_build            *bool `json:",omitempty"`
-	Brillo                     *bool `json:",omitempty"`
 	Malloc_not_svelte          *bool `json:",omitempty"`
 	Safestack                  *bool `json:",omitempty"`
 	HostStaticBinaries         *bool `json:",omitempty"`
@@ -211,6 +213,8 @@ type productVariables struct {
 	OdmPath     *string `json:",omitempty"`
 	ProductPath *string `json:",omitempty"`
 
+	UseClangLld *bool `json:",omitempty"`
+
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
 
@@ -232,6 +236,8 @@ type productVariables struct {
 
 	Override_rs_driver *string `json:",omitempty"`
 
+	Product_is_iot *bool `json:",omitempty"`
+
 	DeviceKernelHeaders []string `json:",omitempty"`
 	DistDir             *string  `json:",omitempty"`
 
@@ -240,6 +246,11 @@ type productVariables struct {
 	NamespacesToExport []string `json:",omitempty"`
 
 	PgoAdditionalProfileDirs []string `json:",omitempty"`
+
+	BoardVendorSepolicyDirs      []string `json:",omitempty"`
+	BoardOdmSepolicyDirs         []string `json:",omitempty"`
+	BoardPlatPublicSepolicyDirs  []string `json:",omitempty"`
+	BoardPlatPrivateSepolicyDirs []string `json:",omitempty"`
 
 	VendorVars map[string]map[string]string `json:",omitempty"`
 }

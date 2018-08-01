@@ -43,6 +43,9 @@ var (
 		"-Wl,--icf=safe",
 	}
 
+	arm64Lldflags = append(ClangFilterUnknownLldflags(arm64Ldflags),
+		"-Wl,-z,max-page-size=4096")
+
 	arm64Cppflags = []string{}
 
 	arm64CpuVariantCflags = map[string][]string{
@@ -50,15 +53,12 @@ var (
 			"-mcpu=cortex-a53",
 		},
 		"cortex-a55": []string{
-			// The cortex-a55 target is not yet supported,
-			// so use cortex-a53.
-			"-mcpu=cortex-a53",
+			"-mcpu=cortex-a55",
 		},
 		"cortex-a75": []string{
-			// Use the cortex-a53 since it is similar to the little
+			// Use the cortex-a55 since it is similar to the little
 			// core (cortex-a55) and is sensitive to ordering.
-			// The cortex-a55 target is not yet supported.
-			"-mcpu=cortex-a53",
+			"-mcpu=cortex-a55",
 		},
 		"kryo": []string{
 			// Use the cortex-a57 cpu since some compilers
@@ -104,11 +104,13 @@ func init() {
 
 	pctx.StaticVariable("Arm64Cflags", strings.Join(arm64Cflags, " "))
 	pctx.StaticVariable("Arm64Ldflags", strings.Join(arm64Ldflags, " "))
+	pctx.StaticVariable("Arm64Lldflags", strings.Join(arm64Lldflags, " "))
 	pctx.StaticVariable("Arm64Cppflags", strings.Join(arm64Cppflags, " "))
 	pctx.StaticVariable("Arm64IncludeFlags", bionicHeaders("arm64"))
 
 	pctx.StaticVariable("Arm64ClangCflags", strings.Join(ClangFilterUnknownCflags(arm64Cflags), " "))
 	pctx.StaticVariable("Arm64ClangLdflags", strings.Join(ClangFilterUnknownCflags(arm64Ldflags), " "))
+	pctx.StaticVariable("Arm64ClangLldflags", strings.Join(ClangFilterUnknownCflags(arm64Lldflags), " "))
 	pctx.StaticVariable("Arm64ClangCppflags", strings.Join(ClangFilterUnknownCflags(arm64Cppflags), " "))
 
 	pctx.StaticVariable("Arm64ClangArmv8ACflags", strings.Join(arm64ArchVariantCflags["armv8-a"], " "))
@@ -173,6 +175,7 @@ type toolchainArm64 struct {
 	toolchain64Bit
 
 	ldflags              string
+	lldflags             string
 	toolchainCflags      string
 	toolchainClangCflags string
 }
@@ -229,6 +232,10 @@ func (t *toolchainArm64) ClangLdflags() string {
 	return t.ldflags
 }
 
+func (t *toolchainArm64) ClangLldflags() string {
+	return t.lldflags
+}
+
 func (t *toolchainArm64) ToolchainClangCflags() string {
 	return t.toolchainClangCflags
 }
@@ -262,6 +269,10 @@ func arm64ToolchainFactory(arch android.Arch) Toolchain {
 	return &toolchainArm64{
 		ldflags: strings.Join([]string{
 			"${config.Arm64Ldflags}",
+			extraLdflags,
+		}, " "),
+		lldflags: strings.Join([]string{
+			"${config.Arm64Lldflags}",
 			extraLdflags,
 		}, " "),
 		toolchainCflags:      variantOrDefault(arm64CpuVariantCflagsVar, arch.CpuVariant),

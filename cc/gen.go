@@ -25,7 +25,7 @@ import (
 )
 
 func init() {
-	pctx.SourcePathVariable("lexCmd", "prebuilts/misc/${config.HostPrebuiltTag}/flex/flex-2.5.39")
+	pctx.SourcePathVariable("lexCmd", "prebuilts/build-tools/${config.HostPrebuiltTag}/bin/flex")
 	pctx.SourcePathVariable("yaccCmd", "prebuilts/build-tools/${config.HostPrebuiltTag}/bin/bison")
 	pctx.SourcePathVariable("yaccDataDir", "prebuilts/build-tools/common/bison")
 
@@ -48,7 +48,7 @@ var (
 
 	aidl = pctx.AndroidStaticRule("aidl",
 		blueprint.RuleParams{
-			Command:     "$aidlCmd -d${out}.d -ninja $aidlFlags $in $outDir $out",
+			Command:     "$aidlCmd -d${out}.d --ninja $aidlFlags $in $outDir $out",
 			CommandDeps: []string{"$aidlCmd"},
 			Depfile:     "${out}.d",
 			Deps:        blueprint.DepsGCC,

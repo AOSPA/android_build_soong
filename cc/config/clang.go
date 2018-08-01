@@ -36,6 +36,7 @@ var ClangUnknownCflags = sorted([]string{
 	"-Wno-error=maybe-uninitialized",
 	"-Wno-error=unused-but-set-parameter",
 	"-Wno-error=unused-but-set-variable",
+	"-Wno-extended-offsetof",
 	"-Wno-free-nonheap-object",
 	"-Wno-literal-suffix",
 	"-Wno-maybe-uninitialized",
@@ -82,6 +83,15 @@ var ClangUnknownCflags = sorted([]string{
 	"--enable-stdcall-fixup",
 })
 
+// Ldflags that should be filtered out when linking with clang lld
+var ClangUnknownLldflags = sorted([]string{
+	"-fuse-ld=gold",
+	"-Wl,--icf=safe",
+	"-Wl,--fix-cortex-a8",
+	"-Wl,--no-fix-cortex-a8",
+	"-Wl,-m,aarch64_elf64_le_vec",
+})
+
 var ClangLibToolingUnknownCflags = []string{
 	"-flto*",
 	"-fsanitize*",
@@ -117,9 +127,9 @@ func init() {
 		// http://b/68236239 Allow 0/NULL instead of using nullptr everywhere.
 		"-Wno-zero-as-null-pointer-constant",
 
-		// http://b/36463318 Clang executes with an absolute path, so clang-provided
-		// headers are now absolute.
-		"-fdebug-prefix-map=$$PWD/=",
+		// Warnings from clang-7.0
+		"-Wno-deprecated-register",
+		"-Wno-sign-compare",
 	}, " "))
 
 	pctx.StaticVariable("ClangExtraCppflags", strings.Join([]string{
@@ -155,13 +165,22 @@ func init() {
 		// http://b/72331526 Disable -Wtautological-* until the instances detected by these
 		// new warnings are fixed.
 		"-Wno-tautological-constant-compare",
+		"-Wno-tautological-type-limit-compare",
+		"-Wno-tautological-unsigned-enum-zero-compare",
+		"-Wno-tautological-unsigned-zero-compare",
 
 		// http://b/72331524 Allow null pointer arithmetic until the instances detected by
 		// this new warning are fixed.
 		"-Wno-null-pointer-arithmetic",
 
-		// http://b/72330874 Disable -Wenum-compare until the instances detected by this new
-		// warning are fixed.
+		// Disable c++98-specific warning since Android is not concerned with C++98
+		// compatibility.
+		"-Wno-c++98-compat-extra-semi",
+	}, " "))
+
+	// Extra cflags for projects under external/ directory to disable warnings that are infeasible
+	// to fix in all the external projects and their upstream repos.
+	pctx.StaticVariable("ClangExtraExternalCflags", strings.Join([]string{
 		"-Wno-enum-compare",
 		"-Wno-enum-compare-switch",
 	}, " "))
@@ -171,6 +190,17 @@ func ClangFilterUnknownCflags(cflags []string) []string {
 	ret := make([]string, 0, len(cflags))
 	for _, f := range cflags {
 		if !inListSorted(f, ClangUnknownCflags) {
+			ret = append(ret, f)
+		}
+	}
+
+	return ret
+}
+
+func ClangFilterUnknownLldflags(lldflags []string) []string {
+	ret := make([]string, 0, len(lldflags))
+	for _, f := range lldflags {
+		if !inListSorted(f, ClangUnknownLldflags) {
 			ret = append(ret, f)
 		}
 	}

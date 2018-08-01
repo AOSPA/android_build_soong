@@ -78,17 +78,23 @@ var (
 		"--sysroot ${LinuxGccRoot}/sysroot",
 	}...)
 
+	linuxClangLldflags = ClangFilterUnknownLldflags(linuxClangLdflags)
+
 	linuxX86ClangLdflags = append(ClangFilterUnknownCflags(linuxX86Ldflags), []string{
 		"-B${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}/32",
 		"-L${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}/32",
 		"-L${LinuxGccRoot}/${LinuxGccTriple}/lib32",
 	}...)
 
+	linuxX86ClangLldflags = ClangFilterUnknownLldflags(linuxX86ClangLdflags)
+
 	linuxX8664ClangLdflags = append(ClangFilterUnknownCflags(linuxX8664Ldflags), []string{
 		"-B${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}",
 		"-L${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}",
 		"-L${LinuxGccRoot}/${LinuxGccTriple}/lib64",
 	}...)
+
+	linuxX8664ClangLldflags = ClangFilterUnknownLldflags(linuxX8664ClangLdflags)
 
 	linuxClangCppflags = []string{
 		"-isystem ${LinuxGccRoot}/${LinuxGccTriple}/include/c++/${LinuxGccVersion}",
@@ -135,6 +141,7 @@ func init() {
 
 	pctx.StaticVariable("LinuxClangCflags", strings.Join(linuxClangCflags, " "))
 	pctx.StaticVariable("LinuxClangLdflags", strings.Join(linuxClangLdflags, " "))
+	pctx.StaticVariable("LinuxClangLldflags", strings.Join(linuxClangLldflags, " "))
 	pctx.StaticVariable("LinuxClangCppflags", strings.Join(linuxClangCppflags, " "))
 
 	// Extended cflags
@@ -148,7 +155,9 @@ func init() {
 	pctx.StaticVariable("LinuxX8664ClangCflags",
 		strings.Join(ClangFilterUnknownCflags(linuxX8664Cflags), " "))
 	pctx.StaticVariable("LinuxX86ClangLdflags", strings.Join(linuxX86ClangLdflags, " "))
+	pctx.StaticVariable("LinuxX86ClangLldflags", strings.Join(linuxX86ClangLldflags, " "))
 	pctx.StaticVariable("LinuxX8664ClangLdflags", strings.Join(linuxX8664ClangLdflags, " "))
+	pctx.StaticVariable("LinuxX8664ClangLldflags", strings.Join(linuxX8664ClangLldflags, " "))
 	pctx.StaticVariable("LinuxX86ClangCppflags", strings.Join(linuxX86ClangCppflags, " "))
 	pctx.StaticVariable("LinuxX8664ClangCppflags", strings.Join(linuxX8664ClangCppflags, " "))
 	// Yasm flags
@@ -242,8 +251,16 @@ func (t *toolchainLinuxX86) ClangLdflags() string {
 	return "${config.LinuxClangLdflags} ${config.LinuxX86ClangLdflags}"
 }
 
+func (t *toolchainLinuxX86) ClangLldflags() string {
+	return "${config.LinuxClangLldflags} ${config.LinuxX86ClangLldflags}"
+}
+
 func (t *toolchainLinuxX8664) ClangLdflags() string {
 	return "${config.LinuxClangLdflags} ${config.LinuxX8664ClangLdflags}"
+}
+
+func (t *toolchainLinuxX8664) ClangLldflags() string {
+	return "${config.LinuxClangLldflags} ${config.LinuxX8664ClangLldflags}"
 }
 
 func (t *toolchainLinuxX86) YasmFlags() string {

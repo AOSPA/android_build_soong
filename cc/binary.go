@@ -41,9 +41,6 @@ type BinaryLinkerProperties struct {
 	// extension (if any) appended
 	Symlinks []string `android:"arch_variant"`
 
-	// do not pass -pie
-	No_pie *bool `android:"arch_variant"`
-
 	DynamicLinker string `blueprint:"mutated"`
 
 	// Names of modules to be overridden. Listed modules can only be other binaries
@@ -216,9 +213,6 @@ func (binary *binaryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Flags
 	if ctx.Host() && !binary.static() {
 		if !ctx.Config().IsEnvTrue("DISABLE_HOST_PIE") {
 			flags.LdFlags = append(flags.LdFlags, "-pie")
-			if ctx.Windows() {
-				flags.LdFlags = append(flags.LdFlags, "-Wl,-e_mainCRTStartup")
-			}
 		}
 	}
 
@@ -318,6 +312,10 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 	builderFlags := flagsToBuilderFlags(flags)
 
 	if binary.stripper.needsStrip(ctx) {
+		// b/80093681, GNU strip/objcopy bug.
+		// Use llvm-{strip,objcopy} when clang lld is used.
+		builderFlags.stripUseLlvmStrip =
+			flags.Clang && binary.baseLinker.useClangLld(ctx)
 		strippedOutputFile := outputFile
 		outputFile = android.PathForModuleOut(ctx, "unstripped", fileName)
 		binary.stripper.strip(ctx, outputFile, strippedOutputFile, builderFlags)

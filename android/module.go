@@ -124,6 +124,7 @@ type ModuleContext interface {
 
 	InstallInData() bool
 	InstallInSanitizerDir() bool
+	InstallInRecovery() bool
 
 	RequiredModuleNames() []string
 
@@ -143,7 +144,9 @@ type ModuleContext interface {
 	VisitDirectDeps(visit func(Module))
 	VisitDirectDepsWithTag(tag blueprint.DependencyTag, visit func(Module))
 	VisitDirectDepsIf(pred func(Module) bool, visit func(Module))
+	// Deprecated: use WalkDeps instead to support multiple dependency tags on the same module
 	VisitDepsDepthFirst(visit func(Module))
+	// Deprecated: use WalkDeps instead to support multiple dependency tags on the same module
 	VisitDepsDepthFirstIf(pred func(Module) bool, visit func(Module))
 	WalkDeps(visit func(Module, Module) bool)
 
@@ -176,6 +179,7 @@ type Module interface {
 	Target() Target
 	InstallInData() bool
 	InstallInSanitizerDir() bool
+	InstallInRecovery() bool
 	SkipInstall()
 	ExportedToMake() bool
 
@@ -191,8 +195,6 @@ type nameProperties struct {
 }
 
 type commonProperties struct {
-	Tags []string
-
 	// emit build rules for this module
 	Enabled *bool `android:"arch_variant"`
 
@@ -239,8 +241,14 @@ type commonProperties struct {
 	// /system/product if product partition does not exist).
 	Product_specific *bool
 
+	// Whether this module is installed to recovery partition
+	Recovery *bool
+
 	// init.rc files to be installed if this module is installed
 	Init_rc []string
+
+	// VINTF manifest fragments to be installed if this module is installed
+	Vintf_fragments []string
 
 	// names of other modules to install if this module is installed
 	Required []string `android:"arch_variant"`
@@ -320,6 +328,7 @@ func InitAndroidModule(m Module) {
 		&base.nameProperties,
 		&base.commonProperties,
 		&base.variableProperties)
+	base.customizableProperties = m.GetProperties()
 }
 
 func InitAndroidArchModule(m Module, hod HostOrDeviceSupported, defaultMultilib Multilib) {
@@ -497,6 +506,22 @@ func (a *ModuleBase) DeviceSupported() bool {
 				*a.hostAndDeviceProperties.Device_supported)
 }
 
+func (a *ModuleBase) Platform() bool {
+	return !a.DeviceSpecific() && !a.SocSpecific() && !a.ProductSpecific()
+}
+
+func (a *ModuleBase) DeviceSpecific() bool {
+	return Bool(a.commonProperties.Device_specific)
+}
+
+func (a *ModuleBase) SocSpecific() bool {
+	return Bool(a.commonProperties.Vendor) || Bool(a.commonProperties.Proprietary) || Bool(a.commonProperties.Soc_specific)
+}
+
+func (a *ModuleBase) ProductSpecific() bool {
+	return Bool(a.commonProperties.Product_specific)
+}
+
 func (a *ModuleBase) Enabled() bool {
 	if a.commonProperties.Enabled == nil {
 		return !a.Os().DefaultDisabled
@@ -516,6 +541,7 @@ func (a *ModuleBase) computeInstallDeps(
 	ctx blueprint.ModuleContext) Paths {
 
 	result := Paths{}
+	// TODO(ccross): we need to use WalkDeps and have some way to know which dependencies require installation
 	ctx.VisitDepsDepthFirstIf(isFileInstaller,
 		func(m blueprint.Module) {
 			fileInstaller := m.(fileInstaller)
@@ -540,6 +566,10 @@ func (p *ModuleBase) InstallInData() bool {
 
 func (p *ModuleBase) InstallInSanitizerDir() bool {
 	return false
+}
+
+func (p *ModuleBase) InstallInRecovery() bool {
+	return Bool(p.commonProperties.Recovery)
 }
 
 func (a *ModuleBase) generateModuleTarget(ctx ModuleContext) {
@@ -990,8 +1020,19 @@ func (a *androidModuleContext) InstallInSanitizerDir() bool {
 	return a.module.InstallInSanitizerDir()
 }
 
+func (a *androidModuleContext) InstallInRecovery() bool {
+	return a.module.InstallInRecovery()
+}
+
 func (a *androidModuleContext) skipInstall(fullInstallPath OutputPath) bool {
 	if a.module.base().commonProperties.SkipInstall {
+		return true
+	}
+
+	// We'll need a solution for choosing which of modules with the same name in different
+	// namespaces to install.  For now, reuse the list of namespaces exported to Make as the
+	// list of namespaces to install in a Soong-only build.
+	if !a.module.base().commonProperties.NamespaceExportedToMake {
 		return true
 	}
 

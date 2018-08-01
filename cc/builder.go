@@ -67,7 +67,9 @@ var (
 
 	partialLd = pctx.AndroidStaticRule("partialLd",
 		blueprint.RuleParams{
-			Command:     "$ldCmd -nostdlib -Wl,-r ${in} -o ${out} ${ldFlags}",
+			// Without -no-pie, clang 7.0 adds -pie to link Android files,
+			// but -r and -pie cannot be used together.
+			Command:     "$ldCmd -nostdlib -no-pie -Wl,-r ${in} -o ${out} ${ldFlags}",
 			CommandDeps: []string{"$ldCmd"},
 		},
 		"ldCmd", "ldFlags")
@@ -109,13 +111,14 @@ var (
 		"objcopyCmd", "prefix")
 
 	_ = pctx.SourcePathVariable("stripPath", "build/soong/scripts/strip.sh")
+	_ = pctx.SourcePathVariable("xzCmd", "prebuilts/build-tools/${config.HostPrebuiltTag}/bin/xz")
 
 	strip = pctx.AndroidStaticRule("strip",
 		blueprint.RuleParams{
 			Depfile:     "${out}.d",
 			Deps:        blueprint.DepsGCC,
-			Command:     "CROSS_COMPILE=$crossCompile $stripPath ${args} -i ${in} -o ${out} -d ${out}.d",
-			CommandDeps: []string{"$stripPath"},
+			Command:     "CROSS_COMPILE=$crossCompile XZ=$xzCmd CLANG_BIN=${config.ClangBin} $stripPath ${args} -i ${in} -o ${out} -d ${out}.d",
+			CommandDeps: []string{"$stripPath", "$xzCmd"},
 		},
 		"args", "crossCompile")
 
@@ -200,7 +203,7 @@ var (
 			// TODO(b/78139997): Add -check-all-apis back
 			commandStr := "($sAbiDiffer $allowFlags -lib $libName -arch $arch -o ${out} -new $in -old $referenceDump)"
 			distAbiDiffDir := android.PathForDist(ctx, "abidiffs")
-			commandStr += "|| (echo ' ---- Please update abi references by running platform/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l ${libName} ----'"
+			commandStr += "|| (echo ' ---- Please update abi references by running $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l ${libName} ----'"
 			if distAbiDiffDir.Valid() {
 				commandStr += " && (mkdir -p " + distAbiDiffDir.String() + " && cp ${out} " + distAbiDiffDir.String() + ")"
 			}
@@ -264,6 +267,7 @@ type builderFlags struct {
 	stripKeepSymbols       bool
 	stripKeepMiniDebugInfo bool
 	stripAddGnuDebuglink   bool
+	stripUseLlvmStrip      bool
 }
 
 type Objects struct {
@@ -735,10 +739,13 @@ func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 	baseName, exportedHeaderFlags string, isVndkExt bool) android.OptionalPath {
 
 	outputFile := android.PathForModuleOut(ctx, baseName+".abidiff")
-
+	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 	localAbiCheckAllowFlags := append([]string(nil), abiCheckAllowFlags...)
 	if exportedHeaderFlags == "" {
 		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-advice-only")
+	}
+	if inList(libName, llndkLibraries) {
+		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-consider-opaque-types-different")
 	}
 	if isVndkExt {
 		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-allow-extensions")
@@ -765,7 +772,7 @@ func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 		Implicit:    referenceDump,
 		Args: map[string]string{
 			"referenceDump": referenceDump.String(),
-			"libName":       baseName[0:(len(baseName) - len(filepath.Ext(baseName)))],
+			"libName":       libName,
 			"arch":          ctx.Arch().ArchType.Name,
 			"allowFlags":    strings.Join(localAbiCheckAllowFlags, " "),
 		},
@@ -850,6 +857,9 @@ func TransformStrip(ctx android.ModuleContext, inputFile android.Path,
 	}
 	if flags.stripKeepSymbols {
 		args += " --keep-symbols"
+	}
+	if flags.stripUseLlvmStrip {
+		args += " --use-llvm-strip"
 	}
 
 	ctx.Build(pctx, android.BuildParams{

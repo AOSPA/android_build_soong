@@ -142,6 +142,19 @@ type BaseCompilerProperties struct {
 			// variant of the C/C++ module.
 			Cflags []string
 		}
+		Recovery struct {
+			// list of source files that should only be used in the
+			// recovery variant of the C/C++ module.
+			Srcs []string
+
+			// list of source files that should not be used to
+			// build the recovery variant of the C/C++ module.
+			Exclude_srcs []string
+
+			// List of additional cflags that should be used to build the recovery
+			// variant of the C/C++ module.
+			Cflags []string
+		}
 	}
 
 	Proto struct {
@@ -245,6 +258,8 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	CheckBadCompilerFlags(ctx, "cppflags", compiler.Properties.Cppflags)
 	CheckBadCompilerFlags(ctx, "conlyflags", compiler.Properties.Conlyflags)
 	CheckBadCompilerFlags(ctx, "asflags", compiler.Properties.Asflags)
+	CheckBadCompilerFlags(ctx, "vendor.cflags", compiler.Properties.Target.Vendor.Cflags)
+	CheckBadCompilerFlags(ctx, "recovery.cflags", compiler.Properties.Target.Recovery.Cflags)
 
 	esc := proptools.NinjaAndShellEscape
 
@@ -286,7 +301,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		// behavior here, and the NDK always has all the NDK headers available.
 		flags.SystemIncludeFlags = append(flags.SystemIncludeFlags,
 			"-isystem "+getCurrentIncludePath(ctx).String(),
-			"-isystem "+getCurrentIncludePath(ctx).Join(ctx, tc.ClangTriple()).String())
+			"-isystem "+getCurrentIncludePath(ctx).Join(ctx, config.NDKTriple(tc)).String())
 
 		// Traditionally this has come from android/api-level.h, but with the
 		// libc headers unified it must be set by the build system since we
@@ -315,6 +330,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		flags.GlobalFlags = append(flags.GlobalFlags,
 			"-D__ANDROID_API__="+version, "-D__ANDROID_VNDK__")
+	}
+
+	if ctx.inRecovery() {
+		flags.GlobalFlags = append(flags.GlobalFlags, "-D__ANDROID_RECOVERY__")
 	}
 
 	instructionSet := String(compiler.Properties.Instruction_set)
@@ -375,6 +394,12 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			tc.Cflags(),
 			"${config.CommonGlobalCflags}",
 			fmt.Sprintf("${config.%sGlobalCflags}", hod))
+	}
+
+	if flags.Clang {
+		if strings.HasPrefix(android.PathForModuleSrc(ctx).String(), "external/") {
+			flags.GlobalFlags = append([]string{"${config.ClangExternalCflags}"}, flags.GlobalFlags...)
+		}
 	}
 
 	if ctx.Device() {
@@ -439,6 +464,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	if ctx.useVndk() {
 		flags.CFlags = append(flags.CFlags, esc(compiler.Properties.Target.Vendor.Cflags)...)
+	}
+
+	if ctx.inRecovery() {
+		flags.CFlags = append(flags.CFlags, esc(compiler.Properties.Target.Recovery.Cflags)...)
 	}
 
 	// We can enforce some rules more strictly in the code we own. strict

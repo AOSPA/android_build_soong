@@ -85,6 +85,7 @@ func init() {
 			"LOCAL_MULTILIB":                "compile_multilib",
 			"LOCAL_ARM_MODE_HACK":           "instruction_set",
 			"LOCAL_SDK_VERSION":             "sdk_version",
+			"LOCAL_MIN_SDK_VERSION":         "min_sdk_version",
 			"LOCAL_NDK_STL_VARIANT":         "stl",
 			"LOCAL_JAR_MANIFEST":            "manifest",
 			"LOCAL_JARJAR_RULES":            "jarjar_rules",
@@ -125,6 +126,7 @@ func init() {
 			"LOCAL_EXPORT_SHARED_LIBRARY_HEADERS": "export_shared_lib_headers",
 			"LOCAL_EXPORT_STATIC_LIBRARY_HEADERS": "export_static_lib_headers",
 			"LOCAL_INIT_RC":                       "init_rc",
+			"LOCAL_VINTF_FRAGMENTS":               "vintf_fragments",
 			"LOCAL_TIDY_FLAGS":                    "tidy_flags",
 			// TODO: This is comma-separated, not space-separated
 			"LOCAL_TIDY_CHECKS":           "tidy_checks",
@@ -146,7 +148,7 @@ func init() {
 			"LOCAL_ANNOTATION_PROCESSOR_CLASSES": "annotation_processor_classes",
 
 			"LOCAL_PROGUARD_FLAGS":      "optimize.proguard_flags",
-			"LOCAL_PROGUARD_FLAG_FILES": "optimize.proguard_flag_files",
+			"LOCAL_PROGUARD_FLAG_FILES": "optimize.proguard_flags_files",
 
 			// These will be rewritten to libs/static_libs by bpfix, after their presence is used to convert
 			// java_library_static to android_library.
@@ -167,6 +169,7 @@ func init() {
 			"LOCAL_NO_STANDARD_LIBRARIES":    "no_standard_libs",
 			"LOCAL_PACK_MODULE_RELOCATIONS":  "pack_relocations",
 			"LOCAL_TIDY":                     "tidy",
+			"LOCAL_USE_CLANG_LLD":            "use_clang_lld",
 			"LOCAL_PROPRIETARY_MODULE":       "proprietary",
 			"LOCAL_VENDOR_MODULE":            "vendor",
 			"LOCAL_ODM_MODULE":               "device_specific",
@@ -177,6 +180,8 @@ func init() {
 			"LOCAL_DEX_PREOPT":                  "dex_preopt.enabled",
 			"LOCAL_DEX_PREOPT_APP_IMAGE":        "dex_preopt.app_image",
 			"LOCAL_DEX_PREOPT_GENERATE_PROFILE": "dex_preopt.profile_guided",
+
+			"LOCAL_PRIVATE_PLATFORM_APIS": "platform_apis",
 		})
 }
 
@@ -742,8 +747,8 @@ var moduleTypes = map[string]string{
 	"BUILD_NATIVE_BENCHMARK":      "cc_benchmark",
 	"BUILD_HOST_NATIVE_BENCHMARK": "cc_benchmark_host",
 
-	"BUILD_JAVA_LIBRARY":             "java_library",
-	"BUILD_STATIC_JAVA_LIBRARY":      "java_library_static",
+	"BUILD_JAVA_LIBRARY":             "java_library_installable", // will be rewritten to java_library by bpfix
+	"BUILD_STATIC_JAVA_LIBRARY":      "java_library",
 	"BUILD_HOST_JAVA_LIBRARY":        "java_library_host",
 	"BUILD_HOST_DALVIK_JAVA_LIBRARY": "java_library_host_dalvik",
 	"BUILD_PACKAGE":                  "android_app",

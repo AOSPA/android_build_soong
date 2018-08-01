@@ -16,7 +16,6 @@ package cc
 
 import (
 	"android/soong/android"
-	"android/soong/genrule"
 
 	"fmt"
 	"io/ioutil"
@@ -62,9 +61,9 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 	ctx.RegisterModuleType("llndk_headers", android.ModuleFactoryAdaptor(llndkHeadersFactory))
 	ctx.RegisterModuleType("vendor_public_library", android.ModuleFactoryAdaptor(vendorPublicLibraryFactory))
 	ctx.RegisterModuleType("cc_object", android.ModuleFactoryAdaptor(objectFactory))
-	ctx.RegisterModuleType("filegroup", android.ModuleFactoryAdaptor(genrule.FileGroupFactory))
+	ctx.RegisterModuleType("filegroup", android.ModuleFactoryAdaptor(android.FileGroupFactory))
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("image", vendorMutator).Parallel()
+		ctx.BottomUp("image", imageMutator).Parallel()
 		ctx.BottomUp("link", linkageMutator).Parallel()
 		ctx.BottomUp("vndk", vndkMutator).Parallel()
 		ctx.BottomUp("begin", beginMutator).Parallel()
@@ -76,16 +75,19 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 		toolchain_library {
 			name: "libatomic",
 			vendor_available: true,
+			recovery_available: true,
 		}
 
 		toolchain_library {
 			name: "libcompiler_rt-extras",
 			vendor_available: true,
+			recovery_available: true,
 		}
 
 		toolchain_library {
 			name: "libgcc",
 			vendor_available: true,
+			recovery_available: true,
 		}
 
 		cc_library {
@@ -93,6 +95,7 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 			no_libgcc: true,
 			nocrt: true,
 			system_shared_libs: [],
+			recovery_available: true,
 		}
 		llndk_library {
 			name: "libc",
@@ -103,6 +106,7 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 			no_libgcc: true,
 			nocrt: true,
 			system_shared_libs: [],
+			recovery_available: true,
 		}
 		llndk_library {
 			name: "libm",
@@ -113,6 +117,7 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 			no_libgcc: true,
 			nocrt: true,
 			system_shared_libs: [],
+			recovery_available: true,
 		}
 		llndk_library {
 			name: "libdl",
@@ -125,6 +130,7 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 			system_shared_libs: [],
 			stl: "none",
 			vendor_available: true,
+			recovery_available: true,
 		}
 		cc_library {
 			name: "libc++",
@@ -133,6 +139,7 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 			system_shared_libs: [],
 			stl: "none",
 			vendor_available: true,
+			recovery_available: true,
 			vndk: {
 				enabled: true,
 				support_system_process: true,
@@ -145,14 +152,17 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 			system_shared_libs: [],
 			stl: "none",
 			vendor_available: true,
+			recovery_available: true,
 		}
 
 		cc_object {
 			name: "crtbegin_so",
+			recovery_available: true,
 		}
 
 		cc_object {
 			name: "crtend_so",
+			recovery_available: true,
 		}
 
 		cc_library {
@@ -1389,6 +1399,120 @@ func TestLlndkHeaders(t *testing.T) {
 	}
 }
 
+func checkRuntimeLibs(t *testing.T, expected []string, module *Module) {
+	actual := module.Properties.AndroidMkRuntimeLibs
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("incorrect runtime_libs for shared libs"+
+			"\nactual:   %v"+
+			"\nexpected: %v",
+			actual,
+			expected,
+		)
+	}
+}
+
+const runtimeLibAndroidBp = `
+	cc_library {
+		name: "libvendor_available1",
+		vendor_available: true,
+		no_libgcc : true,
+		nocrt : true,
+		system_shared_libs : [],
+	}
+	cc_library {
+		name: "libvendor_available2",
+		vendor_available: true,
+		runtime_libs: ["libvendor_available1"],
+		no_libgcc : true,
+		nocrt : true,
+		system_shared_libs : [],
+	}
+	cc_library {
+		name: "libvendor_available3",
+		vendor_available: true,
+		runtime_libs: ["libvendor_available1"],
+		target: {
+			vendor: {
+				exclude_runtime_libs: ["libvendor_available1"],
+			}
+		},
+		no_libgcc : true,
+		nocrt : true,
+		system_shared_libs : [],
+	}
+	cc_library {
+		name: "libcore",
+		runtime_libs: ["libvendor_available1"],
+		no_libgcc : true,
+		nocrt : true,
+		system_shared_libs : [],
+	}
+	cc_library {
+		name: "libvendor1",
+		vendor: true,
+		no_libgcc : true,
+		nocrt : true,
+		system_shared_libs : [],
+	}
+	cc_library {
+		name: "libvendor2",
+		vendor: true,
+		runtime_libs: ["libvendor_available1", "libvendor1"],
+		no_libgcc : true,
+		nocrt : true,
+		system_shared_libs : [],
+	}
+`
+
+func TestRuntimeLibs(t *testing.T) {
+	ctx := testCc(t, runtimeLibAndroidBp)
+
+	// runtime_libs for core variants use the module names without suffixes.
+	variant := "android_arm64_armv8-a_core_shared"
+
+	module := ctx.ModuleForTests("libvendor_available2", variant).Module().(*Module)
+	checkRuntimeLibs(t, []string{"libvendor_available1"}, module)
+
+	module = ctx.ModuleForTests("libcore", variant).Module().(*Module)
+	checkRuntimeLibs(t, []string{"libvendor_available1"}, module)
+
+	// runtime_libs for vendor variants have '.vendor' suffixes if the modules have both core
+	// and vendor variants.
+	variant = "android_arm64_armv8-a_vendor_shared"
+
+	module = ctx.ModuleForTests("libvendor_available2", variant).Module().(*Module)
+	checkRuntimeLibs(t, []string{"libvendor_available1.vendor"}, module)
+
+	module = ctx.ModuleForTests("libvendor2", variant).Module().(*Module)
+	checkRuntimeLibs(t, []string{"libvendor_available1.vendor", "libvendor1"}, module)
+}
+
+func TestExcludeRuntimeLibs(t *testing.T) {
+	ctx := testCc(t, runtimeLibAndroidBp)
+
+	variant := "android_arm64_armv8-a_core_shared"
+	module := ctx.ModuleForTests("libvendor_available3", variant).Module().(*Module)
+	checkRuntimeLibs(t, []string{"libvendor_available1"}, module)
+
+	variant = "android_arm64_armv8-a_vendor_shared"
+	module = ctx.ModuleForTests("libvendor_available3", variant).Module().(*Module)
+	checkRuntimeLibs(t, nil, module)
+}
+
+func TestRuntimeLibsNoVndk(t *testing.T) {
+	ctx := testCcNoVndk(t, runtimeLibAndroidBp)
+
+	// If DeviceVndkVersion is not defined, then runtime_libs are copied as-is.
+
+	variant := "android_arm64_armv8-a_core_shared"
+
+	module := ctx.ModuleForTests("libvendor_available2", variant).Module().(*Module)
+	checkRuntimeLibs(t, []string{"libvendor_available1"}, module)
+
+	module = ctx.ModuleForTests("libvendor2", variant).Module().(*Module)
+	checkRuntimeLibs(t, []string{"libvendor_available1", "libvendor1"}, module)
+}
+
 var compilerFlagsTestCases = []struct {
 	in  string
 	out bool
@@ -1537,4 +1661,29 @@ func TestVendorPublicLibraries(t *testing.T) {
 		t.Errorf("libflags for libvendor must contain %#v, but was %#v", stubPaths[0], libflags)
 	}
 
+}
+
+func TestRecovery(t *testing.T) {
+	ctx := testCc(t, `
+		cc_library_shared {
+			name: "librecovery",
+			recovery: true,
+		}
+		cc_library_shared {
+			name: "librecovery32",
+			recovery: true,
+			compile_multilib:"32",
+		}
+	`)
+
+	variants := ctx.ModuleVariantsForTests("librecovery")
+	const arm64 = "android_arm64_armv8-a_recovery_shared"
+	if len(variants) != 1 || !android.InList(arm64, variants) {
+		t.Errorf("variants of librecovery must be \"%s\" only, but was %#v", arm64, variants)
+	}
+
+	variants = ctx.ModuleVariantsForTests("librecovery32")
+	if android.InList(arm64, variants) {
+		t.Errorf("multilib was set to 32 for librecovery32, but its variants has %s.", arm64)
+	}
 }

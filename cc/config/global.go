@@ -91,11 +91,22 @@ var (
 		"-Wl,--no-undefined-version",
 	}
 
+	deviceGlobalLldflags = append(ClangFilterUnknownLldflags(deviceGlobalLdflags),
+		[]string{
+			// TODO(b/109657296): needs --no-rosegment until Android
+			// stack unwinder can handle the read-only segment.
+			"-Wl,--no-rosegment",
+			"-Wl,--pack-dyn-relocs=android",
+			"-fuse-ld=lld",
+		}...)
+
 	hostGlobalCflags = []string{}
 
 	hostGlobalCppflags = []string{}
 
 	hostGlobalLdflags = []string{}
+
+	hostGlobalLldflags = []string{"-fuse-ld=lld"}
 
 	commonGlobalCppflags = []string{
 		"-Wsign-promo",
@@ -122,8 +133,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-4691093"
-	ClangDefaultShortVersion = "6.0.2"
+	ClangDefaultVersion      = "clang-r328903"
+	ClangDefaultShortVersion = "7.0.2"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -147,9 +158,11 @@ func init() {
 	pctx.StaticVariable("DeviceGlobalCflags", strings.Join(deviceGlobalCflags, " "))
 	pctx.StaticVariable("DeviceGlobalCppflags", strings.Join(deviceGlobalCppflags, " "))
 	pctx.StaticVariable("DeviceGlobalLdflags", strings.Join(deviceGlobalLdflags, " "))
+	pctx.StaticVariable("DeviceGlobalLldflags", strings.Join(deviceGlobalLldflags, " "))
 	pctx.StaticVariable("HostGlobalCflags", strings.Join(hostGlobalCflags, " "))
 	pctx.StaticVariable("HostGlobalCppflags", strings.Join(hostGlobalCppflags, " "))
 	pctx.StaticVariable("HostGlobalLdflags", strings.Join(hostGlobalLdflags, " "))
+	pctx.StaticVariable("HostGlobalLldflags", strings.Join(hostGlobalLldflags, " "))
 	pctx.StaticVariable("NoOverrideGlobalCflags", strings.Join(noOverrideGlobalCflags, " "))
 
 	pctx.StaticVariable("CommonGlobalCppflags", strings.Join(commonGlobalCppflags, " "))
@@ -165,6 +178,8 @@ func init() {
 
 	pctx.StaticVariable("CommonClangGlobalCppflags",
 		strings.Join(append(ClangFilterUnknownCflags(commonGlobalCppflags), "${ClangExtraCppflags}"), " "))
+
+	pctx.StaticVariable("ClangExternalCflags", "${ClangExtraExternalCflags}")
 
 	// Everything in these lists is a crime against abstraction and dependency tracking.
 	// Do not add anything to this list.

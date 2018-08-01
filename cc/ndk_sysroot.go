@@ -59,6 +59,7 @@ import (
 func init() {
 	android.RegisterModuleType("ndk_headers", ndkHeadersFactory)
 	android.RegisterModuleType("ndk_library", ndkLibraryFactory)
+	android.RegisterModuleType("versioned_ndk_headers", versionedNdkHeadersFactory)
 	android.RegisterModuleType("preprocessed_ndk_headers", preprocessedNdkHeadersFactory)
 	android.RegisterSingletonType("ndk", NdkSingleton)
 
@@ -107,7 +108,12 @@ func (n *ndkSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 			licensePaths = append(licensePaths, m.licensePath)
 		}
 
-		if m, ok := module.(*preprocessedHeaderModule); ok {
+		if m, ok := module.(*versionedHeaderModule); ok {
+			installPaths = append(installPaths, m.installPaths...)
+			licensePaths = append(licensePaths, m.licensePath)
+		}
+
+		if m, ok := module.(*preprocessedHeadersModule); ok {
 			installPaths = append(installPaths, m.installPaths...)
 			licensePaths = append(licensePaths, m.licensePath)
 		}

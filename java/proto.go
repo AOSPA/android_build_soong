@@ -18,25 +18,29 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
 )
 
 func init() {
 	pctx.HostBinToolVariable("protocCmd", "aprotoc")
+	pctx.HostBinToolVariable("depFixCmd", "dep_fixer")
 }
 
 var (
 	proto = pctx.AndroidStaticRule("protoc",
 		blueprint.RuleParams{
 			Command: `rm -rf $out.tmp && mkdir -p $out.tmp && ` +
-				`$protocCmd $protoOut=$protoOutParams:$out.tmp -I $protoBase $protoFlags $in && ` +
+				`$protocCmd $protoOut=$protoOutParams:$out.tmp --dependency_out=$out.d -I $protoBase $protoFlags $in && ` +
+				`$depFixCmd $out.d && ` +
 				`${config.SoongZipCmd} -jar -o $out -C $out.tmp -D $out.tmp && rm -rf $out.tmp`,
 			CommandDeps: []string{
 				"$protocCmd",
+				"$depFixCmd",
 				"${config.SoongZipCmd}",
 			},
+			Depfile: "${out}.d",
+			Deps:    blueprint.DepsGCC,
 		}, "protoBase", "protoFlags", "protoOut", "protoOutParams")
 )
 
@@ -67,7 +71,7 @@ func genProto(ctx android.ModuleContext, protoFile android.Path, flags javaBuild
 }
 
 func protoDeps(ctx android.BottomUpMutatorContext, p *android.ProtoProperties) {
-	switch proptools.String(p.Proto.Type) {
+	switch String(p.Proto.Type) {
 	case "micro":
 		ctx.AddDependency(ctx.Module(), staticLibTag, "libprotobuf-java-micro")
 	case "nano":
@@ -82,14 +86,14 @@ func protoDeps(ctx android.BottomUpMutatorContext, p *android.ProtoProperties) {
 		}
 	default:
 		ctx.PropertyErrorf("proto.type", "unknown proto type %q",
-			proptools.String(p.Proto.Type))
+			String(p.Proto.Type))
 	}
 }
 
 func protoFlags(ctx android.ModuleContext, j *CompilerProperties, p *android.ProtoProperties,
 	flags javaBuilderFlags) javaBuilderFlags {
 
-	switch proptools.String(p.Proto.Type) {
+	switch String(p.Proto.Type) {
 	case "micro":
 		flags.protoOutTypeFlag = "--javamicro_out"
 	case "nano":
@@ -101,7 +105,7 @@ func protoFlags(ctx android.ModuleContext, j *CompilerProperties, p *android.Pro
 		flags.protoOutTypeFlag = "--java_out"
 	default:
 		ctx.PropertyErrorf("proto.type", "unknown proto type %q",
-			proptools.String(p.Proto.Type))
+			String(p.Proto.Type))
 	}
 
 	if len(j.Proto.Output_params) > 0 {

@@ -45,10 +45,51 @@ func Reformat(input string) (string, error) {
 // A FixRequest specifies the details of which fixes to apply to an individual file
 // A FixRequest doesn't specify whether to do a dry run or where to write the results; that's in cmd/bpfix.go
 type FixRequest struct {
-	simplifyKnownRedundantVariables           bool
-	rewriteIncorrectAndroidmkPrebuilts        bool
-	rewriteIncorrectAndroidmkAndroidLibraries bool
-	mergeMatchingModuleProperties             bool
+	steps []fixStep
+}
+
+type fixStep struct {
+	name string
+	fix  func(f *Fixer) error
+}
+
+var fixSteps = []fixStep{
+	{
+		name: "simplifyKnownRedundantVariables",
+		fix:  runPatchListMod(simplifyKnownPropertiesDuplicatingEachOther),
+	},
+	{
+		name: "rewriteIncorrectAndroidmkPrebuilts",
+		fix:  rewriteIncorrectAndroidmkPrebuilts,
+	},
+	{
+		name: "rewriteIncorrectAndroidmkAndroidLibraries",
+		fix:  rewriteIncorrectAndroidmkAndroidLibraries,
+	},
+	{
+		name: "rewriteTestModuleTypes",
+		fix:  rewriteTestModuleTypes,
+	},
+	{
+		name: "rewriteAndroidmkJavaLibs",
+		fix:  rewriteAndroidmkJavaLibs,
+	},
+	{
+		name: "rewriteJavaStaticLibs",
+		fix:  rewriteJavaStaticLibs,
+	},
+	{
+		name: "mergeMatchingModuleProperties",
+		fix:  runPatchListMod(mergeMatchingModuleProperties),
+	},
+	{
+		name: "reorderCommonProperties",
+		fix:  runPatchListMod(reorderCommonProperties),
+	},
+	{
+		name: "removeTags",
+		fix:  runPatchListMod(removeTags),
+	},
 }
 
 func NewFixRequest() FixRequest {
@@ -56,11 +97,8 @@ func NewFixRequest() FixRequest {
 }
 
 func (r FixRequest) AddAll() (result FixRequest) {
-	result = r
-	result.simplifyKnownRedundantVariables = true
-	result.rewriteIncorrectAndroidmkPrebuilts = true
-	result.rewriteIncorrectAndroidmkAndroidLibraries = true
-	result.mergeMatchingModuleProperties = true
+	result.steps = append([]fixStep(nil), r.steps...)
+	result.steps = append(result.steps, fixSteps...)
 	return result
 }
 
@@ -144,28 +182,8 @@ func parse(name string, r io.Reader) (*parser.File, error) {
 }
 
 func (f *Fixer) fixTreeOnce(config FixRequest) error {
-	if config.simplifyKnownRedundantVariables {
-		err := f.simplifyKnownPropertiesDuplicatingEachOther()
-		if err != nil {
-			return err
-		}
-	}
-	if config.rewriteIncorrectAndroidmkPrebuilts {
-		err := f.rewriteIncorrectAndroidmkPrebuilts()
-		if err != nil {
-			return err
-		}
-	}
-
-	if config.rewriteIncorrectAndroidmkAndroidLibraries {
-		err := f.rewriteIncorrectAndroidmkAndroidLibraries()
-		if err != nil {
-			return err
-		}
-	}
-
-	if config.mergeMatchingModuleProperties {
-		err := f.mergeMatchingModuleProperties()
+	for _, fix := range config.steps {
+		err := fix.fix(f)
 		if err != nil {
 			return err
 		}
@@ -173,12 +191,13 @@ func (f *Fixer) fixTreeOnce(config FixRequest) error {
 	return nil
 }
 
-func (f *Fixer) simplifyKnownPropertiesDuplicatingEachOther() error {
+func simplifyKnownPropertiesDuplicatingEachOther(mod *parser.Module, buf []byte, patchList *parser.PatchList) error {
 	// remove from local_include_dirs anything in export_include_dirs
-	return f.removeMatchingModuleListProperties("export_include_dirs", "local_include_dirs")
+	return removeMatchingModuleListProperties(mod, patchList,
+		"export_include_dirs", "local_include_dirs")
 }
 
-func (f *Fixer) rewriteIncorrectAndroidmkPrebuilts() error {
+func rewriteIncorrectAndroidmkPrebuilts(f *Fixer) error {
 	for _, def := range f.tree.Defs {
 		mod, ok := def.(*parser.Module)
 		if !ok {
@@ -214,7 +233,7 @@ func (f *Fixer) rewriteIncorrectAndroidmkPrebuilts() error {
 	return nil
 }
 
-func (f *Fixer) rewriteIncorrectAndroidmkAndroidLibraries() error {
+func rewriteIncorrectAndroidmkAndroidLibraries(f *Fixer) error {
 	for _, def := range f.tree.Defs {
 		mod, ok := def.(*parser.Module)
 		if !ok {
@@ -230,7 +249,7 @@ func (f *Fixer) rewriteIncorrectAndroidmkAndroidLibraries() error {
 		hasResourceDirs := hasNonEmptyLiteralListProperty(mod, "resource_dirs")
 
 		if hasAndroidLibraries || hasStaticAndroidLibraries || hasResourceDirs {
-			if mod.Type == "java_library_static" {
+			if mod.Type == "java_library_static" || mod.Type == "java_library" {
 				mod.Type = "android_library"
 			}
 		}
@@ -249,40 +268,262 @@ func (f *Fixer) rewriteIncorrectAndroidmkAndroidLibraries() error {
 	return nil
 }
 
-func (f *Fixer) mergeMatchingModuleProperties() error {
-	// Make sure all the offsets are accurate
-	buf, err := f.reparse()
-	if err != nil {
-		return err
-	}
-
-	var patchlist parser.PatchList
+// rewriteTestModuleTypes looks for modules that are identifiable as tests but for which Make doesn't have a separate
+// module class, and moves them to the appropriate Soong module type.
+func rewriteTestModuleTypes(f *Fixer) error {
 	for _, def := range f.tree.Defs {
 		mod, ok := def.(*parser.Module)
 		if !ok {
 			continue
 		}
 
-		err := mergeMatchingProperties(&mod.Properties, buf, &patchlist)
+		if !strings.HasPrefix(mod.Type, "java_") && !strings.HasPrefix(mod.Type, "android_") {
+			continue
+		}
+
+		hasInstrumentationFor := hasNonEmptyLiteralStringProperty(mod, "instrumentation_for")
+		tags, _ := getLiteralListPropertyValue(mod, "tags")
+
+		var hasTestsTag bool
+		for _, tag := range tags {
+			if tag == "tests" {
+				hasTestsTag = true
+			}
+		}
+
+		isTest := hasInstrumentationFor || hasTestsTag
+
+		if isTest {
+			switch mod.Type {
+			case "android_app":
+				mod.Type = "android_test"
+			case "java_library", "java_library_installable":
+				mod.Type = "java_test"
+			case "java_library_host":
+				mod.Type = "java_test_host"
+			}
+		}
+	}
+
+	return nil
+}
+
+// rewriteJavaStaticLibs rewrites java_library_static into java_library
+func rewriteJavaStaticLibs(f *Fixer) error {
+	for _, def := range f.tree.Defs {
+		mod, ok := def.(*parser.Module)
+		if !ok {
+			continue
+		}
+
+		if mod.Type == "java_library_static" {
+			mod.Type = "java_library"
+		}
+	}
+
+	return nil
+}
+
+// rewriteAndroidmkJavaLibs rewrites java_library_installable into java_library plus installable: true
+func rewriteAndroidmkJavaLibs(f *Fixer) error {
+	for _, def := range f.tree.Defs {
+		mod, ok := def.(*parser.Module)
+		if !ok {
+			continue
+		}
+
+		if mod.Type != "java_library_installable" {
+			continue
+		}
+
+		mod.Type = "java_library"
+
+		_, hasInstallable := mod.GetProperty("installable")
+		if !hasInstallable {
+			prop := &parser.Property{
+				Name: "installable",
+				Value: &parser.Bool{
+					Value: true,
+				},
+			}
+			mod.Properties = append(mod.Properties, prop)
+		}
+	}
+
+	return nil
+}
+
+func runPatchListMod(modFunc func(mod *parser.Module, buf []byte, patchlist *parser.PatchList) error) func(*Fixer) error {
+	return func(f *Fixer) error {
+		// Make sure all the offsets are accurate
+		buf, err := f.reparse()
+		if err != nil {
+			return err
+		}
+
+		var patchlist parser.PatchList
+		for _, def := range f.tree.Defs {
+			mod, ok := def.(*parser.Module)
+			if !ok {
+				continue
+			}
+
+			err := modFunc(mod, buf, &patchlist)
+			if err != nil {
+				return err
+			}
+		}
+
+		newBuf := new(bytes.Buffer)
+		err = patchlist.Apply(bytes.NewReader(buf), newBuf)
+		if err != nil {
+			return err
+		}
+
+		// Save a copy of the buffer to print for errors below
+		bufCopy := append([]byte(nil), newBuf.Bytes()...)
+
+		newTree, err := parse(f.tree.Name, newBuf)
+		if err != nil {
+			return fmt.Errorf("Failed to parse: %v\nBuffer:\n%s", err, string(bufCopy))
+		}
+
+		f.tree = newTree
+
+		return nil
+	}
+}
+
+var commonPropertyPriorities = []string{
+	"name",
+	"defaults",
+	"device_supported",
+	"host_supported",
+	"installable",
+}
+
+func reorderCommonProperties(mod *parser.Module, buf []byte, patchlist *parser.PatchList) error {
+	if len(mod.Properties) == 0 {
+		return nil
+	}
+
+	pos := mod.LBracePos.Offset + 1
+	stage := ""
+
+	for _, name := range commonPropertyPriorities {
+		idx := propertyIndex(mod.Properties, name)
+		if idx == -1 {
+			continue
+		}
+		if idx == 0 {
+			err := patchlist.Add(pos, pos, stage)
+			if err != nil {
+				return err
+			}
+			stage = ""
+
+			pos = mod.Properties[0].End().Offset + 1
+			mod.Properties = mod.Properties[1:]
+			continue
+		}
+
+		prop := mod.Properties[idx]
+		mod.Properties = append(mod.Properties[:idx], mod.Properties[idx+1:]...)
+
+		stage += string(buf[prop.Pos().Offset : prop.End().Offset+1])
+
+		err := patchlist.Add(prop.Pos().Offset, prop.End().Offset+2, "")
 		if err != nil {
 			return err
 		}
 	}
 
-	newBuf := new(bytes.Buffer)
-	err = patchlist.Apply(bytes.NewReader(buf), newBuf)
-	if err != nil {
-		return err
+	if stage != "" {
+		err := patchlist.Add(pos, pos, stage)
+		if err != nil {
+			return err
+		}
 	}
-
-	newTree, err := parse(f.tree.Name, newBuf)
-	if err != nil {
-		return err
-	}
-
-	f.tree = newTree
 
 	return nil
+}
+
+func removeTags(mod *parser.Module, buf []byte, patchlist *parser.PatchList) error {
+	prop, ok := mod.GetProperty("tags")
+	if !ok {
+		return nil
+	}
+	list, ok := prop.Value.(*parser.List)
+	if !ok {
+		return nil
+	}
+
+	replaceStr := ""
+
+	for _, item := range list.Values {
+		str, ok := item.(*parser.String)
+		if !ok {
+			replaceStr += fmt.Sprintf("// ERROR: Unable to parse tag %q\n", item)
+			continue
+		}
+
+		switch str.Value {
+		case "optional":
+			continue
+		case "debug":
+			replaceStr += `// WARNING: Module tags are not supported in Soong.
+				// Add this module to PRODUCT_PACKAGES_DEBUG in your product file if you want to
+				// force installation for -userdebug and -eng builds.
+				`
+		case "eng":
+			replaceStr += `// WARNING: Module tags are not supported in Soong.
+				// Add this module to PRODUCT_PACKAGES_ENG in your product file if you want to
+				// force installation for -eng builds.
+				`
+		case "tests":
+			switch {
+			case strings.Contains(mod.Type, "cc_test"),
+				strings.Contains(mod.Type, "cc_library_static"),
+				strings.Contains(mod.Type, "java_test"),
+				mod.Type == "android_test":
+				continue
+			case strings.Contains(mod.Type, "cc_lib"):
+				replaceStr += `// WARNING: Module tags are not supported in Soong.
+					// To make a shared library only for tests, use the "cc_test_library" module
+					// type. If you don't use gtest, set "gtest: false".
+					`
+			case strings.Contains(mod.Type, "cc_bin"):
+				replaceStr += `// WARNING: Module tags are not supported in Soong.
+					// For native test binaries, use the "cc_test" module type. Some differences:
+					//  - If you don't use gtest, set "gtest: false"
+					//  - Binaries will be installed into /data/nativetest[64]/<name>/<name>
+					//  - Both 32 & 64 bit versions will be built (as appropriate)
+					`
+			case strings.Contains(mod.Type, "java_lib"):
+				replaceStr += `// WARNING: Module tags are not supported in Soong.
+					// For JUnit or similar tests, use the "java_test" module type. A dependency on
+					// Junit will be added by default, if it is using some other runner, set "junit: false".
+					`
+			case mod.Type == "android_app":
+				replaceStr += `// WARNING: Module tags are not supported in Soong.
+					// For JUnit or instrumentataion app tests, use the "android_test" module type.
+					`
+			default:
+				replaceStr += `// WARNING: Module tags are not supported in Soong.
+					// In most cases, tests are now identified by their module type:
+					// cc_test, java_test, python_test
+					`
+			}
+		default:
+			replaceStr += fmt.Sprintf("// WARNING: Unknown module tag %q\n", str.Value)
+		}
+	}
+
+	return patchlist.Add(prop.Pos().Offset, prop.End().Offset+2, replaceStr)
+}
+
+func mergeMatchingModuleProperties(mod *parser.Module, buf []byte, patchlist *parser.PatchList) error {
+	return mergeMatchingProperties(&mod.Properties, buf, patchlist)
 }
 
 func mergeMatchingProperties(properties *[]*parser.Property, buf []byte, patchlist *parser.PatchList) error {
@@ -359,7 +600,7 @@ func mergeListProperties(a, b *parser.Property, buf []byte, patchlist *parser.Pa
 }
 
 // removes from <items> every item present in <removals>
-func filterExpressionList(items *parser.List, removals *parser.List) {
+func filterExpressionList(patchList *parser.PatchList, items *parser.List, removals *parser.List) {
 	writeIndex := 0
 	for _, item := range items.Values {
 		included := true
@@ -376,34 +617,50 @@ func filterExpressionList(items *parser.List, removals *parser.List) {
 		if included {
 			items.Values[writeIndex] = item
 			writeIndex++
+		} else {
+			patchList.Add(item.Pos().Offset, item.End().Offset+2, "")
 		}
 	}
 	items.Values = items.Values[:writeIndex]
 }
 
 // Remove each modules[i].Properties[<legacyName>][j] that matches a modules[i].Properties[<canonicalName>][k]
-func (f *Fixer) removeMatchingModuleListProperties(canonicalName string, legacyName string) error {
-	for _, def := range f.tree.Defs {
-		mod, ok := def.(*parser.Module)
-		if !ok {
-			continue
-		}
-		legacyList, ok := getLiteralListProperty(mod, legacyName)
-		if !ok {
-			continue
-		}
-		canonicalList, ok := getLiteralListProperty(mod, canonicalName)
-		if !ok {
-			continue
-		}
-		filterExpressionList(legacyList, canonicalList)
+func removeMatchingModuleListProperties(mod *parser.Module, patchList *parser.PatchList, canonicalName string, legacyName string) error {
+	legacyProp, ok := mod.GetProperty(legacyName)
+	if !ok {
+		return nil
 	}
+	legacyList, ok := legacyProp.Value.(*parser.List)
+	if !ok || len(legacyList.Values) == 0 {
+		return nil
+	}
+	canonicalList, ok := getLiteralListProperty(mod, canonicalName)
+	if !ok {
+		return nil
+	}
+
+	localPatches := parser.PatchList{}
+	filterExpressionList(&localPatches, legacyList, canonicalList)
+
+	if len(legacyList.Values) == 0 {
+		patchList.Add(legacyProp.Pos().Offset, legacyProp.End().Offset+2, "")
+	} else {
+		for _, p := range localPatches {
+			patchList.Add(p.Start, p.End, p.Replacement)
+		}
+	}
+
 	return nil
 }
 
 func hasNonEmptyLiteralListProperty(mod *parser.Module, name string) bool {
 	list, found := getLiteralListProperty(mod, name)
 	return found && len(list.Values) > 0
+}
+
+func hasNonEmptyLiteralStringProperty(mod *parser.Module, name string) bool {
+	s, found := getLiteralStringPropertyValue(mod, name)
+	return found && len(s) > 0
 }
 
 func getLiteralListProperty(mod *parser.Module, name string) (list *parser.List, found bool) {
@@ -413,6 +670,49 @@ func getLiteralListProperty(mod *parser.Module, name string) (list *parser.List,
 	}
 	list, ok = prop.Value.(*parser.List)
 	return list, ok
+}
+
+func getLiteralListPropertyValue(mod *parser.Module, name string) (list []string, found bool) {
+	listValue, ok := getLiteralListProperty(mod, name)
+	if !ok {
+		return nil, false
+	}
+	for _, v := range listValue.Values {
+		stringValue, ok := v.(*parser.String)
+		if !ok {
+			return nil, false
+		}
+		list = append(list, stringValue.Value)
+	}
+
+	return list, true
+}
+
+func getLiteralStringProperty(mod *parser.Module, name string) (s *parser.String, found bool) {
+	prop, ok := mod.GetProperty(name)
+	if !ok {
+		return nil, false
+	}
+	s, ok = prop.Value.(*parser.String)
+	return s, ok
+}
+
+func getLiteralStringPropertyValue(mod *parser.Module, name string) (s string, found bool) {
+	stringValue, ok := getLiteralStringProperty(mod, name)
+	if !ok {
+		return "", false
+	}
+
+	return stringValue.Value, true
+}
+
+func propertyIndex(props []*parser.Property, propertyName string) int {
+	for i, prop := range props {
+		if prop.Name == propertyName {
+			return i
+		}
+	}
+	return -1
 }
 
 func renameProperty(mod *parser.Module, from, to string) {

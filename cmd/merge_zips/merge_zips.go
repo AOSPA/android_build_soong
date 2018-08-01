@@ -24,7 +24,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
+
+	"github.com/google/blueprint/pathtools"
 
 	"android/soong/jar"
 	"android/soong/third_party/zip"
@@ -63,19 +64,20 @@ var (
 	zipsToNotStrip   = make(zipsToNotStripSet)
 	stripDirEntries  = flag.Bool("D", false, "strip directory entries from the output zip file")
 	manifest         = flag.String("m", "", "manifest file to insert in jar")
+	pyMain           = flag.String("pm", "", "__main__.py file to insert in par")
 	entrypoint       = flag.String("e", "", "par entrypoint file to insert in par")
 	ignoreDuplicates = flag.Bool("ignore-duplicates", false, "take each entry from the first zip it exists in and don't warn")
 )
 
 func init() {
-	flag.Var(&stripDirs, "stripDir", "the prefix of file path to be excluded from the output zip")
-	flag.Var(&stripFiles, "stripFile", "filenames to be excluded from the output zip, accepts wildcards")
+	flag.Var(&stripDirs, "stripDir", "directories to be excluded from the output zip, accepts wildcards")
+	flag.Var(&stripFiles, "stripFile", "files to be excluded from the output zip, accepts wildcards")
 	flag.Var(&zipsToNotStrip, "zipToNotStrip", "the input zip file which is not applicable for stripping")
 }
 
 func main() {
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: merge_zips [-jpsD] [-m manifest] [-e entrypoint] output [inputs...]")
+		fmt.Fprintln(os.Stderr, "usage: merge_zips [-jpsD] [-m manifest] [-e entrypoint] [-pm __main__.py] output [inputs...]")
 		flag.PrintDefaults()
 	}
 
@@ -113,7 +115,7 @@ func main() {
 			log.Fatal(err)
 		}
 		defer reader.Close()
-		namedReader := namedZipReader{path: input, reader: reader}
+		namedReader := namedZipReader{path: input, reader: &reader.Reader}
 		readers = append(readers, namedReader)
 	}
 
@@ -125,9 +127,13 @@ func main() {
 		log.Fatal(errors.New("must specify -p when specifying a entrypoint via -e"))
 	}
 
+	if *pyMain != "" && !*emulatePar {
+		log.Fatal(errors.New("must specify -p when specifying a Python __main__.py via -pm"))
+	}
+
 	// do merge
-	err = mergeZips(readers, writer, *manifest, *entrypoint, *sortEntries, *emulateJar, *emulatePar,
-		*stripDirEntries, *ignoreDuplicates)
+	err = mergeZips(readers, writer, *manifest, *entrypoint, *pyMain, *sortEntries, *emulateJar, *emulatePar,
+		*stripDirEntries, *ignoreDuplicates, []string(stripFiles), []string(stripDirs), map[string]bool(zipsToNotStrip))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -136,7 +142,7 @@ func main() {
 // a namedZipReader reads a .zip file and can say which file it's reading
 type namedZipReader struct {
 	path   string
-	reader *zip.ReadCloser
+	reader *zip.Reader
 }
 
 // a zipEntryPath refers to a file contained in a zip
@@ -218,8 +224,9 @@ type fileMapping struct {
 	source zipSource
 }
 
-func mergeZips(readers []namedZipReader, writer *zip.Writer, manifest, entrypoint string,
-	sortEntries, emulateJar, emulatePar, stripDirEntries, ignoreDuplicates bool) error {
+func mergeZips(readers []namedZipReader, writer *zip.Writer, manifest, entrypoint, pyMain string,
+	sortEntries, emulateJar, emulatePar, stripDirEntries, ignoreDuplicates bool,
+	stripFiles, stripDirs []string, zipsToNotStrip map[string]bool) error {
 
 	sourceByDest := make(map[string]zipSource, 0)
 	orderedMappings := []fileMapping{}
@@ -266,6 +273,22 @@ func mergeZips(readers []namedZipReader, writer *zip.Writer, manifest, entrypoin
 		fh.SetModTime(jar.DefaultTime)
 		fileSource := bufferEntry{fh, buf}
 		addMapping("entry_point.txt", fileSource)
+	}
+
+	if pyMain != "" {
+		buf, err := ioutil.ReadFile(pyMain)
+		if err != nil {
+			return err
+		}
+		fh := &zip.FileHeader{
+			Name:               "__main__.py",
+			Method:             zip.Store,
+			UncompressedSize64: uint64(len(buf)),
+		}
+		fh.SetMode(0700)
+		fh.SetModTime(jar.DefaultTime)
+		fileSource := bufferEntry{fh, buf}
+		addMapping("__main__.py", fileSource)
 	}
 
 	if emulatePar {
@@ -317,8 +340,12 @@ func mergeZips(readers []namedZipReader, writer *zip.Writer, manifest, entrypoin
 	for _, namedReader := range readers {
 		_, skipStripThisZip := zipsToNotStrip[namedReader.path]
 		for _, file := range namedReader.reader.File {
-			if !skipStripThisZip && shouldStripFile(emulateJar, file.Name) {
-				continue
+			if !skipStripThisZip {
+				if skip, err := shouldStripEntry(emulateJar, stripFiles, stripDirs, file.Name); err != nil {
+					return err
+				} else if skip {
+					continue
+				}
 			}
 
 			if stripDirEntries && file.FileInfo().IsDir() {
@@ -398,26 +425,41 @@ func pathBeforeLastSlash(path string) string {
 	return ret
 }
 
-func shouldStripFile(emulateJar bool, name string) bool {
+func shouldStripEntry(emulateJar bool, stripFiles, stripDirs []string, name string) (bool, error) {
 	for _, dir := range stripDirs {
-		if strings.HasPrefix(name, dir+"/") {
-			if emulateJar {
-				if name != jar.MetaDir && name != jar.ManifestFile {
-					return true
+		dir = filepath.Clean(dir)
+		patterns := []string{
+			dir + "/",      // the directory itself
+			dir + "/**/*",  // files recursively in the directory
+			dir + "/**/*/", // directories recursively in the directory
+		}
+
+		for _, pattern := range patterns {
+			match, err := pathtools.Match(pattern, name)
+			if err != nil {
+				return false, fmt.Errorf("%s: %s", err.Error(), pattern)
+			} else if match {
+				if emulateJar {
+					// When merging jar files, don't strip META-INF/MANIFEST.MF even if stripping META-INF is
+					// requested.
+					// TODO(ccross): which files does this affect?
+					if name != jar.MetaDir && name != jar.ManifestFile {
+						return true, nil
+					}
 				}
-			} else {
-				return true
+				return true, nil
 			}
 		}
 	}
+
 	for _, pattern := range stripFiles {
-		if match, err := filepath.Match(pattern, filepath.Base(name)); err != nil {
-			panic(fmt.Errorf("%s: %s", err.Error(), pattern))
+		if match, err := pathtools.Match(pattern, name); err != nil {
+			return false, fmt.Errorf("%s: %s", err.Error(), pattern)
 		} else if match {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func jarSort(files []fileMapping) {

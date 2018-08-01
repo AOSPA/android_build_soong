@@ -30,6 +30,8 @@ var (
 	DefaultBootclasspathLibraries = []string{"core-oj", "core-libart"}
 	DefaultSystemModules          = "core-system-modules"
 	DefaultLibraries              = []string{"ext", "framework", "okhttp"}
+	DefaultLambdaStubsLibrary     = "core-lambda-stubs"
+	SdkLambdaStubsPath            = "prebuilts/sdk/tools/core-lambda-stubs.jar"
 
 	DefaultJacocoExcludeFilter = []string{"org.junit.*", "org.jacoco.*", "org.mockito.*"}
 
@@ -41,6 +43,16 @@ var (
 		"android.car7",
 		"core-oj",
 		"core-libart",
+	}
+
+	ManifestMergerClasspath = []string{
+		"prebuilts/gradle-plugin/com/android/tools/build/manifest-merger/26.1.0/manifest-merger-26.1.0.jar",
+		"prebuilts/gradle-plugin/com/android/tools/common/26.1.0/common-26.1.0.jar",
+		"prebuilts/gradle-plugin/com/android/tools/sdk-common/26.1.0/sdk-common-26.1.0.jar",
+		"prebuilts/gradle-plugin/com/android/tools/sdklib/26.1.0/sdklib-26.1.0.jar",
+		"prebuilts/gradle-plugin/org/jetbrains/kotlin/kotlin-runtime/1.0.5/kotlin-runtime-1.0.5.jar",
+		"prebuilts/gradle-plugin/org/jetbrains/kotlin/kotlin-stdlib/1.1.3/kotlin-stdlib-1.1.3.jar",
+		"prebuilts/misc/common/guava/guava-21.0.jar",
 	}
 )
 
@@ -92,18 +104,7 @@ func init() {
 	pctx.HostBinToolVariable("MergeZipsCmd", "merge_zips")
 	pctx.HostBinToolVariable("Zip2ZipCmd", "zip2zip")
 	pctx.HostBinToolVariable("ZipSyncCmd", "zipsync")
-	pctx.VariableFunc("DxCmd", func(ctx android.PackageVarContext) string {
-		config := ctx.Config()
-		if config.IsEnvFalse("USE_D8") {
-			if config.UnbundledBuild() || config.IsPdkBuild() {
-				return "prebuilts/build-tools/common/bin/dx"
-			} else {
-				return pctx.HostBinToolPath(ctx, "dx").String()
-			}
-		} else {
-			return pctx.HostBinToolPath(ctx, "d8-compat-dx").String()
-		}
-	})
+	pctx.HostBinToolVariable("ApiCheckCmd", "apicheck")
 	pctx.HostBinToolVariable("D8Cmd", "d8")
 	pctx.HostBinToolVariable("R8Cmd", "r8-compat-proguard")
 
@@ -117,9 +118,9 @@ func init() {
 	})
 
 	pctx.HostJavaToolVariable("JarjarCmd", "jarjar.jar")
-	pctx.HostJavaToolVariable("DesugarJar", "desugar.jar")
 	pctx.HostJavaToolVariable("JsilverJar", "jsilver.jar")
 	pctx.HostJavaToolVariable("DoclavaJar", "doclava.jar")
+	pctx.HostJavaToolVariable("MetalavaJar", "metalava.jar")
 
 	pctx.HostBinToolVariable("SoongJavacWrapper", "soong_javac_wrapper")
 
@@ -143,4 +144,9 @@ func init() {
 	}
 
 	hostBinToolVariableWithPrebuilt("Aapt2Cmd", "prebuilts/sdk/tools", "aapt2")
+
+	pctx.SourcePathVariable("ManifestFixerCmd", "build/soong/scripts/manifest_fixer.py")
+
+	pctx.SourcePathsVariable("ManifestMergerJars", " ", ManifestMergerClasspath...)
+	pctx.SourcePathsVariable("ManifestMergerClasspath", ":", ManifestMergerClasspath...)
 }

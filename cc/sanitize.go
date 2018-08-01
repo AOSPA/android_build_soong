@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/blueprint"
+
 	"android/soong/android"
 	"android/soong/cc/config"
 )
@@ -94,6 +96,7 @@ type SanitizeProperties struct {
 		Safestack        *bool    `android:"arch_variant"`
 		Cfi              *bool    `android:"arch_variant"`
 		Integer_overflow *bool    `android:"arch_variant"`
+		Scudo            *bool    `android:"arch_variant"`
 
 		// Sanitizers to run in the diagnostic mode (as opposed to the release mode).
 		// Replaces abort() on error with a human-readable error message.
@@ -115,6 +118,7 @@ type SanitizeProperties struct {
 	SanitizerEnabled  bool `blueprint:"mutated"`
 	SanitizeDep       bool `blueprint:"mutated"`
 	MinimalRuntimeDep bool `blueprint:"mutated"`
+	UbsanRuntimeDep   bool `blueprint:"mutated"`
 	InSanitizerDir    bool `blueprint:"mutated"`
 }
 
@@ -151,7 +155,9 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	if ctx.clang() {
 		if ctx.Host() {
-			globalSanitizers = ctx.Config().SanitizeHost()
+			if !ctx.Windows() {
+				globalSanitizers = ctx.Config().SanitizeHost()
+			}
 		} else {
 			arches := ctx.Config().SanitizeDeviceArch()
 			if len(arches) == 0 || inList(ctx.Arch().ArchType.Name, arches) {
@@ -199,18 +205,24 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 			}
 		}
 
+		// Global integer_overflow builds do not support static libraries.
 		if found, globalSanitizers = removeFromList("integer_overflow", globalSanitizers); found && s.Integer_overflow == nil {
-			if !ctx.Config().IntegerOverflowDisabledForPath(ctx.ModuleDir()) {
+			if !ctx.Config().IntegerOverflowDisabledForPath(ctx.ModuleDir()) && !ctx.static() {
 				s.Integer_overflow = boolPtr(true)
 			}
+		}
+
+		if found, globalSanitizers = removeFromList("scudo", globalSanitizers); found && s.Scudo == nil {
+			s.Scudo = boolPtr(true)
 		}
 
 		if len(globalSanitizers) > 0 {
 			ctx.ModuleErrorf("unknown global sanitizer option %s", globalSanitizers[0])
 		}
 
+		// Global integer_overflow builds do not support static library diagnostics.
 		if found, globalSanitizersDiag = removeFromList("integer_overflow", globalSanitizersDiag); found &&
-			s.Diag.Integer_overflow == nil && Bool(s.Integer_overflow) {
+			s.Diag.Integer_overflow == nil && Bool(s.Integer_overflow) && !ctx.static() {
 			s.Diag.Integer_overflow = boolPtr(true)
 		}
 
@@ -250,10 +262,14 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Diag.Cfi = nil
 	}
 
-	// Also disable CFI for host builds.
+	// Disable sanitizers that depend on the UBSan runtime for host builds.
 	if ctx.Host() {
 		s.Cfi = nil
 		s.Diag.Cfi = nil
+		s.Misc_undefined = nil
+		s.Undefined = nil
+		s.All_undefined = nil
+		s.Integer_overflow = nil
 	}
 
 	// Also disable CFI for VNDK variants of components
@@ -280,8 +296,14 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 	}
 
 	if ctx.Os() != android.Windows && (Bool(s.All_undefined) || Bool(s.Undefined) || Bool(s.Address) || Bool(s.Thread) ||
-		Bool(s.Coverage) || Bool(s.Safestack) || Bool(s.Cfi) || Bool(s.Integer_overflow) || len(s.Misc_undefined) > 0) {
+		Bool(s.Coverage) || Bool(s.Safestack) || Bool(s.Cfi) || Bool(s.Integer_overflow) || len(s.Misc_undefined) > 0 ||
+		Bool(s.Scudo)) {
 		sanitize.Properties.SanitizerEnabled = true
+	}
+
+	// Disable Scudo if ASan or TSan is enabled.
+	if Bool(s.Address) || Bool(s.Thread) {
+		s.Scudo = nil
 	}
 
 	if Bool(s.Coverage) {
@@ -313,7 +335,7 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		flags.LdFlags = append(flags.LdFlags, minimalRuntimePath)
 		flags.LdFlags = append(flags.LdFlags, "-Wl,--exclude-libs,"+minimalRuntimeLib)
 	}
-	if !sanitize.Properties.SanitizerEnabled {
+	if !sanitize.Properties.SanitizerEnabled && !sanitize.Properties.UbsanRuntimeDep {
 		return flags
 	}
 
@@ -412,12 +434,6 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			flags.CFlags = append(flags.CFlags, "-fvisibility=default")
 		}
 		flags.LdFlags = append(flags.LdFlags, cfiLdflags...)
-		if ctx.Device() {
-			// Work around a bug in Clang. The CFI sanitizer requires LTO, and when
-			// LTO is enabled, the Clang driver fails to enable emutls for Android.
-			// See b/72706604 or https://github.com/android-ndk/ndk/issues/498.
-			flags.LdFlags = append(flags.LdFlags, "-Wl,-plugin-opt,-emulated-tls")
-		}
 		flags.ArGoldPlugin = true
 		if Bool(sanitize.Properties.Sanitize.Diag.Cfi) {
 			diagSanitizers = append(diagSanitizers, "cfi")
@@ -439,15 +455,17 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	}
 
 	if Bool(sanitize.Properties.Sanitize.Integer_overflow) {
-		if !ctx.static() {
-			sanitizers = append(sanitizers, "unsigned-integer-overflow")
-			sanitizers = append(sanitizers, "signed-integer-overflow")
-			flags.CFlags = append(flags.CFlags, intOverflowCflags...)
-			if Bool(sanitize.Properties.Sanitize.Diag.Integer_overflow) {
-				diagSanitizers = append(diagSanitizers, "unsigned-integer-overflow")
-				diagSanitizers = append(diagSanitizers, "signed-integer-overflow")
-			}
+		sanitizers = append(sanitizers, "unsigned-integer-overflow")
+		sanitizers = append(sanitizers, "signed-integer-overflow")
+		flags.CFlags = append(flags.CFlags, intOverflowCflags...)
+		if Bool(sanitize.Properties.Sanitize.Diag.Integer_overflow) {
+			diagSanitizers = append(diagSanitizers, "unsigned-integer-overflow")
+			diagSanitizers = append(diagSanitizers, "signed-integer-overflow")
 		}
+	}
+
+	if Bool(sanitize.Properties.Sanitize.Scudo) {
+		sanitizers = append(sanitizers, "scudo")
 	}
 
 	if len(sanitizers) > 0 {
@@ -487,15 +505,22 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		runtimeLibrary = config.AddressSanitizerRuntimeLibrary(ctx.toolchain())
 	} else if Bool(sanitize.Properties.Sanitize.Thread) {
 		runtimeLibrary = config.ThreadSanitizerRuntimeLibrary(ctx.toolchain())
-	} else if len(diagSanitizers) > 0 {
+	} else if Bool(sanitize.Properties.Sanitize.Scudo) {
+		runtimeLibrary = config.ScudoRuntimeLibrary(ctx.toolchain())
+	} else if len(diagSanitizers) > 0 || sanitize.Properties.UbsanRuntimeDep {
 		runtimeLibrary = config.UndefinedBehaviorSanitizerRuntimeLibrary(ctx.toolchain())
 	}
 
 	if runtimeLibrary != "" {
+		runtimeLibraryPath := "${config.ClangAsanLibDir}/" + runtimeLibrary
+		if !ctx.static() {
+			runtimeLibraryPath = runtimeLibraryPath + ctx.toolchain().ShlibSuffix()
+		} else {
+			runtimeLibraryPath = runtimeLibraryPath + ".a"
+		}
+
 		// ASan runtime library must be the first in the link order.
-		flags.libFlags = append([]string{
-			"${config.ClangAsanLibDir}/" + runtimeLibrary + ctx.toolchain().ShlibSuffix(),
-		}, flags.libFlags...)
+		flags.libFlags = append([]string{runtimeLibraryPath}, flags.libFlags...)
 		sanitize.runtimeLibrary = runtimeLibrary
 
 		// When linking against VNDK, use the vendor variant of the runtime lib
@@ -571,7 +596,6 @@ func (sanitize *sanitize) SetSanitizer(t sanitizerType, b bool) {
 		sanitize.Properties.Sanitize.Integer_overflow = boolPtr(b)
 	case cfi:
 		sanitize.Properties.Sanitize.Cfi = boolPtr(b)
-		sanitize.Properties.Sanitize.Diag.Cfi = boolPtr(b)
 	default:
 		panic(fmt.Errorf("unknown sanitizerType %d", t))
 	}
@@ -605,38 +629,54 @@ func (sanitize *sanitize) isSanitizerEnabled(t sanitizerType) bool {
 	return sanitizerVal != nil && *sanitizerVal == true
 }
 
+func isSanitizableDependencyTag(tag blueprint.DependencyTag) bool {
+	t, ok := tag.(dependencyTag)
+	return ok && t.library || t == reuseObjTag
+}
+
 // Propagate asan requirements down from binaries
 func sanitizerDepsMutator(t sanitizerType) func(android.TopDownMutatorContext) {
 	return func(mctx android.TopDownMutatorContext) {
 		if c, ok := mctx.Module().(*Module); ok && c.sanitize.isSanitizerEnabled(t) {
-			mctx.VisitDepsDepthFirst(func(module android.Module) {
-				if d, ok := module.(*Module); ok && d.sanitize != nil &&
+			mctx.WalkDeps(func(child, parent android.Module) bool {
+				if !isSanitizableDependencyTag(mctx.OtherModuleDependencyTag(child)) {
+					return false
+				}
+				if d, ok := child.(*Module); ok && d.sanitize != nil &&
 					!Bool(d.sanitize.Properties.Sanitize.Never) &&
 					!d.sanitize.isSanitizerExplicitlyDisabled(t) {
 					if (t == cfi && d.static()) || t != cfi {
 						d.sanitize.Properties.SanitizeDep = true
 					}
 				}
+				return true
 			})
 		}
 	}
 }
 
 // Propagate the ubsan minimal runtime dependency when there are integer overflow sanitized static dependencies.
-func minimalRuntimeDepsMutator() func(android.TopDownMutatorContext) {
-	return func(mctx android.TopDownMutatorContext) {
-		if c, ok := mctx.Module().(*Module); ok && c.sanitize != nil {
-			mctx.VisitDepsDepthFirst(func(module android.Module) {
-				if d, ok := module.(*Module); ok && d.static() && d.sanitize != nil {
+func sanitizerRuntimeDepsMutator(mctx android.TopDownMutatorContext) {
+	if c, ok := mctx.Module().(*Module); ok && c.sanitize != nil {
+		mctx.WalkDeps(func(child, parent android.Module) bool {
+			if !isSanitizableDependencyTag(mctx.OtherModuleDependencyTag(child)) {
+				return false
+			}
+			if d, ok := child.(*Module); ok && d.static() && d.sanitize != nil {
 
-					// If a static dependency will be built with the minimal runtime,
+				if enableMinimalRuntime(d.sanitize) {
+					// If a static dependency is built with the minimal runtime,
 					// make sure we include the ubsan minimal runtime.
-					if enableMinimalRuntime(d.sanitize) {
-						c.sanitize.Properties.MinimalRuntimeDep = true
-					}
+					c.sanitize.Properties.MinimalRuntimeDep = true
+				} else if Bool(d.sanitize.Properties.Sanitize.Diag.Integer_overflow) ||
+					len(d.sanitize.Properties.Sanitize.Diag.Misc_undefined) > 0 {
+					// If a static dependency runs with full ubsan diagnostics,
+					// make sure we include the ubsan runtime.
+					c.sanitize.Properties.UbsanRuntimeDep = true
 				}
-			})
-		}
+			}
+			return true
+		})
 	}
 }
 
@@ -712,6 +752,7 @@ func cfiStaticLibs(config android.Config) *[]string {
 
 func enableMinimalRuntime(sanitize *sanitize) bool {
 	if !Bool(sanitize.Properties.Sanitize.Address) &&
+		!Bool(sanitize.Properties.Sanitize.Scudo) &&
 		(Bool(sanitize.Properties.Sanitize.Integer_overflow) ||
 			len(sanitize.Properties.Sanitize.Misc_undefined) > 0) &&
 		!(Bool(sanitize.Properties.Sanitize.Diag.Integer_overflow) ||

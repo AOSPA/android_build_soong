@@ -44,10 +44,16 @@ type configImpl struct {
 	skipMake   bool
 
 	// From the product config
-	katiArgs     []string
-	ninjaArgs    []string
-	katiSuffix   string
-	targetDevice string
+	katiArgs        []string
+	ninjaArgs       []string
+	katiSuffix      string
+	targetDevice    string
+	targetDeviceDir string
+
+	pdkBuild       bool
+	brokenDupRules bool
+
+	pathReplaced bool
 }
 
 const srcDirFileCheck = "build/soong/root.bp"
@@ -100,8 +106,10 @@ func NewConfig(ctx Context, args ...string) Config {
 		"OUT_DIR_COMMON_BASE",
 
 		// Variables that have caused problems in the past
+		"CDPATH",
 		"DISPLAY",
 		"GREP_OPTIONS",
+		"NDK_ROOT",
 
 		// Drop make flags
 		"MAKEFLAGS",
@@ -110,10 +118,24 @@ func NewConfig(ctx Context, args ...string) Config {
 
 		// Set in envsetup.sh, reset in makefiles
 		"ANDROID_JAVA_TOOLCHAIN",
+
+		// Set by envsetup.sh, but shouldn't be used inside the build because envsetup.sh is optional
+		"ANDROID_BUILD_TOP",
+		"ANDROID_HOST_OUT",
+		"ANDROID_PRODUCT_OUT",
+		"ANDROID_HOST_OUT_TESTCASES",
+		"ANDROID_TARGET_OUT_TESTCASES",
+		"ANDROID_TOOLCHAIN",
+		"ANDROID_TOOLCHAIN_2ND_ARCH",
+		"ANDROID_DEV_SCRIPTS",
+		"ANDROID_EMULATOR_PREBUILTS",
+		"ANDROID_PRE_BUILD_PATHS",
 	)
 
 	// Tell python not to spam the source tree with .pyc files.
 	ret.environ.Set("PYTHONDONTWRITEBYTECODE", "1")
+
+	ret.environ.Set("TMPDIR", absPath(ctx, ret.TempDir()))
 
 	// Precondition: the current directory is the top of the source tree
 	if _, err := os.Stat(srcDirFileCheck); err != nil {
@@ -154,19 +176,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		if override, ok := ret.environ.Get("OVERRIDE_ANDROID_JAVA_HOME"); ok {
 			return override
 		}
-		v, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK9")
-		if !ok {
-			v2, ok2 := ret.environ.Get("RUN_ERROR_PRONE")
-			if ok2 && (v2 == "true") {
-				v = "false"
-			} else {
-				v = "1.8"
-			}
-		}
-		if v != "false" {
-			return java9Home
-		}
-		return java8Home
+		return java9Home
 	}()
 	absJavaHome := absPath(ctx, javaHome)
 
@@ -553,4 +563,28 @@ func (c *configImpl) PrebuiltBuildTool(name string) string {
 		}
 	}
 	return filepath.Join("prebuilts/build-tools", c.HostPrebuiltTag(), "bin", name)
+}
+
+func (c *configImpl) SetBuildBrokenDupRules(val bool) {
+	c.brokenDupRules = val
+}
+
+func (c *configImpl) BuildBrokenDupRules() bool {
+	return c.brokenDupRules
+}
+
+func (c *configImpl) SetTargetDeviceDir(dir string) {
+	c.targetDeviceDir = dir
+}
+
+func (c *configImpl) TargetDeviceDir() string {
+	return c.targetDeviceDir
+}
+
+func (c *configImpl) SetPdkBuild(pdk bool) {
+	c.pdkBuild = pdk
+}
+
+func (c *configImpl) IsPdkBuild() bool {
+	return c.pdkBuild
 }

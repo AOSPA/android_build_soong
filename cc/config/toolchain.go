@@ -66,7 +66,10 @@ type Toolchain interface {
 	ClangCflags() string
 	ClangCppflags() string
 	ClangLdflags() string
+	ClangLldflags() string
 	ClangInstructionSetFlags(string) (string, error)
+
+	ndkTriple() string
 
 	YasmFlags() string
 
@@ -85,6 +88,19 @@ type Toolchain interface {
 }
 
 type toolchainBase struct {
+}
+
+func (t *toolchainBase) ndkTriple() string {
+	return ""
+}
+
+func NDKTriple(toolchain Toolchain) string {
+	triple := toolchain.ndkTriple()
+	if triple == "" {
+		// Use the clang triple if there is no explicit NDK triple
+		triple = toolchain.ClangTriple()
+	}
+	return triple
 }
 
 func (toolchainBase) InstructionSetFlags(s string) (string, error) {
@@ -225,6 +241,10 @@ func ThreadSanitizerRuntimeLibrary(t Toolchain) string {
 
 func ProfileRuntimeLibrary(t Toolchain) string {
 	return SanitizerRuntimeLibrary(t, "profile")
+}
+
+func ScudoRuntimeLibrary(t Toolchain) string {
+	return SanitizerRuntimeLibrary(t, "scudo")
 }
 
 func ToolPath(t Toolchain) string {

@@ -15,12 +15,16 @@
 package build
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/blueprint/microfactory"
+
+	"android/soong/ui/status"
 )
 
 func runSoong(ctx Context, config Config) {
@@ -41,9 +45,8 @@ func runSoong(ctx Context, config Config) {
 		cmd.Environment.Set("SRCDIR", ".")
 		cmd.Environment.Set("TOPNAME", "Android.bp")
 		cmd.Sandbox = soongSandbox
-		cmd.Stdout = ctx.Stdout()
-		cmd.Stderr = ctx.Stderr()
-		cmd.RunOrFatal()
+
+		cmd.RunAndPrintOrFatal()
 	}()
 
 	func() {
@@ -56,11 +59,17 @@ func runSoong(ctx Context, config Config) {
 			if _, err := os.Stat(envTool); err == nil {
 				cmd := Command(ctx, config, "soong_env", envTool, envFile)
 				cmd.Sandbox = soongSandbox
-				cmd.Stdout = ctx.Stdout()
-				cmd.Stderr = ctx.Stderr()
+
+				var buf strings.Builder
+				cmd.Stdout = &buf
+				cmd.Stderr = &buf
 				if err := cmd.Run(); err != nil {
 					ctx.Verboseln("soong_env failed, forcing manifest regeneration")
 					os.Remove(envFile)
+				}
+
+				if buf.Len() > 0 {
+					ctx.Verboseln(buf.String())
 				}
 			} else {
 				ctx.Verboseln("Missing soong_env tool, forcing manifest regeneration")
@@ -71,18 +80,28 @@ func runSoong(ctx Context, config Config) {
 		}
 	}()
 
+	var cfg microfactory.Config
+	cfg.Map("github.com/google/blueprint", "build/blueprint")
+
+	cfg.TrimPath = absPath(ctx, ".")
+
 	func() {
 		ctx.BeginTrace("minibp")
 		defer ctx.EndTrace()
 
-		var cfg microfactory.Config
-		cfg.Map("github.com/google/blueprint", "build/blueprint")
-
-		cfg.TrimPath = absPath(ctx, ".")
-
 		minibp := filepath.Join(config.SoongOutDir(), ".minibootstrap/minibp")
 		if _, err := microfactory.Build(&cfg, minibp, "github.com/google/blueprint/bootstrap/minibp"); err != nil {
 			ctx.Fatalln("Failed to build minibp:", err)
+		}
+	}()
+
+	func() {
+		ctx.BeginTrace("bpglob")
+		defer ctx.EndTrace()
+
+		bpglob := filepath.Join(config.SoongOutDir(), ".minibootstrap/bpglob")
+		if _, err := microfactory.Build(&cfg, bpglob, "github.com/google/blueprint/bootstrap/bpglob"); err != nil {
+			ctx.Fatalln("Failed to build bpglob:", err)
 		}
 	}()
 
@@ -108,22 +127,18 @@ func runSoong(ctx Context, config Config) {
 		ctx.BeginTrace(name)
 		defer ctx.EndTrace()
 
+		fifo := filepath.Join(config.OutDir(), ".ninja_fifo")
+		status.NinjaReader(ctx, ctx.Status.StartTool(), fifo)
+
 		cmd := Command(ctx, config, "soong "+name,
 			config.PrebuiltBuildTool("ninja"),
 			"-d", "keepdepfile",
 			"-w", "dupbuild=err",
 			"-j", strconv.Itoa(config.Parallel()),
+			fmt.Sprintf("--frontend=cat <&3 >%s", fifo),
 			"-f", filepath.Join(config.SoongOutDir(), file))
-		if config.IsVerbose() {
-			cmd.Args = append(cmd.Args, "-v")
-		}
 		cmd.Sandbox = soongSandbox
-		cmd.Stdin = ctx.Stdin()
-		cmd.Stdout = ctx.Stdout()
-		cmd.Stderr = ctx.Stderr()
-
-		defer ctx.ImportNinjaLog(filepath.Join(config.OutDir(), ".ninja_log"), time.Now())
-		cmd.RunOrFatal()
+		cmd.RunAndPrintOrFatal()
 	}
 
 	ninja("minibootstrap", ".minibootstrap/build.ninja")

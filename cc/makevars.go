@@ -74,7 +74,10 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("CLANG_CXX", "${config.ClangBin}/clang++")
 	ctx.Strict("LLVM_AS", "${config.ClangBin}/llvm-as")
 	ctx.Strict("LLVM_LINK", "${config.ClangBin}/llvm-link")
+	ctx.Strict("LLVM_OBJCOPY", "${config.ClangBin}/llvm-objcopy")
+	ctx.Strict("LLVM_STRIP", "${config.ClangBin}/llvm-strip")
 	ctx.Strict("PATH_TO_CLANG_TIDY", "${config.ClangBin}/clang-tidy")
+	ctx.Strict("CLANG_TIDY_UNKNOWN_CFLAGS", strings.Join(config.ClangTidyUnknownCflags, " "))
 	ctx.StrictSorted("CLANG_CONFIG_UNKNOWN_CFLAGS", strings.Join(config.ClangUnknownCflags, " "))
 
 	ctx.Strict("RS_LLVM_PREBUILTS_VERSION", "${config.RSClangVersion}")
@@ -85,6 +88,7 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("RS_LLVM_AS", "${config.RSLLVMPrebuiltsPath}/llvm-as")
 	ctx.Strict("RS_LLVM_LINK", "${config.RSLLVMPrebuiltsPath}/llvm-link")
 
+	ctx.Strict("CLANG_EXTERNAL_CFLAGS", "${config.ClangExternalCflags}")
 	ctx.Strict("GLOBAL_CFLAGS_NO_OVERRIDE", "${config.NoOverrideGlobalCflags}")
 	ctx.Strict("GLOBAL_CLANG_CFLAGS_NO_OVERRIDE", "${config.ClangExtraNoOverrideCflags}")
 	ctx.Strict("GLOBAL_CPPFLAGS_NO_OVERRIDE", "")
@@ -244,6 +248,12 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 		toolchain.ToolchainLdflags(),
 		productExtraLdflags,
 	}, " "))
+	ctx.Strict(makePrefix+"GLOBAL_LLDFLAGS", strings.Join([]string{
+		fmt.Sprintf("${config.%sGlobalLldflags}", hod),
+		toolchain.Ldflags(),
+		toolchain.ToolchainLdflags(),
+		productExtraLdflags,
+	}, " "))
 
 	includeFlags, err := ctx.Eval(toolchain.IncludeFlags())
 	if err != nil {
@@ -292,12 +302,20 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 			productExtraLdflags,
 			clangExtras,
 		}, " "))
+		ctx.Strict(clangPrefix+"GLOBAL_LLDFLAGS", strings.Join([]string{
+			fmt.Sprintf("${config.%sGlobalLldflags}", hod),
+			toolchain.ClangLldflags(),
+			toolchain.ToolchainClangLdflags(),
+			productExtraLdflags,
+			clangExtras,
+		}, " "))
 
 		if target.Os.Class == android.Device {
 			ctx.Strict(secondPrefix+"ADDRESS_SANITIZER_RUNTIME_LIBRARY", strings.TrimSuffix(config.AddressSanitizerRuntimeLibrary(toolchain), ".so"))
 			ctx.Strict(secondPrefix+"UBSAN_RUNTIME_LIBRARY", strings.TrimSuffix(config.UndefinedBehaviorSanitizerRuntimeLibrary(toolchain), ".so"))
 			ctx.Strict(secondPrefix+"UBSAN_MINIMAL_RUNTIME_LIBRARY", strings.TrimSuffix(config.UndefinedBehaviorSanitizerMinimalRuntimeLibrary(toolchain), ".a"))
 			ctx.Strict(secondPrefix+"TSAN_RUNTIME_LIBRARY", strings.TrimSuffix(config.ThreadSanitizerRuntimeLibrary(toolchain), ".so"))
+			ctx.Strict(secondPrefix+"SCUDO_RUNTIME_LIBRARY", strings.TrimSuffix(config.ScudoRuntimeLibrary(toolchain), ".so"))
 		}
 
 		// This is used by external/gentoo/...
@@ -314,10 +332,14 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 
 	if target.Os == android.Darwin {
 		ctx.Strict(makePrefix+"AR", "${config.MacArPath}")
+		ctx.Strict(makePrefix+"NM", "${config.MacToolPath}/nm")
+		ctx.Strict(makePrefix+"OTOOL", "${config.MacToolPath}/otool")
+		ctx.Strict(makePrefix+"STRIP", "${config.MacStripPath}")
 	} else {
 		ctx.Strict(makePrefix+"AR", "${config.ClangBin}/llvm-ar")
 		ctx.Strict(makePrefix+"READELF", gccCmd(toolchain, "readelf"))
 		ctx.Strict(makePrefix+"NM", gccCmd(toolchain, "nm"))
+		ctx.Strict(makePrefix+"STRIP", gccCmd(toolchain, "strip"))
 	}
 
 	if target.Os == android.Windows {
@@ -327,10 +349,9 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 	if target.Os.Class == android.Device {
 		ctx.Strict(makePrefix+"OBJCOPY", gccCmd(toolchain, "objcopy"))
 		ctx.Strict(makePrefix+"LD", gccCmd(toolchain, "ld"))
-		ctx.Strict(makePrefix+"STRIP", gccCmd(toolchain, "strip"))
 		ctx.Strict(makePrefix+"GCC_VERSION", toolchain.GccVersion())
 		ctx.Strict(makePrefix+"NDK_GCC_VERSION", toolchain.GccVersion())
-		ctx.Strict(makePrefix+"NDK_TRIPLE", toolchain.ClangTriple())
+		ctx.Strict(makePrefix+"NDK_TRIPLE", config.NDKTriple(toolchain))
 	}
 
 	if target.Os.Class == android.Host || target.Os.Class == android.HostCross {

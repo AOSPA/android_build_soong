@@ -26,6 +26,7 @@ import (
 
 func init() {
 	android.RegisterModuleType("android_app", AndroidAppFactory)
+	android.RegisterModuleType("android_test", AndroidTestFactory)
 }
 
 // AndroidManifest.xml merging
@@ -50,8 +51,6 @@ type appProperties struct {
 
 	// list of resource labels to generate individual resource packages
 	Package_splits []string
-
-	Instrumentation_for *string
 }
 
 type AndroidApp struct {
@@ -61,6 +60,8 @@ type AndroidApp struct {
 	certificate certificate
 
 	appProperties appProperties
+
+	extraLinkFlags []string
 }
 
 func (a *AndroidApp) ExportedProguardFlagFiles() android.Paths {
@@ -69,6 +70,10 @@ func (a *AndroidApp) ExportedProguardFlagFiles() android.Paths {
 
 func (a *AndroidApp) ExportedStaticPackages() android.Paths {
 	return nil
+}
+
+func (a *AndroidApp) ExportedManifest() android.Path {
+	return a.manifestPath
 }
 
 var _ AndroidLibraryDependency = (*AndroidApp)(nil)
@@ -80,19 +85,16 @@ type certificate struct {
 func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 	a.Module.deps(ctx)
 	if !Bool(a.properties.No_framework_libs) && !Bool(a.properties.No_standard_libs) {
-		a.aapt.deps(ctx, String(a.deviceProperties.Sdk_version))
+		a.aapt.deps(ctx, sdkContext(a))
 	}
 }
 
 func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	var linkFlags []string
-	if String(a.appProperties.Instrumentation_for) != "" {
-		linkFlags = append(linkFlags,
-			"--rename-instrumentation-target-package",
-			String(a.appProperties.Instrumentation_for))
-	} else {
-		a.properties.Instrument = true
-	}
+	a.generateAndroidBuildActions(ctx)
+}
+
+func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
+	linkFlags := append([]string(nil), a.extraLinkFlags...)
 
 	hasProduct := false
 	for _, f := range a.aaptProperties.Aaptflags {
@@ -119,7 +121,7 @@ func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// TODO: LOCAL_PACKAGE_OVERRIDES
 	//    $(addprefix --rename-manifest-package , $(PRIVATE_MANIFEST_PACKAGE_NAME)) \
 
-	a.aapt.buildActions(ctx, String(a.deviceProperties.Sdk_version), linkFlags...)
+	a.aapt.buildActions(ctx, sdkContext(a), linkFlags...)
 
 	// apps manifests are handled by aapt, don't let Module see them
 	a.properties.Manifest = nil
@@ -188,6 +190,9 @@ func AndroidAppFactory() android.Module {
 	module.Module.deviceProperties.Optimize.Enabled = proptools.BoolPtr(true)
 	module.Module.deviceProperties.Optimize.Shrink = proptools.BoolPtr(true)
 
+	module.Module.properties.Instrument = true
+	module.Module.properties.Installable = proptools.BoolPtr(true)
+
 	module.AddProperties(
 		&module.Module.properties,
 		&module.Module.deviceProperties,
@@ -196,5 +201,47 @@ func AndroidAppFactory() android.Module {
 		&module.appProperties)
 
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	return module
+}
+
+type appTestProperties struct {
+	Instrumentation_for *string
+}
+
+type AndroidTest struct {
+	AndroidApp
+
+	appTestProperties appTestProperties
+
+	testProperties testProperties
+}
+
+func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if String(a.appTestProperties.Instrumentation_for) != "" {
+		a.AndroidApp.extraLinkFlags = append(a.AndroidApp.extraLinkFlags,
+			"--rename-instrumentation-target-package",
+			String(a.appTestProperties.Instrumentation_for))
+	}
+
+	a.generateAndroidBuildActions(ctx)
+}
+
+func AndroidTestFactory() android.Module {
+	module := &AndroidTest{}
+
+	module.Module.deviceProperties.Optimize.Enabled = proptools.BoolPtr(true)
+	module.Module.properties.Installable = proptools.BoolPtr(true)
+
+	module.AddProperties(
+		&module.Module.properties,
+		&module.Module.deviceProperties,
+		&module.Module.protoProperties,
+		&module.aaptProperties,
+		&module.appProperties,
+		&module.appTestProperties,
+		&module.testProperties)
+
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+
 	return module
 }

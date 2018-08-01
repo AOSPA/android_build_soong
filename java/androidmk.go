@@ -19,8 +19,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/google/blueprint/proptools"
-
 	"android/soong/android"
 )
 
@@ -39,7 +37,7 @@ func (library *Library) AndroidMk() android.AndroidMkData {
 					fmt.Fprintln(w, "LOCAL_LOGTAGS_FILES :=", strings.Join(logtags, " "))
 				}
 
-				if library.properties.Installable != nil && *library.properties.Installable == false {
+				if library.installFile == nil {
 					fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
 				}
 				if library.dexJarFile != nil {
@@ -58,11 +56,15 @@ func (library *Library) AndroidMk() android.AndroidMkData {
 						fmt.Fprintln(w, "LOCAL_DEX_PREOPT_PROFILE_CLASS_LISTING := $(LOCAL_PATH)/"+*library.deviceProperties.Dex_preopt.Profile)
 					}
 				}
-				fmt.Fprintln(w, "LOCAL_SDK_VERSION :=", String(library.deviceProperties.Sdk_version))
+				fmt.Fprintln(w, "LOCAL_SDK_VERSION :=", library.sdkVersion())
 				fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", library.headerJarFile.String())
 
 				if library.jacocoReportClassesFile != nil {
 					fmt.Fprintln(w, "LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR :=", library.jacocoReportClassesFile.String())
+				}
+
+				if len(library.exportedSdkLibs) != 0 {
+					fmt.Fprintln(w, "LOCAL_EXPORT_SDK_LIBRARIES :=", strings.Join(library.exportedSdkLibs, " "))
 				}
 
 				// Temporary hack: export sources used to compile framework.jar to Make
@@ -77,13 +79,13 @@ func (library *Library) AndroidMk() android.AndroidMkData {
 		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
 			android.WriteAndroidMkData(w, data)
 
-			if proptools.Bool(library.deviceProperties.Hostdex) && !library.Host() {
+			if Bool(library.deviceProperties.Hostdex) && !library.Host() {
 				fmt.Fprintln(w, "include $(CLEAR_VARS)")
 				fmt.Fprintln(w, "LOCAL_MODULE := "+name+"-hostdex")
 				fmt.Fprintln(w, "LOCAL_IS_HOST_MODULE := true")
 				fmt.Fprintln(w, "LOCAL_MODULE_CLASS := JAVA_LIBRARIES")
 				fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", library.implementationJarFile.String())
-				if library.properties.Installable != nil && *library.properties.Installable == false {
+				if library.installFile == nil {
 					fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
 				}
 				if library.dexJarFile != nil {
@@ -97,6 +99,19 @@ func (library *Library) AndroidMk() android.AndroidMkData {
 	}
 }
 
+func (j *Test) AndroidMk() android.AndroidMkData {
+	data := j.Library.AndroidMk()
+	data.Extra = append(data.Extra, func(w io.Writer, outputFile android.Path) {
+		fmt.Fprintln(w, "LOCAL_MODULE_TAGS := tests")
+		if len(j.testProperties.Test_suites) > 0 {
+			fmt.Fprintln(w, "LOCAL_COMPATIBILITY_SUITE :=",
+				strings.Join(j.testProperties.Test_suites, " "))
+		}
+	})
+
+	return data
+}
+
 func (prebuilt *Import) AndroidMk() android.AndroidMkData {
 	return android.AndroidMkData{
 		Class:      "JAVA_LIBRARIES",
@@ -104,9 +119,9 @@ func (prebuilt *Import) AndroidMk() android.AndroidMkData {
 		Include:    "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
 		Extra: []android.AndroidMkExtraFunc{
 			func(w io.Writer, outputFile android.Path) {
-				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := ", !proptools.Bool(prebuilt.properties.Installable))
+				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := ", !Bool(prebuilt.properties.Installable))
 				fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", prebuilt.combinedClasspathFile.String())
-				fmt.Fprintln(w, "LOCAL_SDK_VERSION :=", String(prebuilt.properties.Sdk_version))
+				fmt.Fprintln(w, "LOCAL_SDK_VERSION :=", prebuilt.sdkVersion())
 			},
 		},
 	}
@@ -125,7 +140,8 @@ func (prebuilt *AARImport) AndroidMk() android.AndroidMkData {
 				fmt.Fprintln(w, "LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE :=", prebuilt.exportPackage.String())
 				fmt.Fprintln(w, "LOCAL_SOONG_EXPORT_PROGUARD_FLAGS :=", prebuilt.proguardFlags.String())
 				fmt.Fprintln(w, "LOCAL_SOONG_STATIC_LIBRARY_EXTRA_PACKAGES :=", prebuilt.extraAaptPackagesFile.String())
-				fmt.Fprintln(w, "LOCAL_SDK_VERSION :=", String(prebuilt.properties.Sdk_version))
+				fmt.Fprintln(w, "LOCAL_FULL_MANIFEST_FILE :=", prebuilt.manifest.String())
+				fmt.Fprintln(w, "LOCAL_SDK_VERSION :=", prebuilt.sdkVersion())
 			},
 		},
 	}
@@ -217,6 +233,19 @@ func (app *AndroidApp) AndroidMk() android.AndroidMkData {
 	}
 }
 
+func (a *AndroidTest) AndroidMk() android.AndroidMkData {
+	data := a.AndroidApp.AndroidMk()
+	data.Extra = append(data.Extra, func(w io.Writer, outputFile android.Path) {
+		fmt.Fprintln(w, "LOCAL_MODULE_TAGS := tests")
+		if len(a.testProperties.Test_suites) > 0 {
+			fmt.Fprintln(w, "LOCAL_COMPATIBILITY_SUITE :=",
+				strings.Join(a.testProperties.Test_suites, " "))
+		}
+	})
+
+	return data
+}
+
 func (a *AndroidLibrary) AndroidMk() android.AndroidMkData {
 	data := a.Library.AndroidMk()
 
@@ -247,15 +276,15 @@ func (a *AndroidLibrary) AndroidMk() android.AndroidMkData {
 func (jd *Javadoc) AndroidMk() android.AndroidMkData {
 	return android.AndroidMkData{
 		Class:      "JAVA_LIBRARIES",
-		OutputFile: android.OptionalPathForPath(jd.stubsJar),
+		OutputFile: android.OptionalPathForPath(jd.stubsSrcJar),
 		Include:    "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
 		Extra: []android.AndroidMkExtraFunc{
 			func(w io.Writer, outputFile android.Path) {
-				if jd.properties.Installable == nil || *jd.properties.Installable == true {
+				if BoolDefault(jd.properties.Installable, true) {
 					fmt.Fprintln(w, "LOCAL_DROIDDOC_DOC_ZIP := ", jd.docZip.String())
 				}
-				if jd.stubsJar != nil {
-					fmt.Fprintln(w, "LOCAL_DROIDDOC_STUBS_JAR := ", jd.stubsJar.String())
+				if jd.stubsSrcJar != nil {
+					fmt.Fprintln(w, "LOCAL_DROIDDOC_STUBS_SRCJAR := ", jd.stubsSrcJar.String())
 				}
 			},
 		},
@@ -265,15 +294,66 @@ func (jd *Javadoc) AndroidMk() android.AndroidMkData {
 func (ddoc *Droiddoc) AndroidMk() android.AndroidMkData {
 	return android.AndroidMkData{
 		Class:      "JAVA_LIBRARIES",
-		OutputFile: android.OptionalPathForPath(ddoc.stubsJar),
+		OutputFile: android.OptionalPathForPath(ddoc.stubsSrcJar),
 		Include:    "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
 		Extra: []android.AndroidMkExtraFunc{
 			func(w io.Writer, outputFile android.Path) {
-				if ddoc.Javadoc.properties.Installable == nil || *ddoc.Javadoc.properties.Installable == true {
+				if BoolDefault(ddoc.Javadoc.properties.Installable, true) {
 					fmt.Fprintln(w, "LOCAL_DROIDDOC_DOC_ZIP := ", ddoc.Javadoc.docZip.String())
 				}
-				if ddoc.Javadoc.stubsJar != nil {
-					fmt.Fprintln(w, "LOCAL_DROIDDOC_STUBS_JAR := ", ddoc.Javadoc.stubsJar.String())
+				if ddoc.Javadoc.stubsSrcJar != nil {
+					fmt.Fprintln(w, "LOCAL_DROIDDOC_STUBS_SRCJAR := ", ddoc.Javadoc.stubsSrcJar.String())
+				}
+				if ddoc.checkCurrentApiTimestamp != nil {
+					fmt.Fprintln(w, ".PHONY:", ddoc.Name()+"-check-current-api")
+					fmt.Fprintln(w, ddoc.Name()+"-check-current-api:",
+						ddoc.checkCurrentApiTimestamp.String())
+
+					fmt.Fprintln(w, ".PHONY: checkapi")
+					fmt.Fprintln(w, "checkapi:",
+						ddoc.checkCurrentApiTimestamp.String())
+
+					fmt.Fprintln(w, ".PHONY: droidcore")
+					fmt.Fprintln(w, "droidcore: checkapi")
+				}
+				if ddoc.updateCurrentApiTimestamp != nil {
+					fmt.Fprintln(w, ".PHONY:", ddoc.Name(), "-update-current-api")
+					fmt.Fprintln(w, ddoc.Name()+"-update-current-api:",
+						ddoc.updateCurrentApiTimestamp.String())
+
+					fmt.Fprintln(w, ".PHONY: update-api")
+					fmt.Fprintln(w, "update-api:",
+						ddoc.updateCurrentApiTimestamp.String())
+				}
+				if ddoc.checkLastReleasedApiTimestamp != nil {
+					fmt.Fprintln(w, ".PHONY:", ddoc.Name()+"-check-last-released-api")
+					fmt.Fprintln(w, ddoc.Name()+"-check-last-released-api:",
+						ddoc.checkLastReleasedApiTimestamp.String())
+				}
+				apiFilePrefix := "INTERNAL_PLATFORM_"
+				if String(ddoc.properties.Api_tag_name) != "" {
+					apiFilePrefix += String(ddoc.properties.Api_tag_name) + "_"
+				}
+				if ddoc.apiFile != nil {
+					fmt.Fprintln(w, apiFilePrefix+"API_FILE := ", ddoc.apiFile.String())
+				}
+				if ddoc.dexApiFile != nil {
+					fmt.Fprintln(w, apiFilePrefix+"DEX_API_FILE := ", ddoc.dexApiFile.String())
+				}
+				if ddoc.privateApiFile != nil {
+					fmt.Fprintln(w, apiFilePrefix+"PRIVATE_API_FILE := ", ddoc.privateApiFile.String())
+				}
+				if ddoc.privateDexApiFile != nil {
+					fmt.Fprintln(w, apiFilePrefix+"PRIVATE_DEX_API_FILE := ", ddoc.privateDexApiFile.String())
+				}
+				if ddoc.removedApiFile != nil {
+					fmt.Fprintln(w, apiFilePrefix+"REMOVED_API_FILE := ", ddoc.removedApiFile.String())
+				}
+				if ddoc.removedDexApiFile != nil {
+					fmt.Fprintln(w, apiFilePrefix+"REMOVED_DEX_API_FILE := ", ddoc.removedDexApiFile.String())
+				}
+				if ddoc.exactApiFile != nil {
+					fmt.Fprintln(w, apiFilePrefix+"EXACT_API_FILE := ", ddoc.exactApiFile.String())
 				}
 			},
 		},

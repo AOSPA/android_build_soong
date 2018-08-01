@@ -24,7 +24,8 @@ import (
 )
 
 var (
-	vendorSuffix = ".vendor"
+	vendorSuffix   = ".vendor"
+	recoverySuffix = ".recovery"
 )
 
 type AndroidMkContext interface {
@@ -58,6 +59,8 @@ func (c *Module) AndroidMk() android.AndroidMkData {
 
 	ret := android.AndroidMkData{
 		OutputFile: c.outputFile,
+		Required:   c.Properties.AndroidMkRuntimeLibs,
+
 		Extra: []android.AndroidMkExtraFunc{
 			func(w io.Writer, outputFile android.Path) {
 				if len(c.Properties.Logtags) > 0 {
@@ -68,7 +71,7 @@ func (c *Module) AndroidMk() android.AndroidMkData {
 					fmt.Fprintln(w, "LOCAL_SHARED_LIBRARIES := "+strings.Join(c.Properties.AndroidMkSharedLibs, " "))
 				}
 				if c.Target().Os == android.Android &&
-					String(c.Properties.Sdk_version) != "" && !c.useVndk() {
+					String(c.Properties.Sdk_version) != "" && !c.useVndk() && !c.inRecovery() {
 					fmt.Fprintln(w, "LOCAL_SDK_VERSION := "+String(c.Properties.Sdk_version))
 					fmt.Fprintln(w, "LOCAL_NDK_STL_VARIANT := none")
 				} else {
@@ -97,6 +100,8 @@ func (c *Module) AndroidMk() android.AndroidMkData {
 		// .vendor suffix is added only when we will have two variants: core and vendor.
 		// The suffix is not added for vendor-only module.
 		ret.SubName += vendorSuffix
+	} else if c.inRecovery() && !c.onlyInRecovery() {
+		ret.SubName += recoverySuffix
 	}
 
 	return ret
@@ -243,6 +248,7 @@ func (benchmark *benchmarkDecorator) AndroidMk(ctx AndroidMkContext, ret *androi
 			fmt.Fprintln(w, "LOCAL_COMPATIBILITY_SUITE :=",
 				strings.Join(benchmark.Properties.Test_suites, " "))
 		}
+		fmt.Fprintln(w, "LOCAL_NATIVE_BENCHMARK := true")
 	})
 
 	androidMkWriteTestData(benchmark.data, ctx, ret)
@@ -342,7 +348,7 @@ func (c *stubDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkDa
 
 func (c *llndkStubDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
 	ret.Class = "SHARED_LIBRARIES"
-	ret.SubName = ".vendor"
+	ret.SubName = vendorSuffix
 
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		c.libraryDecorator.androidMkWriteExportedFlags(w)

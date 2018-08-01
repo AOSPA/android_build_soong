@@ -15,15 +15,14 @@
 package build
 
 import (
-	"bufio"
 	"crypto/md5"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
+
+	"android/soong/ui/status"
 )
 
 var spaceSlashReplacer = strings.NewReplacer("/", "_", " ", "_")
@@ -77,8 +76,19 @@ func runKati(ctx Context, config Config) {
 		"--color_warnings",
 		"--gen_all_targets",
 		"--werror_find_emulator",
+		"--no_builtin_rules",
+		"--werror_suffix_rules",
 		"--kati_stats",
 		"-f", "build/make/core/main.mk",
+	}
+
+	// PDK builds still uses a few implicit rules
+	if !config.IsPdkBuild() {
+		args = append(args, "--werror_implicit_rules")
+	}
+
+	if !config.BuildBrokenDupRules() {
+		args = append(args, "--werror_overriding_commands")
 	}
 
 	if !config.Environment().IsFalse("KATI_EMULATE_FIND") {
@@ -90,7 +100,8 @@ func runKati(ctx Context, config Config) {
 	args = append(args,
 		"BUILDING_WITH_NINJA=true",
 		"SOONG_ANDROID_MK="+config.SoongAndroidMk(),
-		"SOONG_MAKEVARS_MK="+config.SoongMakeVarsMk())
+		"SOONG_MAKEVARS_MK="+config.SoongMakeVarsMk(),
+		"TARGET_DEVICE_DIR="+config.TargetDeviceDir())
 
 	if config.UseGoma() {
 		args = append(args, "-j"+strconv.Itoa(config.Parallel()))
@@ -105,70 +116,8 @@ func runKati(ctx Context, config Config) {
 	cmd.Stderr = cmd.Stdout
 
 	cmd.StartOrFatal()
-	katiRewriteOutput(ctx, pipe)
+	status.KatiReader(ctx.Status.StartTool(), pipe)
 	cmd.WaitOrFatal()
-}
-
-var katiIncludeRe = regexp.MustCompile(`^(\[\d+/\d+] )?including [^ ]+ ...$`)
-var katiLogRe = regexp.MustCompile(`^\*kati\*: `)
-
-func katiRewriteOutput(ctx Context, pipe io.ReadCloser) {
-	haveBlankLine := true
-	smartTerminal := ctx.IsTerminal()
-	errSmartTerminal := ctx.IsErrTerminal()
-
-	scanner := bufio.NewScanner(pipe)
-	for scanner.Scan() {
-		line := scanner.Text()
-		verbose := katiIncludeRe.MatchString(line)
-
-		// Only put kati debug/stat lines in our verbose log
-		if katiLogRe.MatchString(line) {
-			ctx.Verbose(line)
-			continue
-		}
-
-		// For verbose lines, write them on the current line without a newline,
-		// then overwrite them if the next thing we're printing is another
-		// verbose line.
-		if smartTerminal && verbose {
-			// Limit line width to the terminal width, otherwise we'll wrap onto
-			// another line and we won't delete the previous line.
-			//
-			// Run this on every line in case the window has been resized while
-			// we're printing. This could be optimized to only re-run when we
-			// get SIGWINCH if it ever becomes too time consuming.
-			if max, ok := termWidth(ctx.Stdout()); ok {
-				if len(line) > max {
-					// Just do a max. Ninja elides the middle, but that's
-					// more complicated and these lines aren't that important.
-					line = line[:max]
-				}
-			}
-
-			// Move to the beginning on the line, print the output, then clear
-			// the rest of the line.
-			fmt.Fprint(ctx.Stdout(), "\r", line, "\x1b[K")
-			haveBlankLine = false
-			continue
-		} else if smartTerminal && !haveBlankLine {
-			// If we've previously written a verbose message, send a newline to save
-			// that message instead of overwriting it.
-			fmt.Fprintln(ctx.Stdout())
-			haveBlankLine = true
-		} else if !errSmartTerminal {
-			// Most editors display these as garbage, so strip them out.
-			line = string(stripAnsiEscapes([]byte(line)))
-		}
-
-		// Assume that non-verbose lines are important enough for stderr
-		fmt.Fprintln(ctx.Stderr(), line)
-	}
-
-	// Save our last verbose line.
-	if !haveBlankLine {
-		fmt.Fprintln(ctx.Stdout())
-	}
 }
 
 func runKatiCleanSpec(ctx Context, config Config) {
@@ -185,18 +134,24 @@ func runKatiCleanSpec(ctx Context, config Config) {
 		"--color_warnings",
 		"--gen_all_targets",
 		"--werror_find_emulator",
+		"--werror_overriding_commands",
 		"--use_find_emulator",
+		"--kati_stats",
 		"-f", "build/make/core/cleanbuild.mk",
 		"BUILDING_WITH_NINJA=true",
 		"SOONG_MAKEVARS_MK=" + config.SoongMakeVarsMk(),
+		"TARGET_DEVICE_DIR=" + config.TargetDeviceDir(),
 	}
 
 	cmd := Command(ctx, config, "ckati", executable, args...)
 	cmd.Sandbox = katiCleanSpecSandbox
-	cmd.Stdout = ctx.Stdout()
-	cmd.Stderr = ctx.Stderr()
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		ctx.Fatalln("Error getting output pipe for ckati:", err)
+	}
+	cmd.Stderr = cmd.Stdout
 
-	// Kati leaks memory, so ensure leak detection is turned off
-	cmd.Environment.Set("ASAN_OPTIONS", "detect_leaks=0")
-	cmd.RunOrFatal()
+	cmd.StartOrFatal()
+	status.KatiReader(ctx.Status.StartTool(), pipe)
+	cmd.WaitOrFatal()
 }

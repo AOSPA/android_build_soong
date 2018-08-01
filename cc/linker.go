@@ -58,6 +58,9 @@ type BaseLinkerProperties struct {
 	// don't link in libgcc.a
 	No_libgcc *bool
 
+	// Use clang lld instead of gnu ld.
+	Use_clang_lld *bool `android:"arch_variant"`
+
 	// -l arguments to pass to linker for host-provided shared libraries
 	Host_ldlibs []string `android:"arch_variant"`
 
@@ -85,20 +88,45 @@ type BaseLinkerProperties struct {
 	// between static libraries, but it is generally better to order them correctly instead.
 	Group_static_libs *bool `android:"arch_variant"`
 
+	// list of modules that should be installed with this module.  This is similar to 'required'
+	// but '.vendor' suffix will be appended to the module names if the shared libraries have
+	// vendor variants and this module uses VNDK.
+	Runtime_libs []string `android:"arch_variant"`
+
 	Target struct {
 		Vendor struct {
+			// list of shared libs that should not be used to build the vendor variant
+			// of the C/C++ module.
+			Exclude_shared_libs []string
+
+			// list of static libs that should not be used to build the vendor variant
+			// of the C/C++ module.
+			Exclude_static_libs []string
+
+			// list of runtime libs that should not be installed along with the vendor
+			// variant of the C/C++ module.
+			Exclude_runtime_libs []string
+		}
+		Recovery struct {
 			// list of shared libs that should not be used to build
-			// the vendor variant of the C/C++ module.
+			// the recovery variant of the C/C++ module.
 			Exclude_shared_libs []string
 
 			// list of static libs that should not be used to build
-			// the vendor variant of the C/C++ module.
+			// the recovery variant of the C/C++ module.
 			Exclude_static_libs []string
 		}
 	}
 
 	// make android::build:GetBuildNumber() available containing the build ID.
 	Use_version_lib *bool `android:"arch_variant"`
+}
+
+// TODO(http://b/80437643): BaseLinkerProperties is getting too big,
+// more than 2^16 bytes. New properties are defined in MoreBaseLinkerProperties.
+type MoreBaseLinkerProperties struct {
+	// Generate compact dynamic relocation table, default true.
+	Pack_relocations *bool `android:"arch_variant"`
 }
 
 func NewBaseLinker() *baseLinker {
@@ -108,6 +136,7 @@ func NewBaseLinker() *baseLinker {
 // baseLinker provides support for shared_libs, static_libs, and whole_static_libs properties
 type baseLinker struct {
 	Properties        BaseLinkerProperties
+	MoreProperties    MoreBaseLinkerProperties
 	dynamicProperties struct {
 		RunPaths []string `blueprint:"mutated"`
 	}
@@ -126,7 +155,7 @@ func (linker *baseLinker) linkerInit(ctx BaseModuleContext) {
 }
 
 func (linker *baseLinker) linkerProps() []interface{} {
-	return []interface{}{&linker.Properties, &linker.dynamicProperties}
+	return []interface{}{&linker.Properties, &linker.MoreProperties, &linker.dynamicProperties}
 }
 
 func (linker *baseLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
@@ -134,6 +163,7 @@ func (linker *baseLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
 	deps.HeaderLibs = append(deps.HeaderLibs, linker.Properties.Header_libs...)
 	deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Static_libs...)
 	deps.SharedLibs = append(deps.SharedLibs, linker.Properties.Shared_libs...)
+	deps.RuntimeLibs = append(deps.RuntimeLibs, linker.Properties.Runtime_libs...)
 
 	deps.ReexportHeaderLibHeaders = append(deps.ReexportHeaderLibHeaders, linker.Properties.Export_header_lib_headers...)
 	deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, linker.Properties.Export_static_lib_headers...)
@@ -150,6 +180,15 @@ func (linker *baseLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
 		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Vendor.Exclude_static_libs)
 		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Vendor.Exclude_static_libs)
 		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Vendor.Exclude_static_libs)
+		deps.RuntimeLibs = removeListFromList(deps.RuntimeLibs, linker.Properties.Target.Vendor.Exclude_runtime_libs)
+	}
+
+	if ctx.inRecovery() {
+		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Recovery.Exclude_shared_libs)
+		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, linker.Properties.Target.Recovery.Exclude_shared_libs)
+		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Recovery.Exclude_static_libs)
+		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Recovery.Exclude_static_libs)
+		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Recovery.Exclude_static_libs)
 	}
 
 	if ctx.ModuleName() != "libcompiler_rt-extras" {
@@ -201,6 +240,24 @@ func (linker *baseLinker) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
 	return deps
 }
 
+func (linker *baseLinker) useClangLld(ctx ModuleContext) bool {
+	// Clang lld is not ready for for Darwin host executables yet.
+	// See https://lld.llvm.org/AtomLLD.html for status of lld for Mach-O.
+	if ctx.Darwin() {
+		return false
+	}
+	// http://b/110800681 - lld cannot link Android's Windows modules yet.
+	if ctx.Windows() {
+		return false
+	}
+	if linker.Properties.Use_clang_lld != nil {
+		return Bool(linker.Properties.Use_clang_lld)
+	}
+	return ctx.Config().UseClangLld()
+}
+
+// ModuleContext extends BaseModuleContext
+// BaseModuleContext should know if LLD is used?
 func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 	toolchain := ctx.toolchain()
 
@@ -209,7 +266,14 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 		hod = "Device"
 	}
 
-	flags.LdFlags = append(flags.LdFlags, fmt.Sprintf("${config.%sGlobalLdflags}", hod))
+	if flags.Clang && linker.useClangLld(ctx) {
+		flags.LdFlags = append(flags.LdFlags, fmt.Sprintf("${config.%sGlobalLldflags}", hod))
+		if !BoolDefault(linker.MoreProperties.Pack_relocations, true) {
+			flags.LdFlags = append(flags.LdFlags, "-Wl,--pack-dyn-relocs=none")
+		}
+	} else {
+		flags.LdFlags = append(flags.LdFlags, fmt.Sprintf("${config.%sGlobalLdflags}", hod))
+	}
 	if Bool(linker.Properties.Allow_undefined_symbols) {
 		if ctx.Darwin() {
 			// darwin defaults to treating undefined symbols as errors
@@ -219,7 +283,9 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 		flags.LdFlags = append(flags.LdFlags, "-Wl,--no-undefined")
 	}
 
-	if flags.Clang {
+	if flags.Clang && linker.useClangLld(ctx) {
+		flags.LdFlags = append(flags.LdFlags, toolchain.ClangLldflags())
+	} else if flags.Clang {
 		flags.LdFlags = append(flags.LdFlags, toolchain.ClangLdflags())
 	} else {
 		flags.LdFlags = append(flags.LdFlags, toolchain.Ldflags())

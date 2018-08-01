@@ -13,10 +13,25 @@
 // limitations under the License.
 
 bootstrap_go_package {
+    name: "soong-ui-build-paths",
+    pkgPath: "android/soong/ui/build/paths",
+    srcs: [
+        "paths/config.go",
+        "paths/logs.go",
+    ],
+    testSrcs: [
+        "paths/logs_test.go",
+    ],
+}
+
+bootstrap_go_package {
     name: "soong-ui-build",
     pkgPath: "android/soong/ui/build",
     deps: [
+        "soong-ui-build-paths",
         "soong-ui-logger",
+        "soong-ui-status",
+        "soong-ui-terminal",
         "soong-ui-tracer",
         "soong-shared",
         "soong-finder",
@@ -33,6 +48,7 @@ bootstrap_go_package {
         "finder.go",
         "kati.go",
         "ninja.go",
+        "path.go",
         "proc_sync.go",
         "signal.go",
         "soong.go",
@@ -48,13 +64,11 @@ bootstrap_go_package {
     darwin: {
         srcs: [
             "sandbox_darwin.go",
-            "util_darwin.go"
         ],
     },
     linux: {
         srcs: [
             "sandbox_linux.go",
-            "util_linux.go"
         ],
     },
 }
