@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/blueprint/microfactory"
 
@@ -113,10 +112,6 @@ func runSoong(ctx Context, config Config) {
 			"vendor/qcom/opensource/core-utils/build/QSSI_violators")
 
 		cmd.Sandbox = soongSandbox
-		cmd.Stdin = ctx.Stdin()
-		cmd.Stdout = ctx.Stdout()
-		cmd.Stderr = ctx.Stderr()
-		defer ctx.ImportNinjaLog(filepath.Join(config.OutDir(), ".ninja_log"), time.Now())
 		err := cmd.Run()
 		if err != nil {
 			ctx.Verboseln("QSSI_violators returned error...")
