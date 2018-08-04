@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
 	"runtime"
 	"strconv"
 	"strings"
@@ -261,7 +260,6 @@ func setSdclangVars() {
 	sdclangFlags2 := ""
 
 	product := android.SdclangEnv["TARGET_PRODUCT"]
-	androidRoot := android.SdclangEnv["ANDROID_BUILD_TOP"]
 	aeConfigPath := android.SdclangEnv["SDCLANG_AE_CONFIG"]
 	sdclangConfigPath := android.SdclangEnv["SDCLANG_CONFIG"]
 	sdclangSA := android.SdclangEnv["SDCLANG_SA_ENABLED"]
@@ -271,8 +269,7 @@ func setSdclangVars() {
 	}
 
 	// Load AE config file and set AE flag
-	aeConfigFile := path.Join(androidRoot, aeConfigPath)
-	if file, err := os.Open(aeConfigFile); err == nil {
+	if file, err := os.Open(aeConfigPath); err == nil {
 		decoder := json.NewDecoder(file)
 		aeConfig := sdclangAEConfig{}
 		if err := decoder.Decode(&aeConfig); err == nil {
@@ -283,9 +280,8 @@ func setSdclangVars() {
 	}
 
 	// Load SD Clang config file and set SD Clang variables
-	sdclangConfigFile := path.Join(androidRoot, sdclangConfigPath)
 	var sdclangConfig interface{}
-	if file, err := os.Open(sdclangConfigFile); err == nil {
+	if file, err := os.Open(sdclangConfigPath); err == nil {
 		decoder := json.NewDecoder(file)
                 // Parse the config file
 		if err := decoder.Decode(&sdclangConfig); err == nil {
@@ -346,8 +342,7 @@ func setSdclangVars() {
 			}
 			b, _ := strconv.ParseBool(sdclangSA)
 			if(b) {
-				androidroot_llvm := []string{androidRoot, "llvmsa"}
-				llvmsa_loc := strings.Join(androidroot_llvm, "/")
+				llvmsa_loc := "llvmsa"
 				s := []string{sdclangFlags, "--compile-and-analyze", llvmsa_loc}
 				sdclangFlags = strings.Join(s, " ")
 				fmt.Println("Clang SA is enabled: ", sdclangFlags)
