@@ -308,6 +308,9 @@ func (sanitize *sanitize) deps(ctx BaseModuleContext, deps Deps) Deps {
 func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	minimalRuntimeLib := config.UndefinedBehaviorSanitizerMinimalRuntimeLibrary(ctx.toolchain()) + ".a"
 	minimalRuntimePath := "${config.ClangAsanLibDir}/" + minimalRuntimeLib
+	if flags.Sdclang {
+		minimalRuntimePath = "${config.SDClangAsanLibDir}/" + minimalRuntimeLib
+	}
 
 	if ctx.Device() && sanitize.Properties.MinimalRuntimeDep {
 		flags.LdFlags = append(flags.LdFlags, minimalRuntimePath)
@@ -493,9 +496,16 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 	if runtimeLibrary != "" {
 		// ASan runtime library must be the first in the link order.
-		flags.libFlags = append([]string{
-			"${config.ClangAsanLibDir}/" + runtimeLibrary + ctx.toolchain().ShlibSuffix(),
-		}, flags.libFlags...)
+		if flags.Sdclang {
+			flags.libFlags = append([]string{
+				"${config.SDClangAsanLibDir}/" + runtimeLibrary + ctx.toolchain().ShlibSuffix(),
+			}, flags.libFlags...)
+		} else {
+			flags.libFlags = append([]string{
+				"${config.ClangAsanLibDir}/" + runtimeLibrary + ctx.toolchain().ShlibSuffix(),
+			}, flags.libFlags...)
+		}
+
 		sanitize.runtimeLibrary = runtimeLibrary
 
 		// When linking against VNDK, use the vendor variant of the runtime lib
