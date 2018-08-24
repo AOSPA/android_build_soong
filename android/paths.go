@@ -245,7 +245,17 @@ func pathsForModuleSrcFromFullPath(ctx ModuleContext, paths []string, incDirs bo
 			reportPathErrorf(ctx, "Path '%s' is not in module source directory '%s'", p, prefix)
 			continue
 		}
-		ret = append(ret, PathForModuleSrc(ctx, path[len(prefix):]))
+
+		srcPath, err := pathForSource(ctx, ctx.ModuleDir(), path[len(prefix):])
+		if err != nil {
+			reportPathError(ctx, err)
+			continue
+		}
+
+		moduleSrcPath := ModuleSrcPath{srcPath}
+		moduleSrcPath.basePath.rel = srcPath.path
+
+		ret = append(ret, moduleSrcPath)
 	}
 	return ret
 }
@@ -529,10 +539,6 @@ func pathForSource(ctx PathContext, pathComponents ...string) (SourcePath, error
 		return ret, fmt.Errorf("source path %s is in output", abs)
 	}
 
-	if pathtools.IsGlob(ret.String()) {
-		return ret, fmt.Errorf("path may not contain a glob: %s", ret.String())
-	}
-
 	return ret, nil
 }
 
@@ -569,6 +575,10 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 		reportPathError(ctx, err)
 	}
 
+	if pathtools.IsGlob(path.String()) {
+		reportPathErrorf(ctx, "path may not contain a glob: %s", path.String())
+	}
+
 	if modCtx, ok := ctx.(ModuleContext); ok && ctx.Config().AllowMissingDependencies() {
 		exists, err := existsWithDependencies(ctx, path)
 		if err != nil {
@@ -592,6 +602,11 @@ func ExistentPathForSource(ctx PathContext, pathComponents ...string) OptionalPa
 	path, err := pathForSource(ctx, pathComponents...)
 	if err != nil {
 		reportPathError(ctx, err)
+		return OptionalPath{}
+	}
+
+	if pathtools.IsGlob(path.String()) {
+		reportPathErrorf(ctx, "path may not contain a glob: %s", path.String())
 		return OptionalPath{}
 	}
 
@@ -660,6 +675,11 @@ type OutputPath struct {
 
 func (p OutputPath) withRel(rel string) OutputPath {
 	p.basePath = p.basePath.withRel(rel)
+	return p
+}
+
+func (p OutputPath) WithoutRel() OutputPath {
+	p.basePath.rel = filepath.Base(p.basePath.path)
 	return p
 }
 
@@ -769,6 +789,10 @@ func PathForModuleSrc(ctx ModuleContext, paths ...string) ModuleSrcPath {
 		reportPathError(ctx, err)
 	}
 
+	if pathtools.IsGlob(srcPath.String()) {
+		reportPathErrorf(ctx, "path may not contain a glob: %s", srcPath.String())
+	}
+
 	path := ModuleSrcPath{srcPath}
 	path.basePath.rel = p
 
@@ -826,37 +850,40 @@ func pathForModule(ctx ModuleContext) OutputPath {
 	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir())
 }
 
-// PathForVndkRefDump returns an OptionalPath representing the path of the reference
-// abi dump for the given module. This is not guaranteed to be valid.
-func PathForVndkRefAbiDump(ctx ModuleContext, version, fileName string, vndkOrNdk, isSourceDump bool) OptionalPath {
+// PathForVndkRefAbiDump returns an OptionalPath representing the path of the
+// reference abi dump for the given module. This is not guaranteed to be valid.
+func PathForVndkRefAbiDump(ctx ModuleContext, version, fileName string,
+	isLlndk, isGzip bool) OptionalPath {
+
 	arches := ctx.DeviceConfig().Arches()
+	if len(arches) == 0 {
+		panic("device build with no primary arch")
+	}
 	currentArch := ctx.Arch()
 	archNameAndVariant := currentArch.ArchType.String()
 	if currentArch.ArchVariant != "" {
 		archNameAndVariant += "_" + currentArch.ArchVariant
 	}
-	var sourceOrBinaryDir string
-	var vndkOrNdkDir string
-	var ext string
-	if isSourceDump {
-		ext = ".lsdump.gz"
-		sourceOrBinaryDir = "source-based"
+
+	var dirName string
+	if isLlndk {
+		dirName = "ndk"
 	} else {
-		ext = ".bdump.gz"
-		sourceOrBinaryDir = "binary-based"
+		dirName = "vndk"
 	}
-	if vndkOrNdk {
-		vndkOrNdkDir = "vndk"
-	} else {
-		vndkOrNdkDir = "ndk"
-	}
-	if len(arches) == 0 {
-		panic("device build with no primary arch")
-	}
+
 	binderBitness := ctx.DeviceConfig().BinderBitness()
-	refDumpFileStr := "prebuilts/abi-dumps/" + vndkOrNdkDir + "/" + version + "/" + binderBitness + "/" +
-		archNameAndVariant + "/" + sourceOrBinaryDir + "/" + fileName + ext
-	return ExistentPathForSource(ctx, refDumpFileStr)
+
+	var ext string
+	if isGzip {
+		ext = ".lsdump.gz"
+	} else {
+		ext = ".lsdump"
+	}
+
+	return ExistentPathForSource(ctx, "prebuilts", "abi-dumps", dirName,
+		version, binderBitness, archNameAndVariant, "source-based",
+		fileName+ext)
 }
 
 // PathForModuleOut returns a Path representing the paths... under the module's
@@ -958,6 +985,8 @@ func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string
 			partition = ctx.DeviceConfig().OdmPath()
 		} else if ctx.ProductSpecific() {
 			partition = ctx.DeviceConfig().ProductPath()
+		} else if ctx.ProductServicesSpecific() {
+			partition = ctx.DeviceConfig().ProductServicesPath()
 		} else {
 			partition = "system"
 		}

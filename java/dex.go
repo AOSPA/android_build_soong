@@ -111,6 +111,8 @@ func (j *Module) r8Flags(ctx android.ModuleContext, flags javaBuilderFlags) (r8F
 	flagFiles = append(flagFiles, j.extraProguardFlagFiles...)
 	// TODO(ccross): static android library proguard files
 
+	flagFiles = append(flagFiles, android.PathsForModuleSrc(ctx, j.deviceProperties.Optimize.Proguard_flags_files)...)
+
 	r8Flags = append(r8Flags, android.JoinWithPrefix(flagFiles.Strings(), "-include "))
 	r8Deps = append(r8Deps, flagFiles...)
 
@@ -138,7 +140,7 @@ func (j *Module) r8Flags(ctx android.ModuleContext, flags javaBuilderFlags) (r8F
 }
 
 func (j *Module) compileDex(ctx android.ModuleContext, flags javaBuilderFlags,
-	classesJar android.Path, jarName string) android.Path {
+	classesJar android.Path, jarName string) android.ModuleOutPath {
 
 	useR8 := Bool(j.deviceProperties.Optimize.Enabled)
 
@@ -181,6 +183,5 @@ func (j *Module) compileDex(ctx android.ModuleContext, flags javaBuilderFlags,
 		})
 	}
 
-	j.dexJarFile = javalibJar
 	return javalibJar
 }

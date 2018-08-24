@@ -110,6 +110,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		"DISPLAY",
 		"GREP_OPTIONS",
 		"NDK_ROOT",
+		"POSIXLY_CORRECT",
 
 		// Drop make flags
 		"MAKEFLAGS",
@@ -291,6 +292,9 @@ func (c *configImpl) configureLocale(ctx Context) {
 	// The for LANG, use C.UTF-8 if it exists (Debian currently, proposed
 	// for others)
 	if inList("C.UTF-8", locales) {
+		c.environ.Set("LANG", "C.UTF-8")
+	} else if inList("C.utf8", locales) {
+		// These normalize to the same thing
 		c.environ.Set("LANG", "C.UTF-8")
 	} else if inList("en_US.UTF-8", locales) {
 		c.environ.Set("LANG", "en_US.UTF-8")

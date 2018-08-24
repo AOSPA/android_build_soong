@@ -67,6 +67,7 @@ type aapt struct {
 	rroDirs               android.Paths
 	rTxt                  android.Path
 	extraAaptPackagesFile android.Path
+	isLibrary             bool
 
 	aaptProperties aaptProperties
 }
@@ -167,13 +168,16 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext sdkContext, ex
 	manifestFile := proptools.StringDefault(a.aaptProperties.Manifest, "AndroidManifest.xml")
 	manifestSrcPath := android.PathForModuleSrc(ctx, manifestFile)
 
-	manifestPath := manifestMerger(ctx, manifestSrcPath, sdkContext, staticLibManifests)
+	manifestPath := manifestMerger(ctx, manifestSrcPath, sdkContext, staticLibManifests, a.isLibrary)
 
 	linkFlags, linkDeps, resDirs, overlayDirs, rroDirs := a.aapt2Flags(ctx, sdkContext, manifestPath)
 
 	linkFlags = append(linkFlags, libFlags...)
 	linkDeps = append(linkDeps, libDeps...)
 	linkFlags = append(linkFlags, extraLinkFlags...)
+	if a.isLibrary {
+		linkFlags = append(linkFlags, "--static-lib")
+	}
 
 	packageRes := android.PathForModuleOut(ctx, "package-res.apk")
 	srcJar := android.PathForModuleGen(ctx, "R.jar")
@@ -182,15 +186,38 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext sdkContext, ex
 	// This file isn't used by Soong, but is generated for exporting
 	extraPackages := android.PathForModuleOut(ctx, "extra_packages")
 
-	var compiledRes, compiledOverlay android.Paths
+	var compiledResDirs []android.Paths
 	for _, dir := range resDirs {
-		compiledRes = append(compiledRes, aapt2Compile(ctx, dir.dir, dir.files).Paths()...)
+		compiledResDirs = append(compiledResDirs, aapt2Compile(ctx, dir.dir, dir.files).Paths())
 	}
+
+	var compiledRes, compiledOverlay android.Paths
+
+	compiledOverlay = append(compiledOverlay, transitiveStaticLibs...)
+
+	if a.isLibrary {
+		// For a static library we treat all the resources equally with no overlay.
+		for _, compiledResDir := range compiledResDirs {
+			compiledRes = append(compiledRes, compiledResDir...)
+		}
+	} else if len(transitiveStaticLibs) > 0 {
+		// If we are using static android libraries, every source file becomes an overlay.
+		// This is to emulate old AAPT behavior which simulated library support.
+		for _, compiledResDir := range compiledResDirs {
+			compiledOverlay = append(compiledOverlay, compiledResDir...)
+		}
+	} else if len(compiledResDirs) > 0 {
+		// Without static libraries, the first directory is our directory, which can then be
+		// overlaid by the rest.
+		compiledRes = append(compiledRes, compiledResDirs[0]...)
+		for _, compiledResDir := range compiledResDirs[1:] {
+			compiledOverlay = append(compiledOverlay, compiledResDir...)
+		}
+	}
+
 	for _, dir := range overlayDirs {
 		compiledOverlay = append(compiledOverlay, aapt2Compile(ctx, dir.dir, dir.files).Paths()...)
 	}
-
-	compiledOverlay = append(compiledOverlay, transitiveStaticLibs...)
 
 	aapt2Link(ctx, packageRes, srcJar, proguardOptionsFile, rTxt, extraPackages,
 		linkFlags, linkDeps, compiledRes, compiledOverlay)
@@ -286,7 +313,8 @@ func (a *AndroidLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	a.aapt.buildActions(ctx, sdkContext(a), "--static-lib")
+	a.isLibrary = true
+	a.aapt.buildActions(ctx, sdkContext(a))
 
 	ctx.CheckbuildFile(a.proguardOptionsFile)
 	ctx.CheckbuildFile(a.exportPackage)
@@ -490,6 +518,14 @@ func (a *AARImport) HeaderJars() android.Paths {
 }
 
 func (a *AARImport) ImplementationJars() android.Paths {
+	return android.Paths{a.classpathFile}
+}
+
+func (a *AARImport) ResourceJars() android.Paths {
+	return nil
+}
+
+func (a *AARImport) ImplementationAndResourcesJars() android.Paths {
 	return android.Paths{a.classpathFile}
 }
 

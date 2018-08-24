@@ -69,6 +69,7 @@ type androidBaseContext interface {
 	DeviceSpecific() bool
 	SocSpecific() bool
 	ProductSpecific() bool
+	ProductServicesSpecific() bool
 	AConfig() Config
 	DeviceConfig() DeviceConfig
 }
@@ -241,6 +242,11 @@ type commonProperties struct {
 	// /system/product if product partition does not exist).
 	Product_specific *bool
 
+	// whether this module provides services owned by the OS provider to the core platform. When set
+	// to true, it is installed into  /product_services (or /system/product_services if
+	// product_services partition does not exist).
+	Product_services_specific *bool
+
 	// Whether this module is installed to recovery partition
 	Recovery *bool
 
@@ -288,11 +294,25 @@ type HostOrDeviceSupported int
 
 const (
 	_ HostOrDeviceSupported = iota
+
+	// Host and HostCross are built by default. Device is not supported.
 	HostSupported
+
+	// Host is built by default. HostCross and Device are not supported.
 	HostSupportedNoCross
+
+	// Device is built by default. Host and HostCross are not supported.
 	DeviceSupported
+
+	// Device is built by default. Host and HostCross are supported.
 	HostAndDeviceSupported
+
+	// Host, HostCross, and Device are built by default.
 	HostAndDeviceDefault
+
+	// Nothing is supported. This is not exposed to the user, but used to mark a
+	// host only module as unsupported when the module type is not supported on
+	// the host OS. E.g. benchmarks are supported on Linux but not Darwin.
 	NeitherHostNorDeviceSupported
 )
 
@@ -303,6 +323,7 @@ const (
 	deviceSpecificModule
 	socSpecificModule
 	productSpecificModule
+	productServicesSpecificModule
 )
 
 func (k moduleKind) String() string {
@@ -315,6 +336,8 @@ func (k moduleKind) String() string {
 		return "soc-specific"
 	case productSpecificModule:
 		return "product-specific"
+	case productServicesSpecificModule:
+		return "productservices-specific"
 	default:
 		panic(fmt.Errorf("unknown module kind %d", k))
 	}
@@ -484,9 +507,11 @@ func (a *ModuleBase) OsClassSupported() []OsClass {
 		return []OsClass{Host}
 	case DeviceSupported:
 		return []OsClass{Device}
-	case HostAndDeviceSupported:
+	case HostAndDeviceSupported, HostAndDeviceDefault:
 		var supported []OsClass
-		if Bool(a.hostAndDeviceProperties.Host_supported) {
+		if Bool(a.hostAndDeviceProperties.Host_supported) ||
+			(a.commonProperties.HostOrDeviceSupported == HostAndDeviceDefault &&
+				a.hostAndDeviceProperties.Host_supported == nil) {
 			supported = append(supported, Host, HostCross)
 		}
 		if a.hostAndDeviceProperties.Device_supported == nil ||
@@ -507,7 +532,7 @@ func (a *ModuleBase) DeviceSupported() bool {
 }
 
 func (a *ModuleBase) Platform() bool {
-	return !a.DeviceSpecific() && !a.SocSpecific() && !a.ProductSpecific()
+	return !a.DeviceSpecific() && !a.SocSpecific() && !a.ProductSpecific() && !a.ProductServicesSpecific()
 }
 
 func (a *ModuleBase) DeviceSpecific() bool {
@@ -520,6 +545,10 @@ func (a *ModuleBase) SocSpecific() bool {
 
 func (a *ModuleBase) ProductSpecific() bool {
 	return Bool(a.commonProperties.Product_specific)
+}
+
+func (a *ModuleBase) ProductServicesSpecific() bool {
+	return Bool(a.commonProperties.Product_services_specific)
 }
 
 func (a *ModuleBase) Enabled() bool {
@@ -632,17 +661,11 @@ func determineModuleKind(a *ModuleBase, ctx blueprint.BaseModuleContext) moduleK
 	var socSpecific = Bool(a.commonProperties.Vendor) || Bool(a.commonProperties.Proprietary) || Bool(a.commonProperties.Soc_specific)
 	var deviceSpecific = Bool(a.commonProperties.Device_specific)
 	var productSpecific = Bool(a.commonProperties.Product_specific)
+	var productServicesSpecific = Bool(a.commonProperties.Product_services_specific)
 
-	if ((socSpecific || deviceSpecific) && productSpecific) || (socSpecific && deviceSpecific) {
-		msg := "conflicting value set here"
-		if productSpecific {
-			ctx.PropertyErrorf("product_specific", "a module cannot be specific to SoC or device and product at the same time.")
-			if deviceSpecific {
-				ctx.PropertyErrorf("device_specific", msg)
-			}
-		} else {
-			ctx.PropertyErrorf("device_specific", "a module cannot be specific to SoC and device at the same time.")
-		}
+	msg := "conflicting value set here"
+	if socSpecific && deviceSpecific {
+		ctx.PropertyErrorf("device_specific", "a module cannot be specific to SoC and device at the same time.")
 		if Bool(a.commonProperties.Vendor) {
 			ctx.PropertyErrorf("vendor", msg)
 		}
@@ -654,8 +677,36 @@ func determineModuleKind(a *ModuleBase, ctx blueprint.BaseModuleContext) moduleK
 		}
 	}
 
+	if productSpecific && productServicesSpecific {
+		ctx.PropertyErrorf("product_specific", "a module cannot be specific to product and product_services at the same time.")
+		ctx.PropertyErrorf("product_services_specific", msg)
+	}
+
+	if (socSpecific || deviceSpecific) && (productSpecific || productServicesSpecific) {
+		if productSpecific {
+			ctx.PropertyErrorf("product_specific", "a module cannot be specific to SoC or device and product at the same time.")
+		} else {
+			ctx.PropertyErrorf("product_services_specific", "a module cannot be specific to SoC or device and product_services at the same time.")
+		}
+		if deviceSpecific {
+			ctx.PropertyErrorf("device_specific", msg)
+		} else {
+			if Bool(a.commonProperties.Vendor) {
+				ctx.PropertyErrorf("vendor", msg)
+			}
+			if Bool(a.commonProperties.Proprietary) {
+				ctx.PropertyErrorf("proprietary", msg)
+			}
+			if Bool(a.commonProperties.Soc_specific) {
+				ctx.PropertyErrorf("soc_specific", msg)
+			}
+		}
+	}
+
 	if productSpecific {
 		return productSpecificModule
+	} else if productServicesSpecific {
+		return productServicesSpecificModule
 	} else if deviceSpecific {
 		return deviceSpecificModule
 	} else if socSpecific {
@@ -1010,6 +1061,10 @@ func (a *androidBaseContextImpl) SocSpecific() bool {
 
 func (a *androidBaseContextImpl) ProductSpecific() bool {
 	return a.kind == productSpecificModule
+}
+
+func (a *androidBaseContextImpl) ProductServicesSpecific() bool {
+	return a.kind == productServicesSpecificModule
 }
 
 func (a *androidModuleContext) InstallInData() bool {
