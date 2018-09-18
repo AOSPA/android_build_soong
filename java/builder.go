@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
 )
@@ -61,13 +62,12 @@ var (
 
 	kotlinc = pctx.AndroidGomaStaticRule("kotlinc",
 		blueprint.RuleParams{
-			Command: `rm -rf "$outDir" "$srcJarDir" && mkdir -p "$outDir" "$srcJarDir" && ` +
+			Command: `rm -rf "$classesDir" "$srcJarDir" "$kotlinBuildFile" && mkdir -p "$classesDir" "$srcJarDir" && ` +
 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
-				`${config.GenKotlinBuildFileCmd} $classpath $outDir $out.rsp $srcJarDir/list > $outDir/kotlinc-build.xml &&` +
+				`${config.GenKotlinBuildFileCmd} $classpath $classesDir $out.rsp $srcJarDir/list > $kotlinBuildFile &&` +
 				`${config.KotlincCmd} $kotlincFlags ` +
-				`-jvm-target $kotlinJvmTarget -Xbuild-file=$outDir/kotlinc-build.xml && ` +
-				`rm $outDir/kotlinc-build.xml && ` +
-				`${config.SoongZipCmd} -jar -o $out -C $outDir -D $outDir`,
+				`-jvm-target $kotlinJvmTarget -Xbuild-file=$kotlinBuildFile && ` +
+				`${config.SoongZipCmd} -jar -o $out -C $classesDir -D $classesDir`,
 			CommandDeps: []string{
 				"${config.KotlincCmd}",
 				"${config.KotlinCompilerJar}",
@@ -78,7 +78,7 @@ var (
 			Rspfile:        "$out.rsp",
 			RspfileContent: `$in`,
 		},
-		"kotlincFlags", "classpath", "srcJars", "srcJarDir", "outDir", "kotlinJvmTarget")
+		"kotlincFlags", "classpath", "srcJars", "srcJarDir", "classesDir", "kotlinJvmTarget", "kotlinBuildFile")
 
 	turbine = pctx.AndroidStaticRule("turbine",
 		blueprint.RuleParams{
@@ -122,6 +122,13 @@ var (
 			CommandDeps: []string{"${config.JavaCmd}", "${config.JarjarCmd}", "$rulesFile"},
 		},
 		"rulesFile")
+
+	jetifier = pctx.AndroidStaticRule("jetifier",
+		blueprint.RuleParams{
+			Command:     "${config.JavaCmd} -jar ${config.JetifierJar} -l error -o $out -i $in",
+			CommandDeps: []string{"${config.JavaCmd}", "${config.JetifierJar}"},
+		},
+	)
 )
 
 func init() {
@@ -167,11 +174,12 @@ func TransformKotlinToClasses(ctx android.ModuleContext, outputFile android.Writ
 		Inputs:      inputs,
 		Implicits:   deps,
 		Args: map[string]string{
-			"classpath":    flags.kotlincClasspath.FormJavaClassPath("-classpath"),
-			"kotlincFlags": flags.kotlincFlags,
-			"srcJars":      strings.Join(srcJars.Strings(), " "),
-			"outDir":       android.PathForModuleOut(ctx, "kotlinc", "classes").String(),
-			"srcJarDir":    android.PathForModuleOut(ctx, "kotlinc", "srcJars").String(),
+			"classpath":       flags.kotlincClasspath.FormJavaClassPath("-classpath"),
+			"kotlincFlags":    flags.kotlincFlags,
+			"srcJars":         strings.Join(srcJars.Strings(), " "),
+			"classesDir":      android.PathForModuleOut(ctx, "kotlinc", "classes").String(),
+			"srcJarDir":       android.PathForModuleOut(ctx, "kotlinc", "srcJars").String(),
+			"kotlinBuildFile": android.PathForModuleOut(ctx, "kotlinc-build.xml").String(),
 			// http://b/69160377 kotlinc only supports -jvm-target 1.6 and 1.8
 			"kotlinJvmTarget": "1.8",
 		},
@@ -313,7 +321,7 @@ func TransformResourcesToJar(ctx android.ModuleContext, outputFile android.Writa
 		Output:      outputFile,
 		Implicits:   deps,
 		Args: map[string]string{
-			"jarArgs": strings.Join(jarArgs, " "),
+			"jarArgs": strings.Join(proptools.NinjaEscape(jarArgs), " "),
 		},
 	})
 }
@@ -369,6 +377,16 @@ func TransformJarJar(ctx android.ModuleContext, outputFile android.WritablePath,
 		Args: map[string]string{
 			"rulesFile": rulesFile.String(),
 		},
+	})
+}
+
+func TransformJetifier(ctx android.ModuleContext, outputFile android.WritablePath,
+	inputFile android.Path) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        jetifier,
+		Description: "jetifier",
+		Output:      outputFile,
+		Input:       inputFile,
 	})
 }
 

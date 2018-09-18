@@ -40,12 +40,13 @@ var Forbidden = PathConfig{
 }
 
 // The configuration used if the tool is not listed in the config below.
-// Currently this will create the symlink, but log a warning. In the future,
-// I expect this to move closer to Forbidden.
+// Currently this will create the symlink, but log and error when it's used. In
+// the future, I expect the symlink to be removed, and this will be equivalent
+// to Forbidden.
 var Missing = PathConfig{
 	Symlink: true,
 	Log:     true,
-	Error:   false,
+	Error:   true,
 }
 
 func GetConfig(name string) PathConfig {
@@ -77,6 +78,7 @@ var Configuration = map[string]PathConfig{
 	"env":       Allowed,
 	"expr":      Allowed,
 	"find":      Allowed,
+	"fuser":     Allowed,
 	"getconf":   Allowed,
 	"getopt":    Allowed,
 	"git":       Allowed,
@@ -98,6 +100,7 @@ var Configuration = map[string]PathConfig{
 	"mkdir":     Allowed,
 	"mktemp":    Allowed,
 	"mv":        Allowed,
+	"od":        Allowed,
 	"openssl":   Allowed,
 	"paste":     Allowed,
 	"patch":     Allowed,
@@ -128,11 +131,14 @@ var Configuration = map[string]PathConfig{
 	"sum":       Allowed,
 	"tar":       Allowed,
 	"tail":      Allowed,
+	"tee":       Allowed,
+	"todos":     Allowed,
 	"touch":     Allowed,
 	"tr":        Allowed,
 	"true":      Allowed,
 	"uname":     Allowed,
 	"uniq":      Allowed,
+	"unix2dos":  Allowed,
 	"unzip":     Allowed,
 	"wc":        Allowed,
 	"which":     Allowed,

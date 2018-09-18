@@ -49,10 +49,16 @@ def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument('--minSdkVersion', default='', dest='min_sdk_version',
                       help='specify minSdkVersion used by the build system')
+  parser.add_argument('--targetSdkVersion', default='', dest='target_sdk_version',
+                      help='specify targetSdkVersion used by the build system')
+  parser.add_argument('--raise-min-sdk-version', dest='raise_min_sdk_version', action='store_true',
+                      help='raise the minimum sdk version in the manifest if necessary')
   parser.add_argument('--library', dest='library', action='store_true',
                       help='manifest is for a static library')
   parser.add_argument('--uses-library', dest='uses_libraries', action='append',
                       help='specify additional <uses-library> tag to add')
+  parser.add_argument('--uses-non-sdk-api', dest='uses_non_sdk_api', action='store_true',
+                      help='manifest is for a package built against the platform')
   parser.add_argument('input', help='input AndroidManifest.xml file')
   parser.add_argument('output', help='output AndroidManifest.xml file')
   return parser.parse_args()
@@ -128,12 +134,13 @@ def get_indent(element, default_level):
   return indent
 
 
-def raise_min_sdk_version(doc, requested, library):
+def raise_min_sdk_version(doc, min_sdk_version, target_sdk_version, library):
   """Ensure the manifest contains a <uses-sdk> tag with a minSdkVersion.
 
   Args:
     doc: The XML document.  May be modified by this function.
-    requested: The requested minSdkVersion attribute.
+    min_sdk_version: The requested minSdkVersion attribute.
+    target_sdk_version: The requested targetSdkVersion attribute.
   Raises:
     RuntimeError: invalid manifest
   """
@@ -160,11 +167,11 @@ def raise_min_sdk_version(doc, requested, library):
   min_attr = element.getAttributeNodeNS(android_ns, 'minSdkVersion')
   if min_attr is None:
     min_attr = doc.createAttributeNS(android_ns, 'android:minSdkVersion')
-    min_attr.value = requested
+    min_attr.value = min_sdk_version
     element.setAttributeNode(min_attr)
   else:
-    if compare_version_gt(requested, min_attr.value):
-      min_attr.value = requested
+    if compare_version_gt(min_sdk_version, min_attr.value):
+      min_attr.value = min_sdk_version
 
   # Insert the targetSdkVersion attribute if it is missing.  If it is already
   # present leave it as is.
@@ -174,7 +181,7 @@ def raise_min_sdk_version(doc, requested, library):
     if library:
       target_attr.value = '1'
     else:
-      target_attr.value = requested
+      target_attr.value = target_sdk_version
     element.setAttributeNode(target_attr)
 
 
@@ -226,6 +233,33 @@ def add_uses_libraries(doc, new_uses_libraries):
     indent = get_indent(application.previousSibling, 1)
     application.appendChild(doc.createTextNode(indent))
 
+def add_uses_non_sdk_api(doc):
+  """Add android:usesNonSdkApi=true attribute to <application>.
+
+  Args:
+    doc: The XML document. May be modified by this function.
+  Raises:
+    RuntimeError: Invalid manifest
+  """
+
+  manifest = parse_manifest(doc)
+  elems = get_children_with_tag(manifest, 'application')
+  application = elems[0] if len(elems) == 1 else None
+  if len(elems) > 1:
+    raise RuntimeError('found multiple <application> tags')
+  elif not elems:
+    application = doc.createElement('application')
+    indent = get_indent(manifest.firstChild, 1)
+    first = manifest.firstChild
+    manifest.insertBefore(doc.createTextNode(indent), first)
+    manifest.insertBefore(application, first)
+
+  attr = application.getAttributeNodeNS(android_ns, 'usesNonSdkApi')
+  if attr is None:
+    attr = doc.createAttributeNS(android_ns, 'android:usesNonSdkApi')
+    attr.value = 'true'
+    application.setAttributeNode(attr)
+
 
 def write_xml(f, doc):
   f.write('<?xml version="1.0" encoding="utf-8"?>\n')
@@ -242,11 +276,14 @@ def main():
 
     ensure_manifest_android_ns(doc)
 
-    if args.min_sdk_version:
-      raise_min_sdk_version(doc, args.min_sdk_version, args.library)
+    if args.raise_min_sdk_version:
+      raise_min_sdk_version(doc, args.min_sdk_version, args.target_sdk_version, args.library)
 
     if args.uses_libraries:
       add_uses_libraries(doc, args.uses_libraries)
+
+    if args.uses_non_sdk_api:
+      add_uses_non_sdk_api(doc)
 
     with open(args.output, 'wb') as f:
       write_xml(f, doc)

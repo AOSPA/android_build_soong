@@ -21,6 +21,7 @@ import (
 type StripProperties struct {
 	Strip struct {
 		None         *bool
+		All          *bool
 		Keep_symbols *bool
 	}
 }
@@ -30,17 +31,23 @@ type stripper struct {
 }
 
 func (stripper *stripper) needsStrip(ctx ModuleContext) bool {
-	return !ctx.Config().EmbeddedInMake() && !Bool(stripper.StripProperties.Strip.None)
+	// TODO(ccross): enable host stripping when embedded in make?  Make never had support for stripping host binaries.
+	return (!ctx.Config().EmbeddedInMake() || ctx.Device()) && !Bool(stripper.StripProperties.Strip.None)
 }
 
-func (stripper *stripper) strip(ctx ModuleContext, in, out android.ModuleOutPath,
+func (stripper *stripper) strip(ctx ModuleContext, in android.Path, out android.ModuleOutPath,
 	flags builderFlags) {
 	if ctx.Darwin() {
 		TransformDarwinStrip(ctx, in, out)
 	} else {
-		flags.stripKeepSymbols = Bool(stripper.StripProperties.Strip.Keep_symbols)
-		// TODO(ccross): don't add gnu debuglink for user builds
-		flags.stripAddGnuDebuglink = true
+		if Bool(stripper.StripProperties.Strip.Keep_symbols) {
+			flags.stripKeepSymbols = true
+		} else if !Bool(stripper.StripProperties.Strip.All) {
+			flags.stripKeepMiniDebugInfo = true
+		}
+		if ctx.Config().Debuggable() && !flags.stripKeepMiniDebugInfo {
+			flags.stripAddGnuDebuglink = true
+		}
 		TransformStrip(ctx, in, out, flags)
 	}
 }
