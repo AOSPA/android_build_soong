@@ -67,7 +67,8 @@ var (
 
 	metalava = pctx.AndroidStaticRule("metalava",
 		blueprint.RuleParams{
-			Command: `rm -rf "$outDir" "$srcJarDir" "$stubsDir" && mkdir -p "$outDir" "$srcJarDir" "$stubsDir" && ` +
+			Command: `rm -rf "$outDir" "$srcJarDir" "$stubsDir" "$docStubsDir" && ` +
+				`mkdir -p "$outDir" "$srcJarDir" "$stubsDir" "$docStubsDir" && ` +
 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
 				`${config.JavaCmd} -jar ${config.MetalavaJar} -encoding UTF-8 -source $javaVersion @$out.rsp @$srcJarDir/list ` +
 				`$bootclasspathArgs $classpathArgs -sourcepath $sourcepath --no-banner --color --quiet ` +
@@ -85,7 +86,7 @@ var (
 			RspfileContent: "$in",
 			Restat:         true,
 		},
-		"outDir", "srcJarDir", "stubsDir", "srcJars", "javaVersion", "bootclasspathArgs",
+		"outDir", "srcJarDir", "stubsDir", "docStubsDir", "srcJars", "javaVersion", "bootclasspathArgs",
 		"classpathArgs", "sourcepath", "opts", "docZip")
 )
 
@@ -94,7 +95,7 @@ func init() {
 
 	android.RegisterModuleType("droiddoc", DroiddocFactory)
 	android.RegisterModuleType("droiddoc_host", DroiddocHostFactory)
-	android.RegisterModuleType("droiddoc_template", DroiddocTemplateFactory)
+	android.RegisterModuleType("droiddoc_exported_dir", ExportedDroiddocDirFactory)
 	android.RegisterModuleType("javadoc", JavadocFactory)
 	android.RegisterModuleType("javadoc_host", JavadocHostFactory)
 }
@@ -169,7 +170,7 @@ type DroiddocProperties struct {
 	// directory relative to top of the source tree that contains doc templates files.
 	Custom_template *string
 
-	// directories relative to top of the source tree which contains html/jd files.
+	// directories under current module source which contains html/jd files.
 	Html_dirs []string
 
 	// set a value in the Clearsilver hdf namespace.
@@ -243,6 +244,9 @@ type DroiddocProperties struct {
 	// the generated exact API filename by Doclava.
 	Exact_api_filename *string
 
+	// the generated proguard filename by Doclava.
+	Proguard_filename *string
+
 	// if set to false, don't allow droiddoc to generate stubs source files. Defaults to true.
 	Create_stubs *bool
 
@@ -262,10 +266,43 @@ type DroiddocProperties struct {
 	// is set to true, Metalava will allow framework SDK to contain annotations.
 	Metalava_annotations_enabled *bool
 
-	// a top level directory contains XML files set to merge annotations.
-	Metalava_merge_annotations_dir *string
+	// a list of top-level directories containing files to merge annotations from.
+	Metalava_merge_annotations_dirs []string
+
+	// if set to true, generate docs through Dokka instead of Doclava. Valid only when
+	// metalava_enabled is set to true.
+	Dokka_enabled *bool
 }
 
+//
+// Common flags passed down to build rule
+//
+type droiddocBuilderFlags struct {
+	args               string
+	bootClasspathArgs  string
+	classpathArgs      string
+	dokkaClasspathArgs string
+	aidlFlags          string
+
+	doclavaStubsFlags string
+	doclavaDocsFlags  string
+	postDoclavaCmds   string
+
+	metalavaStubsFlags       string
+	metalavaAnnotationsFlags string
+	metalavaJavadocFlags     string
+
+	metalavaDokkaFlags string
+}
+
+func InitDroiddocModule(module android.DefaultableModule, hod android.HostOrDeviceSupported) {
+	android.InitAndroidArchModule(module, hod, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+}
+
+//
+// Javadoc
+//
 type Javadoc struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
@@ -282,31 +319,6 @@ type Javadoc struct {
 
 func (j *Javadoc) Srcs() android.Paths {
 	return android.Paths{j.stubsSrcJar}
-}
-
-var _ android.SourceFileProducer = (*Javadoc)(nil)
-
-type Droiddoc struct {
-	Javadoc
-
-	properties        DroiddocProperties
-	apiFile           android.WritablePath
-	dexApiFile        android.WritablePath
-	privateApiFile    android.WritablePath
-	privateDexApiFile android.WritablePath
-	removedApiFile    android.WritablePath
-	removedDexApiFile android.WritablePath
-	exactApiFile      android.WritablePath
-	apiMappingFile    android.WritablePath
-
-	checkCurrentApiTimestamp      android.WritablePath
-	updateCurrentApiTimestamp     android.WritablePath
-	checkLastReleasedApiTimestamp android.WritablePath
-}
-
-func InitDroiddocModule(module android.DefaultableModule, hod android.HostOrDeviceSupported) {
-	android.InitAndroidArchModule(module, hod, android.MultilibCommon)
-	android.InitDefaultableModule(module)
 }
 
 func JavadocFactory() android.Module {
@@ -327,25 +339,7 @@ func JavadocHostFactory() android.Module {
 	return module
 }
 
-func DroiddocFactory() android.Module {
-	module := &Droiddoc{}
-
-	module.AddProperties(&module.properties,
-		&module.Javadoc.properties)
-
-	InitDroiddocModule(module, android.HostAndDeviceSupported)
-	return module
-}
-
-func DroiddocHostFactory() android.Module {
-	module := &Droiddoc{}
-
-	module.AddProperties(&module.properties,
-		&module.Javadoc.properties)
-
-	InitDroiddocModule(module, android.HostSupported)
-	return module
-}
+var _ android.SourceFileProducer = (*Javadoc)(nil)
 
 func (j *Javadoc) sdkVersion() string {
 	return String(j.properties.Sdk_version)
@@ -364,7 +358,7 @@ func (j *Javadoc) addDeps(ctx android.BottomUpMutatorContext) {
 				ctx.AddDependency(ctx.Module(), systemModulesTag, config.DefaultSystemModules)
 			}
 			if !Bool(j.properties.No_framework_libs) {
-				ctx.AddDependency(ctx.Module(), libTag, []string{"ext", "framework"}...)
+				ctx.AddDependency(ctx.Module(), libTag, config.DefaultLibraries...)
 			}
 		} else if sdkDep.useModule {
 			if ctx.Config().TargetOpenJDK9() {
@@ -398,8 +392,8 @@ func (j *Javadoc) genWhitelistPathPrefixes(whitelistPathPrefixes map[string]bool
 	}
 }
 
-func (j *Javadoc) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaBuilderFlags {
-	var flags javaBuilderFlags
+func (j *Javadoc) collectAidlFlags(ctx android.ModuleContext, deps deps) droiddocBuilderFlags {
+	var flags droiddocBuilderFlags
 
 	// aidl flags.
 	aidlFlags := j.aidlFlags(ctx, deps.aidlPreprocess, deps.aidlIncludeDirs)
@@ -435,7 +429,7 @@ func (j *Javadoc) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.Op
 }
 
 func (j *Javadoc) genSources(ctx android.ModuleContext, srcFiles android.Paths,
-	flags javaBuilderFlags) android.Paths {
+	flags droiddocBuilderFlags) android.Paths {
 
 	outSrcFiles := make(android.Paths, 0, len(srcFiles))
 
@@ -485,7 +479,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 				} else if sdkVersion == "" {
 					linkType = javaPlatform
 				}
-				deps.classpath = append(deps.classpath, dep.HeaderJars(linkType)...)
+				deps.classpath = append(deps.classpath, dep.ImplementationJars(linkType)...)
 			case android.SourceFileProducer:
 				checkProducesJars(ctx, dep)
 				deps.classpath = append(deps.classpath, dep.Srcs()...)
@@ -528,7 +522,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 	// do not pass exclude_srcs directly when expanding srcFiles since exclude_srcs
 	// may contain filegroup or genrule.
 	srcFiles := ctx.ExpandSources(j.properties.Srcs, j.properties.Exclude_srcs)
-	flags := j.collectBuilderFlags(ctx, deps)
+	flags := j.collectAidlFlags(ctx, deps)
 	srcFiles = j.genSources(ctx, srcFiles, flags)
 
 	// srcs may depend on some genrule output.
@@ -587,9 +581,9 @@ func (j *Javadoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		Inputs:         j.srcFiles,
 		Implicits:      implicits,
 		Args: map[string]string{
-			"outDir":            android.PathForModuleOut(ctx, "docs", "out").String(),
-			"srcJarDir":         android.PathForModuleOut(ctx, "docs", "srcjars").String(),
-			"stubsDir":          android.PathForModuleOut(ctx, "docs", "stubsDir").String(),
+			"outDir":            android.PathForModuleOut(ctx, "out").String(),
+			"srcJarDir":         android.PathForModuleOut(ctx, "srcjars").String(),
+			"stubsDir":          android.PathForModuleOut(ctx, "stubsDir").String(),
 			"srcJars":           strings.Join(j.srcJars.Strings(), " "),
 			"opts":              opts,
 			"bootclasspathArgs": bootClasspathArgs,
@@ -598,6 +592,60 @@ func (j *Javadoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			"docZip":            j.docZip.String(),
 		},
 	})
+}
+
+//
+// Droiddoc
+//
+type Droiddoc struct {
+	Javadoc
+
+	properties        DroiddocProperties
+	apiFile           android.WritablePath
+	dexApiFile        android.WritablePath
+	privateApiFile    android.WritablePath
+	privateDexApiFile android.WritablePath
+	removedApiFile    android.WritablePath
+	removedDexApiFile android.WritablePath
+	exactApiFile      android.WritablePath
+	apiMappingFile    android.WritablePath
+	proguardFile      android.WritablePath
+
+	checkCurrentApiTimestamp      android.WritablePath
+	updateCurrentApiTimestamp     android.WritablePath
+	checkLastReleasedApiTimestamp android.WritablePath
+
+	annotationsZip android.WritablePath
+
+	apiFilePath android.Path
+}
+
+type ApiFilePath interface {
+	ApiFilePath() android.Path
+}
+
+func DroiddocFactory() android.Module {
+	module := &Droiddoc{}
+
+	module.AddProperties(&module.properties,
+		&module.Javadoc.properties)
+
+	InitDroiddocModule(module, android.HostAndDeviceSupported)
+	return module
+}
+
+func DroiddocHostFactory() android.Module {
+	module := &Droiddoc{}
+
+	module.AddProperties(&module.properties,
+		&module.Javadoc.properties)
+
+	InitDroiddocModule(module, android.HostSupported)
+	return module
+}
+
+func (d *Droiddoc) ApiFilePath() android.Path {
+	return d.apiFilePath
 }
 
 func (d *Droiddoc) checkCurrentApi() bool {
@@ -633,7 +681,7 @@ func (d *Droiddoc) DepsMutator(ctx android.BottomUpMutatorContext) {
 		ctx.AddDependency(ctx.Module(), droiddocTemplateTag, String(d.properties.Custom_template))
 	}
 
-	// extra_arg_files may contains filegroup or genrule.
+	// arg_files may contains filegroup or genrule.
 	android.ExtractSourcesDeps(ctx, d.properties.Arg_files)
 
 	// knowntags may contain filegroup or genrule.
@@ -660,36 +708,39 @@ func (d *Droiddoc) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if String(d.properties.Metalava_previous_api) != "" {
 		android.ExtractSourceDeps(ctx, d.properties.Metalava_previous_api)
 	}
+
+	if len(d.properties.Metalava_merge_annotations_dirs) != 0 {
+		for _, mergeAnnotationsDir := range d.properties.Metalava_merge_annotations_dirs {
+			ctx.AddDependency(ctx.Module(), metalavaMergeAnnotationsDirTag, mergeAnnotationsDir)
+		}
+	}
 }
 
-func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	deps := d.Javadoc.collectDeps(ctx)
+func (d *Droiddoc) initBuilderFlags(ctx android.ModuleContext, implicits *android.Paths,
+	deps deps) (droiddocBuilderFlags, error) {
+	var flags droiddocBuilderFlags
 
-	var implicits android.Paths
-	implicits = append(implicits, deps.bootClasspath...)
-	implicits = append(implicits, deps.classpath...)
+	*implicits = append(*implicits, deps.bootClasspath...)
+	*implicits = append(*implicits, deps.classpath...)
 
-	var bootClasspathArgs string
-	javaVersion := getJavaVersion(ctx, String(d.Javadoc.properties.Java_version), sdkContext(d))
-	// Doclava has problem with "-source 1.9", so override javaVersion when Doclava
-	// is running with EXPERIMENTAL_USE_OPENJDK9=true. And eventually Doclava will be
-	// replaced by Metalava.
-	if !Bool(d.properties.Metalava_enabled) {
-		javaVersion = "1.8"
-	}
 	// continue to use -bootclasspath even if Metalava under -source 1.9 is enabled
 	// since it doesn't support system modules yet.
 	if len(deps.bootClasspath.Strings()) > 0 {
 		// For OpenJDK 8 we can use -bootclasspath to define the core libraries code.
-		bootClasspathArgs = deps.bootClasspath.FormJavaClassPath("-bootclasspath")
+		flags.bootClasspathArgs = deps.bootClasspath.FormJavaClassPath("-bootclasspath")
 	}
-	classpathArgs := deps.classpath.FormJavaClassPath("-classpath")
+	flags.classpathArgs = deps.classpath.FormJavaClassPath("-classpath")
+	// Dokka doesn't support boocClasspath, so combine these two classpath vars for Dokka.
+	dokkaClasspath := classpath{}
+	dokkaClasspath = append(dokkaClasspath, deps.bootClasspath...)
+	dokkaClasspath = append(dokkaClasspath, deps.classpath...)
+	flags.dokkaClasspathArgs = dokkaClasspath.FormJavaClassPath("-classpath")
 
 	argFiles := ctx.ExpandSources(d.properties.Arg_files, nil)
 	argFilesMap := map[string]android.Path{}
 
 	for _, f := range argFiles {
-		implicits = append(implicits, f)
+		*implicits = append(*implicits, f)
 		if _, exists := argFilesMap[f.Rel()]; !exists {
 			argFilesMap[f.Rel()] = f
 		} else {
@@ -698,7 +749,8 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 	}
 
-	args, err := android.Expand(String(d.properties.Args), func(name string) (string, error) {
+	var err error
+	flags.args, err = android.Expand(String(d.properties.Args), func(name string) (string, error) {
 		if strings.HasPrefix(name, "location ") {
 			label := strings.TrimSpace(strings.TrimPrefix(name, "location "))
 			if f, ok := argFilesMap[label]; ok {
@@ -714,162 +766,16 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	if err != nil {
 		ctx.PropertyErrorf("args", "%s", err.Error())
-		return
+		return droiddocBuilderFlags{}, err
 	}
+	return flags, nil
+}
 
-	genDocsForMetalava := false
-	var metalavaArgs string
-	if Bool(d.properties.Metalava_enabled) {
-		if strings.Contains(args, "--generate-documentation") {
-			if !strings.Contains(args, "-nodocs") {
-				genDocsForMetalava = true
-			}
-			// TODO(nanzhang): Add a Soong property to handle documentation args.
-			metalavaArgs = strings.Split(args, "--generate-documentation")[0]
-		} else {
-			metalavaArgs = args
-		}
-	}
+func (d *Droiddoc) collectDoclavaDocsFlags(ctx android.ModuleContext, implicits *android.Paths,
+	jsilver, doclava android.Path) string {
 
-	var templateDir, htmlDirArgs, htmlDir2Args string
-	if !Bool(d.properties.Metalava_enabled) || genDocsForMetalava {
-		if String(d.properties.Custom_template) == "" {
-			// TODO: This is almost always droiddoc-templates-sdk
-			ctx.PropertyErrorf("custom_template", "must specify a template")
-		}
-
-		ctx.VisitDirectDepsWithTag(droiddocTemplateTag, func(m android.Module) {
-			if t, ok := m.(*DroiddocTemplate); ok {
-				implicits = append(implicits, t.deps...)
-				templateDir = t.dir.String()
-			} else {
-				ctx.PropertyErrorf("custom_template", "module %q is not a droiddoc_template", ctx.OtherModuleName(m))
-			}
-		})
-
-		if len(d.properties.Html_dirs) > 0 {
-			htmlDir := android.PathForModuleSrc(ctx, d.properties.Html_dirs[0])
-			implicits = append(implicits, ctx.Glob(htmlDir.Join(ctx, "**/*").String(), nil)...)
-			htmlDirArgs = "-htmldir " + htmlDir.String()
-		}
-
-		if len(d.properties.Html_dirs) > 1 {
-			htmlDir2 := android.PathForModuleSrc(ctx, d.properties.Html_dirs[1])
-			implicits = append(implicits, ctx.Glob(htmlDir2.Join(ctx, "**/*").String(), nil)...)
-			htmlDir2Args = "-htmldir2 " + htmlDir2.String()
-		}
-
-		if len(d.properties.Html_dirs) > 2 {
-			ctx.PropertyErrorf("html_dirs", "Droiddoc only supports up to 2 html dirs")
-		}
-
-		knownTags := ctx.ExpandSources(d.properties.Knowntags, nil)
-		implicits = append(implicits, knownTags...)
-
-		for _, kt := range knownTags {
-			args = args + " -knowntags " + kt.String()
-		}
-
-		for _, hdf := range d.properties.Hdf {
-			args = args + " -hdf " + hdf
-		}
-
-		if String(d.properties.Proofread_file) != "" {
-			proofreadFile := android.PathForModuleOut(ctx, String(d.properties.Proofread_file))
-			args = args + " -proofread " + proofreadFile.String()
-		}
-
-		if String(d.properties.Todo_file) != "" {
-			// tricky part:
-			// we should not compute full path for todo_file through PathForModuleOut().
-			// the non-standard doclet will get the full path relative to "-o".
-			args = args + " -todo " + String(d.properties.Todo_file)
-		}
-
-		if String(d.properties.Resourcesdir) != "" {
-			// TODO: should we add files under resourcesDir to the implicits? It seems that
-			// resourcesDir is one sub dir of htmlDir
-			resourcesDir := android.PathForModuleSrc(ctx, String(d.properties.Resourcesdir))
-			args = args + " -resourcesdir " + resourcesDir.String()
-		}
-
-		if String(d.properties.Resourcesoutdir) != "" {
-			// TODO: it seems -resourceoutdir reference/android/images/ didn't get generated anywhere.
-			args = args + " -resourcesoutdir " + String(d.properties.Resourcesoutdir)
-		}
-	}
-
-	var docArgsForMetalava string
-	if Bool(d.properties.Metalava_enabled) && genDocsForMetalava {
-		docArgsForMetalava = strings.Split(args, "--generate-documentation")[1]
-	}
-
-	var implicitOutputs android.WritablePaths
-
-	if d.checkCurrentApi() || d.checkLastReleasedApi() || String(d.properties.Api_filename) != "" {
-		d.apiFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_api.txt")
-		args = args + " -api " + d.apiFile.String()
-		metalavaArgs = metalavaArgs + " --api " + d.apiFile.String()
-		implicitOutputs = append(implicitOutputs, d.apiFile)
-	}
-
-	if d.checkCurrentApi() || d.checkLastReleasedApi() || String(d.properties.Removed_api_filename) != "" {
-		d.removedApiFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_removed.txt")
-		args = args + " -removedApi " + d.removedApiFile.String()
-		metalavaArgs = metalavaArgs + " --removed-api " + d.removedApiFile.String()
-		implicitOutputs = append(implicitOutputs, d.removedApiFile)
-	}
-
-	if String(d.properties.Private_api_filename) != "" {
-		d.privateApiFile = android.PathForModuleOut(ctx, String(d.properties.Private_api_filename))
-		args = args + " -privateApi " + d.privateApiFile.String()
-		metalavaArgs = metalavaArgs + " --private-api " + d.privateApiFile.String()
-		implicitOutputs = append(implicitOutputs, d.privateApiFile)
-	}
-
-	if String(d.properties.Dex_api_filename) != "" {
-		d.dexApiFile = android.PathForModuleOut(ctx, String(d.properties.Dex_api_filename))
-		args = args + " -dexApi " + d.dexApiFile.String()
-		implicitOutputs = append(implicitOutputs, d.dexApiFile)
-	}
-
-	if String(d.properties.Private_dex_api_filename) != "" {
-		d.privateDexApiFile = android.PathForModuleOut(ctx, String(d.properties.Private_dex_api_filename))
-		args = args + " -privateDexApi " + d.privateDexApiFile.String()
-		metalavaArgs = metalavaArgs + " --private-dex-api " + d.privateDexApiFile.String()
-		implicitOutputs = append(implicitOutputs, d.privateDexApiFile)
-	}
-
-	if String(d.properties.Removed_dex_api_filename) != "" {
-		d.removedDexApiFile = android.PathForModuleOut(ctx, String(d.properties.Removed_dex_api_filename))
-		args = args + " -removedDexApi " + d.removedDexApiFile.String()
-		metalavaArgs = metalavaArgs + " --removed-dex-api " + d.removedDexApiFile.String()
-		implicitOutputs = append(implicitOutputs, d.removedDexApiFile)
-	}
-
-	if String(d.properties.Exact_api_filename) != "" {
-		d.exactApiFile = android.PathForModuleOut(ctx, String(d.properties.Exact_api_filename))
-		args = args + " -exactApi " + d.exactApiFile.String()
-		metalavaArgs = metalavaArgs + " --exact-api " + d.exactApiFile.String()
-		implicitOutputs = append(implicitOutputs, d.exactApiFile)
-	}
-
-	if String(d.properties.Dex_mapping_filename) != "" {
-		d.apiMappingFile = android.PathForModuleOut(ctx, String(d.properties.Dex_mapping_filename))
-		args = args + " -apiMapping " + d.apiMappingFile.String()
-		// Omitted: metalava support
-		implicitOutputs = append(implicitOutputs, d.apiMappingFile)
-	}
-
-	implicits = append(implicits, d.Javadoc.srcJars...)
-
-	implicitOutputs = append(implicitOutputs, d.Javadoc.docZip)
-	for _, o := range d.properties.Out {
-		implicitOutputs = append(implicitOutputs, android.PathForModuleGen(ctx, o))
-	}
-
-	jsilver := android.PathForOutput(ctx, "host", ctx.Config().PrebuiltOS(), "framework", "jsilver.jar")
-	doclava := android.PathForOutput(ctx, "host", ctx.Config().PrebuiltOS(), "framework", "doclava.jar")
+	*implicits = append(*implicits, jsilver)
+	*implicits = append(*implicits, doclava)
 
 	var date string
 	if runtime.GOOS == "darwin" {
@@ -878,157 +784,392 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		date = `date -d`
 	}
 
-	doclavaOpts := "-source " + javaVersion + " -J-Xmx1600m -J-XX:-OmitStackTraceInFastThrow -XDignore.symbol.file " +
+	// Droiddoc always gets "-source 1.8" because it doesn't support 1.9 sources.  For modules with 1.9
+	// sources, droiddoc will get sources produced by metalava which will have already stripped out the
+	// 1.9 language features.
+	args := " -source 1.8 -J-Xmx1600m -J-XX:-OmitStackTraceInFastThrow -XDignore.symbol.file " +
 		"-doclet com.google.doclava.Doclava -docletpath " + jsilver.String() + ":" + doclava.String() + " " +
-		"-templatedir " + templateDir + " " + htmlDirArgs + " " + htmlDir2Args + " " +
 		"-hdf page.build " + ctx.Config().BuildId() + "-" + ctx.Config().BuildNumberFromFile() + " " +
 		`-hdf page.now "$$(` + date + ` @$$(cat ` + ctx.Config().Getenv("BUILD_DATETIME_FILE") + `) "+%d %b %Y %k:%M")" `
 
-	if !Bool(d.properties.Metalava_enabled) {
-		opts := doclavaOpts + args
+	if String(d.properties.Custom_template) == "" {
+		// TODO: This is almost always droiddoc-templates-sdk
+		ctx.PropertyErrorf("custom_template", "must specify a template")
+	}
 
-		implicits = append(implicits, jsilver)
-		implicits = append(implicits, doclava)
-
-		if BoolDefault(d.properties.Create_stubs, true) {
-			opts += " -stubs " + android.PathForModuleOut(ctx, "docs", "stubsDir").String()
+	ctx.VisitDirectDepsWithTag(droiddocTemplateTag, func(m android.Module) {
+		if t, ok := m.(*ExportedDroiddocDir); ok {
+			*implicits = append(*implicits, t.deps...)
+			args = args + " -templatedir " + t.dir.String()
+		} else {
+			ctx.PropertyErrorf("custom_template", "module %q is not a droiddoc_template", ctx.OtherModuleName(m))
 		}
+	})
 
-		if Bool(d.properties.Write_sdk_values) {
-			opts += " -sdkvalues " + android.PathForModuleOut(ctx, "docs").String()
+	if len(d.properties.Html_dirs) > 0 {
+		htmlDir := android.PathForModuleSrc(ctx, d.properties.Html_dirs[0])
+		*implicits = append(*implicits, ctx.Glob(htmlDir.Join(ctx, "**/*").String(), nil)...)
+		args = args + " -htmldir " + htmlDir.String()
+	}
+
+	if len(d.properties.Html_dirs) > 1 {
+		htmlDir2 := android.PathForModuleSrc(ctx, d.properties.Html_dirs[1])
+		*implicits = append(*implicits, ctx.Glob(htmlDir2.Join(ctx, "**/*").String(), nil)...)
+		args = args + " -htmldir2 " + htmlDir2.String()
+	}
+
+	if len(d.properties.Html_dirs) > 2 {
+		ctx.PropertyErrorf("html_dirs", "Droiddoc only supports up to 2 html dirs")
+	}
+
+	knownTags := ctx.ExpandSources(d.properties.Knowntags, nil)
+	*implicits = append(*implicits, knownTags...)
+
+	for _, kt := range knownTags {
+		args = args + " -knowntags " + kt.String()
+	}
+
+	for _, hdf := range d.properties.Hdf {
+		args = args + " -hdf " + hdf
+	}
+
+	if String(d.properties.Proofread_file) != "" {
+		proofreadFile := android.PathForModuleOut(ctx, String(d.properties.Proofread_file))
+		args = args + " -proofread " + proofreadFile.String()
+	}
+
+	if String(d.properties.Todo_file) != "" {
+		// tricky part:
+		// we should not compute full path for todo_file through PathForModuleOut().
+		// the non-standard doclet will get the full path relative to "-o".
+		args = args + " -todo " + String(d.properties.Todo_file)
+	}
+
+	if String(d.properties.Resourcesdir) != "" {
+		// TODO: should we add files under resourcesDir to the implicits? It seems that
+		// resourcesDir is one sub dir of htmlDir
+		resourcesDir := android.PathForModuleSrc(ctx, String(d.properties.Resourcesdir))
+		args = args + " -resourcesdir " + resourcesDir.String()
+	}
+
+	if String(d.properties.Resourcesoutdir) != "" {
+		// TODO: it seems -resourceoutdir reference/android/images/ didn't get generated anywhere.
+		args = args + " -resourcesoutdir " + String(d.properties.Resourcesoutdir)
+	}
+	return args
+}
+
+func (d *Droiddoc) collectStubsFlags(ctx android.ModuleContext, implicitOutputs *android.WritablePaths) (string, string) {
+	var doclavaFlags, MetalavaFlags string
+	if d.checkCurrentApi() || d.checkLastReleasedApi() || String(d.properties.Api_filename) != "" {
+		d.apiFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_api.txt")
+		doclavaFlags += " -api " + d.apiFile.String()
+		MetalavaFlags = MetalavaFlags + " --api " + d.apiFile.String()
+		*implicitOutputs = append(*implicitOutputs, d.apiFile)
+		d.apiFilePath = d.apiFile
+	}
+
+	if d.checkCurrentApi() || d.checkLastReleasedApi() || String(d.properties.Removed_api_filename) != "" {
+		d.removedApiFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_removed.txt")
+		doclavaFlags += " -removedApi " + d.removedApiFile.String()
+		MetalavaFlags = MetalavaFlags + " --removed-api " + d.removedApiFile.String()
+		*implicitOutputs = append(*implicitOutputs, d.removedApiFile)
+	}
+
+	if String(d.properties.Private_api_filename) != "" {
+		d.privateApiFile = android.PathForModuleOut(ctx, String(d.properties.Private_api_filename))
+		doclavaFlags += " -privateApi " + d.privateApiFile.String()
+		MetalavaFlags = MetalavaFlags + " --private-api " + d.privateApiFile.String()
+		*implicitOutputs = append(*implicitOutputs, d.privateApiFile)
+	}
+
+	if String(d.properties.Dex_api_filename) != "" {
+		d.dexApiFile = android.PathForModuleOut(ctx, String(d.properties.Dex_api_filename))
+		doclavaFlags += " -dexApi " + d.dexApiFile.String()
+		*implicitOutputs = append(*implicitOutputs, d.dexApiFile)
+	}
+
+	if String(d.properties.Private_dex_api_filename) != "" {
+		d.privateDexApiFile = android.PathForModuleOut(ctx, String(d.properties.Private_dex_api_filename))
+		doclavaFlags += " -privateDexApi " + d.privateDexApiFile.String()
+		MetalavaFlags = MetalavaFlags + " --private-dex-api " + d.privateDexApiFile.String()
+		*implicitOutputs = append(*implicitOutputs, d.privateDexApiFile)
+	}
+
+	if String(d.properties.Removed_dex_api_filename) != "" {
+		d.removedDexApiFile = android.PathForModuleOut(ctx, String(d.properties.Removed_dex_api_filename))
+		doclavaFlags += " -removedDexApi " + d.removedDexApiFile.String()
+		MetalavaFlags = MetalavaFlags + " --removed-dex-api " + d.removedDexApiFile.String()
+		*implicitOutputs = append(*implicitOutputs, d.removedDexApiFile)
+	}
+
+	if String(d.properties.Exact_api_filename) != "" {
+		d.exactApiFile = android.PathForModuleOut(ctx, String(d.properties.Exact_api_filename))
+		doclavaFlags += " -exactApi " + d.exactApiFile.String()
+		MetalavaFlags = MetalavaFlags + " --exact-api " + d.exactApiFile.String()
+		*implicitOutputs = append(*implicitOutputs, d.exactApiFile)
+	}
+
+	if String(d.properties.Dex_mapping_filename) != "" {
+		d.apiMappingFile = android.PathForModuleOut(ctx, String(d.properties.Dex_mapping_filename))
+		doclavaFlags += " -apiMapping " + d.apiMappingFile.String()
+		// Omitted: metalava support
+		*implicitOutputs = append(*implicitOutputs, d.apiMappingFile)
+	}
+
+	if String(d.properties.Proguard_filename) != "" {
+		d.proguardFile = android.PathForModuleOut(ctx, String(d.properties.Proguard_filename))
+		doclavaFlags += " -proguard " + d.proguardFile.String()
+		// Omitted: metalava support
+		*implicitOutputs = append(*implicitOutputs, d.proguardFile)
+	}
+
+	if BoolDefault(d.properties.Create_stubs, true) {
+		doclavaFlags += " -stubs " + android.PathForModuleOut(ctx, "stubsDir").String()
+	}
+
+	if Bool(d.properties.Write_sdk_values) {
+		doclavaFlags += " -sdkvalues " + android.PathForModuleOut(ctx, "out").String()
+	}
+	return doclavaFlags, MetalavaFlags
+}
+
+func (d *Droiddoc) getPostDoclavaCmds(ctx android.ModuleContext, implicits *android.Paths) string {
+	var cmds string
+	if String(d.properties.Static_doc_index_redirect) != "" {
+		static_doc_index_redirect := ctx.ExpandSource(String(d.properties.Static_doc_index_redirect),
+			"static_doc_index_redirect")
+		*implicits = append(*implicits, static_doc_index_redirect)
+		cmds = cmds + " && cp " + static_doc_index_redirect.String() + " " +
+			android.PathForModuleOut(ctx, "out", "index.html").String()
+	}
+
+	if String(d.properties.Static_doc_properties) != "" {
+		static_doc_properties := ctx.ExpandSource(String(d.properties.Static_doc_properties),
+			"static_doc_properties")
+		*implicits = append(*implicits, static_doc_properties)
+		cmds = cmds + " && cp " + static_doc_properties.String() + " " +
+			android.PathForModuleOut(ctx, "out", "source.properties").String()
+	}
+	return cmds
+}
+
+func (d *Droiddoc) collectMetalavaAnnotationsFlags(
+	ctx android.ModuleContext, implicits *android.Paths, implicitOutputs *android.WritablePaths) string {
+	var flags string
+	if Bool(d.properties.Metalava_annotations_enabled) {
+		if String(d.properties.Metalava_previous_api) == "" {
+			ctx.PropertyErrorf("metalava_previous_api",
+				"has to be non-empty if annotations was enabled!")
 		}
+		previousApi := ctx.ExpandSource(String(d.properties.Metalava_previous_api),
+			"metalava_previous_api")
+		*implicits = append(*implicits, previousApi)
 
-		var postDoclavaCmds string
-		if String(d.properties.Static_doc_index_redirect) != "" {
-			static_doc_index_redirect := ctx.ExpandSource(String(d.properties.Static_doc_index_redirect),
-				"static_doc_index_redirect")
-			implicits = append(implicits, static_doc_index_redirect)
-			postDoclavaCmds += " && cp " + static_doc_index_redirect.String() + " " +
-				android.PathForModuleOut(ctx, "docs", "out", "index.html").String()
+		flags += " --include-annotations --migrate-nullness " + previousApi.String()
+
+		d.annotationsZip = android.PathForModuleOut(ctx, ctx.ModuleName()+"_annotations.zip")
+		*implicitOutputs = append(*implicitOutputs, d.annotationsZip)
+
+		flags += " --extract-annotations " + d.annotationsZip.String()
+
+		if len(d.properties.Metalava_merge_annotations_dirs) == 0 {
+			ctx.PropertyErrorf("metalava_merge_annotations_dirs",
+				"has to be non-empty if annotations was enabled!")
 		}
-
-		if String(d.properties.Static_doc_properties) != "" {
-			static_doc_properties := ctx.ExpandSource(String(d.properties.Static_doc_properties),
-				"static_doc_properties")
-			implicits = append(implicits, static_doc_properties)
-			postDoclavaCmds += " && cp " + static_doc_properties.String() + " " +
-				android.PathForModuleOut(ctx, "docs", "out", "source.properties").String()
-		}
-
-		ctx.Build(pctx, android.BuildParams{
-			Rule:            javadoc,
-			Description:     "Droiddoc",
-			Output:          d.Javadoc.stubsSrcJar,
-			Inputs:          d.Javadoc.srcFiles,
-			Implicits:       implicits,
-			ImplicitOutputs: implicitOutputs,
-			Args: map[string]string{
-				"outDir":            android.PathForModuleOut(ctx, "docs", "out").String(),
-				"srcJarDir":         android.PathForModuleOut(ctx, "docs", "srcjars").String(),
-				"stubsDir":          android.PathForModuleOut(ctx, "docs", "stubsDir").String(),
-				"srcJars":           strings.Join(d.Javadoc.srcJars.Strings(), " "),
-				"opts":              opts,
-				"bootclasspathArgs": bootClasspathArgs,
-				"classpathArgs":     classpathArgs,
-				"sourcepath":        strings.Join(d.Javadoc.sourcepaths.Strings(), ":"),
-				"docZip":            d.Javadoc.docZip.String(),
-				"postDoclavaCmds":   postDoclavaCmds,
-			},
+		ctx.VisitDirectDepsWithTag(metalavaMergeAnnotationsDirTag, func(m android.Module) {
+			if t, ok := m.(*ExportedDroiddocDir); ok {
+				*implicits = append(*implicits, t.deps...)
+				flags += " --merge-annotations " + t.dir.String()
+			} else {
+				ctx.PropertyErrorf("metalava_merge_annotations_dirs",
+					"module %q is not a metalava merge-annotations dir", ctx.OtherModuleName(m))
+			}
 		})
-	} else {
-		opts := metalavaArgs
+		// TODO(tnorbye): find owners to fix these warnings when annotation was enabled.
+		flags += " --hide HiddenTypedefConstant --hide SuperfluousPrefix --hide AnnotationExtraction "
+	}
 
-		buildArgs := map[string]string{
-			"outDir":            android.PathForModuleOut(ctx, "docs", "out").String(),
-			"srcJarDir":         android.PathForModuleOut(ctx, "docs", "srcjars").String(),
-			"stubsDir":          android.PathForModuleOut(ctx, "docs", "stubsDir").String(),
+	return flags
+}
+
+func (d *Droiddoc) collectMetalavaJavadocFlags(ctx android.ModuleContext,
+	bootClasspathArgs, classpathArgs, outDir, docStubsDir string) string {
+	return " --doc-stubs " + docStubsDir +
+		" --write-doc-stubs-source-list " + android.PathForModuleOut(ctx, "doc_stubs.srclist").String() +
+		" --generate-documentation ${config.JavadocCmd} -encoding UTF-8 DOC_STUBS_SOURCE_LIST " +
+		bootClasspathArgs + " " + classpathArgs + " " + " -sourcepath " +
+		docStubsDir + " -quiet -d " + outDir
+}
+
+func (d *Droiddoc) collectMetalavaDokkaFlags(ctx android.ModuleContext, implicits *android.Paths,
+	classpathArgs, outDir, docStubsDir string) string {
+	dokka := android.PathForOutput(ctx, "host", ctx.Config().PrebuiltOS(), "framework", "dokka.jar")
+	*implicits = append(*implicits, dokka)
+
+	return " --doc-stubs " + docStubsDir + " --write-doc-stubs-source-list " +
+		android.PathForModuleOut(ctx, "doc_stubs.srclist").String() +
+		" --generate-documentation ${config.JavaCmd} -jar " + dokka.String() + " " +
+		docStubsDir + " " + classpathArgs + " -format dac -dacRoot /reference/kotlin -output " + outDir
+}
+
+func (d *Droiddoc) transformMetalava(ctx android.ModuleContext, implicits android.Paths,
+	implicitOutputs android.WritablePaths, outDir, docStubsDir, javaVersion,
+	bootclasspathArgs, classpathArgs, opts string) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:            metalava,
+		Description:     "Metalava",
+		Output:          d.Javadoc.stubsSrcJar,
+		Inputs:          d.Javadoc.srcFiles,
+		Implicits:       implicits,
+		ImplicitOutputs: implicitOutputs,
+		Args: map[string]string{
+			"outDir":            outDir,
+			"srcJarDir":         android.PathForModuleOut(ctx, "srcjars").String(),
+			"stubsDir":          android.PathForModuleOut(ctx, "stubsDir").String(),
+			"docStubsDir":       docStubsDir,
 			"srcJars":           strings.Join(d.Javadoc.srcJars.Strings(), " "),
 			"javaVersion":       javaVersion,
-			"bootclasspathArgs": bootClasspathArgs,
+			"bootclasspathArgs": bootclasspathArgs,
 			"classpathArgs":     classpathArgs,
 			"sourcepath":        strings.Join(d.Javadoc.sourcepaths.Strings(), ":"),
 			"docZip":            d.Javadoc.docZip.String(),
-		}
+			"opts":              opts,
+		},
+	})
+}
 
-		var previousApi android.Path
-		if String(d.properties.Metalava_previous_api) != "" {
-			previousApi = ctx.ExpandSource(String(d.properties.Metalava_previous_api),
-				"metalava_previous_api")
-			opts += " --previous-api " + previousApi.String()
-			implicits = append(implicits, previousApi)
-		}
+func (d *Droiddoc) transformDoclava(ctx android.ModuleContext, implicits android.Paths,
+	implicitOutputs android.WritablePaths, bootclasspathArgs, classpathArgs, opts, postDoclavaCmds string) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:            javadoc,
+		Description:     "Doclava",
+		Output:          d.Javadoc.stubsSrcJar,
+		Inputs:          d.Javadoc.srcFiles,
+		Implicits:       implicits,
+		ImplicitOutputs: implicitOutputs,
+		Args: map[string]string{
+			"outDir":            android.PathForModuleOut(ctx, "out").String(),
+			"srcJarDir":         android.PathForModuleOut(ctx, "srcjars").String(),
+			"stubsDir":          android.PathForModuleOut(ctx, "stubsDir").String(),
+			"srcJars":           strings.Join(d.Javadoc.srcJars.Strings(), " "),
+			"opts":              opts,
+			"bootclasspathArgs": bootclasspathArgs,
+			"classpathArgs":     classpathArgs,
+			"sourcepath":        strings.Join(d.Javadoc.sourcepaths.Strings(), ":"),
+			"docZip":            d.Javadoc.docZip.String(),
+			"postDoclavaCmds":   postDoclavaCmds,
+		},
+	})
+}
 
-		if Bool(d.properties.Metalava_annotations_enabled) {
-			if String(d.properties.Metalava_previous_api) == "" {
-				ctx.PropertyErrorf("metalava_previous_api",
-					"has to be non-empty if annotations was enabled!")
-			}
-			opts += " --include-annotations --migrate-nullness"
+func (d *Droiddoc) transformCheckApi(ctx android.ModuleContext, apiFile, removedApiFile android.Path,
+	checkApiClasspath classpath, msg, opts string, output android.WritablePath) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        apiCheck,
+		Description: "Check API",
+		Output:      output,
+		Inputs:      nil,
+		Implicits: append(android.Paths{apiFile, removedApiFile, d.apiFile, d.removedApiFile},
+			checkApiClasspath...),
+		Args: map[string]string{
+			"classpath":             checkApiClasspath.FormJavaClassPath(""),
+			"opts":                  opts,
+			"apiFile":               apiFile.String(),
+			"apiFileToCheck":        d.apiFile.String(),
+			"removedApiFile":        removedApiFile.String(),
+			"removedApiFileToCheck": d.removedApiFile.String(),
+			"msg": msg,
+		},
+	})
+}
 
-			annotationsZip := android.PathForModuleOut(ctx, ctx.ModuleName()+"_annotations.zip")
-			implicitOutputs = append(implicitOutputs, annotationsZip)
+func (d *Droiddoc) transformUpdateApi(ctx android.ModuleContext, apiFile, removedApiFile android.Path,
+	output android.WritablePath) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        updateApi,
+		Description: "Update API",
+		Output:      output,
+		Implicits:   append(android.Paths{}, apiFile, removedApiFile, d.apiFile, d.removedApiFile),
+		Args: map[string]string{
+			"apiFile":               apiFile.String(),
+			"apiFileToCheck":        d.apiFile.String(),
+			"removedApiFile":        removedApiFile.String(),
+			"removedApiFileToCheck": d.removedApiFile.String(),
+		},
+	})
+}
 
-			if String(d.properties.Metalava_merge_annotations_dir) == "" {
-				ctx.PropertyErrorf("metalava_merge_annotations",
-					"has to be non-empty if annotations was enabled!")
-			}
+func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	deps := d.Javadoc.collectDeps(ctx)
 
-			mergeAnnotationsDir := android.PathForSource(ctx, String(d.properties.Metalava_merge_annotations_dir))
-
-			opts += " --extract-annotations " + annotationsZip.String() + " --merge-annotations " + mergeAnnotationsDir.String()
-			// TODO(tnorbye): find owners to fix these warnings when annotation was enabled.
-			opts += " --hide HiddenTypedefConstant --hide SuperfluousPrefix --hide AnnotationExtraction"
-		}
-
-		if genDocsForMetalava {
-			opts += " --doc-stubs " + android.PathForModuleOut(ctx, "docs", "docStubsDir").String() +
-				" --write-doc-stubs-source-list $outDir/doc_stubs_src_list " +
-				" --generate-documentation ${config.JavadocCmd} -encoding UTF-8 DOC_STUBS_SOURCE_LIST " +
-				doclavaOpts + docArgsForMetalava + bootClasspathArgs + " " + classpathArgs + " " + " -sourcepath " +
-				android.PathForModuleOut(ctx, "docs", "docStubsDir").String() + " -quiet -d $outDir "
-			implicits = append(implicits, jsilver)
-			implicits = append(implicits, doclava)
-		}
-
-		buildArgs["opts"] = opts
-		ctx.Build(pctx, android.BuildParams{
-			Rule:            metalava,
-			Description:     "Metalava",
-			Output:          d.Javadoc.stubsSrcJar,
-			Inputs:          d.Javadoc.srcFiles,
-			Implicits:       implicits,
-			ImplicitOutputs: implicitOutputs,
-			Args:            buildArgs,
-		})
-	}
-
+	javaVersion := getJavaVersion(ctx, String(d.Javadoc.properties.Java_version), sdkContext(d))
+	jsilver := android.PathForOutput(ctx, "host", ctx.Config().PrebuiltOS(), "framework", "jsilver.jar")
+	doclava := android.PathForOutput(ctx, "host", ctx.Config().PrebuiltOS(), "framework", "doclava.jar")
 	java8Home := ctx.Config().Getenv("ANDROID_JAVA8_HOME")
-
 	checkApiClasspath := classpath{jsilver, doclava, android.PathForSource(ctx, java8Home, "lib/tools.jar")}
 
-	if d.checkCurrentApi() && !ctx.Config().IsPdkBuild() {
-		d.checkCurrentApiTimestamp = android.PathForModuleOut(ctx, "check_current_api.timestamp")
+	var implicits android.Paths
+	implicits = append(implicits, d.Javadoc.srcJars...)
 
+	var implicitOutputs android.WritablePaths
+	implicitOutputs = append(implicitOutputs, d.Javadoc.docZip)
+	for _, o := range d.properties.Out {
+		implicitOutputs = append(implicitOutputs, android.PathForModuleGen(ctx, o))
+	}
+
+	flags, err := d.initBuilderFlags(ctx, &implicits, deps)
+	if err != nil {
+		return
+	}
+
+	flags.doclavaStubsFlags, flags.metalavaStubsFlags = d.collectStubsFlags(ctx, &implicitOutputs)
+	if Bool(d.properties.Metalava_enabled) {
+		flags.metalavaAnnotationsFlags = d.collectMetalavaAnnotationsFlags(ctx, &implicits, &implicitOutputs)
+		outDir := android.PathForModuleOut(ctx, "out").String()
+		docStubsDir := android.PathForModuleOut(ctx, "docStubsDir").String()
+		// TODO(nanzhang): Add a Soong property to handle documentation args.
+		if strings.Contains(flags.args, "--generate-documentation") { // enable docs generation
+			if Bool(d.properties.Dokka_enabled) {
+				flags.metalavaDokkaFlags = d.collectMetalavaDokkaFlags(ctx, &implicits,
+					flags.dokkaClasspathArgs, outDir, docStubsDir)
+				d.transformMetalava(ctx, implicits, implicitOutputs, outDir, docStubsDir, javaVersion,
+					flags.bootClasspathArgs, flags.classpathArgs, flags.metalavaStubsFlags+
+						flags.metalavaAnnotationsFlags+" "+strings.Split(flags.args, "--generate-documentation")[0]+
+						flags.metalavaDokkaFlags+" "+strings.Split(flags.args, "--generate-documentation")[1])
+			} else {
+				flags.metalavaJavadocFlags = d.collectMetalavaJavadocFlags(
+					ctx, flags.bootClasspathArgs, flags.classpathArgs, outDir, docStubsDir)
+				flags.doclavaDocsFlags = d.collectDoclavaDocsFlags(ctx, &implicits, jsilver, doclava)
+				d.transformMetalava(ctx, implicits, implicitOutputs, outDir, docStubsDir, javaVersion,
+					flags.bootClasspathArgs, flags.classpathArgs, flags.metalavaStubsFlags+
+						flags.metalavaAnnotationsFlags+" "+strings.Split(flags.args, "--generate-documentation")[0]+
+						flags.metalavaJavadocFlags+flags.doclavaDocsFlags+
+						" "+strings.Split(flags.args, "--generate-documentation")[1])
+			}
+		} else {
+			d.transformMetalava(ctx, implicits, implicitOutputs, outDir, docStubsDir, javaVersion,
+				flags.bootClasspathArgs, flags.classpathArgs,
+				flags.metalavaStubsFlags+flags.metalavaAnnotationsFlags+flags.args)
+		}
+	} else {
+		flags.doclavaDocsFlags = d.collectDoclavaDocsFlags(ctx, &implicits, jsilver, doclava)
+		flags.postDoclavaCmds = d.getPostDoclavaCmds(ctx, &implicits)
+		d.transformDoclava(ctx, implicits, implicitOutputs, flags.bootClasspathArgs, flags.classpathArgs,
+			flags.doclavaDocsFlags+flags.doclavaStubsFlags+" "+flags.args,
+			flags.postDoclavaCmds)
+	}
+
+	if d.checkCurrentApi() && !ctx.Config().IsPdkBuild() {
 		apiFile := ctx.ExpandSource(String(d.properties.Check_api.Current.Api_file),
 			"check_api.current.api_file")
 		removedApiFile := ctx.ExpandSource(String(d.properties.Check_api.Current.Removed_api_file),
 			"check_api.current_removed_api_file")
 
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        apiCheck,
-			Description: "Current API check",
-			Output:      d.checkCurrentApiTimestamp,
-			Inputs:      nil,
-			Implicits: append(android.Paths{apiFile, removedApiFile, d.apiFile, d.removedApiFile},
-				checkApiClasspath...),
-			Args: map[string]string{
-				"classpath":             checkApiClasspath.FormJavaClassPath(""),
-				"opts":                  String(d.properties.Check_api.Current.Args),
-				"apiFile":               apiFile.String(),
-				"apiFileToCheck":        d.apiFile.String(),
-				"removedApiFile":        removedApiFile.String(),
-				"removedApiFileToCheck": d.removedApiFile.String(),
-				"msg": fmt.Sprintf(`\n******************************\n`+
+		if !Bool(d.properties.Metalava_enabled) {
+			d.checkCurrentApiTimestamp = android.PathForModuleOut(ctx, "check_current_api.timestamp")
+			d.transformCheckApi(ctx, apiFile, removedApiFile, checkApiClasspath,
+				fmt.Sprintf(`\n******************************\n`+
 					`You have tried to change the API from what has been previously approved.\n\n`+
 					`To make these errors go away, you have two choices:\n`+
 					`   1. You can add '@hide' javadoc comments to the methods, etc. listed in the\n`+
@@ -1037,25 +1178,19 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					`         make %s-update-current-api\n\n`+
 					`      To submit the revised current.txt to the main Android repository,\n`+
 					`      you will need approval.\n`+
-					`******************************\n`, ctx.ModuleName()),
-			},
-		})
+					`******************************\n`, ctx.ModuleName()), String(d.properties.Check_api.Current.Args),
+				d.checkCurrentApiTimestamp)
+		} else {
+			// TODO(nanzhang): Refactor below when Metalava support API check.
+			if d.apiFile == nil || d.removedApiFile == nil {
+				ctx.ModuleErrorf("api_filename and removed_api_filename properties cannot be empty for API check!")
+			}
+		}
 
 		d.updateCurrentApiTimestamp = android.PathForModuleOut(ctx, "update_current_api.timestamp")
-
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        updateApi,
-			Description: "update current API",
-			Output:      d.updateCurrentApiTimestamp,
-			Implicits:   append(android.Paths{}, apiFile, removedApiFile, d.apiFile, d.removedApiFile),
-			Args: map[string]string{
-				"apiFile":               apiFile.String(),
-				"apiFileToCheck":        d.apiFile.String(),
-				"removedApiFile":        removedApiFile.String(),
-				"removedApiFileToCheck": d.removedApiFile.String(),
-			},
-		})
+		d.transformUpdateApi(ctx, apiFile, removedApiFile, d.updateCurrentApiTimestamp)
 	}
+
 	if d.checkLastReleasedApi() && !ctx.Config().IsPdkBuild() {
 		d.checkLastReleasedApiTimestamp = android.PathForModuleOut(ctx, "check_last_released_api.timestamp")
 
@@ -1064,55 +1199,45 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		removedApiFile := ctx.ExpandSource(String(d.properties.Check_api.Last_released.Removed_api_file),
 			"check_api.last_released.removed_api_file")
 
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        apiCheck,
-			Description: "Last Released API check",
-			Output:      d.checkLastReleasedApiTimestamp,
-			Inputs:      nil,
-			Implicits: append(android.Paths{apiFile, removedApiFile, d.apiFile, d.removedApiFile},
-				checkApiClasspath...),
-			Args: map[string]string{
-				"classpath":             checkApiClasspath.FormJavaClassPath(""),
-				"opts":                  String(d.properties.Check_api.Last_released.Args),
-				"apiFile":               apiFile.String(),
-				"apiFileToCheck":        d.apiFile.String(),
-				"removedApiFile":        removedApiFile.String(),
-				"removedApiFileToCheck": d.removedApiFile.String(),
-				"msg": `\n******************************\n` +
-					`You have tried to change the API from what has been previously released in\n` +
-					`an SDK.  Please fix the errors listed above.\n` +
-					`******************************\n`,
-			},
-		})
+		d.transformCheckApi(ctx, apiFile, removedApiFile, checkApiClasspath,
+			`\n******************************\n`+
+				`You have tried to change the API from what has been previously released in\n`+
+				`an SDK.  Please fix the errors listed above.\n`+
+				`******************************\n`, String(d.properties.Check_api.Last_released.Args),
+			d.checkLastReleasedApiTimestamp)
 	}
 }
 
+//
+// Exported Droiddoc Directory
+//
 var droiddocTemplateTag = dependencyTag{name: "droiddoc-template"}
+var metalavaMergeAnnotationsDirTag = dependencyTag{name: "metalava-merge-annotations-dir"}
 
-type DroiddocTemplateProperties struct {
-	// path to the directory containing the droiddoc templates.
+type ExportedDroiddocDirProperties struct {
+	// path to the directory containing Droiddoc related files.
 	Path *string
 }
 
-type DroiddocTemplate struct {
+type ExportedDroiddocDir struct {
 	android.ModuleBase
 
-	properties DroiddocTemplateProperties
+	properties ExportedDroiddocDirProperties
 
 	deps android.Paths
 	dir  android.Path
 }
 
-func DroiddocTemplateFactory() android.Module {
-	module := &DroiddocTemplate{}
+func ExportedDroiddocDirFactory() android.Module {
+	module := &ExportedDroiddocDir{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidModule(module)
 	return module
 }
 
-func (d *DroiddocTemplate) DepsMutator(android.BottomUpMutatorContext) {}
+func (d *ExportedDroiddocDir) DepsMutator(android.BottomUpMutatorContext) {}
 
-func (d *DroiddocTemplate) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+func (d *ExportedDroiddocDir) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	path := android.PathForModuleSrc(ctx, String(d.properties.Path))
 	d.dir = path
 	d.deps = ctx.Glob(path.Join(ctx, "**/*").String(), nil)

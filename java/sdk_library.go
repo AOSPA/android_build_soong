@@ -47,6 +47,9 @@ var (
 	systemApiStubsTag = dependencyTag{name: "system"}
 	testApiStubsTag   = dependencyTag{name: "test"}
 	implLibTag        = dependencyTag{name: "platform"}
+	publicApiFileTag  = dependencyTag{name: "publicApi"}
+	systemApiFileTag  = dependencyTag{name: "systemApi"}
+	testApiFileTag    = dependencyTag{name: "testApi"}
 )
 
 type apiScope int
@@ -114,6 +117,17 @@ type sdkLibraryProperties struct {
 		Javacflags []string
 	}
 
+	// Additional droiddoc options
+	Droiddoc_options []string
+
+	// If set to true, compile dex regardless of installable.  Defaults to false.
+	// This applies to the stubs lib.
+	Compile_dex *bool
+
+	// the sub dirs under srcs_lib_whitelist_dirs will be scanned for java srcs.
+	// Defaults to "android.annotation".
+	Srcs_lib_whitelist_pkgs []string
+
 	// TODO: determines whether to create HTML doc or not
 	//Html_doc *bool
 }
@@ -129,6 +143,15 @@ type sdkLibrary struct {
 	systemApiStubsPath android.Paths
 	testApiStubsPath   android.Paths
 	implLibPath        android.Paths
+
+	publicApiStubsImplPath android.Paths
+	systemApiStubsImplPath android.Paths
+	testApiStubsImplPath   android.Paths
+	implLibImplPath        android.Paths
+
+	publicApiFilePath android.Path
+	systemApiFilePath android.Path
+	testApiFilePath   android.Path
 }
 
 func (module *sdkLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -137,6 +160,10 @@ func (module *sdkLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddDependency(ctx.Module(), systemApiStubsTag, module.stubsName(apiScopeSystem))
 	ctx.AddDependency(ctx.Module(), testApiStubsTag, module.stubsName(apiScopeTest))
 	ctx.AddDependency(ctx.Module(), implLibTag, module.implName())
+
+	ctx.AddDependency(ctx.Module(), publicApiFileTag, module.docsName(apiScopePublic))
+	ctx.AddDependency(ctx.Module(), systemApiFileTag, module.docsName(apiScopeSystem))
+	ctx.AddDependency(ctx.Module(), testApiFileTag, module.docsName(apiScopeTest))
 }
 
 func (module *sdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -151,12 +178,28 @@ func (module *sdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 			switch tag {
 			case publicApiStubsTag:
 				module.publicApiStubsPath = lib.HeaderJars()
+				module.publicApiStubsImplPath = lib.ImplementationJars()
 			case systemApiStubsTag:
 				module.systemApiStubsPath = lib.HeaderJars()
+				module.systemApiStubsImplPath = lib.ImplementationJars()
 			case testApiStubsTag:
 				module.testApiStubsPath = lib.HeaderJars()
+				module.testApiStubsImplPath = lib.ImplementationJars()
 			case implLibTag:
 				module.implLibPath = lib.HeaderJars()
+				module.implLibImplPath = lib.ImplementationJars()
+			default:
+				ctx.ModuleErrorf("depends on module %q of unknown tag %q", otherName, tag)
+			}
+		}
+		if doc, ok := to.(ApiFilePath); ok {
+			switch tag {
+			case publicApiFileTag:
+				module.publicApiFilePath = doc.ApiFilePath()
+			case systemApiFileTag:
+				module.systemApiFilePath = doc.ApiFilePath()
+			case testApiFileTag:
+				module.testApiFilePath = doc.ApiFilePath()
 			default:
 				ctx.ModuleErrorf("depends on module %q of unknown tag %q", otherName, tag)
 			}
@@ -189,6 +232,24 @@ func (module *sdkLibrary) AndroidMk() android.AndroidMkData {
 				fmt.Fprintln(w, "$(call dist-for-goals,sdk win_sdk,"+
 					module.testApiStubsPath.Strings()[0]+
 					":"+path.Join("apistubs", "test", module.BaseModuleName()+".jar")+")")
+			}
+			if module.publicApiFilePath != nil {
+				fmt.Fprintln(w, "$(call dist-for-goals,sdk win_sdk,"+
+					module.publicApiFilePath.String()+
+					":"+path.Join("apistubs", "public", "api",
+					module.BaseModuleName()+".txt")+")")
+			}
+			if module.systemApiFilePath != nil {
+				fmt.Fprintln(w, "$(call dist-for-goals,sdk win_sdk,"+
+					module.systemApiFilePath.String()+
+					":"+path.Join("apistubs", "system", "api",
+					module.BaseModuleName()+".txt")+")")
+			}
+			if module.testApiFilePath != nil {
+				fmt.Fprintln(w, "$(call dist-for-goals,sdk win_sdk,"+
+					module.testApiFilePath.String()+
+					":"+path.Join("apistubs", "test", "api",
+					module.BaseModuleName()+".txt")+")")
 			}
 		},
 	}
@@ -309,6 +370,7 @@ func (module *sdkLibrary) createStubsLibrary(mctx android.TopDownMutatorContext,
 		Soc_specific      *bool
 		Device_specific   *bool
 		Product_specific  *bool
+		Compile_dex       *bool
 		Product_variables struct {
 			Unbundled_build struct {
 				Enabled *bool
@@ -327,6 +389,9 @@ func (module *sdkLibrary) createStubsLibrary(mctx android.TopDownMutatorContext,
 	// Unbundled apps will use the prebult one from /prebuilts/sdk
 	props.Product_variables.Unbundled_build.Enabled = proptools.BoolPtr(false)
 	props.Product_variables.Pdk.Enabled = proptools.BoolPtr(false)
+	if module.properties.Compile_dex != nil {
+		props.Compile_dex = module.properties.Compile_dex
+	}
 
 	if module.SocSpecific() {
 		props.Soc_specific = proptools.BoolPtr(true)
@@ -380,7 +445,7 @@ func (module *sdkLibrary) createDocs(mctx android.TopDownMutatorContext, apiScop
 	droiddocArgs := " -hide 110 -hide 111 -hide 113 -hide 121 -hide 125 -hide 126 -hide 127 -hide 128" +
 		" -stubpackages " + strings.Join(module.properties.Api_packages, ":") +
 		" " + android.JoinWithPrefix(module.properties.Hidden_api_packages, "-hidePackage ") +
-		" -nodocs"
+		" " + android.JoinWithPrefix(module.properties.Droiddoc_options, "-") + " -nodocs"
 	switch apiScope {
 	case apiScopeSystem:
 		droiddocArgs = droiddocArgs + " -showAnnotation android.annotation.SystemApi"
@@ -438,7 +503,11 @@ func (module *sdkLibrary) createDocs(mctx android.TopDownMutatorContext, apiScop
 	props.Srcs_lib_whitelist_dirs = []string{"core/java"}
 	// Add android.annotation package to give access to the framework-defined
 	// annotations such as SystemApi, NonNull, etc.
-	props.Srcs_lib_whitelist_pkgs = []string{"android.annotation"}
+	if module.properties.Srcs_lib_whitelist_pkgs != nil {
+		props.Srcs_lib_whitelist_pkgs = module.properties.Srcs_lib_whitelist_pkgs
+	} else {
+		props.Srcs_lib_whitelist_pkgs = []string{"android.annotation"}
+	}
 	// These libs are required by doclava to parse the framework sources add via
 	// Src_lib and Src_lib_whitelist_* properties just above.
 	// If we don't add them to the classpath, errors messages are generated by doclava,
@@ -554,6 +623,18 @@ func (module *sdkLibrary) HeaderJars(linkType linkType) android.Paths {
 		return module.implLibPath
 	} else {
 		return module.publicApiStubsPath
+	}
+}
+
+// to satisfy SdkLibraryDependency interface
+func (module *sdkLibrary) ImplementationJars(linkType linkType) android.Paths {
+	// This module is just a wrapper for the stubs.
+	if linkType == javaSystem {
+		return module.systemApiStubsImplPath
+	} else if linkType == javaPlatform {
+		return module.implLibImplPath
+	} else {
+		return module.publicApiStubsImplPath
 	}
 }
 

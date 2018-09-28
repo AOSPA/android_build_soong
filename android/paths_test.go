@@ -292,6 +292,17 @@ func TestPathForModuleInstall(t *testing.T) {
 			in:  []string{"bin", "my_test"},
 			out: "target/product/test_device/product/bin/my_test",
 		},
+		{
+			name: "product_services binary",
+			ctx: &moduleInstallPathContextImpl{
+				androidBaseContextImpl: androidBaseContextImpl{
+					target: deviceTarget,
+					kind:   productServicesSpecificModule,
+				},
+			},
+			in:  []string{"bin", "my_test"},
+			out: "target/product/test_device/product_services/bin/my_test",
+		},
 
 		{
 			name: "system native test binary",
@@ -334,6 +345,19 @@ func TestPathForModuleInstall(t *testing.T) {
 				androidBaseContextImpl: androidBaseContextImpl{
 					target: deviceTarget,
 					kind:   productSpecificModule,
+				},
+				inData: true,
+			},
+			in:  []string{"nativetest", "my_test"},
+			out: "target/product/test_device/data/nativetest/my_test",
+		},
+
+		{
+			name: "product_services native test binary",
+			ctx: &moduleInstallPathContextImpl{
+				androidBaseContextImpl: androidBaseContextImpl{
+					target: deviceTarget,
+					kind:   productServicesSpecificModule,
 				},
 				inData: true,
 			},
@@ -390,6 +414,19 @@ func TestPathForModuleInstall(t *testing.T) {
 		},
 
 		{
+			name: "sanitized product_services binary",
+			ctx: &moduleInstallPathContextImpl{
+				androidBaseContextImpl: androidBaseContextImpl{
+					target: deviceTarget,
+					kind:   productServicesSpecificModule,
+				},
+				inSanitizerDir: true,
+			},
+			in:  []string{"bin", "my_test"},
+			out: "target/product/test_device/data/asan/product_services/bin/my_test",
+		},
+
+		{
 			name: "sanitized system native test binary",
 			ctx: &moduleInstallPathContextImpl{
 				androidBaseContextImpl: androidBaseContextImpl{
@@ -433,6 +470,19 @@ func TestPathForModuleInstall(t *testing.T) {
 				androidBaseContextImpl: androidBaseContextImpl{
 					target: deviceTarget,
 					kind:   productSpecificModule,
+				},
+				inData:         true,
+				inSanitizerDir: true,
+			},
+			in:  []string{"nativetest", "my_test"},
+			out: "target/product/test_device/data/asan/data/nativetest/my_test",
+		},
+		{
+			name: "sanitized product_services native test binary",
+			ctx: &moduleInstallPathContextImpl{
+				androidBaseContextImpl: androidBaseContextImpl{
+					target: deviceTarget,
+					kind:   productServicesSpecificModule,
 				},
 				inData:         true,
 				inSanitizerDir: true,

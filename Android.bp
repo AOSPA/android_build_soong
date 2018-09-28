@@ -120,6 +120,7 @@ bootstrap_go_package {
         "soong-android",
         "soong-cc-config",
         "soong-genrule",
+        "soong-tradefed",
     ],
     srcs: [
         "cc/androidmk.go",
@@ -174,6 +175,7 @@ bootstrap_go_package {
         "cc/gen_test.go",
         "cc/library_test.go",
         "cc/test_data_test.go",
+        "cc/util_test.go",
     ],
     pluginFor: ["soong_build"],
 }
@@ -217,6 +219,7 @@ bootstrap_go_package {
         "soong-android",
         "soong-genrule",
         "soong-java-config",
+        "soong-tradefed",
     ],
     srcs: [
         "java/aapt2.go",
@@ -292,6 +295,21 @@ bootstrap_go_package {
     srcs: [
         "shared/paths.go",
     ],
+}
+
+bootstrap_go_package {
+    name: "soong-tradefed",
+    pkgPath: "android/soong/tradefed",
+    deps: [
+        "blueprint",
+        "soong-android",
+    ],
+    srcs: [
+        "tradefed/autogen.go",
+        "tradefed/config.go",
+        "tradefed/makevars.go",
+    ],
+    pluginFor: ["soong_build"],
 }
 
 bootstrap_go_package {

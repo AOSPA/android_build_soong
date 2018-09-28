@@ -22,6 +22,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/tradefed"
 )
 
 func init() {
@@ -51,6 +52,13 @@ type appProperties struct {
 
 	// list of resource labels to generate individual resource packages
 	Package_splits []string
+
+	// Names of modules to be overridden. Listed modules can only be other binaries
+	// (in Make or Soong).
+	// This does not completely prevent installation of the overridden binaries, but if both
+	// binaries would be installed by default (in PRODUCT_PACKAGES) the other binary will be removed
+	// from PRODUCT_PACKAGES.
+	Overrides []string
 }
 
 type AndroidApp struct {
@@ -200,7 +208,7 @@ func AndroidAppFactory() android.Module {
 		&module.aaptProperties,
 		&module.appProperties)
 
-	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	InitJavaModule(module, android.DeviceSupported)
 	return module
 }
 
@@ -214,6 +222,9 @@ type AndroidTest struct {
 	appTestProperties appTestProperties
 
 	testProperties testProperties
+
+	testConfig android.Path
+	data       android.Paths
 }
 
 func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -224,6 +235,15 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	a.generateAndroidBuildActions(ctx)
+
+	a.testConfig = tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config, a.manifestPath)
+	a.data = ctx.ExpandSources(a.testProperties.Data, nil)
+}
+
+func (a *AndroidTest) DepsMutator(ctx android.BottomUpMutatorContext) {
+	android.ExtractSourceDeps(ctx, a.testProperties.Test_config)
+	android.ExtractSourcesDeps(ctx, a.testProperties.Data)
+	a.AndroidApp.DepsMutator(ctx)
 }
 
 func AndroidTestFactory() android.Module {
@@ -241,7 +261,6 @@ func AndroidTestFactory() android.Module {
 		&module.appTestProperties,
 		&module.testProperties)
 
-	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
-
+	InitJavaModule(module, android.DeviceSupported)
 	return module
 }
