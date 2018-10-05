@@ -77,7 +77,7 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("LLVM_OBJCOPY", "${config.ClangBin}/llvm-objcopy")
 	ctx.Strict("LLVM_STRIP", "${config.ClangBin}/llvm-strip")
 	ctx.Strict("PATH_TO_CLANG_TIDY", "${config.ClangBin}/clang-tidy")
-	ctx.Strict("CLANG_TIDY_UNKNOWN_CFLAGS", strings.Join(config.ClangTidyUnknownCflags, " "))
+	ctx.Strict("PATH_TO_CLANG_TIDY_SHELL", "${config.ClangTidyShellPath}")
 	ctx.StrictSorted("CLANG_CONFIG_UNKNOWN_CFLAGS", strings.Join(config.ClangUnknownCflags, " "))
 
 	ctx.Strict("RS_LLVM_PREBUILTS_VERSION", "${config.RSClangVersion}")
@@ -129,14 +129,16 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_LDFLAGS", strings.Join(asanLdflags, " "))
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_STATIC_LIBRARIES", strings.Join(asanLibs, " "))
 
+	ctx.Strict("HWADDRESS_SANITIZER_CONFIG_EXTRA_CFLAGS", strings.Join(hwasanCflags, " "))
+
 	ctx.Strict("CFI_EXTRA_CFLAGS", strings.Join(cfiCflags, " "))
+	ctx.Strict("CFI_EXTRA_ASFLAGS", strings.Join(cfiAsflags, " "))
 	ctx.Strict("CFI_EXTRA_LDFLAGS", strings.Join(cfiLdflags, " "))
 
 	ctx.Strict("INTEGER_OVERFLOW_EXTRA_CFLAGS", strings.Join(intOverflowCflags, " "))
 
 	ctx.Strict("DEFAULT_C_STD_VERSION", config.CStdVersion)
 	ctx.Strict("DEFAULT_CPP_STD_VERSION", config.CppStdVersion)
-	ctx.Strict("DEFAULT_GCC_CPP_STD_VERSION", config.GccCppStdVersion)
 	ctx.Strict("EXPERIMENTAL_C_STD_VERSION", config.ExperimentalCStdVersion)
 	ctx.Strict("EXPERIMENTAL_CPP_STD_VERSION", config.ExperimentalCppStdVersion)
 
@@ -147,6 +149,9 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("AIDL_CPP", "${aidlCmd}")
 
 	ctx.Strict("RS_GLOBAL_INCLUDES", "${config.RsGlobalIncludes}")
+
+	ctx.Strict("SOONG_STRIP_PATH", "${stripPath}")
+	ctx.Strict("XZ", "${xzCmd}")
 
 	nativeHelperIncludeFlags, err := ctx.Eval("${config.CommonNativehelperInclude}")
 	if err != nil {
@@ -227,34 +232,6 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 		productExtraLdflags += "-static"
 	}
 
-	ctx.Strict(makePrefix+"GLOBAL_CFLAGS", strings.Join([]string{
-		toolchain.Cflags(),
-		"${config.CommonGlobalCflags}",
-		fmt.Sprintf("${config.%sGlobalCflags}", hod),
-		toolchain.ToolchainCflags(),
-		productExtraCflags,
-	}, " "))
-	ctx.Strict(makePrefix+"GLOBAL_CONLYFLAGS", strings.Join([]string{
-		"${config.CommonGlobalConlyflags}",
-	}, " "))
-	ctx.Strict(makePrefix+"GLOBAL_CPPFLAGS", strings.Join([]string{
-		"${config.CommonGlobalCppflags}",
-		fmt.Sprintf("${config.%sGlobalCppflags}", hod),
-		toolchain.Cppflags(),
-	}, " "))
-	ctx.Strict(makePrefix+"GLOBAL_LDFLAGS", strings.Join([]string{
-		fmt.Sprintf("${config.%sGlobalLdflags}", hod),
-		toolchain.Ldflags(),
-		toolchain.ToolchainLdflags(),
-		productExtraLdflags,
-	}, " "))
-	ctx.Strict(makePrefix+"GLOBAL_LLDFLAGS", strings.Join([]string{
-		fmt.Sprintf("${config.%sGlobalLldflags}", hod),
-		toolchain.Ldflags(),
-		toolchain.ToolchainLdflags(),
-		productExtraLdflags,
-	}, " "))
-
 	includeFlags, err := ctx.Eval(toolchain.IncludeFlags())
 	if err != nil {
 		panic(err)
@@ -277,60 +254,51 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 		ctx.Strict(makePrefix+"thumb_CFLAGS", flags)
 	}
 
-	if toolchain.ClangSupported() {
-		clangPrefix := secondPrefix + "CLANG_" + typePrefix
-		clangExtras := "-target " + toolchain.ClangTriple()
-		clangExtras += " -B" + config.ToolPath(toolchain)
+	clangPrefix := secondPrefix + "CLANG_" + typePrefix
+	clangExtras := "-target " + toolchain.ClangTriple()
+	clangExtras += " -B" + config.ToolPath(toolchain)
 
-		ctx.Strict(clangPrefix+"GLOBAL_CFLAGS", strings.Join([]string{
-			toolchain.ClangCflags(),
-			"${config.CommonClangGlobalCflags}",
-			fmt.Sprintf("${config.%sClangGlobalCflags}", hod),
-			toolchain.ToolchainClangCflags(),
-			clangExtras,
-			productExtraCflags,
-		}, " "))
-		ctx.Strict(clangPrefix+"GLOBAL_CPPFLAGS", strings.Join([]string{
-			"${config.CommonClangGlobalCppflags}",
-			fmt.Sprintf("${config.%sGlobalCppflags}", hod),
-			toolchain.ClangCppflags(),
-		}, " "))
-		ctx.Strict(clangPrefix+"GLOBAL_LDFLAGS", strings.Join([]string{
-			fmt.Sprintf("${config.%sGlobalLdflags}", hod),
-			toolchain.ClangLdflags(),
-			toolchain.ToolchainClangLdflags(),
-			productExtraLdflags,
-			clangExtras,
-		}, " "))
-		ctx.Strict(clangPrefix+"GLOBAL_LLDFLAGS", strings.Join([]string{
-			fmt.Sprintf("${config.%sGlobalLldflags}", hod),
-			toolchain.ClangLldflags(),
-			toolchain.ToolchainClangLdflags(),
-			productExtraLdflags,
-			clangExtras,
-		}, " "))
+	ctx.Strict(clangPrefix+"GLOBAL_CFLAGS", strings.Join([]string{
+		toolchain.ClangCflags(),
+		"${config.CommonClangGlobalCflags}",
+		fmt.Sprintf("${config.%sClangGlobalCflags}", hod),
+		toolchain.ToolchainClangCflags(),
+		clangExtras,
+		productExtraCflags,
+	}, " "))
+	ctx.Strict(clangPrefix+"GLOBAL_CPPFLAGS", strings.Join([]string{
+		"${config.CommonClangGlobalCppflags}",
+		fmt.Sprintf("${config.%sGlobalCppflags}", hod),
+		toolchain.ClangCppflags(),
+	}, " "))
+	ctx.Strict(clangPrefix+"GLOBAL_LDFLAGS", strings.Join([]string{
+		fmt.Sprintf("${config.%sGlobalLdflags}", hod),
+		toolchain.ClangLdflags(),
+		toolchain.ToolchainClangLdflags(),
+		productExtraLdflags,
+		clangExtras,
+	}, " "))
+	ctx.Strict(clangPrefix+"GLOBAL_LLDFLAGS", strings.Join([]string{
+		fmt.Sprintf("${config.%sGlobalLldflags}", hod),
+		toolchain.ClangLldflags(),
+		toolchain.ToolchainClangLdflags(),
+		productExtraLdflags,
+		clangExtras,
+	}, " "))
 
-		if target.Os.Class == android.Device {
-			ctx.Strict(secondPrefix+"ADDRESS_SANITIZER_RUNTIME_LIBRARY", strings.TrimSuffix(config.AddressSanitizerRuntimeLibrary(toolchain), ".so"))
-			ctx.Strict(secondPrefix+"HWADDRESS_SANITIZER_RUNTIME_LIBRARY", strings.TrimSuffix(config.HWAddressSanitizerRuntimeLibrary(toolchain), ".so"))
-			ctx.Strict(secondPrefix+"HWADDRESS_SANITIZER_STATIC_LIBRARY", strings.TrimSuffix(config.HWAddressSanitizerStaticLibrary(toolchain), ".a"))
-			ctx.Strict(secondPrefix+"UBSAN_RUNTIME_LIBRARY", strings.TrimSuffix(config.UndefinedBehaviorSanitizerRuntimeLibrary(toolchain), ".so"))
-			ctx.Strict(secondPrefix+"UBSAN_MINIMAL_RUNTIME_LIBRARY", strings.TrimSuffix(config.UndefinedBehaviorSanitizerMinimalRuntimeLibrary(toolchain), ".a"))
-			ctx.Strict(secondPrefix+"TSAN_RUNTIME_LIBRARY", strings.TrimSuffix(config.ThreadSanitizerRuntimeLibrary(toolchain), ".so"))
-			ctx.Strict(secondPrefix+"SCUDO_RUNTIME_LIBRARY", strings.TrimSuffix(config.ScudoRuntimeLibrary(toolchain), ".so"))
-		}
-
-		// This is used by external/gentoo/...
-		ctx.Strict("CLANG_CONFIG_"+target.Arch.ArchType.Name+"_"+typePrefix+"TRIPLE",
-			toolchain.ClangTriple())
-
-		ctx.Strict(makePrefix+"CLANG_SUPPORTED", "true")
-	} else {
-		ctx.Strict(makePrefix+"CLANG_SUPPORTED", "")
+	if target.Os.Class == android.Device {
+		ctx.Strict(secondPrefix+"ADDRESS_SANITIZER_RUNTIME_LIBRARY", strings.TrimSuffix(config.AddressSanitizerRuntimeLibrary(toolchain), ".so"))
+		ctx.Strict(secondPrefix+"HWADDRESS_SANITIZER_RUNTIME_LIBRARY", strings.TrimSuffix(config.HWAddressSanitizerRuntimeLibrary(toolchain), ".so"))
+		ctx.Strict(secondPrefix+"HWADDRESS_SANITIZER_STATIC_LIBRARY", strings.TrimSuffix(config.HWAddressSanitizerStaticLibrary(toolchain), ".a"))
+		ctx.Strict(secondPrefix+"UBSAN_RUNTIME_LIBRARY", strings.TrimSuffix(config.UndefinedBehaviorSanitizerRuntimeLibrary(toolchain), ".so"))
+		ctx.Strict(secondPrefix+"UBSAN_MINIMAL_RUNTIME_LIBRARY", strings.TrimSuffix(config.UndefinedBehaviorSanitizerMinimalRuntimeLibrary(toolchain), ".a"))
+		ctx.Strict(secondPrefix+"TSAN_RUNTIME_LIBRARY", strings.TrimSuffix(config.ThreadSanitizerRuntimeLibrary(toolchain), ".so"))
+		ctx.Strict(secondPrefix+"SCUDO_RUNTIME_LIBRARY", strings.TrimSuffix(config.ScudoRuntimeLibrary(toolchain), ".so"))
 	}
 
-	ctx.Strict(makePrefix+"CC", gccCmd(toolchain, "gcc"))
-	ctx.Strict(makePrefix+"CXX", gccCmd(toolchain, "g++"))
+	// This is used by external/gentoo/...
+	ctx.Strict("CLANG_CONFIG_"+target.Arch.ArchType.Name+"_"+typePrefix+"TRIPLE",
+		toolchain.ClangTriple())
 
 	if target.Os == android.Darwin {
 		ctx.Strict(makePrefix+"AR", "${config.MacArPath}")

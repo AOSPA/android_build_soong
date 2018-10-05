@@ -51,6 +51,24 @@ type prebuiltLibraryLinker struct {
 
 var _ prebuiltLinkerInterface = (*prebuiltLibraryLinker)(nil)
 
+func (p *prebuiltLibraryLinker) linkerInit(ctx BaseModuleContext) {}
+
+func (p *prebuiltLibraryLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
+	// export_header_lib_headers needs to be passed along
+	return Deps{
+		HeaderLibs:               p.baseLinker.Properties.Header_libs,
+		ReexportHeaderLibHeaders: p.baseLinker.Properties.Export_header_lib_headers,
+	}
+}
+
+func (p *prebuiltLibraryLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
+	return flags
+}
+
+func (p *prebuiltLibraryLinker) linkerProps() []interface{} {
+	return p.libraryDecorator.linkerProps()
+}
+
 func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 	flags Flags, deps PathDeps, objs Objects) android.Path {
 	// TODO(ccross): verify shared library dependencies
@@ -58,8 +76,28 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 		p.libraryDecorator.exportIncludes(ctx, "-I")
 		p.libraryDecorator.reexportFlags(deps.ReexportedFlags)
 		p.libraryDecorator.reexportDeps(deps.ReexportedFlagsDeps)
-		// TODO(ccross): .toc optimization, stripping, packing
-		return p.Prebuilt.SingleSourcePath(ctx)
+
+		builderFlags := flagsToBuilderFlags(flags)
+
+		in := p.Prebuilt.SingleSourcePath(ctx)
+
+		if p.shared() {
+			p.unstrippedOutputFile = in
+			libName := ctx.baseModuleName() + flags.Toolchain.ShlibSuffix()
+			if p.needsStrip(ctx) {
+				stripped := android.PathForModuleOut(ctx, "stripped", libName)
+				p.strip(ctx, in, stripped, builderFlags)
+				in = stripped
+			}
+
+			// Optimize out relinking against shared libraries whose interface hasn't changed by
+			// depending on a table of contents file instead of the library itself.
+			tocFile := android.PathForModuleOut(ctx, libName+".toc")
+			p.tocFile = android.OptionalPathForPath(tocFile)
+			TransformSharedObjectToToc(ctx, in, tocFile, builderFlags)
+		}
+
+		return in
 	}
 
 	return nil
@@ -118,17 +156,26 @@ func (p *prebuiltBinaryLinker) link(ctx ModuleContext,
 	flags Flags, deps PathDeps, objs Objects) android.Path {
 	// TODO(ccross): verify shared library dependencies
 	if len(p.properties.Srcs) > 0 {
-		// TODO(ccross): .toc optimization, stripping, packing
+		builderFlags := flagsToBuilderFlags(flags)
+
+		fileName := p.getStem(ctx) + flags.Toolchain.ExecutableSuffix()
+		in := p.Prebuilt.SingleSourcePath(ctx)
+
+		p.unstrippedOutputFile = in
+
+		if p.needsStrip(ctx) {
+			stripped := android.PathForModuleOut(ctx, "stripped", fileName)
+			p.strip(ctx, in, stripped, builderFlags)
+			in = stripped
+		}
 
 		// Copy binaries to a name matching the final installed name
-		fileName := p.getStem(ctx) + flags.Toolchain.ExecutableSuffix()
 		outputFile := android.PathForModuleOut(ctx, fileName)
-
 		ctx.Build(pctx, android.BuildParams{
 			Rule:        android.CpExecutable,
 			Description: "prebuilt",
 			Output:      outputFile,
-			Input:       p.Prebuilt.SingleSourcePath(ctx),
+			Input:       in,
 		})
 
 		return outputFile

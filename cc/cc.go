@@ -370,6 +370,10 @@ type Module struct {
 	staticVariant *Module
 }
 
+func (c *Module) OutputFile() android.OptionalPath {
+	return c.outputFile
+}
+
 func (c *Module) Init() android.Module {
 	c.AddProperties(&c.Properties, &c.VendorProperties)
 	if c.compiler != nil {
@@ -587,6 +591,9 @@ func (ctx *moduleContextImpl) shouldCreateVndkSourceAbiDump() bool {
 		return false
 	}
 	if inList(ctx.baseModuleName(), llndkLibraries) {
+		return true
+	}
+	if inList(ctx.baseModuleName(), ndkMigratedLibs) {
 		return true
 	}
 	if ctx.useVndk() && ctx.isVndk() {
@@ -927,10 +934,6 @@ func (c *Module) beginMutator(actx android.BottomUpMutatorContext) {
 }
 
 func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
-	if !c.Enabled() {
-		return
-	}
-
 	ctx := &depsContext{
 		BottomUpMutatorContext: actx,
 		moduleContextImpl: moduleContextImpl{
@@ -1048,13 +1051,13 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		actx.AddDependency(c, depTag, gen)
 	}
 
-	actx.AddDependency(c, objDepTag, deps.ObjFiles...)
+	actx.AddVariationDependencies(nil, objDepTag, deps.ObjFiles...)
 
 	if deps.CrtBegin != "" {
-		actx.AddDependency(c, crtBeginDepTag, deps.CrtBegin)
+		actx.AddVariationDependencies(nil, crtBeginDepTag, deps.CrtBegin)
 	}
 	if deps.CrtEnd != "" {
-		actx.AddDependency(c, crtEndDepTag, deps.CrtEnd)
+		actx.AddVariationDependencies(nil, crtEndDepTag, deps.CrtEnd)
 	}
 	if deps.LinkerScript != "" {
 		actx.AddDependency(c, linkerScriptDepTag, deps.LinkerScript)
@@ -1093,10 +1096,6 @@ func beginMutator(ctx android.BottomUpMutatorContext) {
 func (c *Module) clang(ctx BaseModuleContext) bool {
 	if c.Properties.Clang != nil && *c.Properties.Clang == false {
 		ctx.PropertyErrorf("clang", "false (GCC) is no longer supported")
-	}
-
-	if !c.toolchain(ctx).ClangSupported() {
-		panic("GCC is no longer supported")
 	}
 
 	return !c.Properties.Gcc
@@ -1187,7 +1186,7 @@ func checkLinkType(ctx android.ModuleContext, from *Module, to *Module, tag depe
 		// We can be permissive with the system "STL" since it is only the C++
 		// ABI layer, but in the future we should make sure that everyone is
 		// using either libc++ or nothing.
-	} else if getNdkStlFamily(ctx, from) != getNdkStlFamily(ctx, to) {
+	} else if getNdkStlFamily(from) != getNdkStlFamily(to) {
 		ctx.ModuleErrorf("uses %q and depends on %q which uses incompatible %q",
 			from.stl.Properties.SelectedStl, ctx.OtherModuleName(to),
 			to.stl.Properties.SelectedStl)
@@ -1516,6 +1515,29 @@ func (c *Module) static() bool {
 	return false
 }
 
+func (c *Module) getMakeLinkType() string {
+	if c.useVndk() {
+		if inList(c.Name(), vndkCoreLibraries) || inList(c.Name(), vndkSpLibraries) || inList(c.Name(), llndkLibraries) {
+			if inList(c.Name(), vndkPrivateLibraries) {
+				return "native:vndk_private"
+			} else {
+				return "native:vndk"
+			}
+		} else {
+			return "native:vendor"
+		}
+	} else if c.inRecovery() {
+		return "native:recovery"
+	} else if c.Target().Os == android.Android && String(c.Properties.Sdk_version) != "" {
+		return "native:ndk:none:none"
+		// TODO(b/114741097): use the correct ndk stl once build errors have been fixed
+		//family, link := getNdkStlFamilyAndLinkType(c)
+		//return fmt.Sprintf("native:ndk:%s:%s", family, link)
+	} else {
+		return "native:platform"
+	}
+}
+
 //
 // Defaults
 //
@@ -1765,6 +1787,7 @@ func imageMutator(mctx android.BottomUpMutatorContext) {
 		} else if v == recoveryMode {
 			m := mod[i].(*Module)
 			m.Properties.InRecovery = true
+			m.MakeAsPlatform()
 			squashRecoverySrcs(m)
 		}
 	}

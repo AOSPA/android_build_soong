@@ -144,16 +144,16 @@ var (
 		blueprint.RuleParams{
 			Depfile:     "${out}.d",
 			Deps:        blueprint.DepsGCC,
-			Command:     "CROSS_COMPILE=$crossCompile $tocPath -i ${in} -o ${out} -d ${out}.d",
+			Command:     "CROSS_COMPILE=$crossCompile $tocPath $format -i ${in} -o ${out} -d ${out}.d",
 			CommandDeps: []string{"$tocPath"},
 			Restat:      true,
 		},
-		"crossCompile")
+		"crossCompile", "format")
 
 	clangTidy = pctx.AndroidStaticRule("clangTidy",
 		blueprint.RuleParams{
-			Command:     "rm -f $out && ${config.ClangBin}/clang-tidy $tidyFlags $in -- $cFlags && touch $out",
-			CommandDeps: []string{"${config.ClangBin}/clang-tidy"},
+			Command:     "rm -f $out && CLANG_TIDY=${config.ClangBin}/clang-tidy ${config.ClangTidyShellPath} $tidyFlags $in -- $cFlags && touch $out",
+			CommandDeps: []string{"${config.ClangBin}/clang-tidy", "${config.ClangTidyShellPath}"},
 		},
 		"cFlags", "tidyFlags")
 
@@ -234,30 +234,31 @@ func init() {
 }
 
 type builderFlags struct {
-	globalFlags    string
-	arFlags        string
-	asFlags        string
-	cFlags         string
-	toolingCFlags  string // A separate set of Cflags for clang LibTooling tools
-	conlyFlags     string
-	cppFlags       string
-	ldFlags        string
-	libFlags       string
-	yaccFlags      string
-	protoFlags     string
-	protoOutParams string
-	tidyFlags      string
-	sAbiFlags      string
-	yasmFlags      string
-	aidlFlags      string
-	rsFlags        string
-	toolchain      config.Toolchain
-	clang          bool
-	sdclang        bool
-	tidy           bool
-	coverage       bool
-	sAbiDump       bool
-	protoRoot      bool
+	globalFlags     string
+	arFlags         string
+	asFlags         string
+	cFlags          string
+	toolingCFlags   string // A separate set of cFlags for clang LibTooling tools
+	toolingCppFlags string // A separate set of cppFlags for clang LibTooling tools
+	conlyFlags      string
+	cppFlags        string
+	ldFlags         string
+	libFlags        string
+	yaccFlags       string
+	protoFlags      string
+	protoOutParams  string
+	tidyFlags       string
+	sAbiFlags       string
+	yasmFlags       string
+	aidlFlags       string
+	rsFlags         string
+	toolchain       config.Toolchain
+	clang           bool
+	sdclang         bool
+	tidy            bool
+	coverage        bool
+	sAbiDump        bool
+	protoRoot       bool
 
 	systemIncludeFlags string
 
@@ -329,7 +330,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 	toolingCppflags := strings.Join([]string{
 		commonFlags,
 		flags.toolingCFlags,
-		flags.cppFlags,
+		flags.toolingCppFlags,
 	}, " ")
 
 	cppflags := strings.Join([]string{
@@ -784,7 +785,18 @@ func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 func TransformSharedObjectToToc(ctx android.ModuleContext, inputFile android.Path,
 	outputFile android.WritablePath, flags builderFlags) {
 
-	crossCompile := gccCmd(flags.toolchain, "")
+	var format string
+	var crossCompile string
+	if ctx.Darwin() {
+		format = "--macho"
+		crossCompile = "${config.MacToolPath}"
+	} else if ctx.Windows() {
+		format = "--pe"
+		crossCompile = gccCmd(flags.toolchain, "")
+	} else {
+		format = "--elf"
+		crossCompile = gccCmd(flags.toolchain, "")
+	}
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        toc,
@@ -793,6 +805,7 @@ func TransformSharedObjectToToc(ctx android.ModuleContext, inputFile android.Pat
 		Input:       inputFile,
 		Args: map[string]string{
 			"crossCompile": crossCompile,
+			"format":       format,
 		},
 	})
 }

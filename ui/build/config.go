@@ -50,8 +50,10 @@ type configImpl struct {
 	targetDevice    string
 	targetDeviceDir string
 
-	pdkBuild       bool
-	brokenDupRules bool
+	pdkBuild bool
+
+	brokenDupRules     bool
+	brokenPhonyTargets bool
 
 	pathReplaced bool
 }
@@ -367,14 +369,14 @@ func (c *configImpl) Arguments() []string {
 
 func (c *configImpl) OutDir() string {
 	if outDir, ok := c.environ.Get("OUT_DIR"); ok {
-		return outDir
+		return filepath.Clean(outDir)
 	}
 	return "out"
 }
 
 func (c *configImpl) DistDir() string {
 	if distDir, ok := c.environ.Get("DIST_DIR"); ok {
-		return distDir
+		return filepath.Clean(distDir)
 	}
 	return filepath.Join(c.OutDir(), "dist")
 }
@@ -575,6 +577,14 @@ func (c *configImpl) SetBuildBrokenDupRules(val bool) {
 
 func (c *configImpl) BuildBrokenDupRules() bool {
 	return c.brokenDupRules
+}
+
+func (c *configImpl) SetBuildBrokenPhonyTargets(val bool) {
+	c.brokenPhonyTargets = val
+}
+
+func (c *configImpl) BuildBrokenPhonyTargets() bool {
+	return c.brokenPhonyTargets
 }
 
 func (c *configImpl) SetTargetDeviceDir(dir string) {

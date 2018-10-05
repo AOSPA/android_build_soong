@@ -101,6 +101,7 @@ func testContext(config android.Config, bp string,
 		"core-oj",
 		"core-libart",
 		"core-lambda-stubs",
+		"core-simple",
 		"framework",
 		"ext",
 		"okhttp",
@@ -208,8 +209,6 @@ func testContext(config android.Config, bp string,
 		"bar-doc/IFoo.aidl":              nil,
 		"bar-doc/known_oj_tags.txt":      nil,
 		"external/doclava/templates-sdk": nil,
-
-		"external/kotlinc/jarjar-rules.txt": nil,
 	}
 
 	for k, v := range fs {
@@ -353,14 +352,14 @@ var classpathTestcases = []struct {
 }{
 	{
 		name:          "default",
-		bootclasspath: []string{"core-oj", "core-libart"},
+		bootclasspath: []string{"core-oj", "core-libart", "core-simple"},
 		system:        "core-system-modules",
 		classpath:     []string{"ext", "framework", "okhttp"},
 	},
 	{
 		name:          "blank sdk version",
 		properties:    `sdk_version: "",`,
-		bootclasspath: []string{"core-oj", "core-libart"},
+		bootclasspath: []string{"core-oj", "core-libart", "core-simple"},
 		system:        "core-system-modules",
 		classpath:     []string{"ext", "framework", "okhttp"},
 	},
@@ -703,6 +702,30 @@ func TestResources(t *testing.T) {
 			prop: `java_resource_dirs: ["java-res/*"], exclude_java_resource_dirs: ["java-res/b"]`,
 			args: "-C java-res/a -f java-res/a/a",
 		},
+		{
+			// Test wildcards in java_resources
+			name: "wildcard files",
+			prop: `java_resources: ["java-res/**/*"]`,
+			args: "-C . -f java-res/a/a -f java-res/b/b",
+		},
+		{
+			// Test exclude_java_resources with java_resources
+			name: "wildcard files with exclude",
+			prop: `java_resources: ["java-res/**/*"], exclude_java_resources: ["java-res/b/*"]`,
+			args: "-C . -f java-res/a/a",
+		},
+		{
+			// Test exclude_java_resources with java_resource_dirs
+			name: "resource dirs with exclude files",
+			prop: `java_resource_dirs: ["java-res"], exclude_java_resources: ["java-res/b/b"]`,
+			args: "-C java-res -f java-res/a/a",
+		},
+		{
+			// Test exclude_java_resource_dirs with java_resource_dirs
+			name: "resource dirs with exclude files",
+			prop: `java_resource_dirs: ["java-res", "java-res2"], exclude_java_resource_dirs: ["java-res2"]`,
+			args: "-C java-res -f java-res/a/a -f java-res/b/b",
+		},
 	}
 
 	for _, test := range table {
@@ -732,42 +755,6 @@ func TestResources(t *testing.T) {
 					fooRes.Args["jarArgs"], test.args)
 			}
 		})
-	}
-}
-
-func TestExcludeResources(t *testing.T) {
-	ctx := testJava(t, `
-		java_library {
-			name: "foo",
-			srcs: ["a.java"],
-			java_resource_dirs: ["java-res", "java-res2"],
-			exclude_java_resource_dirs: ["java-res2"],
-		}
-
-		java_library {
-			name: "bar",
-			srcs: ["a.java"],
-			java_resources: ["java-res/*/*"],
-			exclude_java_resources: ["java-res/b/*"],
-		}
-	`)
-
-	fooRes := ctx.ModuleForTests("foo", "android_common").Output("res/foo.jar")
-
-	expected := "-C java-res -f java-res/a/a -f java-res/b/b"
-	if fooRes.Args["jarArgs"] != expected {
-		t.Errorf("foo resource jar args %q is not %q",
-			fooRes.Args["jarArgs"], expected)
-
-	}
-
-	barRes := ctx.ModuleForTests("bar", "android_common").Output("res/bar.jar")
-
-	expected = "-C . -f java-res/a/a"
-	if barRes.Args["jarArgs"] != expected {
-		t.Errorf("bar resource jar args %q is not %q",
-			barRes.Args["jarArgs"], expected)
-
 	}
 }
 
@@ -822,12 +809,6 @@ func TestKotlin(t *testing.T) {
 			name: "baz",
 			srcs: ["c.java"],
 		}
-
-		java_library {
-			name: "blorg",
-			renamed_kotlin_stdlib: true,
-			srcs: ["b.kt"],
-		}
 		`)
 
 	fooKotlinc := ctx.ModuleForTests("foo", "android_common").Rule("kotlinc")
@@ -869,12 +850,6 @@ func TestKotlin(t *testing.T) {
 	if !inList(bazHeaderJar.Output.String(), barKotlinc.Implicits.Strings()) {
 		t.Errorf(`expected %q in bar implicits %v`,
 			bazHeaderJar.Output.String(), barKotlinc.Implicits.Strings())
-	}
-
-	blorgRenamedJar := ctx.ModuleForTests("blorg", "android_common").Output("kotlin-renamed/blorg.jar")
-	if blorgRenamedJar.Implicit.String() != "external/kotlinc/jarjar-rules.txt" {
-		t.Errorf(`expected external/kotlinc/jarjar-rules.txt in blorg implicit %q`,
-			blorgRenamedJar.Implicit.String())
 	}
 }
 
