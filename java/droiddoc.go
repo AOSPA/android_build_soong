@@ -30,7 +30,7 @@ var (
 		blueprint.RuleParams{
 			Command: `rm -rf "$outDir" "$srcJarDir" "$stubsDir" && mkdir -p "$outDir" "$srcJarDir" "$stubsDir" && ` +
 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
-				`${config.JavadocCmd} -encoding UTF-8 @$out.rsp @$srcJarDir/list ` +
+				`${config.SoongJavacWrapper} ${config.JavadocCmd} -encoding UTF-8 @$out.rsp @$srcJarDir/list ` +
 				`$opts $bootclasspathArgs $classpathArgs $sourcepathArgs ` +
 				`-d $outDir -quiet  && ` +
 				`${config.SoongZipCmd} -write_if_changed -d -o $docZip -C $outDir -D $outDir && ` +
@@ -40,9 +40,10 @@ var (
 				"${config.JavadocCmd}",
 				"${config.SoongZipCmd}",
 			},
-			Rspfile:        "$out.rsp",
-			RspfileContent: "$in",
-			Restat:         true,
+			CommandOrderOnly: []string{"${config.SoongJavacWrapper}"},
+			Rspfile:          "$out.rsp",
+			RspfileContent:   "$in",
+			Restat:           true,
 		},
 		"outDir", "srcJarDir", "stubsDir", "srcJars", "opts",
 		"bootclasspathArgs", "classpathArgs", "sourcepathArgs", "docZip", "postDoclavaCmds")
@@ -159,6 +160,10 @@ type JavadocProperties struct {
 
 	// list of java libraries that will be in the classpath.
 	Libs []string `android:"arch_variant"`
+
+	// don't build against the default libraries (bootclasspath, legacy-test, core-junit,
+	// ext, and framework for device targets)
+	No_standard_libs *bool
 
 	// don't build against the framework libraries (legacy-test, core-junit,
 	// ext, and framework for device targets)
@@ -303,30 +308,33 @@ type DroidstubsProperties struct {
 	// the tag name used to distinguish if the API files belong to public/system/test.
 	Api_tag_name *string
 
-	// the generated public API filename by Doclava.
+	// the generated public API filename by Metalava.
 	Api_filename *string
 
-	// the generated public Dex API filename by Doclava.
+	// the generated public Dex API filename by Metalava.
 	Dex_api_filename *string
 
-	// the generated private API filename by Doclava.
+	// the generated private API filename by Metalava.
 	Private_api_filename *string
 
-	// the generated private Dex API filename by Doclava.
+	// the generated private Dex API filename by Metalava.
 	Private_dex_api_filename *string
 
-	// the generated removed API filename by Doclava.
+	// the generated removed API filename by Metalava.
 	Removed_api_filename *string
 
-	// the generated removed Dex API filename by Doclava.
+	// the generated removed Dex API filename by Metalava.
 	Removed_dex_api_filename *string
 
 	// mapping of dex signatures to source file and line number. This is a temporary property and
 	// will be deleted; you probably shouldn't be using it.
 	Dex_mapping_filename *string
 
-	// the generated exact API filename by Doclava.
+	// the generated exact API filename by Metalava.
 	Exact_api_filename *string
+
+	// the generated proguard filename by Metalava.
+	Proguard_filename *string
 
 	Check_api struct {
 		Last_released ApiToCheck
@@ -340,8 +348,11 @@ type DroidstubsProperties struct {
 	// is set to true, Metalava will allow framework SDK to contain annotations.
 	Annotations_enabled *bool
 
-	// a list of top-level directories containing files to merge annotations from.
+	// a list of top-level directories containing files to merge qualifier annotations (i.e. those intended to be included in the stubs written) from.
 	Merge_annotations_dirs []string
+
+	// a list of top-level directories containing Java stub files to merge show/hide annotations from.
+	Merge_inclusion_annotations_dirs []string
 
 	// if set to true, allow Metalava to generate doc_stubs source files. Defaults to false.
 	Create_doc_stubs *bool
@@ -355,6 +366,10 @@ type DroidstubsProperties struct {
 	// if set to true, collect the values used by the Dev tools and
 	// write them in files packaged with the SDK. Defaults to false.
 	Write_sdk_values *bool
+
+	// If set to true, .xml based public API file will be also generated, and
+	// JDiff tool will be invoked to genreate javadoc files. Defaults to false.
+	Jdiff_enabled *bool
 }
 
 //
@@ -375,7 +390,7 @@ type droiddocBuilderFlags struct {
 	metalavaAnnotationsFlags          string
 	metalavaApiLevelsAnnotationsFlags string
 
-	metalavaDokkaFlags string
+	metalavaApiToXmlFlags string
 }
 
 func InitDroiddocModule(module android.DefaultableModule, hod android.HostOrDeviceSupported) {
@@ -470,20 +485,22 @@ func (j *Javadoc) minSdkVersion() string {
 
 func (j *Javadoc) addDeps(ctx android.BottomUpMutatorContext) {
 	if ctx.Device() {
-		sdkDep := decodeSdkDep(ctx, sdkContext(j))
-		if sdkDep.useDefaultLibs {
-			ctx.AddVariationDependencies(nil, bootClasspathTag, config.DefaultBootclasspathLibraries...)
-			if ctx.Config().TargetOpenJDK9() {
-				ctx.AddVariationDependencies(nil, systemModulesTag, config.DefaultSystemModules)
+		if !Bool(j.properties.No_standard_libs) {
+			sdkDep := decodeSdkDep(ctx, sdkContext(j))
+			if sdkDep.useDefaultLibs {
+				ctx.AddVariationDependencies(nil, bootClasspathTag, config.DefaultBootclasspathLibraries...)
+				if ctx.Config().TargetOpenJDK9() {
+					ctx.AddVariationDependencies(nil, systemModulesTag, config.DefaultSystemModules)
+				}
+				if !Bool(j.properties.No_framework_libs) {
+					ctx.AddVariationDependencies(nil, libTag, config.DefaultLibraries...)
+				}
+			} else if sdkDep.useModule {
+				if ctx.Config().TargetOpenJDK9() {
+					ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
+				}
+				ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.modules...)
 			}
-			if !Bool(j.properties.No_framework_libs) {
-				ctx.AddVariationDependencies(nil, libTag, config.DefaultLibraries...)
-			}
-		} else if sdkDep.useModule {
-			if ctx.Config().TargetOpenJDK9() {
-				ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
-			}
-			ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.modules...)
 		}
 	}
 
@@ -1189,15 +1206,18 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 type Droidstubs struct {
 	Javadoc
 
-	properties        DroidstubsProperties
-	apiFile           android.WritablePath
-	dexApiFile        android.WritablePath
-	privateApiFile    android.WritablePath
-	privateDexApiFile android.WritablePath
-	removedApiFile    android.WritablePath
-	removedDexApiFile android.WritablePath
-	apiMappingFile    android.WritablePath
-	exactApiFile      android.WritablePath
+	properties             DroidstubsProperties
+	apiFile                android.WritablePath
+	apiXmlFile             android.WritablePath
+	lastReleasedApiXmlFile android.WritablePath
+	dexApiFile             android.WritablePath
+	privateApiFile         android.WritablePath
+	privateDexApiFile      android.WritablePath
+	removedApiFile         android.WritablePath
+	removedDexApiFile      android.WritablePath
+	apiMappingFile         android.WritablePath
+	exactApiFile           android.WritablePath
+	proguardFile           android.WritablePath
 
 	checkCurrentApiTimestamp      android.WritablePath
 	updateCurrentApiTimestamp     android.WritablePath
@@ -1207,6 +1227,9 @@ type Droidstubs struct {
 	apiVersionsXml android.WritablePath
 
 	apiFilePath android.Path
+
+	jdiffDocZip      android.WritablePath
+	jdiffStubsSrcJar android.WritablePath
 }
 
 func DroidstubsFactory() android.Module {
@@ -1253,6 +1276,12 @@ func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if len(d.properties.Merge_annotations_dirs) != 0 {
 		for _, mergeAnnotationsDir := range d.properties.Merge_annotations_dirs {
 			ctx.AddDependency(ctx.Module(), metalavaMergeAnnotationsDirTag, mergeAnnotationsDir)
+		}
+	}
+
+	if len(d.properties.Merge_inclusion_annotations_dirs) != 0 {
+		for _, mergeInclusionAnnotationsDir := range d.properties.Merge_inclusion_annotations_dirs {
+			ctx.AddDependency(ctx.Module(), metalavaMergeInclusionAnnotationsDirTag, mergeInclusionAnnotationsDir)
 		}
 	}
 
@@ -1339,6 +1368,12 @@ func (d *Droidstubs) collectStubsFlags(ctx android.ModuleContext,
 		*implicitOutputs = append(*implicitOutputs, d.apiMappingFile)
 	}
 
+	if String(d.properties.Proguard_filename) != "" {
+		d.proguardFile = android.PathForModuleOut(ctx, String(d.properties.Proguard_filename))
+		metalavaFlags += " --proguard " + d.proguardFile.String()
+		*implicitOutputs = append(*implicitOutputs, d.proguardFile)
+	}
+
 	if Bool(d.properties.Write_sdk_values) {
 		metalavaFlags = metalavaFlags + " --sdk-values " + android.PathForModuleOut(ctx, "out").String()
 	}
@@ -1378,7 +1413,7 @@ func (d *Droidstubs) collectAnnotationsFlags(ctx android.ModuleContext,
 		ctx.VisitDirectDepsWithTag(metalavaMergeAnnotationsDirTag, func(m android.Module) {
 			if t, ok := m.(*ExportedDroiddocDir); ok {
 				*implicits = append(*implicits, t.deps...)
-				flags += " --merge-annotations " + t.dir.String()
+				flags += " --merge-qualifier-annotations " + t.dir.String()
 			} else {
 				ctx.PropertyErrorf("merge_annotations_dirs",
 					"module %q is not a metalava merge-annotations dir", ctx.OtherModuleName(m))
@@ -1387,6 +1422,15 @@ func (d *Droidstubs) collectAnnotationsFlags(ctx android.ModuleContext,
 		// TODO(tnorbye): find owners to fix these warnings when annotation was enabled.
 		flags += " --hide HiddenTypedefConstant --hide SuperfluousPrefix --hide AnnotationExtraction "
 	}
+	ctx.VisitDirectDepsWithTag(metalavaMergeInclusionAnnotationsDirTag, func(m android.Module) {
+		if t, ok := m.(*ExportedDroiddocDir); ok {
+			*implicits = append(*implicits, t.deps...)
+			flags += " --merge-inclusion-annotations " + t.dir.String()
+		} else {
+			ctx.PropertyErrorf("merge_inclusion_annotations_dirs",
+				"module %q is not a metalava merge-annotations dir", ctx.OtherModuleName(m))
+		}
+	})
 
 	return flags
 }
@@ -1423,6 +1467,37 @@ func (d *Droidstubs) collectAPILevelsAnnotationsFlags(ctx android.ModuleContext,
 			}
 		})
 
+	}
+
+	return flags
+}
+
+func (d *Droidstubs) collectApiToXmlFlags(ctx android.ModuleContext, implicits *android.Paths,
+	implicitOutputs *android.WritablePaths) string {
+	var flags string
+	if Bool(d.properties.Jdiff_enabled) && !ctx.Config().IsPdkBuild() {
+		if d.apiFile.String() == "" {
+			ctx.ModuleErrorf("API signature file has to be specified in Metalava when jdiff is enabled.")
+		}
+
+		d.apiXmlFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_api.xml")
+		*implicitOutputs = append(*implicitOutputs, d.apiXmlFile)
+
+		flags = " --api-xml " + d.apiXmlFile.String()
+
+		if String(d.properties.Check_api.Last_released.Api_file) == "" {
+			ctx.PropertyErrorf("check_api.last_released.api_file",
+				"has to be non-empty if jdiff was enabled!")
+		}
+		lastReleasedApi := ctx.ExpandSource(String(d.properties.Check_api.Last_released.Api_file),
+			"check_api.last_released.api_file")
+		*implicits = append(*implicits, lastReleasedApi)
+
+		d.lastReleasedApiXmlFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_last_released_api.xml")
+		*implicitOutputs = append(*implicitOutputs, d.lastReleasedApiXmlFile)
+
+		flags += " --convert-to-jdiff " + lastReleasedApi.String() + " " +
+			d.lastReleasedApiXmlFile.String()
 	}
 
 	return flags
@@ -1477,6 +1552,30 @@ func (d *Droidstubs) transformCheckApi(ctx android.ModuleContext,
 	})
 }
 
+func (d *Droidstubs) transformJdiff(ctx android.ModuleContext, implicits android.Paths,
+	implicitOutputs android.WritablePaths,
+	bootclasspathArgs, classpathArgs, sourcepathArgs, opts string) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:            javadoc,
+		Description:     "Jdiff",
+		Output:          d.jdiffStubsSrcJar,
+		Inputs:          d.Javadoc.srcFiles,
+		Implicits:       implicits,
+		ImplicitOutputs: implicitOutputs,
+		Args: map[string]string{
+			"outDir":            android.PathForModuleOut(ctx, "jdiff-out").String(),
+			"srcJarDir":         android.PathForModuleOut(ctx, "jdiff-srcjars").String(),
+			"stubsDir":          android.PathForModuleOut(ctx, "jdiff-stubsDir").String(),
+			"srcJars":           strings.Join(d.Javadoc.srcJars.Strings(), " "),
+			"opts":              opts,
+			"bootclasspathArgs": bootclasspathArgs,
+			"classpathArgs":     classpathArgs,
+			"sourcepathArgs":    sourcepathArgs,
+			"docZip":            d.jdiffDocZip.String(),
+		},
+	})
+}
+
 func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	deps := d.Javadoc.collectDeps(ctx)
 
@@ -1493,6 +1592,8 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	flags, err := d.initBuilderFlags(ctx, &implicits, deps)
 	metalavaCheckApiImplicits := implicits
+	jdiffImplicits := implicits
+
 	if err != nil {
 		return
 	}
@@ -1500,6 +1601,8 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	flags.metalavaStubsFlags = d.collectStubsFlags(ctx, &implicitOutputs)
 	flags.metalavaAnnotationsFlags = d.collectAnnotationsFlags(ctx, &implicits, &implicitOutputs)
 	flags.metalavaApiLevelsAnnotationsFlags = d.collectAPILevelsAnnotationsFlags(ctx, &implicits, &implicitOutputs)
+	flags.metalavaApiToXmlFlags = d.collectApiToXmlFlags(ctx, &implicits, &implicitOutputs)
+
 	if strings.Contains(d.Javadoc.args, "--generate-documentation") {
 		// Currently Metalava have the ability to invoke Javadoc in a seperate process.
 		// Pass "-nodocs" to suppress the Javadoc invocation when Metalava receives
@@ -1509,7 +1612,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	d.transformMetalava(ctx, implicits, implicitOutputs, javaVersion,
 		flags.bootClasspathArgs, flags.classpathArgs, flags.sourcepathArgs,
 		flags.metalavaStubsFlags+flags.metalavaAnnotationsFlags+
-			flags.metalavaApiLevelsAnnotationsFlags+" "+d.Javadoc.args)
+			flags.metalavaApiLevelsAnnotationsFlags+flags.metalavaApiToXmlFlags+" "+d.Javadoc.args)
 
 	if apiCheckEnabled(d.properties.Check_api.Current, "current") &&
 		!ctx.Config().IsPdkBuild() {
@@ -1560,6 +1663,31 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				`******************************\n`,
 			d.checkLastReleasedApiTimestamp)
 	}
+
+	if Bool(d.properties.Jdiff_enabled) && !ctx.Config().IsPdkBuild() {
+
+		// Please sync with android-api-council@ before making any changes for the name of jdiffDocZip below
+		// since there's cron job downstream that fetch this .zip file periodically.
+		// See b/116221385 for reference.
+		d.jdiffDocZip = android.PathForModuleOut(ctx, ctx.ModuleName()+"-"+"jdiff-docs.zip")
+		d.jdiffStubsSrcJar = android.PathForModuleOut(ctx, ctx.ModuleName()+"-"+"jdiff-stubs.srcjar")
+
+		var jdiffImplicitOutputs android.WritablePaths
+		jdiffImplicitOutputs = append(jdiffImplicitOutputs, d.jdiffDocZip)
+
+		jdiff := android.PathForOutput(ctx, "host", ctx.Config().PrebuiltOS(), "framework", "jdiff.jar")
+		jdiffImplicits = append(jdiffImplicits, android.Paths{jdiff, d.apiXmlFile, d.lastReleasedApiXmlFile}...)
+
+		opts := " -encoding UTF-8 -source 1.8 -J-Xmx1600m -XDignore.symbol.file " +
+			"-doclet jdiff.JDiff -docletpath " + jdiff.String() + " -quiet " +
+			"-newapi " + strings.TrimSuffix(d.apiXmlFile.Base(), d.apiXmlFile.Ext()) +
+			" -newapidir " + filepath.Dir(d.apiXmlFile.String()) +
+			" -oldapi " + strings.TrimSuffix(d.lastReleasedApiXmlFile.Base(), d.lastReleasedApiXmlFile.Ext()) +
+			" -oldapidir " + filepath.Dir(d.lastReleasedApiXmlFile.String())
+
+		d.transformJdiff(ctx, jdiffImplicits, jdiffImplicitOutputs, flags.bootClasspathArgs, flags.classpathArgs,
+			flags.sourcepathArgs, opts)
+	}
 }
 
 //
@@ -1567,6 +1695,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 //
 var droiddocTemplateTag = dependencyTag{name: "droiddoc-template"}
 var metalavaMergeAnnotationsDirTag = dependencyTag{name: "metalava-merge-annotations-dir"}
+var metalavaMergeInclusionAnnotationsDirTag = dependencyTag{name: "metalava-merge-inclusion-annotations-dir"}
 var metalavaAPILevelsAnnotationsDirTag = dependencyTag{name: "metalava-api-levels-annotations-dir"}
 
 type ExportedDroiddocDirProperties struct {

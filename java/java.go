@@ -95,6 +95,9 @@ type CompilerProperties struct {
 	// list of java libraries that will be compiled into the resulting jar
 	Static_libs []string `android:"arch_variant"`
 
+	// list of native libraries that will be provided in or alongside the resulting jar
+	Jni_libs []string `android:"arch_variant"`
+
 	// manifest file to be included in resulting jar
 	Manifest *string
 
@@ -138,7 +141,7 @@ type CompilerProperties struct {
 	// supported at compile time. It should only be needed to compile tests in
 	// packages that exist in libcore and which are inconvenient to move
 	// elsewhere.
-	Patch_module *string
+	Patch_module *string `android:"arch_variant"`
 
 	Jacoco struct {
 		// List of classes to include for instrumentation with jacoco to collect coverage
@@ -311,6 +314,10 @@ type Module struct {
 
 	// list of SDK lib names that this java moudule is exporting
 	exportedSdkLibs []string
+
+	// list of source files, collected from compiledJavaSrcs and compiledSrcJars
+	// filter out Exclude_srcs, will be used by android.IDEInfo struct
+	expandIDEInfoCompiledSrcs []string
 }
 
 func (j *Module) Srcs() android.Paths {
@@ -885,7 +892,7 @@ func getJavaVersion(ctx android.ModuleContext, javaVersion string, sdkContext sd
 		ret = javaVersion
 	} else if ctx.Device() && sdk <= 23 {
 		ret = "1.7"
-	} else if ctx.Device() && sdk <= 26 || !ctx.Config().TargetOpenJDK9() {
+	} else if ctx.Device() && sdk <= 28 || !ctx.Config().TargetOpenJDK9() {
 		ret = "1.8"
 	} else if ctx.Device() && sdkContext.sdkVersion() != "" && sdk == android.FutureApiLevel {
 		// TODO(ccross): once we generate stubs we should be able to use 1.9 for sdk_version: "current"
@@ -1009,6 +1016,10 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 	srcJars := srcFiles.FilterByExt(".srcjar")
 	srcJars = append(srcJars, deps.srcJars...)
 	srcJars = append(srcJars, extraSrcJars...)
+
+	// Collect source files from compiledJavaSrcs, compiledSrcJars and filter out Exclude_srcs
+	// that IDEInfo struct will use
+	j.expandIDEInfoCompiledSrcs = append(j.expandIDEInfoCompiledSrcs, srcFiles.Strings()...)
 
 	jarName := ctx.ModuleName() + ".jar"
 
@@ -1362,6 +1373,23 @@ func (j *Module) logtags() android.Paths {
 	return j.logtagsSrcs
 }
 
+// Collect information for opening IDE project files in java/jdeps.go.
+func (j *Module) IDEInfo(dpInfo *android.IdeInfo) {
+	dpInfo.Deps = append(dpInfo.Deps, j.CompilerDeps()...)
+	dpInfo.Srcs = append(dpInfo.Srcs, j.expandIDEInfoCompiledSrcs...)
+	dpInfo.Aidl_include_dirs = append(dpInfo.Aidl_include_dirs, j.deviceProperties.Aidl.Include_dirs...)
+	if j.properties.Jarjar_rules != nil {
+		dpInfo.Jarjar_rules = append(dpInfo.Jarjar_rules, *j.properties.Jarjar_rules)
+	}
+}
+
+func (j *Module) CompilerDeps() []string {
+	jdeps := []string{}
+	jdeps = append(jdeps, j.properties.Libs...)
+	jdeps = append(jdeps, j.properties.Static_libs...)
+	return jdeps
+}
+
 //
 // Java libraries (.jar file)
 //
@@ -1421,6 +1449,10 @@ type testProperties struct {
 	// installed with the module.
 	Test_config *string `android:"arch_variant"`
 
+	// the name of the test configuration template (for example "AndroidTestTemplate.xml") that
+	// should be installed with the module.
+	Test_config_template *string `android:"arch_variant"`
+
 	// list of files or filegroup modules that provide data that should be installed alongside
 	// the test
 	Data []string
@@ -1436,7 +1468,7 @@ type Test struct {
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	j.testConfig = tradefed.AutoGenJavaTestConfig(ctx, j.testProperties.Test_config)
+	j.testConfig = tradefed.AutoGenJavaTestConfig(ctx, j.testProperties.Test_config, j.testProperties.Test_config_template)
 	j.data = ctx.ExpandSources(j.testProperties.Data, nil)
 
 	j.Library.GenerateAndroidBuildActions(ctx)
@@ -1445,6 +1477,7 @@ func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 func (j *Test) DepsMutator(ctx android.BottomUpMutatorContext) {
 	j.deps(ctx)
 	android.ExtractSourceDeps(ctx, j.testProperties.Test_config)
+	android.ExtractSourceDeps(ctx, j.testProperties.Test_config_template)
 	android.ExtractSourcesDeps(ctx, j.testProperties.Data)
 }
 
@@ -1460,7 +1493,6 @@ func TestFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
 	InitJavaModule(module, android.HostAndDeviceSupported)
-	android.InitDefaultableModule(module)
 	return module
 }
 
@@ -1475,7 +1507,6 @@ func TestHostFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
 	InitJavaModule(module, android.HostSupported)
-	android.InitDefaultableModule(module)
 	return module
 }
 
@@ -1591,6 +1622,7 @@ type ImportProperties struct {
 
 type Import struct {
 	android.ModuleBase
+	android.DefaultableModuleBase
 	prebuilt android.Prebuilt
 
 	properties ImportProperties
@@ -1691,6 +1723,26 @@ func (j *Import) ExportedSdkLibs() []string {
 	return j.exportedSdkLibs
 }
 
+// Collect information for opening IDE project files in java/jdeps.go.
+const (
+	removedPrefix = "prebuilt_"
+)
+
+func (j *Import) IDEInfo(dpInfo *android.IdeInfo) {
+	dpInfo.Jars = append(dpInfo.Jars, j.PrebuiltSrcs()...)
+}
+
+func (j *Import) IDECustomizedModuleName() string {
+	// TODO(b/113562217): Extract the base module name from the Import name, often the Import name
+	// has a prefix "prebuilt_". Remove the prefix explicitly if needed until we find a better
+	// solution to get the Import name.
+	name := j.Name()
+	if strings.HasPrefix(name, removedPrefix) {
+		name = strings.Trim(name, removedPrefix)
+	}
+	return name
+}
+
 var _ android.PrebuiltInterface = (*Import)(nil)
 
 func ImportFactory() android.Module {
@@ -1699,7 +1751,7 @@ func ImportFactory() android.Module {
 	module.AddProperties(&module.properties)
 
 	android.InitPrebuiltModule(module, &module.properties.Jars)
-	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
+	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
 }
 
@@ -1709,7 +1761,7 @@ func ImportFactoryHost() android.Module {
 	module.AddProperties(&module.properties)
 
 	android.InitPrebuiltModule(module, &module.properties.Jars)
-	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibCommon)
+	InitJavaModule(module, android.HostSupported)
 	return module
 }
 
@@ -1739,6 +1791,13 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&CompilerProperties{},
 		&CompilerDeviceProperties{},
 		&android.ProtoProperties{},
+		&aaptProperties{},
+		&androidLibraryProperties{},
+		&appProperties{},
+		&appTestProperties{},
+		&ImportProperties{},
+		&AARImportProperties{},
+		&sdkLibraryProperties{},
 	)
 
 	android.InitDefaultsModule(module)

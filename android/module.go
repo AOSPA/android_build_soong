@@ -442,6 +442,8 @@ type ModuleBase struct {
 
 	// For tests
 	buildParams []BuildParams
+
+	prefer32 func(ctx BaseModuleContext, base *ModuleBase, class OsClass) bool
 }
 
 func (a *ModuleBase) AddProperties(props ...interface{}) {
@@ -454,6 +456,10 @@ func (a *ModuleBase) GetProperties() []interface{} {
 
 func (a *ModuleBase) BuildParamsForTests() []BuildParams {
 	return a.buildParams
+}
+
+func (a *ModuleBase) Prefer32(prefer32 func(ctx BaseModuleContext, base *ModuleBase, class OsClass) bool) {
+	a.prefer32 = prefer32
 }
 
 // Name returns the name of the module.  It may be overridden by individual module types, for
@@ -600,6 +606,10 @@ func (p *ModuleBase) InstallInSanitizerDir() bool {
 
 func (p *ModuleBase) InstallInRecovery() bool {
 	return Bool(p.commonProperties.Recovery)
+}
+
+func (a *ModuleBase) Owner() string {
+	return String(a.commonProperties.Owner)
 }
 
 func (a *ModuleBase) generateModuleTarget(ctx ModuleContext) {
@@ -1523,16 +1533,16 @@ func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 	}
 }
 
-type AndroidModulesByName struct {
-	slice []Module
+type ModulesByName struct {
+	slice []blueprint.Module
 	ctx   interface {
 		ModuleName(blueprint.Module) string
 		ModuleSubDir(blueprint.Module) string
 	}
 }
 
-func (s AndroidModulesByName) Len() int { return len(s.slice) }
-func (s AndroidModulesByName) Less(i, j int) bool {
+func (s ModulesByName) Len() int { return len(s.slice) }
+func (s ModulesByName) Less(i, j int) bool {
 	mi, mj := s.slice[i], s.slice[j]
 	ni, nj := s.ctx.ModuleName(mi), s.ctx.ModuleName(mj)
 
@@ -1542,4 +1552,28 @@ func (s AndroidModulesByName) Less(i, j int) bool {
 		return s.ctx.ModuleSubDir(mi) < s.ctx.ModuleSubDir(mj)
 	}
 }
-func (s AndroidModulesByName) Swap(i, j int) { s.slice[i], s.slice[j] = s.slice[j], s.slice[i] }
+func (s ModulesByName) Swap(i, j int) { s.slice[i], s.slice[j] = s.slice[j], s.slice[i] }
+
+// Collect information for opening IDE project files in java/jdeps.go.
+type IDEInfo interface {
+	IDEInfo(ideInfo *IdeInfo)
+	BaseModuleName() string
+}
+
+// Extract the base module name from the Import name.
+// Often the Import name has a prefix "prebuilt_".
+// Remove the prefix explicitly if needed
+// until we find a better solution to get the Import name.
+type IDECustomizedModuleName interface {
+	IDECustomizedModuleName() string
+}
+
+type IdeInfo struct {
+	Deps              []string `json:"dependencies,omitempty"`
+	Srcs              []string `json:"srcs,omitempty"`
+	Aidl_include_dirs []string `json:"aidl_include_dirs,omitempty"`
+	Jarjar_rules      []string `json:"jarjar_rules,omitempty"`
+	Jars              []string `json:"jars,omitempty"`
+	Classes           []string `json:"class,omitempty"`
+	Installed_paths   []string `json:"installed,omitempty"`
+}

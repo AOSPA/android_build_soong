@@ -102,8 +102,9 @@ type Module struct {
 
 	taskGenerator taskFunc
 
-	deps android.Paths
-	rule blueprint.Rule
+	deps       android.Paths
+	rule       blueprint.Rule
+	rawCommand string
 
 	exportedIncludeDirs android.Paths
 
@@ -287,6 +288,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	genDir := android.PathForModuleGen(ctx)
 	// Escape the command for the shell
 	rawCommand = "'" + strings.Replace(rawCommand, "'", `'\''`, -1) + "'"
+	g.rawCommand = rawCommand
 	sandboxCommand := fmt.Sprintf("$sboxCmd --sandbox-path %s --output-root %s -c %s %s $allouts",
 		sandboxPath, genDir, rawCommand, depfilePlaceholder)
 
@@ -342,6 +344,17 @@ func (g *Module) generateSourceFile(ctx android.ModuleContext, task generateTask
 		g.outputFiles = append(g.outputFiles, outputFile)
 	}
 	g.outputDeps = append(g.outputDeps, task.out[0])
+}
+
+// Collect information for opening IDE project files in java/jdeps.go.
+func (g *Module) IDEInfo(dpInfo *android.IdeInfo) {
+	dpInfo.Srcs = append(dpInfo.Srcs, g.Srcs().Strings()...)
+	for _, src := range g.properties.Srcs {
+		if strings.HasPrefix(src, ":") {
+			src = strings.Trim(src, ":")
+			dpInfo.Deps = append(dpInfo.Deps, src)
+		}
+	}
 }
 
 func generatorFactory(taskGenerator taskFunc, props ...interface{}) *Module {
