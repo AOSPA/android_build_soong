@@ -417,7 +417,12 @@ func setSdclangVars() {
 		absPath = path.Join(androidRoot, absPath)
 	}
 
-	libDir, err := ioutil.ReadDir(path.Join(absPath, "../lib/clang"))
+	libDirPrefix := "../lib/clang"
+	libDir, err := ioutil.ReadDir(path.Join(absPath, libDirPrefix))
+	if err != nil {
+		libDirPrefix = "../lib64/clang"
+		libDir, err = ioutil.ReadDir(path.Join(absPath, libDirPrefix))
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -425,7 +430,7 @@ func setSdclangVars() {
 		panic("Failed to find sanitizer libraries")
 	}
 
-	pctx.StaticVariable("SDClangAsanLibDir", path.Join(absPath, "../lib/clang", libDir[0].Name(), "lib/linux"))
+	pctx.StaticVariable("SDClangAsanLibDir", path.Join(absPath, libDirPrefix, libDir[0].Name(), "lib/linux"))
 }
 
 var HostPrebuiltTag = pctx.VariableConfigMethod("HostPrebuiltTag", android.Config.PrebuiltOS)
