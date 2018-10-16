@@ -17,10 +17,10 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	//"io/ioutil"
 	"os"
-	"path"
-	"path/filepath"
+	//"path"
+	//"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -409,28 +409,29 @@ func setSdclangVars() {
 	})
 
 	// Find the path to SDLLVM's ASan libraries
-	absPath := sdclangPath
-	if envPath := android.SdclangEnv["SDCLANG_PATH"]; envPath != "" {
-		absPath = envPath
-	}
-	if !filepath.IsAbs(absPath) {
-		absPath = path.Join(androidRoot, absPath)
-	}
-
-	libDirPrefix := "../lib/clang"
-	libDir, err := ioutil.ReadDir(path.Join(absPath, libDirPrefix))
-	if err != nil {
-		libDirPrefix = "../lib64/clang"
-		libDir, err = ioutil.ReadDir(path.Join(absPath, libDirPrefix))
-	}
-	if err != nil {
-		panic(err)
-	}
-	if len(libDir) != 1 || !libDir[0].IsDir() {
-		panic("Failed to find sanitizer libraries")
-	}
-
-	pctx.StaticVariable("SDClangAsanLibDir", path.Join(absPath, libDirPrefix, libDir[0].Name(), "lib/linux"))
+	// TODO (b/117846004): Disable setting SDClangAsanLibDir due to unit test path issues
+	//absPath := sdclangPath
+	//if envPath := android.SdclangEnv["SDCLANG_PATH"]; envPath != "" {
+	//	absPath = envPath
+	//}
+	//if !filepath.IsAbs(absPath) {
+	//	absPath = path.Join(androidRoot, absPath)
+	//}
+	//
+	//libDirPrefix := "../lib/clang"
+	//libDir, err := ioutil.ReadDir(path.Join(absPath, libDirPrefix))
+	//if err != nil {
+	//	libDirPrefix = "../lib64/clang"
+	//	libDir, err = ioutil.ReadDir(path.Join(absPath, libDirPrefix))
+	//}
+	//if err != nil {
+	//	panic(err)
+	//}
+	//if len(libDir) != 1 || !libDir[0].IsDir() {
+	//	panic("Failed to find sanitizer libraries")
+	//}
+	//
+	//pctx.StaticVariable("SDClangAsanLibDir", path.Join(absPath, libDirPrefix, libDir[0].Name(), "lib/linux"))
 }
 
 var HostPrebuiltTag = pctx.VariableConfigMethod("HostPrebuiltTag", android.Config.PrebuiltOS)
