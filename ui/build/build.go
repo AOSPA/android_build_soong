@@ -37,7 +37,10 @@ func SetupOutDir(ctx Context, config Config) {
 
 var combinedBuildNinjaTemplate = template.Must(template.New("combined").Parse(`
 builddir = {{.OutDir}}
-{{if .HasKatiSuffix}}include {{.KatiNinjaFile}}
+pool local_pool
+ depth = {{.Parallel}}
+build _kati_always_build_: phony
+{{if .HasKatiSuffix}}include {{.KatiBuildNinjaFile}}
 {{end -}}
 include {{.SoongNinjaFile}}
 `))
@@ -70,6 +73,17 @@ const (
 	RunBuildTests      = 1 << iota
 	BuildAll           = BuildProductConfig | BuildSoong | BuildKati | BuildNinja
 )
+
+func checkProblematicFiles(ctx Context) {
+	files := []string{"Android.mk", "CleanSpec.mk"}
+	for _, file := range files {
+		if _, err := os.Stat(file); !os.IsNotExist(err) {
+			absolute := absPath(ctx, file)
+			ctx.Printf("Found %s in tree root. This file needs to be removed to build.\n", file)
+			ctx.Fatalf("    rm %s\n", absolute)
+		}
+	}
+}
 
 func checkCaseSensitivity(ctx Context, config Config) {
 	outDir := config.OutDir()
@@ -131,6 +145,8 @@ func Build(ctx Context, config Config, what int) {
 	buildLock := BecomeSingletonOrFail(ctx, config)
 	defer buildLock.Unlock()
 
+	checkProblematicFiles(ctx)
+
 	SetupOutDir(ctx, config)
 
 	checkCaseSensitivity(ctx, config)
@@ -161,7 +177,9 @@ func Build(ctx Context, config Config, what int) {
 
 	if what&BuildKati != 0 {
 		// Run ckati
-		runKati(ctx, config)
+		genKatiSuffix(ctx, config)
+		runKatiCleanSpec(ctx, config)
+		runKatiBuild(ctx, config)
 
 		ioutil.WriteFile(config.LastKatiSuffixFile(), []byte(config.KatiSuffix()), 0777)
 	} else {

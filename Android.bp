@@ -192,6 +192,9 @@ bootstrap_go_package {
     srcs: [
         "genrule/genrule.go",
     ],
+    testSrcs: [
+        "genrule/genrule_test.go",
+    ],
     pluginFor: ["soong_build"],
 }
 
@@ -235,6 +238,7 @@ bootstrap_go_package {
         "java/genrule.go",
         "java/jacoco.go",
         "java/java.go",
+        "java/jdeps.go",
         "java/java_resources.go",
         "java/prebuilt_apis.go",
         "java/proto.go",
@@ -245,6 +249,7 @@ bootstrap_go_package {
     testSrcs: [
         "java/app_test.go",
         "java/java_test.go",
+        "java/jdeps_test.go",
     ],
     pluginFor: ["soong_build"],
 }

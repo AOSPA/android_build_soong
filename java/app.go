@@ -208,6 +208,10 @@ func AndroidAppFactory() android.Module {
 		&module.aaptProperties,
 		&module.appProperties)
 
+	module.Prefer32(func(ctx android.BaseModuleContext, base *android.ModuleBase, class android.OsClass) bool {
+		return class == android.Device && ctx.Config().DevicePrefer32BitApps()
+	})
+
 	InitJavaModule(module, android.DeviceSupported)
 	return module
 }
@@ -236,12 +240,13 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	a.generateAndroidBuildActions(ctx)
 
-	a.testConfig = tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config, a.manifestPath)
+	a.testConfig = tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config, a.testProperties.Test_config_template, a.manifestPath)
 	a.data = ctx.ExpandSources(a.testProperties.Data, nil)
 }
 
 func (a *AndroidTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 	android.ExtractSourceDeps(ctx, a.testProperties.Test_config)
+	android.ExtractSourceDeps(ctx, a.testProperties.Test_config_template)
 	android.ExtractSourcesDeps(ctx, a.testProperties.Data)
 	a.AndroidApp.DepsMutator(ctx)
 }
@@ -250,6 +255,8 @@ func AndroidTestFactory() android.Module {
 	module := &AndroidTest{}
 
 	module.Module.deviceProperties.Optimize.Enabled = proptools.BoolPtr(true)
+
+	module.Module.properties.Instrument = true
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
 	module.AddProperties(

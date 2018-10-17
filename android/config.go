@@ -241,6 +241,8 @@ func TestArchConfig(buildDir string, env map[string]string) Config {
 		},
 	}
 
+	config.BuildOsVariant = config.Targets[Host][0].String()
+
 	return testConfig
 }
 
@@ -576,6 +578,10 @@ func (c *config) Debuggable() bool {
 	return Bool(c.productVariables.Debuggable)
 }
 
+func (c *config) DevicePrefer32BitApps() bool {
+	return Bool(c.productVariables.DevicePrefer32BitApps)
+}
+
 func (c *config) DevicePrefer32BitExecutables() bool {
 	return Bool(c.productVariables.DevicePrefer32BitExecutables)
 }
@@ -660,7 +666,16 @@ func (c *config) LibartImgHostBaseAddress() string {
 }
 
 func (c *config) LibartImgDeviceBaseAddress() string {
-	return "0x60000000"
+	archType := Common
+	if len(c.Targets[Device]) > 0 {
+		archType = c.Targets[Device][0].Arch.ArchType
+	}
+	switch archType {
+	default:
+		return "0x70000000"
+	case Mips, Mips64:
+		return "0x5C000000"
+	}
 }
 
 func (c *config) ArtUseReadBarrier() bool {
