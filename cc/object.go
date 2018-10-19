@@ -25,7 +25,7 @@ import (
 //
 
 func init() {
-	android.RegisterModuleType("cc_object", objectFactory)
+	android.RegisterModuleType("cc_object", ObjectFactory)
 }
 
 type objectLinker struct {
@@ -33,7 +33,7 @@ type objectLinker struct {
 	Properties ObjectLinkerProperties
 }
 
-func objectFactory() android.Module {
+func ObjectFactory() android.Module {
 	module := newBaseModule(android.HostAndDeviceSupported, android.MultilibBoth)
 	module.linker = &objectLinker{
 		baseLinker: NewBaseLinker(nil),
@@ -64,11 +64,7 @@ func (object *objectLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 }
 
 func (*objectLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
-	if flags.Clang {
-		flags.LdFlags = append(flags.LdFlags, ctx.toolchain().ToolchainClangLdflags())
-	} else {
-		flags.LdFlags = append(flags.LdFlags, ctx.toolchain().ToolchainLdflags())
-	}
+	flags.LdFlags = append(flags.LdFlags, ctx.toolchain().ToolchainClangLdflags())
 
 	return flags
 }

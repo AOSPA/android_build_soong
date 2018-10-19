@@ -127,17 +127,6 @@ var (
 			Command: "rm -f $out && touch $out",
 		})
 
-	_ = pctx.SourcePathVariable("copyGccLibPath", "build/soong/scripts/copygcclib.sh")
-
-	copyGccLib = pctx.AndroidStaticRule("copyGccLib",
-		blueprint.RuleParams{
-			Depfile:     "${out}.d",
-			Deps:        blueprint.DepsGCC,
-			Command:     "$copyGccLibPath $out $ccCmd $cFlags -print-file-name=${libName}",
-			CommandDeps: []string{"$copyGccLibPath", "$ccCmd"},
-		},
-		"ccCmd", "cFlags", "libName")
-
 	_ = pctx.SourcePathVariable("tocPath", "build/soong/scripts/toc.sh")
 
 	toc = pctx.AndroidStaticRule("toc",
@@ -253,7 +242,6 @@ type builderFlags struct {
 	aidlFlags       string
 	rsFlags         string
 	toolchain       config.Toolchain
-	clang           bool
 	sdclang         bool
 	tidy            bool
 	coverage        bool
@@ -302,7 +290,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 
 	objFiles := make(android.Paths, len(srcFiles))
 	var tidyFiles android.Paths
-	if flags.tidy && flags.clang {
+	if flags.tidy {
 		tidyFiles = make(android.Paths, 0, len(srcFiles))
 	}
 	var coverageFiles android.Paths
@@ -345,19 +333,14 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 	}, " ")
 
 	var sAbiDumpFiles android.Paths
-	if flags.sAbiDump && flags.clang {
+	if flags.sAbiDump {
 		sAbiDumpFiles = make(android.Paths, 0, len(srcFiles))
 	}
 
-	if flags.clang {
-		cflags += " ${config.NoOverrideClangGlobalCflags}"
-		toolingCflags += " ${config.NoOverrideClangGlobalCflags}"
-		cppflags += " ${config.NoOverrideClangGlobalCflags}"
-		toolingCppflags += " ${config.NoOverrideClangGlobalCflags}"
-	} else {
-		cflags += " ${config.NoOverrideGlobalCflags}"
-		cppflags += " ${config.NoOverrideGlobalCflags}"
-	}
+	cflags += " ${config.NoOverrideClangGlobalCflags}"
+	toolingCflags += " ${config.NoOverrideClangGlobalCflags}"
+	cppflags += " ${config.NoOverrideClangGlobalCflags}"
+	toolingCppflags += " ${config.NoOverrideClangGlobalCflags}"
 
 	for i, srcFile := range srcFiles {
 		objFile := android.ObjPathWithExt(ctx, subdir, srcFile, "o")
@@ -397,23 +380,23 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 		var moduleCflags string
 		var moduleToolingCflags string
 		var ccCmd string
-		tidy := flags.tidy && flags.clang
+		tidy := flags.tidy
 		coverage := flags.coverage
-		dump := flags.sAbiDump && flags.clang
+		dump := flags.sAbiDump
 
 		switch srcFile.Ext() {
 		case ".S", ".s":
-			ccCmd = "gcc"
+			ccCmd = "clang"
 			moduleCflags = asflags
 			tidy = false
 			coverage = false
 			dump = false
 		case ".c":
-			ccCmd = "gcc"
+			ccCmd = "clang"
 			moduleCflags = cflags
 			moduleToolingCflags = toolingCflags
 		case ".cpp", ".cc", ".mm":
-			ccCmd = "g++"
+			ccCmd = "clang++"
 			moduleCflags = cppflags
 			moduleToolingCflags = toolingCppflags
 		default:
@@ -421,29 +404,14 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			continue
 		}
 
-		if flags.clang {
-			switch ccCmd {
-			case "gcc":
-				ccCmd = "clang"
-			case "g++":
-				ccCmd = "clang++"
-			default:
-				panic("unrecoginzied ccCmd")
-			}
-		}
-
 		ccDesc := ccCmd
 
 		var extraFlags string
-		if flags.clang {
-			if flags.sdclang {
-				ccCmd = "${config.SDClangBin}/" + ccCmd
-				extraFlags = " ${config.SDClangFlags}"
-			} else {
-				ccCmd = "${config.ClangBin}/" + ccCmd
-			}
+		if flags.sdclang {
+			ccCmd = "${config.SDClangBin}/" + ccCmd
+			extraFlags = " ${config.SDClangFlags}"
 		} else {
-			ccCmd = gccCmd(flags.toolchain, ccCmd)
+			ccCmd = "${config.ClangBin}/" + ccCmd
 		}
 
 		var implicitOutputs android.WritablePaths
@@ -631,15 +599,11 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 
 	var ldCmd string
 	var extraFlags string
-	if flags.clang {
-		if flags.sdclang {
-			ldCmd = "${config.SDClangBin}/clang++"
-			extraFlags = " ${config.SDClangFlags}"
-		} else {
-			ldCmd = "${config.ClangBin}/clang++"
-		}
+	if flags.sdclang {
+		ldCmd = "${config.SDClangBin}/clang++"
+		extraFlags = " ${config.SDClangFlags}"
 	} else {
-		ldCmd = gccCmd(flags.toolchain, "g++")
+		ldCmd = "${config.ClangBin}/clang++"
 	}
 
 	var libFlagsList []string
@@ -815,16 +779,12 @@ func TransformObjsToObj(ctx android.ModuleContext, objFiles android.Paths,
 	flags builderFlags, outputFile android.WritablePath) {
 
 	var ldCmd string
-        var extraFlags string
-	if flags.clang {
-		if flags.sdclang {
-			ldCmd = "${config.SDClangBin}/clang++"
-			extraFlags = " ${config.SDClangFlags}"
-		} else {
-			ldCmd = "${config.ClangBin}/clang++"
-		}
+	var extraFlags string
+	if flags.sdclang {
+		ldCmd = "${config.SDClangBin}/clang++"
+		extraFlags = " ${config.SDClangFlags}"
 	} else {
-		ldCmd = gccCmd(flags.toolchain, "g++")
+		ldCmd = "${config.ClangBin}/clang++"
 	}
 
 	ctx.Build(pctx, android.BuildParams{
@@ -910,21 +870,6 @@ func TransformCoverageFilesToLib(ctx android.ModuleContext,
 	}
 
 	return android.OptionalPath{}
-}
-
-func CopyGccLib(ctx android.ModuleContext, libName string,
-	flags builderFlags, outputFile android.WritablePath) {
-
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        copyGccLib,
-		Description: "copy gcc library " + libName,
-		Output:      outputFile,
-		Args: map[string]string{
-			"ccCmd":   gccCmd(flags.toolchain, "gcc"),
-			"cFlags":  flags.globalFlags,
-			"libName": libName,
-		},
-	})
 }
 
 func gccCmd(toolchain config.Toolchain, cmd string) string {
