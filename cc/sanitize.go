@@ -360,6 +360,9 @@ func (sanitize *sanitize) deps(ctx BaseModuleContext, deps Deps) Deps {
 func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	minimalRuntimeLib := config.UndefinedBehaviorSanitizerMinimalRuntimeLibrary(ctx.toolchain()) + ".a"
 	minimalRuntimePath := "${config.ClangAsanLibDir}/" + minimalRuntimeLib
+	if flags.Sdclang {
+		minimalRuntimePath = "${config.SDClangAsanLibDir}/" + minimalRuntimeLib
+	}
 
 	if ctx.Device() && sanitize.Properties.MinimalRuntimeDep {
 		flags.LdFlags = append(flags.LdFlags, minimalRuntimePath)
@@ -551,7 +554,12 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	}
 
 	if runtimeLibrary != "" {
-		runtimeLibraryPath := "${config.ClangAsanLibDir}/" + runtimeLibrary
+		var runtimeLibraryPath string
+		if flags.Sdclang {
+			runtimeLibraryPath = "${config.SDClangAsanLibDir}/" + runtimeLibrary
+		} else {
+			runtimeLibraryPath = "${config.ClangAsanLibDir}/" + runtimeLibrary
+		}
 		if !ctx.static() {
 			runtimeLibraryPath = runtimeLibraryPath + ctx.toolchain().ShlibSuffix()
 		} else {
