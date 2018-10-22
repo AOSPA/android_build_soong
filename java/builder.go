@@ -109,6 +109,15 @@ var (
 		},
 		"jarArgs")
 
+	zip = pctx.AndroidStaticRule("zip",
+		blueprint.RuleParams{
+			Command:        `${config.SoongZipCmd} -o $out @$out.rsp`,
+			CommandDeps:    []string{"${config.SoongZipCmd}"},
+			Rspfile:        "$out.rsp",
+			RspfileContent: "$jarArgs",
+		},
+		"jarArgs")
+
 	combineJar = pctx.AndroidStaticRule("combineJar",
 		blueprint.RuleParams{
 			Command:     `${config.MergeZipsCmd} --ignore-duplicates -j $jarArgs $out $in`,
@@ -387,6 +396,17 @@ func TransformJetifier(ctx android.ModuleContext, outputFile android.WritablePat
 		Description: "jetifier",
 		Output:      outputFile,
 		Input:       inputFile,
+	})
+}
+
+func GenerateMainClassManifest(ctx android.ModuleContext, outputFile android.WritablePath, mainClass string) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        android.WriteFile,
+		Description: "manifest",
+		Output:      outputFile,
+		Args: map[string]string{
+			"content": "Main-Class: " + mainClass + "\n",
+		},
 	})
 }
 

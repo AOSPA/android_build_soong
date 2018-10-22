@@ -41,8 +41,8 @@ var Forbidden = PathConfig{
 
 var Log = PathConfig{
 	Symlink: true,
-	Log: true,
-	Error: false,
+	Log:     true,
+	Error:   false,
 }
 
 // The configuration used if the tool is not listed in the config below.
@@ -101,7 +101,6 @@ var Configuration = map[string]PathConfig{
 	"ls":        Allowed,
 	"lsof":      Allowed,
 	"m4":        Allowed,
-	"make":      Allowed,
 	"md5sum":    Allowed,
 	"mkdir":     Allowed,
 	"mktemp":    Allowed,
@@ -110,7 +109,6 @@ var Configuration = map[string]PathConfig{
 	"openssl":   Allowed,
 	"paste":     Allowed,
 	"patch":     Allowed,
-	"perl":      Log,
 	"pgrep":     Allowed,
 	"pkill":     Allowed,
 	"ps":        Allowed,
@@ -149,7 +147,6 @@ var Configuration = map[string]PathConfig{
 	"which":     Allowed,
 	"whoami":    Allowed,
 	"xargs":     Allowed,
-	"xmllint":   Allowed,
 	"xxd":       Allowed,
 	"xz":        Allowed,
 	"zip":       Allowed,

@@ -34,6 +34,7 @@ type configImpl struct {
 	arguments []string
 	goma      bool
 	environ   *Environment
+	distDir   string
 
 	// From the arguments
 	parallel   int
@@ -86,6 +87,12 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.environ.Set("OUT_DIR", outDir)
 	}
 
+	if distDir, ok := ret.environ.Get("DIST_DIR"); ok {
+		ret.distDir = filepath.Clean(distDir)
+	} else {
+		ret.distDir = filepath.Join(ret.OutDir(), "dist")
+	}
+
 	ret.environ.Unset(
 		// We're already using it
 		"USE_SOONG_UI",
@@ -106,6 +113,9 @@ func NewConfig(ctx Context, args ...string) Config {
 
 		// We handle this above
 		"OUT_DIR_COMMON_BASE",
+
+		// This is handled above too, and set for individual commands later
+		"DIST_DIR",
 
 		// Variables that have caused problems in the past
 		"CDPATH",
@@ -248,10 +258,10 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			}
 		} else if k, v, ok := decodeKeyValue(arg); ok && len(k) > 0 {
 			c.environ.Set(k, v)
+		} else if arg == "dist" {
+			c.dist = true
 		} else {
-			if arg == "dist" {
-				c.dist = true
-			} else if arg == "checkbuild" {
+			if arg == "checkbuild" {
 				c.checkbuild = true
 			}
 			c.arguments = append(c.arguments, arg)
@@ -375,10 +385,7 @@ func (c *configImpl) OutDir() string {
 }
 
 func (c *configImpl) DistDir() string {
-	if distDir, ok := c.environ.Get("DIST_DIR"); ok {
-		return filepath.Clean(distDir)
-	}
-	return filepath.Join(c.OutDir(), "dist")
+	return c.distDir
 }
 
 func (c *configImpl) NinjaArgs() []string {
@@ -505,6 +512,10 @@ func (c *configImpl) KatiBuildNinjaFile() string {
 	return filepath.Join(c.OutDir(), "build"+c.KatiSuffix()+katiBuildSuffix+".ninja")
 }
 
+func (c *configImpl) KatiPackageNinjaFile() string {
+	return filepath.Join(c.OutDir(), "build"+c.KatiSuffix()+katiPackageSuffix+".ninja")
+}
+
 func (c *configImpl) SoongNinjaFile() string {
 	return filepath.Join(c.SoongOutDir(), "build.ninja")
 }
@@ -530,6 +541,10 @@ func (c *configImpl) ProductOut() string {
 
 func (c *configImpl) DevicePreviousProductConfig() string {
 	return filepath.Join(c.ProductOut(), "previous_build_config.mk")
+}
+
+func (c *configImpl) KatiPackageMkDir() string {
+	return filepath.Join(c.ProductOut(), "obj", "CONFIG", "kati_packaging")
 }
 
 func (c *configImpl) hostOutRoot() string {
