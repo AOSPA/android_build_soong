@@ -35,11 +35,11 @@ func init() {
 
 	android.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("image", imageMutator).Parallel()
-		ctx.BottomUp("link", linkageMutator).Parallel()
+		ctx.BottomUp("link", LinkageMutator).Parallel()
 		ctx.BottomUp("vndk", vndkMutator).Parallel()
 		ctx.BottomUp("ndk_api", ndkApiMutator).Parallel()
 		ctx.BottomUp("test_per_src", testPerSrcMutator).Parallel()
-		ctx.BottomUp("begin", beginMutator).Parallel()
+		ctx.BottomUp("begin", BeginMutator).Parallel()
 	})
 
 	android.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
@@ -136,7 +136,6 @@ type Flags struct {
 	SystemIncludeFlags []string
 
 	Toolchain config.Toolchain
-	Clang     bool
 	Sdclang   bool
 	Tidy      bool
 	Coverage  bool
@@ -168,9 +167,6 @@ type BaseProperties struct {
 
 	// compile module with SDLLVM instead of AOSP LLVM
 	Sdclang *bool `android:"arch_variant"`
-
-	// Some internals still need GCC (toolchain_library)
-	Gcc bool `blueprint:"mutated"`
 
 	// Minimum sdk version supported when compiling against the ndk
 	Sdk_version *string
@@ -224,7 +220,6 @@ type VendorProperties struct {
 type ModuleContextIntf interface {
 	static() bool
 	staticBinary() bool
-	clang() bool
 	toolchain() config.Toolchain
 	useSdk() bool
 	sdkVersion() string
@@ -517,10 +512,6 @@ type moduleContextImpl struct {
 	ctx BaseModuleContext
 }
 
-func (ctx *moduleContextImpl) clang() bool {
-	return ctx.mod.clang(ctx.ctx)
-}
-
 func (ctx *moduleContextImpl) toolchain() config.Toolchain {
 	return ctx.mod.toolchain(ctx.ctx)
 }
@@ -737,9 +728,12 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		return
 	}
 
+	if c.Properties.Clang != nil && *c.Properties.Clang == false {
+		ctx.PropertyErrorf("clang", "false (GCC) is no longer supported")
+	}
+
 	flags := Flags{
 		Toolchain: c.toolchain(ctx),
-		Clang:     c.clang(ctx),
 		Sdclang:   c.sdclang(ctx),
 	}
 	if c.compiler != nil {
@@ -1098,18 +1092,10 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 }
 
-func beginMutator(ctx android.BottomUpMutatorContext) {
+func BeginMutator(ctx android.BottomUpMutatorContext) {
 	if c, ok := ctx.Module().(*Module); ok && c.Enabled() {
 		c.beginMutator(ctx)
 	}
-}
-
-func (c *Module) clang(ctx BaseModuleContext) bool {
-	if c.Properties.Clang != nil && *c.Properties.Clang == false {
-		ctx.PropertyErrorf("clang", "false (GCC) is no longer supported")
-	}
-
-	return !c.Properties.Gcc
 }
 
 // Whether a module can link to another module, taking into
@@ -1234,10 +1220,6 @@ func checkDoubleLoadableLibries(ctx android.ModuleContext, from *Module, to *Mod
 
 func (c *Module) sdclang(ctx BaseModuleContext) bool {
 	sdclang := Bool(c.Properties.Sdclang)
-
-	if !c.clang(ctx) {
-		return false
-	}
 
 	// SDLLVM is not for host build
 	if ctx.Host() {
