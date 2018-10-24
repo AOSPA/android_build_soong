@@ -93,8 +93,6 @@ func init() {
 		"cortex-a76",
 		"kryo",
 		"kryo300",
-		"exynos-m1",
-		"exynos-m2",
 		"denver64")
 
 	pctx.StaticVariable("arm64GccVersion", arm64GccVersion)
