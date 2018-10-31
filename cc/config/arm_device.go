@@ -64,6 +64,11 @@ var (
 			"-mfloat-abi=softfp",
 			"-mfpu=neon-fp-armv8",
 		},
+		"armv8-2a": []string{
+			"-march=armv8.2-a",
+			"-mfloat-abi=softfp",
+			"-mfpu=neon-fp-armv8",
+		},
 	}
 
 	armCpuVariantCflags = map[string][]string{
@@ -153,6 +158,7 @@ func init() {
 		"armv7-a",
 		"armv7-a-neon",
 		"armv8-a",
+		"armv8-2a",
 		"cortex-a7",
 		"cortex-a8",
 		"cortex-a9",
@@ -170,6 +176,7 @@ func init() {
 
 	android.RegisterArchVariantFeatures(android.Arm, "armv7-a-neon", "neon")
 	android.RegisterArchVariantFeatures(android.Arm, "armv8-a", "neon")
+	android.RegisterArchVariantFeatures(android.Arm, "armv8-2a", "neon")
 
 	// Krait is not supported by GCC, but is supported by Clang, so
 	// override the definitions when building modules with Clang.
@@ -230,6 +237,8 @@ func init() {
 		strings.Join(armClangArchVariantCflags["armv7-a-neon"], " "))
 	pctx.StaticVariable("ArmClangArmv8ACflags",
 		strings.Join(armClangArchVariantCflags["armv8-a"], " "))
+	pctx.StaticVariable("ArmClangArmv82ACflags",
+		strings.Join(armClangArchVariantCflags["armv8-2a"], " "))
 
 	// Clang cpu variant cflags
 	pctx.StaticVariable("ArmClangGenericCflags",
@@ -278,6 +287,7 @@ var (
 		"armv7-a":      "${config.ArmClangArmv7ACflags}",
 		"armv7-a-neon": "${config.ArmClangArmv7ANeonCflags}",
 		"armv8-a":      "${config.ArmClangArmv8ACflags}",
+		"armv8-2a":      "${config.ArmClangArmv82ACflags}",
 	}
 
 	armClangCpuVariantCflagsVar = map[string]string{
@@ -412,8 +422,8 @@ func armToolchainFactory(arch android.Arch) Toolchain {
 		}
 	case "armv7-a":
 		fixCortexA8 = "-Wl,--fix-cortex-a8"
-	case "armv8-a":
-		// Nothing extra for armv8-a
+	case "armv8-a", "armv8-2a":
+		// Nothing extra for armv8-a/armv8-2a
 	default:
 		panic(fmt.Sprintf("Unknown ARM architecture version: %q", arch.ArchVariant))
 	}
