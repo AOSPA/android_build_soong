@@ -51,6 +51,7 @@ var rewriteProperties = map[string](func(variableAssignmentContext) error){
 	"LOCAL_MODULE_HOST_OS":        hostOs,
 	"LOCAL_SANITIZE":              sanitize(""),
 	"LOCAL_SANITIZE_DIAG":         sanitize("diag."),
+	"LOCAL_STRIP_MODULE":          strip(),
 	"LOCAL_CFLAGS":                cflags,
 	"LOCAL_UNINSTALLABLE_MODULE":  invert("installable"),
 	"LOCAL_PROGUARD_ENABLED":      proguardEnabled,
@@ -81,7 +82,6 @@ func init() {
 		map[string]string{
 			"LOCAL_MODULE":                  "name",
 			"LOCAL_CXX_STL":                 "stl",
-			"LOCAL_STRIP_MODULE":            "strip",
 			"LOCAL_MULTILIB":                "compile_multilib",
 			"LOCAL_ARM_MODE_HACK":           "instruction_set",
 			"LOCAL_SDK_VERSION":             "sdk_version",
@@ -140,6 +140,7 @@ func init() {
 			"LOCAL_DX_FLAGS":              "dxflags",
 			"LOCAL_JAVA_LIBRARIES":        "libs",
 			"LOCAL_STATIC_JAVA_LIBRARIES": "static_libs",
+			"LOCAL_JNI_SHARED_LIBRARIES":  "jni_libs",
 			"LOCAL_AAPT_FLAGS":            "aaptflags",
 			"LOCAL_PACKAGE_SPLITS":        "package_splits",
 			"LOCAL_COMPATIBILITY_SUITE":   "test_suites",
@@ -154,6 +155,7 @@ func init() {
 			// java_library_static to android_library.
 			"LOCAL_SHARED_ANDROID_LIBRARIES": "android_libs",
 			"LOCAL_STATIC_ANDROID_LIBRARIES": "android_static_libs",
+			"LOCAL_ADDITIONAL_CERTIFICATES":  "additional_certificates",
 		})
 
 	addStandardProperties(bpparser.BoolType,
@@ -458,6 +460,29 @@ func sanitize(sub string) func(ctx variableAssignmentContext) error {
 		}
 
 		return err
+	}
+}
+
+func strip() func(ctx variableAssignmentContext) error {
+	return func(ctx variableAssignmentContext) error {
+		val, err := makeVariableToBlueprint(ctx.file, ctx.mkvalue, bpparser.StringType)
+		if err != nil {
+			return err
+		}
+
+		if _, ok := val.(*bpparser.String); !ok {
+			return fmt.Errorf("unsupported strip expression")
+		}
+
+		bpTrue := &bpparser.Bool{
+			Value: true,
+		}
+		v := val.(*bpparser.String).Value
+		sub := (map[string]string{"false": "none", "true": "all", "keep_symbols": "keep_symbols"})[v]
+		if sub == "" {
+			return fmt.Errorf("unexpected strip option: %s", v)
+		}
+		return setVariable(ctx.file, false, ctx.prefix, "strip."+sub, bpTrue, true)
 	}
 }
 

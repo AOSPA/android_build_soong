@@ -95,9 +95,6 @@ type CompilerProperties struct {
 	// list of java libraries that will be compiled into the resulting jar
 	Static_libs []string `android:"arch_variant"`
 
-	// list of native libraries that will be provided in or alongside the resulting jar
-	Jni_libs []string `android:"arch_variant"`
-
 	// manifest file to be included in resulting jar
 	Manifest *string
 
@@ -312,6 +309,9 @@ type Module struct {
 	// list of extra progurad flag files
 	extraProguardFlagFiles android.Paths
 
+	// manifest file to use instead of properties.Manifest
+	overrideManifest android.OptionalPath
+
 	// list of SDK lib names that this java moudule is exporting
 	exportedSdkLibs []string
 
@@ -365,16 +365,23 @@ type dependencyTag struct {
 	name string
 }
 
+type jniDependencyTag struct {
+	blueprint.BaseDependencyTag
+	target android.Target
+}
+
 var (
-	staticLibTag     = dependencyTag{name: "staticlib"}
-	libTag           = dependencyTag{name: "javalib"}
-	annoTag          = dependencyTag{name: "annotation processor"}
-	bootClasspathTag = dependencyTag{name: "bootclasspath"}
-	systemModulesTag = dependencyTag{name: "system modules"}
-	frameworkResTag  = dependencyTag{name: "framework-res"}
-	frameworkApkTag  = dependencyTag{name: "framework-apk"}
-	kotlinStdlibTag  = dependencyTag{name: "kotlin-stdlib"}
-	proguardRaiseTag = dependencyTag{name: "proguard-raise"}
+	staticLibTag          = dependencyTag{name: "staticlib"}
+	libTag                = dependencyTag{name: "javalib"}
+	annoTag               = dependencyTag{name: "annotation processor"}
+	bootClasspathTag      = dependencyTag{name: "bootclasspath"}
+	systemModulesTag      = dependencyTag{name: "system modules"}
+	frameworkResTag       = dependencyTag{name: "framework-res"}
+	frameworkApkTag       = dependencyTag{name: "framework-apk"}
+	kotlinStdlibTag       = dependencyTag{name: "kotlin-stdlib"}
+	proguardRaiseTag      = dependencyTag{name: "proguard-raise"}
+	certificateTag        = dependencyTag{name: "certificate"}
+	instrumentationForTag = dependencyTag{name: "instrumentation_for"}
 )
 
 type sdkDep struct {
@@ -387,6 +394,12 @@ type sdkDep struct {
 
 	jars android.Paths
 	aidl android.Path
+}
+
+type jniLib struct {
+	name   string
+	path   android.Path
+	target android.Target
 }
 
 func (j *Module) shouldInstrument(ctx android.BaseContext) bool {
@@ -597,6 +610,7 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	ctx.AddFarVariationDependencies([]blueprint.Variation{
 		{Mutator: "arch", Variation: ctx.Config().BuildOsCommonVariant},
 	}, annoTag, j.properties.Annotation_processors...)
+
 	android.ExtractSourcesDeps(ctx, j.properties.Srcs)
 	android.ExtractSourcesDeps(ctx, j.properties.Exclude_srcs)
 	android.ExtractSourcesDeps(ctx, j.properties.Java_resources)
@@ -787,6 +801,15 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
 
+		if _, ok := tag.(*jniDependencyTag); ok {
+			// Handled by AndroidApp.collectAppDeps
+			return
+		}
+		if tag == certificateTag {
+			// Handled by AndroidApp.collectAppDeps
+			return
+		}
+
 		if to, ok := module.(*Library); ok {
 			switch tag {
 			case bootClasspathTag, libTag, staticLibTag:
@@ -798,7 +821,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			switch tag {
 			case bootClasspathTag:
 				deps.bootClasspath = append(deps.bootClasspath, dep.HeaderJars()...)
-			case libTag:
+			case libTag, instrumentationForTag:
 				deps.classpath = append(deps.classpath, dep.HeaderJars()...)
 				// sdk lib names from dependencies are re-exported
 				j.exportedSdkLibs = append(j.exportedSdkLibs, dep.ExportedSdkLibs()...)
@@ -1174,8 +1197,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 	jars = append(jars, deps.staticJars...)
 	jars = append(jars, deps.staticResourceJars...)
 
-	var manifest android.OptionalPath
-	if j.properties.Manifest != nil {
+	manifest := j.overrideManifest
+	if !manifest.Valid() && j.properties.Manifest != nil {
 		manifest = android.OptionalPathForPath(ctx.ExpandSource(*j.properties.Manifest, "manifest"))
 	}
 
@@ -1517,6 +1540,9 @@ func TestHostFactory() android.Module {
 type binaryProperties struct {
 	// installable script to execute the resulting jar
 	Wrapper *string
+
+	// Name of the class containing main to be inserted into the manifest as Main-Class.
+	Main_class *string
 }
 
 type Binary struct {
@@ -1537,6 +1563,15 @@ func (j *Binary) HostToolPath() android.OptionalPath {
 func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	if ctx.Arch().ArchType == android.Common {
 		// Compile the jar
+		if j.binaryProperties.Main_class != nil {
+			if j.properties.Manifest != nil {
+				ctx.PropertyErrorf("main_class", "main_class cannot be used when manifest is set")
+			}
+			manifestFile := android.PathForModuleOut(ctx, "manifest.txt")
+			GenerateMainClassManifest(ctx, manifestFile, String(j.binaryProperties.Main_class))
+			j.overrideManifest = android.OptionalPathForPath(manifestFile)
+		}
+
 		j.Library.GenerateAndroidBuildActions(ctx)
 	} else {
 		// Handle the binary wrapper
@@ -1738,7 +1773,7 @@ func (j *Import) IDECustomizedModuleName() string {
 	// solution to get the Import name.
 	name := j.Name()
 	if strings.HasPrefix(name, removedPrefix) {
-		name = strings.Trim(name, removedPrefix)
+		name = strings.TrimPrefix(name, removedPrefix)
 	}
 	return name
 }
