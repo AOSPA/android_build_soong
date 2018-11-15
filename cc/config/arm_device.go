@@ -64,6 +64,11 @@ var (
 			"-mfloat-abi=softfp",
 			"-mfpu=neon-fp-armv8",
 		},
+		"armv8-2a": []string{
+			"-march=armv8.2-a",
+			"-mfloat-abi=softfp",
+			"-mfpu=neon-fp-armv8",
+		},
 	}
 
 	armCpuVariantCflags = map[string][]string{
@@ -135,6 +140,15 @@ var (
 			// better solution comes around. See Bug 27340895
 			"-D__ARM_FEATURE_LPAE=1",
 		},
+		"kryo385": []string{
+			// Use cortex-a53 because kryo385 is not supported in GCC/clang.
+			"-mcpu=cortex-a53",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+		},
 	}
 
 	armClangCpuVariantCflags  = copyVariantFlags(armCpuVariantCflags)
@@ -153,6 +167,7 @@ func init() {
 		"armv7-a",
 		"armv7-a-neon",
 		"armv8-a",
+		"armv8-2a",
 		"cortex-a7",
 		"cortex-a8",
 		"cortex-a9",
@@ -164,12 +179,14 @@ func init() {
 		"cortex-a75",
 		"krait",
 		"kryo",
+		"kryo385",
 		"exynos-m1",
 		"exynos-m2",
 		"denver")
 
 	android.RegisterArchVariantFeatures(android.Arm, "armv7-a-neon", "neon")
 	android.RegisterArchVariantFeatures(android.Arm, "armv8-a", "neon")
+	android.RegisterArchVariantFeatures(android.Arm, "armv8-2a", "neon")
 
 	// Krait is not supported by GCC, but is supported by Clang, so
 	// override the definitions when building modules with Clang.
@@ -230,6 +247,8 @@ func init() {
 		strings.Join(armClangArchVariantCflags["armv7-a-neon"], " "))
 	pctx.StaticVariable("ArmClangArmv8ACflags",
 		strings.Join(armClangArchVariantCflags["armv8-a"], " "))
+	pctx.StaticVariable("ArmClangArmv82ACflags",
+		strings.Join(armClangArchVariantCflags["armv8-2a"], " "))
 
 	// Clang cpu variant cflags
 	pctx.StaticVariable("ArmClangGenericCflags",
@@ -278,6 +297,7 @@ var (
 		"armv7-a":      "${config.ArmClangArmv7ACflags}",
 		"armv7-a-neon": "${config.ArmClangArmv7ANeonCflags}",
 		"armv8-a":      "${config.ArmClangArmv8ACflags}",
+		"armv8-2a":     "${config.ArmClangArmv82ACflags}",
 	}
 
 	armClangCpuVariantCflagsVar = map[string]string{
@@ -292,6 +312,7 @@ var (
 		"cortex-a75":     "${config.ArmClangCortexA55Cflags}",
 		"krait":          "${config.ArmClangKraitCflags}",
 		"kryo":           "${config.ArmClangKryoCflags}",
+		"kryo385":        "${config.ArmClangCortexA53Cflags}",
 		"exynos-m1":      "${config.ArmClangCortexA53Cflags}",
 		"exynos-m2":      "${config.ArmClangCortexA53Cflags}",
 		"denver":         "${config.ArmClangCortexA15Cflags}",
@@ -412,8 +433,8 @@ func armToolchainFactory(arch android.Arch) Toolchain {
 		}
 	case "armv7-a":
 		fixCortexA8 = "-Wl,--fix-cortex-a8"
-	case "armv8-a":
-		// Nothing extra for armv8-a
+	case "armv8-a", "armv8-2a":
+		// Nothing extra for armv8-a/armv8-2a
 	default:
 		panic(fmt.Sprintf("Unknown ARM architecture version: %q", arch.ArchVariant))
 	}
