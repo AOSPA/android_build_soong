@@ -25,6 +25,10 @@ type PathConfig struct {
 
 	// Whether to exit with an error instead of invoking the underlying tool.
 	Error bool
+
+	// Whether we use a toybox prebuilt for this tool. Since we don't have
+	// toybox for Darwin, we'll use the host version instead.
+	Toybox bool
 }
 
 var Allowed = PathConfig{
@@ -55,6 +59,13 @@ var Missing = PathConfig{
 	Error:   true,
 }
 
+var Toybox = PathConfig{
+	Symlink: false,
+	Log:     true,
+	Error:   true,
+	Toybox:  true,
+}
+
 func GetConfig(name string) PathConfig {
 	if config, ok := Configuration[name]; ok {
 		return config
@@ -68,10 +79,8 @@ var Configuration = map[string]PathConfig{
 	"bash":      Allowed,
 	"bc":        Allowed,
 	"bzip2":     Allowed,
-	"cat":       Allowed,
 	"chmod":     Allowed,
 	"cmp":       Allowed,
-	"comm":      Allowed,
 	"cp":        Allowed,
 	"cut":       Allowed,
 	"date":      Allowed,
@@ -81,7 +90,6 @@ var Configuration = map[string]PathConfig{
 	"du":        Allowed,
 	"echo":      Allowed,
 	"egrep":     Allowed,
-	"env":       Allowed,
 	"expr":      Allowed,
 	"find":      Allowed,
 	"fuser":     Allowed,
@@ -93,7 +101,6 @@ var Configuration = map[string]PathConfig{
 	"head":      Allowed,
 	"hexdump":   Allowed,
 	"hostname":  Allowed,
-	"id":        Allowed,
 	"jar":       Allowed,
 	"java":      Allowed,
 	"javap":     Allowed,
@@ -122,30 +129,25 @@ var Configuration = map[string]PathConfig{
 	"rm":        Allowed,
 	"rmdir":     Allowed,
 	"rsync":     Allowed,
-	"runalarm":  Allowed,
 	"sed":       Allowed,
 	"setsid":    Allowed,
 	"sh":        Allowed,
 	"sha1sum":   Allowed,
 	"sha256sum": Allowed,
 	"sha512sum": Allowed,
-	"sleep":     Allowed,
 	"sort":      Allowed,
 	"stat":      Allowed,
 	"tar":       Allowed,
 	"tail":      Allowed,
 	"tee":       Allowed,
+	"timeout":   Allowed,
 	"todos":     Allowed,
 	"touch":     Allowed,
 	"tr":        Allowed,
-	"true":      Allowed,
-	"uname":     Allowed,
-	"uniq":      Allowed,
 	"unix2dos":  Allowed,
 	"unzip":     Allowed,
 	"wc":        Allowed,
 	"which":     Allowed,
-	"whoami":    Allowed,
 	"xargs":     Allowed,
 	"xxd":       Allowed,
 	"xz":        Allowed,
@@ -166,10 +168,16 @@ var Configuration = map[string]PathConfig{
 	"ld.gold":    Forbidden,
 	"pkg-config": Forbidden,
 
-	// We've got prebuilts of these
-	//"dtc":  Forbidden,
-	//"lz4":  Forbidden,
-	//"lz4c": Forbidden,
+	// On linux we'll use the toybox version of these instead
+	"cat":    Toybox,
+	"comm":   Toybox,
+	"env":    Toybox,
+	"id":     Toybox,
+	"sleep":  Toybox,
+	"true":   Toybox,
+	"uname":  Toybox,
+	"uniq":   Toybox,
+	"whoami": Toybox,
 }
 
 func init() {
@@ -177,5 +185,13 @@ func init() {
 		Configuration["md5"] = Allowed
 		Configuration["sw_vers"] = Allowed
 		Configuration["xcrun"] = Allowed
+
+		// We don't have toybox prebuilts for darwin, so allow the
+		// host versions.
+		for name, config := range Configuration {
+			if config.Toybox {
+				Configuration[name] = Allowed
+			}
+		}
 	}
 }

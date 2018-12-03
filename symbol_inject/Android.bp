@@ -1,4 +1,4 @@
-// Copyright 2017 Google Inc. All rights reserved.
+// Copyright 2018 Google Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package config
-
-var (
-	KotlinStdlibJar     = "external/kotlinc/lib/kotlin-stdlib.jar"
-	KotlincIllegalFlags = []string{
-		"-no-jdk",
-		"-no-stdlib",
-	}
-)
-
-func init() {
-	pctx.SourcePathVariable("KotlincCmd", "external/kotlinc/bin/kotlinc")
-	pctx.SourcePathVariable("KotlinCompilerJar", "external/kotlinc/lib/kotlin-compiler.jar")
-	pctx.SourcePathVariable("KotlinStdlibJar", KotlinStdlibJar)
+bootstrap_go_package {
+    name: "soong-symbol_inject",
+    pkgPath: "android/soong/symbol_inject",
+    srcs: [
+        "symbol_inject.go",
+        "elf.go",
+        "macho.go",
+        "pe.go",
+    ],
+    testSrcs: [
+        "elf_symboldata_test.go",
+        "elf_test.go",
+        "macho_symboldata_test.go",
+        "macho_test.go",
+        "pe_symboldata_test.go",
+        "pe_test.go",
+        "symbol_inject_test.go",
+    ],
 }

@@ -95,6 +95,9 @@ type variableProperties struct {
 			Lto      struct {
 				Never *bool
 			}
+			Sanitize struct {
+				Address *bool
+			}
 		}
 
 		Pdk struct {
@@ -202,6 +205,12 @@ type productVariables struct {
 	Device_support_hwfde       *bool `json:",omitempty"`
 	Device_support_hwfde_perf  *bool `json:",omitempty"`
 
+	UncompressPrivAppDex             *bool    `json:",omitempty"`
+	ModulesLoadedByPrivilegedModules []string `json:",omitempty"`
+	DefaultStripDex                  *bool    `json:",omitempty"`
+	DisableDexPreopt                 *bool    `json:",omitempty"`
+	DisableDexPreoptModules          []string `json:",omitempty"`
+
 	IntegerOverflowExcludePaths *[]string `json:",omitempty"`
 
 	EnableCFI       *bool     `json:",omitempty"`
@@ -212,8 +221,6 @@ type productVariables struct {
 	OdmPath             *string `json:",omitempty"`
 	ProductPath         *string `json:",omitempty"`
 	ProductServicesPath *string `json:",omitempty"`
-
-	UseClangLld *bool `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
@@ -253,6 +260,10 @@ type productVariables struct {
 	BoardPlatPrivateSepolicyDirs []string `json:",omitempty"`
 
 	VendorVars map[string]map[string]string `json:",omitempty"`
+
+	Ndk_abis *bool `json:",omitempty"`
+
+	FlattenApex *bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

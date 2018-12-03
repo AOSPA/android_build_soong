@@ -124,7 +124,7 @@ func (t *toolchainLinuxBionic) ClangLldflags() string {
 func (t *toolchainLinuxBionic) ToolchainClangCflags() string {
 	return "-m64 -march=x86-64" +
 		// TODO: We're not really android, but we don't have a triple yet b/31393676
-		" -U__ANDROID__ -fno-emulated-tls"
+		" -U__ANDROID__"
 }
 
 func (t *toolchainLinuxBionic) ToolchainClangLdflags() string {
@@ -137,6 +137,10 @@ func (t *toolchainLinuxBionic) AvailableLibraries() []string {
 
 func (t *toolchainLinuxBionic) Bionic() bool {
 	return true
+}
+
+func (toolchainLinuxBionic) LibclangRuntimeLibraryArch() string {
+	return "x86_64"
 }
 
 var toolchainLinuxBionicSingleton Toolchain = &toolchainLinuxBionic{}
