@@ -27,9 +27,9 @@ import (
 var (
 	pctx = android.NewPackageContext("android/soong/java/config")
 
-	DefaultBootclasspathLibraries = []string{"core-oj", "core-libart", "core-simple"}
-	DefaultSystemModules          = "core-system-modules"
-	DefaultLibraries              = []string{"ext", "framework", "okhttp"}
+	DefaultBootclasspathLibraries = []string{"core.platform.api.stubs", "core-lambda-stubs"}
+	DefaultSystemModules          = "core-platform-api-stubs-system-modules"
+	DefaultLibraries              = []string{"ext", "framework"}
 	DefaultLambdaStubsLibrary     = "core-lambda-stubs"
 	SdkLambdaStubsPath            = "prebuilts/sdk/tools/core-lambda-stubs.jar"
 
