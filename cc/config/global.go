@@ -398,23 +398,25 @@ func setSdclangVars() {
 	})
 
 	// Find the path to SDLLVM's ASan libraries
-	absPath := sdclangPath
-	if envPath := android.SdclangEnv["SDCLANG_PATH"]; envPath != "" {
-		absPath = envPath
-	}
-	if !filepath.IsAbs(absPath) {
-		absPath = path.Join(androidRoot, absPath)
-	}
+	if SDClang {
+		absPath := sdclangPath
+		if envPath := android.SdclangEnv["SDCLANG_PATH"]; envPath != "" {
+			absPath = envPath
+		}
+		if !filepath.IsAbs(absPath) {
+			absPath = path.Join(androidRoot, absPath)
+		}
 
-	libDir, err := ioutil.ReadDir(path.Join(absPath, "../lib/clang"))
-	if err != nil {
-		panic(err)
-	}
-	if len(libDir) != 1 || !libDir[0].IsDir() {
-		panic("Failed to find sanitizer libraries")
-	}
+		libDir, err := ioutil.ReadDir(path.Join(absPath, "../lib/clang"))
+		if err != nil {
+			panic(err)
+		}
+		if len(libDir) != 1 || !libDir[0].IsDir() {
+			panic("Failed to find sanitizer libraries")
+		}
 
-	pctx.StaticVariable("SDClangAsanLibDir", path.Join(absPath, "../lib/clang", libDir[0].Name(), "lib/linux"))
+		pctx.StaticVariable("SDClangAsanLibDir", path.Join(absPath, "../lib/clang", libDir[0].Name(), "lib/linux"))
+	}
 }
 
 var HostPrebuiltTag = pctx.VariableConfigMethod("HostPrebuiltTag", android.Config.PrebuiltOS)
