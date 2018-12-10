@@ -118,6 +118,24 @@ type variableProperties struct {
 			Srcs         []string
 		}
 
+		Real_hal struct {
+			Cflags       []string
+			Exclude_srcs []string
+			Include_dirs []string
+			Shared_libs  []string
+			Static_libs  []string
+			Srcs         []string
+		}
+
+		Qmaa_hal struct {
+			Cflags       []string
+			Exclude_srcs []string
+			Include_dirs []string
+			Shared_libs  []string
+			Static_libs  []string
+			Srcs         []string
+		}
+
 		Device_support_hwfde struct {
 			Cflags []string
 			Header_libs  []string
@@ -198,6 +216,8 @@ type productVariables struct {
 	Uml                        *bool `json:",omitempty"`
 	Use_lmkd_stats_log         *bool `json:",omitempty"`
 	Arc                        *bool `json:",omitempty"`
+	Real_hal                   *bool `json:",omitempty"`
+	Qmaa_hal                   *bool `json:",omitempty"`
 	MinimizeJavaDebugInfo      *bool `json:",omitempty"`
 	Device_support_hwfde       *bool `json:",omitempty"`
 	Device_support_hwfde_perf  *bool `json:",omitempty"`
