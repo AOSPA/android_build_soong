@@ -47,6 +47,10 @@ type aaptProperties struct {
 	// flags passed to aapt when creating the apk
 	Aaptflags []string
 
+	// include all resource configurations, not just the product-configured
+	// ones.
+	Aapt_include_all_resources *bool
+
 	// list of directories relative to the Blueprints file containing assets.
 	// Defaults to "assets"
 	Asset_dirs []string
@@ -153,11 +157,9 @@ func (a *aapt) aapt2Flags(ctx android.ModuleContext, sdkContext sdkContext, mani
 }
 
 func (a *aapt) deps(ctx android.BottomUpMutatorContext, sdkContext sdkContext) {
-	if !ctx.Config().UnbundledBuild() {
-		sdkDep := decodeSdkDep(ctx, sdkContext)
-		if sdkDep.frameworkResModule != "" {
-			ctx.AddVariationDependencies(nil, frameworkResTag, sdkDep.frameworkResModule)
-		}
+	sdkDep := decodeSdkDep(ctx, sdkContext)
+	if sdkDep.frameworkResModule != "" {
+		ctx.AddVariationDependencies(nil, frameworkResTag, sdkDep.frameworkResModule)
 	}
 }
 
@@ -406,6 +408,10 @@ func (a *AARImport) minSdkVersion() string {
 	if a.properties.Min_sdk_version != nil {
 		return *a.properties.Min_sdk_version
 	}
+	return a.sdkVersion()
+}
+
+func (a *AARImport) targetSdkVersion() string {
 	return a.sdkVersion()
 }
 

@@ -37,10 +37,20 @@ type prebuiltEtcProperties struct {
 	// optional subdirectory under which this file is installed into
 	Sub_dir *string `android:"arch_variant"`
 
+	// optional name for the installed file. If unspecified, name of the module is used as the file name
+	Filename *string `android:"arch_variant"`
+
+	// when set to true, and filename property is not set, the name for the installed file
+	// is the same as the file name of the source file.
+	Filename_from_src *bool `android:"arch_variant"`
+
 	// Make this module available when building for recovery.
 	Recovery_available *bool
 
 	InRecovery bool `blueprint:"mutated"`
+
+	// Whether this module is directly installable to one of the partitions. Default: true.
+	Installable *bool
 }
 
 type PrebuiltEtc struct {
@@ -93,9 +103,25 @@ func (p *PrebuiltEtc) SubDir() string {
 	return String(p.properties.Sub_dir)
 }
 
+func (p *PrebuiltEtc) Installable() bool {
+	return p.properties.Installable == nil || Bool(p.properties.Installable)
+}
+
 func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx ModuleContext) {
 	p.sourceFilePath = ctx.ExpandSource(String(p.properties.Src), "src")
-	p.outputFilePath = PathForModuleOut(ctx, ctx.ModuleName()).OutputPath
+	filename := String(p.properties.Filename)
+	filename_from_src := Bool(p.properties.Filename_from_src)
+	if filename == "" {
+		if filename_from_src {
+			filename = p.sourceFilePath.Base()
+		} else {
+			filename = ctx.ModuleName()
+		}
+	} else if filename_from_src {
+		ctx.PropertyErrorf("filename_from_src", "filename is set. filename_from_src can't be true")
+		return
+	}
+	p.outputFilePath = PathForModuleOut(ctx, filename).OutputPath
 	p.installDirPath = PathForModuleInstall(ctx, "etc", String(p.properties.Sub_dir))
 
 	// This ensures that outputFilePath has the same name as this module.
@@ -120,7 +146,8 @@ func (p *PrebuiltEtc) AndroidMk() AndroidMkData {
 			fmt.Fprintln(w, "LOCAL_MODULE_TAGS := optional")
 			fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", p.outputFilePath.String())
 			fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", "$(OUT_DIR)/"+p.installDirPath.RelPathString())
-			fmt.Fprintln(w, "LOCAL_INSTALLED_MODULE_STEM :=", name)
+			fmt.Fprintln(w, "LOCAL_INSTALLED_MODULE_STEM :=", p.outputFilePath.Base())
+			fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !p.Installable())
 			if p.additionalDependencies != nil {
 				fmt.Fprint(w, "LOCAL_ADDITIONAL_DEPENDENCIES :=")
 				for _, path := range *p.additionalDependencies {
