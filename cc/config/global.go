@@ -21,7 +21,6 @@ import (
 	"os"
 	//"path"
 	//"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -95,10 +94,8 @@ var (
 
 	deviceGlobalLldflags = append(ClangFilterUnknownLldflags(deviceGlobalLdflags),
 		[]string{
-			// TODO(b/109657296): needs --no-rosegment until Android
-			// stack unwinder can handle the read-only segment.
-			"-Wl,--no-rosegment",
-			"-Wl,--pack-dyn-relocs=android",
+			"-Wl,--pack-dyn-relocs=android+relr",
+			"-Wl,--use-android-relr-tags",
 			"-fuse-ld=lld",
 		}...)
 
@@ -134,8 +131,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r339409b"
-	ClangDefaultShortVersion = "8.0.2"
+	ClangDefaultVersion      = "clang-r344140b"
+	ClangDefaultShortVersion = "8.0.4"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -221,11 +218,6 @@ func init() {
 		return ClangDefaultShortVersion
 	})
 	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib64/clang/${ClangShortVersion}/lib/linux")
-	if runtime.GOOS == "darwin" {
-		pctx.StaticVariable("LLVMGoldPlugin", "${ClangPath}/lib64/LLVMgold.dylib")
-	} else {
-		pctx.StaticVariable("LLVMGoldPlugin", "${ClangPath}/lib64/LLVMgold.so")
-	}
 
 	// These are tied to the version of LLVM directly in external/llvm, so they might trail the host prebuilts
 	// being used for the rest of the build process.

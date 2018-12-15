@@ -76,7 +76,7 @@ func (lto *lto) useClangLld(ctx BaseModuleContext) bool {
 	if lto.Properties.Use_clang_lld != nil {
 		return Bool(lto.Properties.Use_clang_lld)
 	}
-	return ctx.Config().UseClangLld()
+	return true
 }
 
 func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
@@ -104,8 +104,6 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 			policy := "cache_size=10%:cache_size_bytes=10g"
 			flags.LdFlags = append(flags.LdFlags, cachePolicyFormat+policy)
 		}
-
-		flags.ArGoldPlugin = true
 
 		// If the module does not have a profile, be conservative and do not inline
 		// or unroll loops during LTO, in order to prevent significant size bloat.

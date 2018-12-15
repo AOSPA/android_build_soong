@@ -86,7 +86,6 @@ var ClangUnknownCflags = sorted([]string{
 // Ldflags that should be filtered out when linking with clang lld
 var ClangUnknownLldflags = sorted([]string{
 	"-fuse-ld=gold",
-	"-Wl,--icf=safe",
 	"-Wl,--fix-cortex-a8",
 	"-Wl,--no-fix-cortex-a8",
 	"-Wl,-m,aarch64_elf64_le_vec",
@@ -98,9 +97,8 @@ func init() {
 	pctx.StaticVariable("ClangExtraCflags", strings.Join([]string{
 		"-D__compiler_offsetof=__builtin_offsetof",
 
-		// Make implicit fallthrough an error in the future.
+		// -Wimplicit-fallthrough is not enabled by -Wall.
 		"-Wimplicit-fallthrough",
-		"-Wno-error=implicit-fallthrough",
 
 		// Help catch common 32/64-bit errors.
 		"-Werror=int-conversion",
@@ -131,6 +129,9 @@ func init() {
 		// Warnings from clang-7.0
 		"-Wno-deprecated-register",
 		"-Wno-sign-compare",
+
+		// Warnings from clang-8.0
+		"-Wno-defaulted-function-deleted",
 	}, " "))
 
 	pctx.StaticVariable("ClangExtraCppflags", strings.Join([]string{

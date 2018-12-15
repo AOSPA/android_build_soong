@@ -209,6 +209,9 @@ func (app *AndroidApp) AndroidMk() android.AndroidMkData {
 				if app.headerJarFile != nil {
 					fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", app.headerJarFile.String())
 				}
+				if app.bundleFile != nil {
+					fmt.Fprintln(w, "LOCAL_SOONG_BUNDLE :=", app.bundleFile.String())
+				}
 				if app.jacocoReportClassesFile != nil {
 					fmt.Fprintln(w, "LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR :=", app.jacocoReportClassesFile.String())
 				}
@@ -239,7 +242,7 @@ func (app *AndroidApp) AndroidMk() android.AndroidMkData {
 					fmt.Fprintln(w, "LOCAL_PRIVILEGED_MODULE := true")
 				}
 
-				fmt.Fprintln(w, "LOCAL_CERTIFICATE :=", app.certificate.pem.String())
+				fmt.Fprintln(w, "LOCAL_CERTIFICATE :=", app.certificate.Pem.String())
 				if len(app.appProperties.Overrides) > 0 {
 					fmt.Fprintln(w, "LOCAL_OVERRIDES_PACKAGES := "+strings.Join(app.appProperties.Overrides, " "))
 				}
@@ -290,6 +293,9 @@ func (a *AndroidLibrary) AndroidMk() android.AndroidMkData {
 	data := a.Library.AndroidMk()
 
 	data.Extra = append(data.Extra, func(w io.Writer, outputFile android.Path) {
+		if a.aarFile != nil {
+			fmt.Fprintln(w, "LOCAL_SOONG_AAR :=", a.aarFile.String())
+		}
 		if a.proguardDictionary != nil {
 			fmt.Fprintln(w, "LOCAL_SOONG_PROGUARD_DICT :=", a.proguardDictionary.String())
 		}
@@ -447,6 +453,14 @@ func (dstubs *Droidstubs) AndroidMk() android.AndroidMkData {
 					fmt.Fprintln(w, ".PHONY:", dstubs.Name()+"-check-last-released-api")
 					fmt.Fprintln(w, dstubs.Name()+"-check-last-released-api:",
 						dstubs.checkLastReleasedApiTimestamp.String())
+				}
+				if dstubs.checkNullabilityWarningsTimestamp != nil {
+					fmt.Fprintln(w, ".PHONY:", dstubs.Name()+"-check-nullability-warnings")
+					fmt.Fprintln(w, dstubs.Name()+"-check-nullability-warnings:",
+						dstubs.checkNullabilityWarningsTimestamp.String())
+
+					fmt.Fprintln(w, ".PHONY:", "droidcore")
+					fmt.Fprintln(w, "droidcore: ", dstubs.Name()+"-check-nullability-warnings")
 				}
 				apiFilePrefix := "INTERNAL_PLATFORM_"
 				if String(dstubs.properties.Api_tag_name) != "" {

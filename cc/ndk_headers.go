@@ -44,7 +44,7 @@ var (
 )
 
 func init() {
-	pctx.HostBinToolVariable("versionerCmd", "versioner")
+	pctx.SourcePathVariable("versionerCmd", "prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/versioner")
 }
 
 // Returns the NDK base include path for use with sdk_version current. Usable with -I.
@@ -134,7 +134,7 @@ func (m *headerModule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// but keep them when doing regular platform build.
 	// Ndk_abis property is only set to true with build/soong/scripts/build-ndk-prebuilts.sh
 	// TODO: Revert this once MIPS is supported in NDK again.
-	if Bool(ctx.AConfig().Ndk_abis) && strings.Contains(ctx.ModuleName(), "mips") {
+	if ctx.Config().NdkAbis() && strings.Contains(ctx.ModuleName(), "mips") {
 		return
 	}
 
@@ -278,11 +278,7 @@ func versionedNdkHeadersFactory() android.Module {
 
 	module.AddProperties(&module.properties)
 
-	// Host module rather than device module because device module install steps
-	// do not get run when embedded in make. We're not any of the existing
-	// module types that can be exposed via the Android.mk exporter, so just use
-	// a host module.
-	android.InitAndroidArchModule(module, android.HostSupportedNoCross, android.MultilibFirst)
+	android.InitAndroidModule(module)
 
 	return module
 }
@@ -362,11 +358,7 @@ func preprocessedNdkHeadersFactory() android.Module {
 
 	module.AddProperties(&module.properties)
 
-	// Host module rather than device module because device module install steps
-	// do not get run when embedded in make. We're not any of the existing
-	// module types that can be exposed via the Android.mk exporter, so just use
-	// a host module.
-	android.InitAndroidArchModule(module, android.HostSupportedNoCross, android.MultilibFirst)
+	android.InitAndroidModule(module)
 
 	return module
 }

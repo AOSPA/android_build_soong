@@ -215,7 +215,7 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Mod
 
 		}
 
-		if amod.Arch().ArchType != ctx.Config().Targets[amod.Os().Class][0].Arch.ArchType {
+		if amod.Arch().ArchType != ctx.Config().Targets[amod.Os()][0].Arch.ArchType {
 			prefix = "2ND_" + prefix
 		}
 	}
@@ -275,9 +275,10 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Mod
 		if amod.commonProperties.Owner != nil {
 			fmt.Fprintln(&data.preamble, "LOCAL_MODULE_OWNER :=", *amod.commonProperties.Owner)
 		}
-		if amod.commonProperties.Notice != nil {
-			fmt.Fprintln(&data.preamble, "LOCAL_NOTICE_FILE :=", "$(LOCAL_PATH)/"+*amod.commonProperties.Notice)
-		}
+	}
+
+	if amod.commonProperties.Notice != nil {
+		fmt.Fprintln(&data.preamble, "LOCAL_NOTICE_FILE :=", "$(LOCAL_PATH)/"+*amod.commonProperties.Notice)
 	}
 
 	if host {

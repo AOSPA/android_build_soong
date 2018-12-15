@@ -106,6 +106,12 @@ var (
 		},
 		"srcJarDir", "srcJars", "javaVersion", "bootclasspathArgs", "classpathArgs", "sourcepathArgs", "opts", "msg")
 
+	nullabilityWarningsCheck = pctx.AndroidStaticRule("nullabilityWarningsCheck",
+		blueprint.RuleParams{
+			Command: `( diff $expected $actual && touch $out ) || ( echo -e "$msg" ; exit 38 )`,
+		},
+		"expected", "actual", "msg")
+
 	dokka = pctx.AndroidStaticRule("dokka",
 		blueprint.RuleParams{
 			Command: `rm -rf "$outDir" "$srcJarDir" "$stubsDir" && ` +
@@ -354,6 +360,9 @@ type DroidstubsProperties struct {
 	// a list of top-level directories containing Java stub files to merge show/hide annotations from.
 	Merge_inclusion_annotations_dirs []string
 
+	// a file containing expected warnings produced by validation of nullability annotations.
+	Check_nullability_warnings *string
+
 	// if set to true, allow Metalava to generate doc_stubs source files. Defaults to false.
 	Create_doc_stubs *bool
 
@@ -388,6 +397,7 @@ type droiddocBuilderFlags struct {
 
 	metalavaStubsFlags                string
 	metalavaAnnotationsFlags          string
+	metalavaInclusionAnnotationsFlags string
 	metalavaApiLevelsAnnotationsFlags string
 
 	metalavaApiToXmlFlags string
@@ -480,6 +490,10 @@ func (j *Javadoc) sdkVersion() string {
 }
 
 func (j *Javadoc) minSdkVersion() string {
+	return j.sdkVersion()
+}
+
+func (j *Javadoc) targetSdkVersion() string {
 	return j.sdkVersion()
 }
 
@@ -1206,22 +1220,25 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 type Droidstubs struct {
 	Javadoc
 
-	properties             DroidstubsProperties
-	apiFile                android.WritablePath
-	apiXmlFile             android.WritablePath
-	lastReleasedApiXmlFile android.WritablePath
-	dexApiFile             android.WritablePath
-	privateApiFile         android.WritablePath
-	privateDexApiFile      android.WritablePath
-	removedApiFile         android.WritablePath
-	removedDexApiFile      android.WritablePath
-	apiMappingFile         android.WritablePath
-	exactApiFile           android.WritablePath
-	proguardFile           android.WritablePath
+	properties              DroidstubsProperties
+	apiFile                 android.WritablePath
+	apiXmlFile              android.WritablePath
+	lastReleasedApiXmlFile  android.WritablePath
+	dexApiFile              android.WritablePath
+	privateApiFile          android.WritablePath
+	privateDexApiFile       android.WritablePath
+	removedApiFile          android.WritablePath
+	removedDexApiFile       android.WritablePath
+	apiMappingFile          android.WritablePath
+	exactApiFile            android.WritablePath
+	proguardFile            android.WritablePath
+	nullabilityWarningsFile android.WritablePath
 
 	checkCurrentApiTimestamp      android.WritablePath
 	updateCurrentApiTimestamp     android.WritablePath
 	checkLastReleasedApiTimestamp android.WritablePath
+
+	checkNullabilityWarningsTimestamp android.WritablePath
 
 	annotationsZip android.WritablePath
 	apiVersionsXml android.WritablePath
@@ -1283,6 +1300,10 @@ func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 		for _, mergeInclusionAnnotationsDir := range d.properties.Merge_inclusion_annotations_dirs {
 			ctx.AddDependency(ctx.Module(), metalavaMergeInclusionAnnotationsDirTag, mergeInclusionAnnotationsDir)
 		}
+	}
+
+	if String(d.properties.Check_nullability_warnings) != "" {
+		android.ExtractSourceDeps(ctx, d.properties.Check_nullability_warnings)
 	}
 
 	if len(d.properties.Api_levels_annotations_dirs) != 0 {
@@ -1382,7 +1403,6 @@ func (d *Droidstubs) collectStubsFlags(ctx android.ModuleContext,
 	} else {
 		metalavaFlags += " --stubs " + android.PathForModuleOut(ctx, "stubsDir").String()
 	}
-
 	return metalavaFlags
 }
 
@@ -1390,15 +1410,23 @@ func (d *Droidstubs) collectAnnotationsFlags(ctx android.ModuleContext,
 	implicits *android.Paths, implicitOutputs *android.WritablePaths) string {
 	var flags string
 	if Bool(d.properties.Annotations_enabled) {
-		if String(d.properties.Previous_api) == "" {
-			ctx.PropertyErrorf("metalava_previous_api",
-				"has to be non-empty if annotations was enabled!")
+		flags += " --include-annotations"
+		validatingNullability := strings.Contains(d.Javadoc.args, "--validate-nullability-from-merged-stubs")
+		migratingNullability := String(d.properties.Previous_api) != ""
+		if !(migratingNullability || validatingNullability) {
+			ctx.PropertyErrorf("previous_api",
+				"has to be non-empty if annotations was enabled (unless validating nullability)")
 		}
-		previousApi := ctx.ExpandSource(String(d.properties.Previous_api),
-			"metalava_previous_api")
-		*implicits = append(*implicits, previousApi)
-
-		flags += " --include-annotations --migrate-nullness " + previousApi.String()
+		if migratingNullability {
+			previousApi := ctx.ExpandSource(String(d.properties.Previous_api), "previous_api")
+			*implicits = append(*implicits, previousApi)
+			flags += " --migrate-nullness " + previousApi.String()
+		}
+		if validatingNullability {
+			d.nullabilityWarningsFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_nullability_warnings.txt")
+			*implicitOutputs = append(*implicitOutputs, d.nullabilityWarningsFile)
+			flags += " --nullability-warnings-txt " + d.nullabilityWarningsFile.String()
+		}
 
 		d.annotationsZip = android.PathForModuleOut(ctx, ctx.ModuleName()+"_annotations.zip")
 		*implicitOutputs = append(*implicitOutputs, d.annotationsZip)
@@ -1419,8 +1447,15 @@ func (d *Droidstubs) collectAnnotationsFlags(ctx android.ModuleContext,
 			}
 		})
 		// TODO(tnorbye): find owners to fix these warnings when annotation was enabled.
-		flags += " --hide HiddenTypedefConstant --hide SuperfluousPrefix --hide AnnotationExtraction "
+		flags += " --hide HiddenTypedefConstant --hide SuperfluousPrefix --hide AnnotationExtraction"
 	}
+
+	return flags
+}
+
+func (d *Droidstubs) collectInclusionAnnotationsFlags(ctx android.ModuleContext,
+	implicits *android.Paths, implicitOutputs *android.WritablePaths) string {
+	var flags string
 	ctx.VisitDirectDepsWithTag(metalavaMergeInclusionAnnotationsDirTag, func(m android.Module) {
 		if t, ok := m.(*ExportedDroiddocDir); ok {
 			*implicits = append(*implicits, t.deps...)
@@ -1599,6 +1634,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	flags.metalavaStubsFlags = d.collectStubsFlags(ctx, &implicitOutputs)
 	flags.metalavaAnnotationsFlags = d.collectAnnotationsFlags(ctx, &implicits, &implicitOutputs)
+	flags.metalavaInclusionAnnotationsFlags = d.collectInclusionAnnotationsFlags(ctx, &implicits, &implicitOutputs)
 	flags.metalavaApiLevelsAnnotationsFlags = d.collectAPILevelsAnnotationsFlags(ctx, &implicits, &implicitOutputs)
 	flags.metalavaApiToXmlFlags = d.collectApiToXmlFlags(ctx, &implicits, &implicitOutputs)
 
@@ -1610,7 +1646,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	d.transformMetalava(ctx, implicits, implicitOutputs, javaVersion,
 		flags.bootClasspathArgs, flags.classpathArgs, flags.sourcepathArgs,
-		flags.metalavaStubsFlags+flags.metalavaAnnotationsFlags+
+		flags.metalavaStubsFlags+flags.metalavaAnnotationsFlags+flags.metalavaInclusionAnnotationsFlags+
 			flags.metalavaApiLevelsAnnotationsFlags+flags.metalavaApiToXmlFlags+" "+d.Javadoc.args)
 
 	if apiCheckEnabled(d.properties.Check_api.Current, "current") &&
@@ -1621,8 +1657,9 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			"check_api.current_removed_api_file")
 
 		d.checkCurrentApiTimestamp = android.PathForModuleOut(ctx, "check_current_api.timestamp")
-		opts := d.Javadoc.args + " --check-compatibility:api:current " + apiFile.String() +
-			" --check-compatibility:removed:current " + removedApiFile.String() + " "
+		opts := " " + d.Javadoc.args + " --check-compatibility:api:current " + apiFile.String() +
+			" --check-compatibility:removed:current " + removedApiFile.String() +
+			flags.metalavaInclusionAnnotationsFlags
 
 		d.transformCheckApi(ctx, apiFile, removedApiFile, metalavaCheckApiImplicits,
 			javaVersion, flags.bootClasspathArgs, flags.classpathArgs, flags.sourcepathArgs, opts,
@@ -1651,8 +1688,9 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			"check_api.last_released.removed_api_file")
 
 		d.checkLastReleasedApiTimestamp = android.PathForModuleOut(ctx, "check_last_released_api.timestamp")
-		opts := d.Javadoc.args + " --check-compatibility:api:released " + apiFile.String() +
-			" --check-compatibility:removed:released " + removedApiFile.String() + " "
+		opts := " " + d.Javadoc.args + " --check-compatibility:api:released " + apiFile.String() +
+			flags.metalavaInclusionAnnotationsFlags + " --check-compatibility:removed:released " +
+			removedApiFile.String() + " "
 
 		d.transformCheckApi(ctx, apiFile, removedApiFile, metalavaCheckApiImplicits,
 			javaVersion, flags.bootClasspathArgs, flags.classpathArgs, flags.sourcepathArgs, opts,
@@ -1661,6 +1699,36 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				`an SDK.  Please fix the errors listed above.\n`+
 				`******************************\n`,
 			d.checkLastReleasedApiTimestamp)
+	}
+
+	if String(d.properties.Check_nullability_warnings) != "" {
+		if d.nullabilityWarningsFile == nil {
+			ctx.PropertyErrorf("check_nullability_warnings",
+				"Cannot specify check_nullability_warnings unless validating nullability")
+		}
+		checkNullabilityWarnings := ctx.ExpandSource(String(d.properties.Check_nullability_warnings),
+			"check_nullability_warnings")
+		d.checkNullabilityWarningsTimestamp = android.PathForModuleOut(ctx, "check_nullability_warnings.timestamp")
+		msg := fmt.Sprintf(`\n******************************\n`+
+			`The warnings encountered during nullability annotation validation did\n`+
+			`not match the checked in file of expected warnings. The diffs are shown\n`+
+			`above. You have two options:\n`+
+			`   1. Resolve the differences by editing the nullability annotations.\n`+
+			`   2. Update the file of expected warnings by running:\n`+
+			`         cp %s %s\n`+
+			`       and submitting the updated file as part of your change.`,
+			d.nullabilityWarningsFile, checkNullabilityWarnings)
+		ctx.Build(pctx, android.BuildParams{
+			Rule:        nullabilityWarningsCheck,
+			Description: "Nullability Warnings Check",
+			Output:      d.checkNullabilityWarningsTimestamp,
+			Implicits:   android.Paths{checkNullabilityWarnings, d.nullabilityWarningsFile},
+			Args: map[string]string{
+				"expected": checkNullabilityWarnings.String(),
+				"actual":   d.nullabilityWarningsFile.String(),
+				"msg":      msg,
+			},
+		})
 	}
 
 	if Bool(d.properties.Jdiff_enabled) && !ctx.Config().IsPdkBuild() {

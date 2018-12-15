@@ -34,11 +34,6 @@ SOONG_OUT=${OUT_DIR}/soong
 SOONG_NDK_OUT=${OUT_DIR}/soong/ndk
 rm -rf ${SOONG_OUT}
 mkdir -p ${SOONG_OUT}
-cat > ${SOONG_OUT}/soong.config << EOF
-{
-    "Ndk_abis": true
-}
-EOF
 
 # We only really need to set some of these variables, but soong won't merge this
 # with the defaults, so we need to write out all the defaults with our values
@@ -49,21 +44,11 @@ cat > ${SOONG_OUT}/soong.variables << EOF
     "Platform_version_active_codenames": ${PLATFORM_VERSION_ALL_CODENAMES},
 
     "DeviceName": "generic_arm64",
-    "DeviceArch": "arm64",
-    "DeviceArchVariant": "armv8-a",
-    "DeviceCpuVariant": "denver64",
-    "DeviceAbi": [
-        "arm64-v8a"
-    ],
-    "DeviceSecondaryArch": "arm",
-    "DeviceSecondaryArchVariant": "armv7-a-neon",
-    "DeviceSecondaryCpuVariant": "denver",
-    "DeviceSecondaryAbi": [
-        "armeabi-v7a"
-    ],
     "HostArch": "x86_64",
     "Malloc_not_svelte": false,
-    "Safestack": false
+    "Safestack": false,
+
+    "Ndk_abis": true
 }
 EOF
 m --skip-make ${SOONG_OUT}/ndk.timestamp
