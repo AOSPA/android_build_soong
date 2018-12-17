@@ -38,7 +38,7 @@ var (
 	// TODO(b/113082813) make this configurable using config.fs syntax
 	generateFsConfig = pctx.StaticRule("generateFsConfig", blueprint.RuleParams{
 		Command: `echo '/ 1000 1000 0755' > ${out} && ` +
-			`echo '/manifest.json 1000 1000 0644' >> ${out} && ` +
+			`echo '/apex_manifest.json 1000 1000 0644' >> ${out} && ` +
 			`echo ${ro_paths} | tr ' ' '\n' | awk '{print "/"$$1 " 1000 1000 0644"}' >> ${out} && ` +
 			`echo ${exec_paths} | tr ' ' '\n' | awk '{print "/"$$1 " 1000 1000 0755"}' >> ${out}`,
 		Description: "fs_config ${out}",
@@ -52,7 +52,7 @@ var (
 		Command: `rm -rf ${image_dir} && mkdir -p ${image_dir} && ` +
 			`(${copy_commands}) && ` +
 			`APEXER_TOOL_PATH=${tool_path} ` +
-			`${apexer} --verbose --force --manifest ${manifest} ` +
+			`${apexer} --force --manifest ${manifest} ` +
 			`--file_contexts ${file_contexts} ` +
 			`--canned_fs_config ${canned_fs_config} ` +
 			`--key ${key} ${image_dir} ${out} `,
@@ -69,7 +69,10 @@ var (
 		})
 
 	apexBundleRule = pctx.StaticRule("apexBundleRule", blueprint.RuleParams{
-		Command:     `${zip2zip} -i $in -o $out image.img:apex/${abi}.img manifest.json:root/manifest.json AndroidManifest.xml:manifest/AndroidManifest.xml`,
+		Command: `${zip2zip} -i $in -o $out ` +
+			`apex_payload.img:apex/${abi}.img ` +
+			`apex_manifest.json:root/apex_manifest.json ` +
+			`AndroidManifest.xml:manifest/AndroidManifest.xml`,
 		CommandDeps: []string{"${zip2zip}"},
 		Description: "app bundle",
 	}, "abi")
@@ -181,7 +184,7 @@ func apexMutator(mctx android.BottomUpMutatorContext) {
 
 type apexBundleProperties struct {
 	// Json manifest file describing meta info of this APEX bundle. Default:
-	// "manifest.json"
+	// "apex_manifest.json"
 	Manifest *string
 
 	// Determines the file contexts file for setting security context to each file in this APEX bundle.
@@ -582,7 +585,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, keyFile and
 		},
 	})
 
-	manifest := android.PathForModuleSrc(ctx, proptools.StringDefault(a.properties.Manifest, "manifest.json"))
+	manifest := android.PathForModuleSrc(ctx, proptools.StringDefault(a.properties.Manifest, "apex_manifest.json"))
 
 	fcName := proptools.StringDefault(a.properties.File_contexts, ctx.ModuleName())
 	fileContextsPath := "system/sepolicy/apex/" + fcName + "-file_contexts"
@@ -662,15 +665,16 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, keyFile and
 		Input:       unsignedOutputFile,
 		Args: map[string]string{
 			"certificates": strings.Join([]string{certificate.Pem.String(), certificate.Key.String()}, " "),
+			"flags":        "-a 4096", //alignment
 		},
 	})
 }
 
 func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
-	// For flattened APEX, do nothing but make sure that manifest.json file is also copied along
+	// For flattened APEX, do nothing but make sure that apex_manifest.json file is also copied along
 	// with other ordinary files.
-	manifest := android.PathForModuleSrc(ctx, proptools.StringDefault(a.properties.Manifest, "manifest.json"))
-	a.filesInfo = append(a.filesInfo, apexFile{manifest, ctx.ModuleName() + ".manifest.json", android.Common, ".", etc})
+	manifest := android.PathForModuleSrc(ctx, proptools.StringDefault(a.properties.Manifest, "apex_manifest.json"))
+	a.filesInfo = append(a.filesInfo, apexFile{manifest, ctx.ModuleName() + ".apex_manifest.json", android.Common, ".", etc})
 
 	for _, fi := range a.filesInfo {
 		dir := filepath.Join("apex", ctx.ModuleName(), fi.installDir)
