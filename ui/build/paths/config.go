@@ -169,16 +169,19 @@ var Configuration = map[string]PathConfig{
 	"env":    Toybox,
 	"id":     Toybox,
 	"od":     Toybox,
-	"paste":  Toybox,
-	"pwd":    Toybox,
-	"rmdir":  Toybox,
+	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"paste":  Log,
+	"pwd":    Log,
+	"rmdir":  Log,
 	"sleep":  Toybox,
-	"tail":   Toybox,
+	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"tail":   Log,
 	"true":   Toybox,
 	"uname":  Toybox,
 	"uniq":   Toybox,
 	"whoami": Toybox,
-	"xxd":    Toybox,
+	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"xxd":    Log,
 }
 
 func init() {
