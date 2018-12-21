@@ -28,6 +28,10 @@ func init() {
 	android.RegisterModuleType("cc_object", ObjectFactory)
 }
 
+type objectCompiler struct {
+	*baseCompiler
+}
+
 type objectLinker struct {
 	*baseLinker
 	Properties ObjectLinkerProperties
@@ -38,13 +42,24 @@ func ObjectFactory() android.Module {
 	module.linker = &objectLinker{
 		baseLinker: NewBaseLinker(nil),
 	}
-	module.compiler = NewBaseCompiler()
+	module.compiler = &objectCompiler{
+		baseCompiler: NewBaseCompiler(),
+	}
 
 	// Clang's address-significance tables are incompatible with ld -r.
 	module.compiler.appendCflags([]string{"-fno-addrsig"})
 
 	module.stl = &stl{}
 	return module.Init()
+}
+
+func (compiler *objectCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags {
+	flags = compiler.baseCompiler.compilerFlags(ctx, flags, deps)
+	// SDLLVM does not currently support the "-fno-addrsig" option
+	if flags.Sdclang {
+		flags.CFlags, _ = filterList(flags.CFlags, []string{"-fno-addrsig"})
+	}
+	return flags
 }
 
 func (object *objectLinker) appendLdflags(flags []string) {
