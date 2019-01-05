@@ -482,7 +482,7 @@ func (c *config) PlatformSdkCodename() string {
 }
 
 func (c *config) MinSupportedSdkVersion() int {
-	return 14
+	return 16
 }
 
 func (c *config) DefaultAppTargetSdkInt() int {
@@ -581,6 +581,10 @@ func (c *config) Debuggable() bool {
 	return Bool(c.productVariables.Debuggable)
 }
 
+func (c *config) Eng() bool {
+	return Bool(c.productVariables.Eng)
+}
+
 func (c *config) DevicePrefer32BitApps() bool {
 	return Bool(c.productVariables.DevicePrefer32BitApps)
 }
@@ -623,6 +627,14 @@ func (c *config) EnableCFI() bool {
 		return true
 	} else {
 		return *c.productVariables.EnableCFI
+	}
+}
+
+func (c *config) EnableXOM() bool {
+	if c.productVariables.EnableXOM == nil {
+		return false
+	} else {
+		return Bool(c.productVariables.EnableXOM)
 	}
 }
 
@@ -863,6 +875,13 @@ func (c *config) CFIEnabledForPath(path string) bool {
 	return PrefixInList(path, *c.productVariables.CFIIncludePaths)
 }
 
+func (c *config) XOMDisabledForPath(path string) bool {
+	if c.productVariables.XOMExcludePaths == nil {
+		return false
+	}
+	return PrefixInList(path, *c.productVariables.XOMExcludePaths)
+}
+
 func (c *config) VendorConfig(name string) VendorConfig {
 	return vendorConfig(c.productVariables.VendorVars[name])
 }
@@ -883,6 +902,10 @@ func (c vendorConfig) IsSet(name string) bool {
 
 func (c *config) NdkAbis() bool {
 	return Bool(c.productVariables.Ndk_abis)
+}
+
+func (c *config) ExcludeDraftNdkApis() bool {
+	return Bool(c.productVariables.Exclude_draft_ndk_apis)
 }
 
 func (c *config) FlattenApex() bool {

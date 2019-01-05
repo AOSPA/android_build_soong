@@ -265,6 +265,24 @@ type commonProperties struct {
 	// relative path to a file to include in the list of notices for the device
 	Notice *string
 
+	Dist struct {
+		// copy the output of this module to the $DIST_DIR when `dist` is specified on the
+		// command line and  any of these targets are also on the command line, or otherwise
+		// built
+		Targets []string `android:"arch_variant"`
+
+		// The name of the output artifact. This defaults to the basename of the output of
+		// the module.
+		Dest *string `android:"arch_variant"`
+
+		// The directory within the dist directory to store the artifact. Defaults to the
+		// top level directory ("").
+		Dir *string `android:"arch_variant"`
+
+		// A suffix to add to the artifact file name (before any extension).
+		Suffix *string `android:"arch_variant"`
+	} `android:"arch_variant"`
+
 	// Set by TargetMutator
 	CompileTarget       Target   `blueprint:"mutated"`
 	CompileMultiTargets []Target `blueprint:"mutated"`
@@ -441,6 +459,7 @@ type ModuleBase struct {
 	noAddressSanitizer bool
 	installFiles       Paths
 	checkbuildFiles    Paths
+	noticeFile         Path
 
 	// Used by buildTargetSingleton to create checkbuild and per-directory build targets
 	// Only set on the final variant of each module
@@ -781,6 +800,25 @@ func (a *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 	ctx.Variable(pctx, "moduleDescSuffix", s)
 
+	// Some common property checks for properties that will be used later in androidmk.go
+	if a.commonProperties.Dist.Dest != nil {
+		_, err := validateSafePath(*a.commonProperties.Dist.Dest)
+		if err != nil {
+			ctx.PropertyErrorf("dist.dest", "%s", err.Error())
+		}
+	}
+	if a.commonProperties.Dist.Dir != nil {
+		_, err := validateSafePath(*a.commonProperties.Dist.Dir)
+		if err != nil {
+			ctx.PropertyErrorf("dist.dir", "%s", err.Error())
+		}
+	}
+	if a.commonProperties.Dist.Suffix != nil {
+		if strings.Contains(*a.commonProperties.Dist.Suffix, "/") {
+			ctx.PropertyErrorf("dist.suffix", "Suffix may not contain a '/' character.")
+		}
+	}
+
 	if a.Enabled() {
 		a.module.GenerateAndroidBuildActions(ctx)
 		if ctx.Failed() {
@@ -789,6 +827,11 @@ func (a *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 		a.installFiles = append(a.installFiles, ctx.installFiles...)
 		a.checkbuildFiles = append(a.checkbuildFiles, ctx.checkbuildFiles...)
+
+		if a.commonProperties.Notice != nil {
+			// For filegroup-based notice file references.
+			a.noticeFile = ctx.ExpandSource(*a.commonProperties.Notice, "notice")
+		}
 	}
 
 	if a == ctx.FinalModule().(Module).base() {
@@ -1310,6 +1353,13 @@ func (ctx *androidModuleContext) ExpandSource(srcFile, prop string) Path {
 	srcFiles := ctx.ExpandSourcesSubDir([]string{srcFile}, nil, "")
 	if len(srcFiles) == 1 {
 		return srcFiles[0]
+	} else if len(srcFiles) == 0 {
+		if ctx.Config().AllowMissingDependencies() {
+			ctx.AddMissingDependencies([]string{srcFile})
+		} else {
+			ctx.PropertyErrorf(prop, "%s path %s does not exist", prop, srcFile)
+		}
+		return nil
 	} else {
 		ctx.PropertyErrorf(prop, "module providing %s must produce exactly one file", prop)
 		return nil

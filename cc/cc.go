@@ -53,6 +53,9 @@ func init() {
 		ctx.TopDown("cfi_deps", sanitizerDepsMutator(cfi))
 		ctx.BottomUp("cfi", sanitizerMutator(cfi)).Parallel()
 
+		ctx.TopDown("scs_deps", sanitizerDepsMutator(scs))
+		ctx.BottomUp("scs", sanitizerMutator(scs)).Parallel()
+
 		ctx.TopDown("tsan_deps", sanitizerDepsMutator(tsan))
 		ctx.BottomUp("tsan", sanitizerMutator(tsan)).Parallel()
 
@@ -248,6 +251,7 @@ type ModuleContextIntf interface {
 	baseModuleName() string
 	getVndkExtendsModuleName() string
 	isPgoCompile() bool
+	useClangLld(actx ModuleContext) bool
 }
 
 type ModuleContext interface {
@@ -288,6 +292,7 @@ type linker interface {
 	linkerDeps(ctx DepsContext, deps Deps) Deps
 	linkerFlags(ctx ModuleContext, flags Flags) Flags
 	linkerProps() []interface{}
+	useClangLld(actx ModuleContext) bool
 
 	link(ctx ModuleContext, flags Flags, deps PathDeps, objs Objects) android.Path
 	appendLdflags([]string)
@@ -361,6 +366,7 @@ type Module struct {
 	vndkdep   *vndkdep
 	lto       *lto
 	pgo       *pgo
+	xom       *xom
 
 	androidMkSharedLibDeps []string
 
@@ -417,6 +423,9 @@ func (c *Module) Init() android.Module {
 	}
 	if c.pgo != nil {
 		c.AddProperties(c.pgo.props()...)
+	}
+	if c.xom != nil {
+		c.AddProperties(c.xom.props()...)
 	}
 	for _, feature := range c.features {
 		c.AddProperties(feature.props()...)
@@ -632,6 +641,10 @@ func (ctx *moduleContextImpl) selectedStl() string {
 	return ""
 }
 
+func (ctx *moduleContextImpl) useClangLld(actx ModuleContext) bool {
+	return ctx.mod.linker.useClangLld(actx)
+}
+
 func (ctx *moduleContextImpl) baseModuleName() string {
 	return ctx.mod.ModuleBase.BaseModuleName()
 }
@@ -659,6 +672,7 @@ func newModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Mo
 	module.vndkdep = &vndkdep{}
 	module.lto = &lto{}
 	module.pgo = &pgo{}
+	module.xom = &xom{}
 	return module
 }
 
@@ -775,6 +789,9 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 	if c.pgo != nil {
 		flags = c.pgo.flags(ctx, flags)
+	}
+	if c.xom != nil {
+		flags = c.xom.flags(ctx, flags)
 	}
 	for _, feature := range c.features {
 		flags = feature.flags(ctx, flags)
@@ -1277,7 +1294,8 @@ func checkDoubleLoadableLibries(ctx android.ModuleContext, from *Module, to *Mod
 		}
 		depIsDoubleLoadable := Bool(to.VendorProperties.Double_loadable)
 		if !depIsLlndk && !depIsVndkSp && !depIsDoubleLoadable && depIsVndk {
-			ctx.ModuleErrorf("links VNDK library %q that isn't double_loadable.",
+			ctx.ModuleErrorf("links VNDK library %q that isn't double loadable (not also LL-NDK, "+
+				"VNDK-SP, or explicitly marked as 'double_loadable').",
 				ctx.OtherModuleName(to))
 		}
 	}
@@ -1660,6 +1678,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&VndkProperties{},
 		&LTOProperties{},
 		&PgoProperties{},
+		&XomProperties{},
 		&android.ProtoProperties{},
 	)
 

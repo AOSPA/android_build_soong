@@ -40,6 +40,7 @@ type AndroidMkDataProvider interface {
 type AndroidMkData struct {
 	Class      string
 	SubName    string
+	DistFile   OptionalPath
 	OutputFile OptionalPath
 	Disabled   bool
 	Include    string
@@ -220,6 +221,45 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Mod
 		}
 	}
 
+	if len(amod.commonProperties.Dist.Targets) > 0 {
+		distFile := data.DistFile
+		if !distFile.Valid() {
+			distFile = data.OutputFile
+		}
+		if distFile.Valid() {
+			dest := filepath.Base(distFile.String())
+
+			if amod.commonProperties.Dist.Dest != nil {
+				var err error
+				dest, err = validateSafePath(*amod.commonProperties.Dist.Dest)
+				if err != nil {
+					// This was checked in ModuleBase.GenerateBuildActions
+					panic(err)
+				}
+			}
+
+			if amod.commonProperties.Dist.Suffix != nil {
+				ext := filepath.Ext(dest)
+				suffix := *amod.commonProperties.Dist.Suffix
+				dest = strings.TrimSuffix(dest, ext) + suffix + ext
+			}
+
+			if amod.commonProperties.Dist.Dir != nil {
+				var err error
+				dest, err = validateSafePath(*amod.commonProperties.Dist.Dir, dest)
+				if err != nil {
+					// This was checked in ModuleBase.GenerateBuildActions
+					panic(err)
+				}
+			}
+
+			goals := strings.Join(amod.commonProperties.Dist.Targets, " ")
+			fmt.Fprintln(&data.preamble, ".PHONY:", goals)
+			fmt.Fprintf(&data.preamble, "$(call dist-for-goals,%s,%s:%s)\n",
+				goals, distFile.String(), dest)
+		}
+	}
+
 	fmt.Fprintln(&data.preamble, "\ninclude $(CLEAR_VARS)")
 	fmt.Fprintln(&data.preamble, "LOCAL_PATH :=", filepath.Dir(ctx.BlueprintFile(mod)))
 	fmt.Fprintln(&data.preamble, "LOCAL_MODULE :=", name+data.SubName)
@@ -277,8 +317,8 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Mod
 		}
 	}
 
-	if amod.commonProperties.Notice != nil {
-		fmt.Fprintln(&data.preamble, "LOCAL_NOTICE_FILE :=", "$(LOCAL_PATH)/"+*amod.commonProperties.Notice)
+	if amod.noticeFile != nil {
+		fmt.Fprintln(&data.preamble, "LOCAL_NOTICE_FILE :=", amod.noticeFile.String())
 	}
 
 	if host {
