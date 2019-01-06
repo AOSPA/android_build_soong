@@ -68,6 +68,10 @@ var (
 		"kryo": []string{
 			"-mcpu=kryo",
 		},
+		"kryo385": []string{
+			// Use cortex-a53 because kryo385 is not supported in GCC/clang.
+			"-mcpu=cortex-a53",
+		},
 		"exynos-m1": []string{
 			"-mcpu=exynos-m1",
 		},
@@ -93,6 +97,9 @@ func init() {
 		"cortex-a76",
 		"kryo",
 		"kryo300",
+		"kryo385",
+		"exynos-m1",
+		"exynos-m2",
 		"denver64")
 
 	pctx.StaticVariable("arm64GccVersion", arm64GccVersion)
@@ -143,6 +150,7 @@ var (
 		"cortex-a75": "${config.Arm64ClangCortexA55Cflags}",
 		"cortex-a76": "${config.Arm64ClangCortexA55Cflags}",
 		"kryo":       "${config.Arm64ClangKryoCflags}",
+		"kryo385":    "${config.Arm64ClangCortexA53Cflags}",
 		"exynos-m1":  "${config.Arm64ClangExynosM1Cflags}",
 		"exynos-m2":  "${config.Arm64ClangExynosM2Cflags}",
 	}
