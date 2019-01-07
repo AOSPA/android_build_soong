@@ -99,8 +99,7 @@ func init() {
 		"kryo300",
 		"kryo385",
 		"exynos-m1",
-		"exynos-m2",
-		"denver64")
+		"exynos-m2")
 
 	pctx.StaticVariable("arm64GccVersion", arm64GccVersion)
 
@@ -227,10 +226,7 @@ func arm64ToolchainFactory(arch android.Arch) Toolchain {
 
 	var extraLdflags string
 	switch arch.CpuVariant {
-	case "cortex-a53", "cortex-a72", "cortex-a73", "kryo", "exynos-m1", "exynos-m2",
-		// This variant might not need the workaround but leave it
-		// in the list since it has had the workaround on before.
-		"denver64":
+	case "cortex-a53", "cortex-a72", "cortex-a73", "kryo", "exynos-m1", "exynos-m2":
 		extraLdflags = "-Wl,--fix-cortex-a53-843419"
 	}
 

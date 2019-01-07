@@ -18,6 +18,7 @@ import (
 	"android/soong/android"
 	"android/soong/cc/config"
 	"fmt"
+	"strconv"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -48,7 +49,7 @@ type BaseLinkerProperties struct {
 	// list of system libraries that will be dynamically linked to
 	// shared library and executable modules.  If unset, generally defaults to libc,
 	// libm, and libdl.  Set to [] to prevent linking against the defaults.
-	System_shared_libs []string
+	System_shared_libs []string `android:"arch_variant"`
 
 	// allow the module to contain undefined symbols.  By default,
 	// modules cannot contain undefined symbols that are not satisified by their immediate
@@ -236,35 +237,34 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 			deps.LateStaticLibs = append(deps.LateStaticLibs, "libgcc")
 		}
 
-		if !ctx.static() {
-			systemSharedLibs := linker.Properties.System_shared_libs
-			if systemSharedLibs == nil {
-				systemSharedLibs = []string{"libc", "libm", "libdl"}
-			}
-
-			if inList("libdl", deps.SharedLibs) {
-				// If system_shared_libs has libc but not libdl, make sure shared_libs does not
-				// have libdl to avoid loading libdl before libc.
-				if inList("libc", systemSharedLibs) {
-					if !inList("libdl", systemSharedLibs) {
-						ctx.PropertyErrorf("shared_libs",
-							"libdl must be in system_shared_libs, not shared_libs")
-					}
-					_, deps.SharedLibs = removeFromList("libdl", deps.SharedLibs)
-				}
-			}
-
-			// If libc and libdl are both in system_shared_libs make sure libd comes after libc
-			// to avoid loading libdl before libc.
-			if inList("libdl", systemSharedLibs) && inList("libc", systemSharedLibs) &&
-				indexList("libdl", systemSharedLibs) < indexList("libc", systemSharedLibs) {
-				ctx.PropertyErrorf("system_shared_libs", "libdl must be after libc")
-			}
-
-			deps.LateSharedLibs = append(deps.LateSharedLibs, systemSharedLibs...)
-		} else if ctx.useSdk() || ctx.useVndk() {
-			deps.LateSharedLibs = append(deps.LateSharedLibs, "libc", "libm", "libdl")
+		var systemSharedLibs []string
+		if !ctx.useSdk() && !ctx.useVndk() {
+			systemSharedLibs = linker.Properties.System_shared_libs
 		}
+		if systemSharedLibs == nil {
+			systemSharedLibs = []string{"libc", "libm", "libdl"}
+		}
+
+		if inList("libdl", deps.SharedLibs) {
+			// If system_shared_libs has libc but not libdl, make sure shared_libs does not
+			// have libdl to avoid loading libdl before libc.
+			if inList("libc", systemSharedLibs) {
+				if !inList("libdl", systemSharedLibs) {
+					ctx.PropertyErrorf("shared_libs",
+						"libdl must be in system_shared_libs, not shared_libs")
+				}
+				_, deps.SharedLibs = removeFromList("libdl", deps.SharedLibs)
+			}
+		}
+
+		// If libc and libdl are both in system_shared_libs make sure libdl comes after libc
+		// to avoid loading libdl before libc.
+		if inList("libdl", systemSharedLibs) && inList("libc", systemSharedLibs) &&
+			indexList("libdl", systemSharedLibs) < indexList("libc", systemSharedLibs) {
+			ctx.PropertyErrorf("system_shared_libs", "libdl must be after libc")
+		}
+
+		deps.LateSharedLibs = append(deps.LateSharedLibs, systemSharedLibs...)
 	}
 
 	if ctx.Windows() {
@@ -298,6 +298,23 @@ func (linker *baseLinker) useClangLld(ctx ModuleContext) bool {
 	return true
 }
 
+// Check whether the SDK version is not older than the specific one
+func CheckSdkVersionAtLeast(ctx ModuleContext, SdkVersion int) bool {
+	if ctx.sdkVersion() == "current" {
+		return true
+	}
+	parsedSdkVersion, err := strconv.Atoi(ctx.sdkVersion())
+	if err != nil {
+		ctx.PropertyErrorf("sdk_version",
+			"Invalid sdk_version value (must be int or current): %q",
+			ctx.sdkVersion())
+	}
+	if parsedSdkVersion < SdkVersion {
+		return false
+	}
+	return true
+}
+
 // ModuleContext extends BaseModuleContext
 // BaseModuleContext should know if LLD is used?
 func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
@@ -312,6 +329,13 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 		flags.LdFlags = append(flags.LdFlags, fmt.Sprintf("${config.%sGlobalLldflags}", hod))
 		if !BoolDefault(linker.Properties.Pack_relocations, true) {
 			flags.LdFlags = append(flags.LdFlags, "-Wl,--pack-dyn-relocs=none")
+		} else if ctx.Device() {
+			// The SHT_RELR relocations is only supported by API level >= 28.
+			// Do not turn this on if older version NDK is used.
+			if !ctx.useSdk() || CheckSdkVersionAtLeast(ctx, 28) {
+				flags.LdFlags = append(flags.LdFlags, "-Wl,--pack-dyn-relocs=android+relr")
+				flags.LdFlags = append(flags.LdFlags, "-Wl,--use-android-relr-tags")
+			}
 		}
 	} else {
 		flags.LdFlags = append(flags.LdFlags, fmt.Sprintf("${config.%sGlobalLdflags}", hod))

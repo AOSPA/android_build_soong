@@ -94,8 +94,6 @@ var (
 
 	deviceGlobalLldflags = append(ClangFilterUnknownLldflags(deviceGlobalLdflags),
 		[]string{
-			"-Wl,--pack-dyn-relocs=android+relr",
-			"-Wl,--use-android-relr-tags",
 			"-fuse-ld=lld",
 		}...)
 
@@ -131,8 +129,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r344140b"
-	ClangDefaultShortVersion = "8.0.4"
+	ClangDefaultVersion      = "clang-r346389b"
+	ClangDefaultShortVersion = "8.0.6"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{

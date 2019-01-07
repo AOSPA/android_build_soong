@@ -357,6 +357,7 @@ func AndroidLibraryFactory() android.Module {
 	module.AddProperties(
 		&module.Module.properties,
 		&module.Module.deviceProperties,
+		&module.Module.dexpreoptProperties,
 		&module.Module.protoProperties,
 		&module.aaptProperties,
 		&module.androidLibraryProperties)
@@ -442,7 +443,7 @@ func (a *AARImport) Name() string {
 }
 
 func (a *AARImport) DepsMutator(ctx android.BottomUpMutatorContext) {
-	if !ctx.Config().UnbundledBuild() {
+	if !ctx.Config().UnbundledBuildPrebuiltSdks() {
 		sdkDep := decodeSdkDep(ctx, sdkContext(a))
 		if sdkDep.useModule && sdkDep.frameworkResModule != "" {
 			ctx.AddVariationDependencies(nil, frameworkResTag, sdkDep.frameworkResModule)

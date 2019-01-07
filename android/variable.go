@@ -205,32 +205,34 @@ type productVariables struct {
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 
-	Allow_missing_dependencies *bool `json:",omitempty"`
-	Unbundled_build            *bool `json:",omitempty"`
-	Malloc_not_svelte          *bool `json:",omitempty"`
-	Safestack                  *bool `json:",omitempty"`
-	HostStaticBinaries         *bool `json:",omitempty"`
-	Binder32bit                *bool `json:",omitempty"`
-	UseGoma                    *bool `json:",omitempty"`
-	Debuggable                 *bool `json:",omitempty"`
-	Eng                        *bool `json:",omitempty"`
-	Treble_linker_namespaces   *bool `json:",omitempty"`
-	Enforce_vintf_manifest     *bool `json:",omitempty"`
-	Pdk                        *bool `json:",omitempty"`
-	Uml                        *bool `json:",omitempty"`
-	Use_lmkd_stats_log         *bool `json:",omitempty"`
-	Arc                        *bool `json:",omitempty"`
 	Real_hal                   *bool `json:",omitempty"`
 	Qmaa_hal                   *bool `json:",omitempty"`
-	MinimizeJavaDebugInfo      *bool `json:",omitempty"`
 	Device_support_hwfde       *bool `json:",omitempty"`
 	Device_support_hwfde_perf  *bool `json:",omitempty"`
+	Allow_missing_dependencies       *bool `json:",omitempty"`
+	Unbundled_build                  *bool `json:",omitempty"`
+	Unbundled_build_sdks_from_source *bool `json:",omitempty"`
+	Malloc_not_svelte                *bool `json:",omitempty"`
+	Safestack                        *bool `json:",omitempty"`
+	HostStaticBinaries               *bool `json:",omitempty"`
+	Binder32bit                      *bool `json:",omitempty"`
+	UseGoma                          *bool `json:",omitempty"`
+	Debuggable                       *bool `json:",omitempty"`
+	Eng                              *bool `json:",omitempty"`
+	Treble_linker_namespaces         *bool `json:",omitempty"`
+	Enforce_vintf_manifest           *bool `json:",omitempty"`
+	Pdk                              *bool `json:",omitempty"`
+	Uml                              *bool `json:",omitempty"`
+	Use_lmkd_stats_log               *bool `json:",omitempty"`
+	Arc                              *bool `json:",omitempty"`
+	MinimizeJavaDebugInfo            *bool `json:",omitempty"`
 
 	UncompressPrivAppDex             *bool    `json:",omitempty"`
 	ModulesLoadedByPrivilegedModules []string `json:",omitempty"`
-	DefaultStripDex                  *bool    `json:",omitempty"`
-	DisableDexPreopt                 *bool    `json:",omitempty"`
-	DisableDexPreoptModules          []string `json:",omitempty"`
+
+	DisableDexPreopt        *bool    `json:",omitempty"`
+	DisableDexPreoptModules []string `json:",omitempty"`
+	DexPreoptProfileDir     *string  `json:",omitempty"`
 
 	IntegerOverflowExcludePaths *[]string `json:",omitempty"`
 
@@ -289,6 +291,8 @@ type productVariables struct {
 	Exclude_draft_ndk_apis *bool `json:",omitempty"`
 
 	FlattenApex *bool `json:",omitempty"`
+
+	DexpreoptGlobalConfig *string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

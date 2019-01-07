@@ -55,6 +55,13 @@ var (
 		},
 		"ccCmd", "cFlags")
 
+	ccNoDeps = pctx.AndroidGomaStaticRule("ccNoDeps",
+		blueprint.RuleParams{
+			Command:     "$relPwd ${config.CcWrapper}$ccCmd -c $cFlags -o $out $in",
+			CommandDeps: []string{"$ccCmd"},
+		},
+		"ccCmd", "cFlags")
+
 	ld = pctx.AndroidStaticRule("ld",
 		blueprint.RuleParams{
 			Command: "$ldCmd ${crtBegin} @${out}.rsp " +
@@ -384,9 +391,13 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 		tidy := flags.tidy
 		coverage := flags.coverage
 		dump := flags.sAbiDump
+		rule := cc
 
 		switch srcFile.Ext() {
-		case ".S", ".s":
+		case ".s":
+			rule = ccNoDeps
+			fallthrough
+		case ".S":
 			ccCmd = "clang"
 			moduleCflags = asflags
 			tidy = false
@@ -423,7 +434,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 		}
 
 		ctx.Build(pctx, android.BuildParams{
-			Rule:            cc,
+			Rule:            rule,
 			Description:     ccDesc + " " + srcFile.Rel(),
 			Output:          objFile,
 			ImplicitOutputs: implicitOutputs,

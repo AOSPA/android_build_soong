@@ -59,7 +59,7 @@ func (c *Module) AndroidMk() android.AndroidMkData {
 
 	ret := android.AndroidMkData{
 		OutputFile: c.outputFile,
-		Required:   c.Properties.AndroidMkRuntimeLibs,
+		Required:   append(c.Properties.AndroidMkRuntimeLibs, c.Properties.ApexesProvidingSharedLibs...),
 		Include:    "$(BUILD_SYSTEM)/soong_cc_prebuilt.mk",
 
 		Extra: []android.AndroidMkExtraFunc{
