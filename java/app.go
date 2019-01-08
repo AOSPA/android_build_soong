@@ -67,20 +67,24 @@ type appProperties struct {
 	// list of native libraries that will be provided in or alongside the resulting jar
 	Jni_libs []string `android:"arch_variant"`
 
-	EmbedJNI bool `blueprint:"mutated"`
+	AllowDexPreopt bool `blueprint:"mutated"`
+	EmbedJNI       bool `blueprint:"mutated"`
+	StripDex       bool `blueprint:"mutated"`
 }
 
 type AndroidApp struct {
 	Library
 	aapt
 
-	certificate certificate
+	certificate Certificate
 
 	appProperties appProperties
 
 	extraLinkFlags []string
 
 	installJniLibs []jniLib
+
+	bundleFile android.Path
 }
 
 func (a *AndroidApp) ExportedProguardFlagFiles() android.Paths {
@@ -97,8 +101,8 @@ func (a *AndroidApp) ExportedManifest() android.Path {
 
 var _ AndroidLibraryDependency = (*AndroidApp)(nil)
 
-type certificate struct {
-	pem, key android.Path
+type Certificate struct {
+	Pem, Key android.Path
 }
 
 func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -139,6 +143,44 @@ func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.generateAndroidBuildActions(ctx)
 }
 
+// Returns whether this module should have the dex file stored uncompressed in the APK, or stripped completely.  If
+// stripped, the code will still be present on the device in the dexpreopted files.
+// This is only necessary for APKs, and not jars, because APKs are signed and the dex file should not be uncompressed
+// or removed after the signature has been generated.  For jars, which are not signed, the dex file is uncompressed
+// or removed at installation time in Make.
+func (a *AndroidApp) uncompressOrStripDex(ctx android.ModuleContext) (uncompress, strip bool) {
+	if ctx.Config().UnbundledBuild() {
+		return false, false
+	}
+
+	strip = ctx.Config().DefaultStripDex()
+	// TODO(ccross): don't strip dex installed on partitions that may be updated separately (like vendor)
+	// TODO(ccross): don't strip dex on modules with LOCAL_APK_LIBRARIES equivalent
+
+	// Uncompress dex in APKs of privileged apps, and modules used by privileged apps.
+	if ctx.Config().UncompressPrivAppDex() &&
+		(Bool(a.appProperties.Privileged) ||
+			inList(ctx.ModuleName(), ctx.Config().ModulesLoadedByPrivilegedModules())) {
+
+		uncompress = true
+		// If the dex files is store uncompressed, don't strip it, we will reuse the uncompressed dex from the APK
+		// instead of copying it into the odex file.
+		strip = false
+	}
+
+	// If dexpreopt is disabled, don't strip the dex file
+	if !a.appProperties.AllowDexPreopt ||
+		!BoolDefault(a.deviceProperties.Dex_preopt.Enabled, true) ||
+		ctx.Config().DisableDexPreopt(ctx.ModuleName()) {
+		strip = false
+	}
+
+	// TODO(ccross): strip dexpropted modules that are not propted to system_other
+	strip = false
+
+	return uncompress, strip
+}
+
 func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	linkFlags := append([]string(nil), a.extraLinkFlags...)
 
@@ -154,14 +196,16 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		linkFlags = append(linkFlags, "--product", ctx.Config().ProductAAPTCharacteristics())
 	}
 
-	// Product AAPT config
-	for _, aaptConfig := range ctx.Config().ProductAAPTConfig() {
-		linkFlags = append(linkFlags, "-c", aaptConfig)
-	}
+	if !Bool(a.aaptProperties.Aapt_include_all_resources) {
+		// Product AAPT config
+		for _, aaptConfig := range ctx.Config().ProductAAPTConfig() {
+			linkFlags = append(linkFlags, "-c", aaptConfig)
+		}
 
-	// Product AAPT preferred config
-	if len(ctx.Config().ProductAAPTPreferredConfig()) > 0 {
-		linkFlags = append(linkFlags, "--preferred-density", ctx.Config().ProductAAPTPreferredConfig())
+		// Product AAPT preferred config
+		if len(ctx.Config().ProductAAPTPreferredConfig()) > 0 {
+			linkFlags = append(linkFlags, "--preferred-density", ctx.Config().ProductAAPTPreferredConfig())
+		}
 	}
 
 	// TODO: LOCAL_PACKAGE_OVERRIDES
@@ -184,13 +228,18 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.Module.extraProguardFlagFiles = append(a.Module.extraProguardFlagFiles, staticLibProguardFlagFiles...)
 	a.Module.extraProguardFlagFiles = append(a.Module.extraProguardFlagFiles, a.proguardOptionsFile)
 
+	a.deviceProperties.UncompressDex, a.appProperties.StripDex = a.uncompressOrStripDex(ctx)
+
 	if ctx.ModuleName() != "framework-res" {
 		a.Module.compile(ctx, a.aaptSrcJar)
 	}
+	dexJarFile := a.dexJarFile
 
-	packageFile := android.PathForModuleOut(ctx, "package.apk")
+	if a.appProperties.StripDex {
+		dexJarFile = nil
+	}
 
-	var certificates []certificate
+	var certificates []Certificate
 
 	var jniJarFile android.WritablePath
 	jniLibs, certificateDeps := a.collectAppDeps(ctx)
@@ -215,20 +264,24 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		certificateDeps = certificateDeps[1:]
 	} else if cert != "" {
 		defaultDir := ctx.Config().DefaultAppCertificateDir(ctx)
-		a.certificate = certificate{
+		a.certificate = Certificate{
 			defaultDir.Join(ctx, cert+".x509.pem"),
 			defaultDir.Join(ctx, cert+".pk8"),
 		}
 	} else {
 		pem, key := ctx.Config().DefaultAppCertificate(ctx)
-		a.certificate = certificate{pem, key}
+		a.certificate = Certificate{pem, key}
 	}
 
-	certificates = append([]certificate{a.certificate}, certificateDeps...)
+	certificates = append([]Certificate{a.certificate}, certificateDeps...)
 
-	CreateAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, a.outputFile, certificates)
-
+	packageFile := android.PathForModuleOut(ctx, "package.apk")
+	CreateAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates)
 	a.outputFile = packageFile
+
+	bundleFile := android.PathForModuleOut(ctx, "base.zip")
+	BuildBundleModule(ctx, bundleFile, a.exportPackage, jniJarFile, dexJarFile)
+	a.bundleFile = bundleFile
 
 	if ctx.ModuleName() == "framework-res" {
 		// framework-res.apk is installed as system/framework/framework-res.apk
@@ -240,9 +293,9 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 }
 
-func (a *AndroidApp) collectAppDeps(ctx android.ModuleContext) ([]jniLib, []certificate) {
+func (a *AndroidApp) collectAppDeps(ctx android.ModuleContext) ([]jniLib, []Certificate) {
 	var jniLibs []jniLib
-	var certificates []certificate
+	var certificates []Certificate
 
 	ctx.VisitDirectDeps(func(module android.Module) {
 		otherName := ctx.OtherModuleName(module)
@@ -266,7 +319,7 @@ func (a *AndroidApp) collectAppDeps(ctx android.ModuleContext) ([]jniLib, []cert
 			}
 		} else if tag == certificateTag {
 			if dep, ok := module.(*AndroidAppCertificate); ok {
-				certificates = append(certificates, dep.certificate)
+				certificates = append(certificates, dep.Certificate)
 			} else {
 				ctx.ModuleErrorf("certificate dependency %q must be an android_app_certificate module", otherName)
 			}
@@ -284,6 +337,7 @@ func AndroidAppFactory() android.Module {
 
 	module.Module.properties.Instrument = true
 	module.Module.properties.Installable = proptools.BoolPtr(true)
+	module.appProperties.AllowDexPreopt = true
 
 	module.AddProperties(
 		&module.Module.properties,
@@ -345,6 +399,7 @@ func AndroidTestFactory() android.Module {
 	module.Module.properties.Instrument = true
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.appProperties.EmbedJNI = true
+	module.appProperties.AllowDexPreopt = false
 
 	module.AddProperties(
 		&module.Module.properties,
@@ -379,6 +434,7 @@ func AndroidTestHelperAppFactory() android.Module {
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.appProperties.EmbedJNI = true
+	module.appProperties.AllowDexPreopt = false
 
 	module.AddProperties(
 		&module.Module.properties,
@@ -396,7 +452,7 @@ func AndroidTestHelperAppFactory() android.Module {
 type AndroidAppCertificate struct {
 	android.ModuleBase
 	properties  AndroidAppCertificateProperties
-	certificate certificate
+	Certificate Certificate
 }
 
 type AndroidAppCertificateProperties struct {
@@ -416,7 +472,7 @@ func (c *AndroidAppCertificate) DepsMutator(ctx android.BottomUpMutatorContext) 
 
 func (c *AndroidAppCertificate) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	cert := String(c.properties.Certificate)
-	c.certificate = certificate{
+	c.Certificate = Certificate{
 		android.PathForModuleSrc(ctx, cert+".x509.pem"),
 		android.PathForModuleSrc(ctx, cert+".pk8"),
 	}

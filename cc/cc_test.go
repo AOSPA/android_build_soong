@@ -66,6 +66,7 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 		ctx.BottomUp("image", imageMutator).Parallel()
 		ctx.BottomUp("link", LinkageMutator).Parallel()
 		ctx.BottomUp("vndk", vndkMutator).Parallel()
+		ctx.BottomUp("version", versionMutator).Parallel()
 		ctx.BottomUp("begin", BeginMutator).Parallel()
 	})
 	ctx.Register()
@@ -205,12 +206,13 @@ func createTestContext(t *testing.T, config android.Config, bp string) *android.
 `
 
 	ctx.MockFileSystem(map[string][]byte{
-		"Android.bp": []byte(bp),
-		"foo.c":      nil,
-		"bar.c":      nil,
-		"a.proto":    nil,
-		"b.aidl":     nil,
-		"my_include": nil,
+		"Android.bp":  []byte(bp),
+		"foo.c":       nil,
+		"bar.c":       nil,
+		"a.proto":     nil,
+		"b.aidl":      nil,
+		"my_include":  nil,
+		"foo.map.txt": nil,
 	})
 
 	return ctx
@@ -892,9 +894,7 @@ func TestVndkUseVndkExtError(t *testing.T) {
 		}
 	`)
 
-	// The pattern should be "module \".*\" variant \".*\": \\(.*\\) should not link to \".*\""
-	// but target.vendor.shared_libs has not been supported yet.
-	testCcError(t, "unrecognized property \"target.vendor.shared_libs\"", `
+	testCcError(t, "module \".*\" variant \".*\": \\(.*\\) should not link to \".*\"", `
 		cc_library {
 			name: "libvndk",
 			vendor_available: true,
@@ -963,9 +963,7 @@ func TestVndkUseVndkExtError(t *testing.T) {
 		}
 	`)
 
-	// The pattern should be "module \".*\" variant \".*\": \\(.*\\) should not link to \".*\""
-	// but target.vendor.shared_libs has not been supported yet.
-	testCcError(t, "unrecognized property \"target.vendor.shared_libs\"", `
+	testCcError(t, "module \".*\" variant \".*\": \\(.*\\) should not link to \".*\"", `
 		cc_library {
 			name: "libvndk_sp",
 			vendor_available: true,
@@ -1547,6 +1545,43 @@ func TestRuntimeLibsNoVndk(t *testing.T) {
 	checkRuntimeLibs(t, []string{"libvendor_available1", "libvendor1"}, module)
 }
 
+func checkStaticLibs(t *testing.T, expected []string, module *Module) {
+	actual := module.Properties.AndroidMkStaticLibs
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("incorrect static_libs"+
+			"\nactual:   %v"+
+			"\nexpected: %v",
+			actual,
+			expected,
+		)
+	}
+}
+
+const staticLibAndroidBp = `
+	cc_library {
+		name: "lib1",
+	}
+	cc_library {
+		name: "lib2",
+		static_libs: ["lib1"],
+	}
+`
+
+func TestStaticLibDepExport(t *testing.T) {
+	ctx := testCc(t, staticLibAndroidBp)
+
+	// Check the shared version of lib2.
+	variant := "android_arm64_armv8-a_core_shared"
+	module := ctx.ModuleForTests("lib2", variant).Module().(*Module)
+	checkStaticLibs(t, []string{"lib1", "libclang_rt.builtins-aarch64-android", "libatomic", "libgcc"}, module)
+
+	// Check the static version of lib2.
+	variant = "android_arm64_armv8-a_core_static"
+	module = ctx.ModuleForTests("lib2", variant).Module().(*Module)
+	// libc++_static is linked additionally.
+	checkStaticLibs(t, []string{"lib1", "libc++_static", "libclang_rt.builtins-aarch64-android", "libatomic", "libgcc"}, module)
+}
+
 var compilerFlagsTestCases = []struct {
 	in  string
 	out bool
@@ -1730,5 +1765,68 @@ func TestRecovery(t *testing.T) {
 	if !recoveryModule.Platform() {
 		t.Errorf("recovery variant of libHalInRecovery must not specific to device, soc, or product")
 	}
+}
 
+func TestVersionedStubs(t *testing.T) {
+	ctx := testCc(t, `
+		cc_library_shared {
+			name: "libFoo",
+			srcs: ["foo.c"],
+			stubs: {
+				symbol_file: "foo.map.txt",
+				versions: ["1", "2", "3"],
+			},
+		}
+
+		cc_library_shared {
+			name: "libBar",
+			srcs: ["bar.c"],
+			shared_libs: ["libFoo#1"],
+		}`)
+
+	variants := ctx.ModuleVariantsForTests("libFoo")
+	expectedVariants := []string{
+		"android_arm64_armv8-a_core_shared",
+		"android_arm64_armv8-a_core_shared_1",
+		"android_arm64_armv8-a_core_shared_2",
+		"android_arm64_armv8-a_core_shared_3",
+		"android_arm_armv7-a-neon_core_shared",
+		"android_arm_armv7-a-neon_core_shared_1",
+		"android_arm_armv7-a-neon_core_shared_2",
+		"android_arm_armv7-a-neon_core_shared_3",
+	}
+	variantsMismatch := false
+	if len(variants) != len(expectedVariants) {
+		variantsMismatch = true
+	} else {
+		for _, v := range expectedVariants {
+			if !inList(v, variants) {
+				variantsMismatch = false
+			}
+		}
+	}
+	if variantsMismatch {
+		t.Errorf("variants of libFoo expected:\n")
+		for _, v := range expectedVariants {
+			t.Errorf("%q\n", v)
+		}
+		t.Errorf(", but got:\n")
+		for _, v := range variants {
+			t.Errorf("%q\n", v)
+		}
+	}
+
+	libBarLinkRule := ctx.ModuleForTests("libBar", "android_arm64_armv8-a_core_shared").Rule("ld")
+	libFlags := libBarLinkRule.Args["libFlags"]
+	libFoo1StubPath := "libFoo/android_arm64_armv8-a_core_shared_1/libFoo.so"
+	if !strings.Contains(libFlags, libFoo1StubPath) {
+		t.Errorf("%q is not found in %q", libFoo1StubPath, libFlags)
+	}
+
+	libBarCompileRule := ctx.ModuleForTests("libBar", "android_arm64_armv8-a_core_shared").Rule("cc")
+	cFlags := libBarCompileRule.Args["cFlags"]
+	libFoo1VersioningMacro := "-D__LIBFOO_API__=1"
+	if !strings.Contains(cFlags, libFoo1VersioningMacro) {
+		t.Errorf("%q is not found in %q", libFoo1VersioningMacro, cFlags)
+	}
 }

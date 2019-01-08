@@ -280,7 +280,10 @@ type commonProperties struct {
 }
 
 type hostAndDeviceProperties struct {
-	Host_supported   *bool
+	// If set to true, build a variant of the module for the host.  Defaults to false.
+	Host_supported *bool
+
+	// If set to true, build a variant of the module for the device.  Defaults to true.
 	Device_supported *bool
 }
 
@@ -432,7 +435,7 @@ type ModuleBase struct {
 	variableProperties      variableProperties
 	hostAndDeviceProperties hostAndDeviceProperties
 	generalProperties       []interface{}
-	archProperties          []interface{}
+	archProperties          [][]interface{}
 	customizableProperties  []interface{}
 
 	noAddressSanitizer bool
@@ -1071,10 +1074,10 @@ func (a *androidBaseContextImpl) Debug() bool {
 }
 
 func (a *androidBaseContextImpl) PrimaryArch() bool {
-	if len(a.config.Targets[a.target.Os.Class]) <= 1 {
+	if len(a.config.Targets[a.target.Os]) <= 1 {
 		return true
 	}
-	return a.target.Arch.ArchType == a.config.Targets[a.target.Os.Class][0].Arch.ArchType
+	return a.target.Arch.ArchType == a.config.Targets[a.target.Os][0].Arch.ArchType
 }
 
 func (a *androidBaseContextImpl) AConfig() Config {

@@ -95,6 +95,9 @@ type variableProperties struct {
 			Lto      struct {
 				Never *bool
 			}
+			Sanitize struct {
+				Address *bool
+			}
 		}
 
 		Pdk struct {
@@ -110,6 +113,24 @@ type variableProperties struct {
 		}
 
 		Arc struct {
+			Cflags       []string
+			Exclude_srcs []string
+			Include_dirs []string
+			Shared_libs  []string
+			Static_libs  []string
+			Srcs         []string
+		}
+
+		Real_hal struct {
+			Cflags       []string
+			Exclude_srcs []string
+			Include_dirs []string
+			Shared_libs  []string
+			Static_libs  []string
+			Srcs         []string
+		}
+
+		Qmaa_hal struct {
 			Cflags       []string
 			Exclude_srcs []string
 			Include_dirs []string
@@ -198,9 +219,17 @@ type productVariables struct {
 	Uml                        *bool `json:",omitempty"`
 	Use_lmkd_stats_log         *bool `json:",omitempty"`
 	Arc                        *bool `json:",omitempty"`
+	Real_hal                   *bool `json:",omitempty"`
+	Qmaa_hal                   *bool `json:",omitempty"`
 	MinimizeJavaDebugInfo      *bool `json:",omitempty"`
 	Device_support_hwfde       *bool `json:",omitempty"`
 	Device_support_hwfde_perf  *bool `json:",omitempty"`
+
+	UncompressPrivAppDex             *bool    `json:",omitempty"`
+	ModulesLoadedByPrivilegedModules []string `json:",omitempty"`
+	DefaultStripDex                  *bool    `json:",omitempty"`
+	DisableDexPreopt                 *bool    `json:",omitempty"`
+	DisableDexPreoptModules          []string `json:",omitempty"`
 
 	IntegerOverflowExcludePaths *[]string `json:",omitempty"`
 
@@ -212,8 +241,6 @@ type productVariables struct {
 	OdmPath             *string `json:",omitempty"`
 	ProductPath         *string `json:",omitempty"`
 	ProductServicesPath *string `json:",omitempty"`
-
-	UseClangLld *bool `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
@@ -253,6 +280,10 @@ type productVariables struct {
 	BoardPlatPrivateSepolicyDirs []string `json:",omitempty"`
 
 	VendorVars map[string]map[string]string `json:",omitempty"`
+
+	Ndk_abis *bool `json:",omitempty"`
+
+	FlattenApex *bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

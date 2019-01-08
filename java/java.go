@@ -89,6 +89,9 @@ type CompilerProperties struct {
 	// list of module-specific flags that will be used for javac compiles
 	Javacflags []string `android:"arch_variant"`
 
+	// list of module-specific flags that will be used for kotlinc compiles
+	Kotlincflags []string `android:"arch_variant"`
+
 	// list of of java libraries that will be in the classpath
 	Libs []string `android:"arch_variant"`
 
@@ -183,6 +186,10 @@ type CompilerDeviceProperties struct {
 	// Defaults to sdk_version if not set.
 	Min_sdk_version *string
 
+	// if not blank, set the targetSdkVersion in the AndroidManifest.xml.
+	// Defaults to sdk_version if not set.
+	Target_sdk_version *string
+
 	// if true, compile against the platform APIs instead of an SDK.
 	Platform_apis *bool
 
@@ -257,6 +264,8 @@ type CompilerDeviceProperties struct {
 
 	// When targeting 1.9, override the modules to use with --system
 	System_modules *string
+
+	UncompressDex bool `blueprint:"mutated"`
 }
 
 // Module contains the properties and members used by all java module types
@@ -322,6 +331,10 @@ type Module struct {
 
 func (j *Module) Srcs() android.Paths {
 	return android.Paths{j.outputFile}
+}
+
+func (j *Module) DexJarFile() android.Path {
+	return j.dexJarFile
 }
 
 var _ android.SourceFileProducer = (*Module)(nil)
@@ -423,16 +436,25 @@ func (j *Module) minSdkVersion() string {
 	return j.sdkVersion()
 }
 
+func (j *Module) targetSdkVersion() string {
+	if j.deviceProperties.Target_sdk_version != nil {
+		return *j.deviceProperties.Target_sdk_version
+	}
+	return j.sdkVersion()
+}
+
 type sdkContext interface {
 	// sdkVersion eturns the sdk_version property of the current module, or an empty string if it is not set.
 	sdkVersion() string
 	// minSdkVersion returns the min_sdk_version property of the current module, or sdkVersion() if it is not set.
 	minSdkVersion() string
+	// targetSdkVersion returns the target_sdk_version property of the current module, or sdkVersion() if it is not set.
+	targetSdkVersion() string
 }
 
 func sdkVersionOrDefault(ctx android.BaseContext, v string) string {
 	switch v {
-	case "", "current", "system_current", "test_current", "core_current", "core_platform_current":
+	case "", "current", "system_current", "test_current", "core_current":
 		return ctx.Config().DefaultAppTargetSdk()
 	default:
 		return v
@@ -443,7 +465,7 @@ func sdkVersionOrDefault(ctx android.BaseContext, v string) string {
 // it returns android.FutureApiLevel (10000).
 func sdkVersionToNumber(ctx android.BaseContext, v string) (int, error) {
 	switch v {
-	case "", "current", "test_current", "system_current", "core_current", "core_platform_current":
+	case "", "current", "test_current", "system_current", "core_current":
 		return ctx.Config().DefaultAppTargetSdkInt(), nil
 	default:
 		n := android.GetNumericSdkVersion(v)
@@ -564,8 +586,6 @@ func decodeSdkDep(ctx android.BaseContext, sdkContext sdkContext) sdkDep {
 		return toModule("android_test_stubs_current", "framework-res")
 	case "core_current":
 		return toModule("core.current.stubs", "")
-	case "core_platform_current":
-		return toModule("core.platform.api.stubs", "")
 	default:
 		return toPrebuilt(v)
 	}
@@ -725,27 +745,34 @@ const (
 	javaPlatform
 )
 
-func getLinkType(m *Module, name string) linkType {
+func getLinkType(m *Module, name string) (ret linkType, stubs bool) {
 	ver := m.sdkVersion()
-	noStdLibs := Bool(m.properties.No_standard_libs)
 	switch {
-	case name == "core.current.stubs" || ver == "core_current" ||
-		name == "core.platform.api.stubs" || ver == "core_platform_current" ||
-		noStdLibs || name == "stub-annotations" || name == "private-stub-annotations-jar":
-		return javaCore
-	case name == "android_system_stubs_current" || strings.HasPrefix(ver, "system_"):
-		return javaSystem
-	case name == "android_test_stubs_current" || strings.HasPrefix(ver, "test_"):
-		return javaPlatform
-	case name == "android_stubs_current" || ver == "current":
-		return javaSdk
+	case name == "core.current.stubs" || name == "core.platform.api.stubs" ||
+		name == "stub-annotations" || name == "private-stub-annotations-jar" ||
+		name == "core-lambda-stubs":
+		return javaCore, true
+	case ver == "core_current":
+		return javaCore, false
+	case name == "android_system_stubs_current":
+		return javaSystem, true
+	case strings.HasPrefix(ver, "system_"):
+		return javaSystem, false
+	case name == "android_test_stubs_current":
+		return javaSystem, true
+	case strings.HasPrefix(ver, "test_"):
+		return javaPlatform, false
+	case name == "android_stubs_current":
+		return javaSdk, true
+	case ver == "current":
+		return javaSdk, false
 	case ver == "":
-		return javaPlatform
+		return javaPlatform, false
 	default:
 		if _, err := strconv.Atoi(ver); err != nil {
 			panic(fmt.Errorf("expected sdk_version to be a number, got %q", ver))
 		}
-		return javaSdk
+		return javaSdk, false
 	}
 }
 
@@ -754,8 +781,11 @@ func checkLinkType(ctx android.ModuleContext, from *Module, to *Library, tag dep
 		return
 	}
 
-	myLinkType := getLinkType(from, ctx.ModuleName())
-	otherLinkType := getLinkType(&to.Module, ctx.OtherModuleName(to))
+	myLinkType, stubs := getLinkType(from, ctx.ModuleName())
+	if stubs {
+		return
+	}
+	otherLinkType, _ := getLinkType(&to.Module, ctx.OtherModuleName(to))
 	commonMessage := "Adjust sdk_version: property of the source or target module so that target module is built with the same or smaller API set than the source."
 
 	switch myLinkType {
@@ -860,7 +890,8 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 		case SdkLibraryDependency:
 			switch tag {
 			case libTag:
-				deps.classpath = append(deps.classpath, dep.HeaderJars(getLinkType(j, ctx.ModuleName()))...)
+				linkType, _ := getLinkType(j, ctx.ModuleName())
+				deps.classpath = append(deps.classpath, dep.HeaderJars(linkType)...)
 				// names of sdk libs that are directly depended are exported
 				j.exportedSdkLibs = append(j.exportedSdkLibs, otherName)
 			default:
@@ -1059,13 +1090,21 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 	var kotlinJars android.Paths
 
 	if srcFiles.HasExt(".kt") {
+		// user defined kotlin flags.
+		kotlincFlags := j.properties.Kotlincflags
+		CheckKotlincFlags(ctx, kotlincFlags)
+
 		// If there are kotlin files, compile them first but pass all the kotlin and java files
 		// kotlinc will use the java files to resolve types referenced by the kotlin files, but
 		// won't emit any classes for them.
-
-		flags.kotlincFlags = "-no-stdlib"
+		kotlincFlags = append(kotlincFlags, "-no-stdlib")
 		if ctx.Device() {
-			flags.kotlincFlags += " -no-jdk"
+			kotlincFlags = append(kotlincFlags, "-no-jdk")
+		}
+		if len(kotlincFlags) > 0 {
+			// optimization.
+			ctx.Variable(pctx, "kotlincFlags", strings.Join(kotlincFlags, " "))
+			flags.kotlincFlags += "$kotlincFlags"
 		}
 
 		var kotlinSrcFiles android.Paths
@@ -1302,6 +1341,31 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 
 	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource
 	j.outputFile = outputFile.WithoutRel()
+}
+
+// Check for invalid kotlinc flags. Only use this for flags explicitly passed by the user,
+// since some of these flags may be used internally.
+func CheckKotlincFlags(ctx android.ModuleContext, flags []string) {
+	for _, flag := range flags {
+		flag = strings.TrimSpace(flag)
+
+		if !strings.HasPrefix(flag, "-") {
+			ctx.PropertyErrorf("kotlincflags", "Flag `%s` must start with `-`", flag)
+		} else if strings.HasPrefix(flag, "-Xintellij-plugin-root") {
+			ctx.PropertyErrorf("kotlincflags",
+				"Bad flag: `%s`, only use internal compiler for consistency.", flag)
+		} else if inList(flag, config.KotlincIllegalFlags) {
+			ctx.PropertyErrorf("kotlincflags", "Flag `%s` already used by build system", flag)
+		} else if flag == "-include-runtime" {
+			ctx.PropertyErrorf("kotlincflags", "Bad flag: `%s`, do not include runtime.", flag)
+		} else {
+			args := strings.Split(flag, " ")
+			if args[0] == "-kotlin-home" {
+				ctx.PropertyErrorf("kotlincflags",
+					"Bad flag: `%s`, kotlin home already set to default (path to kotlinc in the repo).", flag)
+			}
+		}
+	}
 }
 
 func (j *Module) compileJavaHeader(ctx android.ModuleContext, srcFiles, srcJars android.Paths,

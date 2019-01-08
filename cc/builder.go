@@ -231,8 +231,6 @@ type builderFlags struct {
 	ldFlags         string
 	libFlags        string
 	yaccFlags       string
-	protoFlags      string
-	protoOutParams  string
 	tidyFlags       string
 	sAbiFlags       string
 	yasmFlags       string
@@ -243,17 +241,23 @@ type builderFlags struct {
 	tidy            bool
 	coverage        bool
 	sAbiDump        bool
-	protoRoot       bool
 
 	systemIncludeFlags string
 
 	groupStaticLibs bool
-	arGoldPlugin    bool
 
 	stripKeepSymbols       bool
 	stripKeepMiniDebugInfo bool
 	stripAddGnuDebuglink   bool
 	stripUseLlvmStrip      bool
+
+	protoDeps        android.Paths
+	protoFlags       string
+	protoOutTypeFlag string
+	protoOutParams   string
+	protoC           bool
+	protoOptionsFile bool
+	protoRoot        bool
 }
 
 type Objects struct {
@@ -491,9 +495,6 @@ func TransformObjToStaticLib(ctx android.ModuleContext, objFiles android.Paths,
 	arFlags := "crsD"
 	if !ctx.Darwin() {
 		arFlags += " -format=gnu"
-	}
-	if flags.arGoldPlugin {
-		arFlags += " --plugin ${config.LLVMGoldPlugin}"
 	}
 	if flags.arFlags != "" {
 		arFlags += " " + flags.arFlags
