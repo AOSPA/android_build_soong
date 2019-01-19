@@ -128,6 +128,7 @@ var (
 	NdkMaxPrebuiltVersionInt = 27
 
 	SDClang                  = false
+	SDClangPath              = ""
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
@@ -394,6 +395,7 @@ func setSdclangVars() {
 		return sdclangAEFlag + " " + sdclangFlags2
 	})
 
+	SDClangPath = sdclangPath
 	// Find the path to SDLLVM's ASan libraries
 	// TODO (b/117846004): Disable setting SDClangAsanLibDir due to unit test path issues
 	//absPath := sdclangPath
