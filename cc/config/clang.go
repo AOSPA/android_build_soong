@@ -91,7 +91,7 @@ var ClangUnknownLldflags = sorted([]string{
 	"-Wl,-m,aarch64_elf64_le_vec",
 })
 
-var ClangLibToolingUnknownCflags []string = nil
+var ClangLibToolingUnknownCflags = sorted([]string{})
 
 func init() {
 	pctx.StaticVariable("ClangExtraCflags", strings.Join([]string{
@@ -120,14 +120,10 @@ func init() {
 		// color codes if it is not running in a terminal.
 		"-fcolor-diagnostics",
 
-		// http://b/29823425 Disable -Wexpansion-to-defined for Clang update to r271374
-		"-Wno-expansion-to-defined",
-
 		// http://b/68236239 Allow 0/NULL instead of using nullptr everywhere.
 		"-Wno-zero-as-null-pointer-constant",
 
 		// Warnings from clang-7.0
-		"-Wno-deprecated-register",
 		"-Wno-sign-compare",
 
 		// Warnings from clang-8.0
@@ -171,25 +167,12 @@ func init() {
 		"-Wno-tautological-unsigned-enum-zero-compare",
 		"-Wno-tautological-unsigned-zero-compare",
 
-		// http://b/72331524 Allow null pointer arithmetic until the instances detected by
-		// this new warning are fixed.
-		"-Wno-null-pointer-arithmetic",
-
 		// Disable c++98-specific warning since Android is not concerned with C++98
 		// compatibility.
 		"-Wno-c++98-compat-extra-semi",
 
-		// Disable this warning until we can fix all instances where it fails.
-		"-Wno-self-assign-overloaded",
-
-		// Disable this warning until we can fix all instances where it fails.
-		"-Wno-constant-logical-operand",
-
 		// Disable this warning because we don't care about behavior with older compilers.
 		"-Wno-return-std-move-in-c++11",
-
-		// Disable this warning until we can fix all instances where it fails.
-		"-Wno-dangling-field",
 	}, " "))
 
 	// Extra cflags for projects under external/ directory to disable warnings that are infeasible
@@ -197,6 +180,10 @@ func init() {
 	pctx.StaticVariable("ClangExtraExternalCflags", strings.Join([]string{
 		"-Wno-enum-compare",
 		"-Wno-enum-compare-switch",
+
+		// http://b/72331524 Allow null pointer arithmetic until the instances detected by
+		// this new warning are fixed.
+		"-Wno-null-pointer-arithmetic",
 	}, " "))
 }
 
