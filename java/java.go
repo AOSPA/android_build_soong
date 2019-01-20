@@ -217,25 +217,6 @@ type CompilerDeviceProperties struct {
 	// If set to true, compile dex regardless of installable.  Defaults to false.
 	Compile_dex *bool
 
-	Dex_preopt struct {
-		// If false, prevent dexpreopting and stripping the dex file from the final jar.  Defaults to
-		// true.
-		Enabled *bool
-
-		// If true, generate an app image (.art file) for this module.
-		App_image *bool
-
-		// If true, use a checked-in profile to guide optimization.  Defaults to false unless
-		// a matching profile is set or a profile is found in PRODUCT_DEX_PREOPT_PROFILE_DIR
-		// that matches the name of this module, in which case it is defaulted to true.
-		Profile_guided *bool
-
-		// If set, provides the path to profile relative to the Android.bp file.  If not set,
-		// defaults to searching for a file that matches the name of this module in the default
-		// profile location set by PRODUCT_DEX_PREOPT_PROFILE_DIR, or empty if not found.
-		Profile *string
-	}
-
 	Optimize struct {
 		// If false, disable all optimization.  Defaults to true for android_app and android_test
 		// modules, false for java_library and java_test modules.
@@ -266,6 +247,7 @@ type CompilerDeviceProperties struct {
 	System_modules *string
 
 	UncompressDex bool `blueprint:"mutated"`
+	IsSDKLibrary  bool `blueprint:"mutated"`
 }
 
 // Module contains the properties and members used by all java module types
@@ -294,6 +276,9 @@ type Module struct {
 
 	// output file containing classes.dex and resources
 	dexJarFile android.Path
+
+	// output file that contains classes.dex if it should be in the output file
+	maybeStrippedDexJarFile android.Path
 
 	// output file containing uninstrumented classes that will be instrumented by jacoco
 	jacocoReportClassesFile android.Path
@@ -327,6 +312,8 @@ type Module struct {
 	// list of source files, collected from compiledJavaSrcs and compiledSrcJars
 	// filter out Exclude_srcs, will be used by android.IDEInfo struct
 	expandIDEInfoCompiledSrcs []string
+
+	dexpreopter
 }
 
 func (j *Module) Srcs() android.Paths {
@@ -568,7 +555,7 @@ func decodeSdkDep(ctx android.BaseContext, sdkContext sdkContext) sdkDep {
 		return ret
 	}
 
-	if ctx.Config().UnbundledBuild() && v != "" {
+	if ctx.Config().UnbundledBuildPrebuiltSdks() && v != "" {
 		return toPrebuilt(v)
 	}
 
@@ -1024,8 +1011,15 @@ func (j *Module) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaB
 	}
 
 	if j.properties.Patch_module != nil && flags.javaVersion == "1.9" {
-		patchClasspath := ".:" + flags.classpath.FormJavaClassPath("")
-		javacFlags = append(javacFlags, "--patch-module="+String(j.properties.Patch_module)+"="+patchClasspath)
+		// Manually specify build directory in case it is not under the repo root.
+		// (javac doesn't seem to expand into symbolc links when searching for patch-module targets, so
+		// just adding a symlink under the root doesn't help.)
+		patchPaths := ".:" + ctx.Config().BuildDir()
+		classPath := flags.classpath.FormJavaClassPath("")
+		if classPath != "" {
+			patchPaths += ":" + classPath
+		}
+		javacFlags = append(javacFlags, "--patch-module="+String(j.properties.Patch_module)+"="+patchPaths)
 	}
 
 	// systemModules
@@ -1332,7 +1326,15 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 
 		j.dexJarFile = dexOutputFile
 
+		dexOutputFile = j.dexpreopt(ctx, dexOutputFile)
+
+		j.maybeStrippedDexJarFile = dexOutputFile
+
 		outputFile = dexOutputFile
+
+		if ctx.Failed() {
+			return
+		}
 	} else {
 		outputFile = implementationAndResourcesJar
 	}
@@ -1425,13 +1427,19 @@ func (j *Module) instrument(ctx android.ModuleContext, flags javaBuilderFlags,
 	return instrumentedJar
 }
 
-var _ Dependency = (*Library)(nil)
+var _ Dependency = (*Module)(nil)
 
 func (j *Module) HeaderJars() android.Paths {
+	if j.headerJarFile == nil {
+		return nil
+	}
 	return android.Paths{j.headerJarFile}
 }
 
 func (j *Module) ImplementationJars() android.Paths {
+	if j.implementationJarFile == nil {
+		return nil
+	}
 	return android.Paths{j.implementationJarFile}
 }
 
@@ -1443,14 +1451,19 @@ func (j *Module) ResourceJars() android.Paths {
 }
 
 func (j *Module) ImplementationAndResourcesJars() android.Paths {
+	if j.implementationAndResourcesJar == nil {
+		return nil
+	}
 	return android.Paths{j.implementationAndResourcesJar}
 }
 
 func (j *Module) AidlIncludeDirs() android.Paths {
+	// exportAidlIncludeDirs is type android.Paths already
 	return j.exportAidlIncludeDirs
 }
 
 func (j *Module) ExportedSdkLibs() []string {
+	// exportedSdkLibs is type []string
 	return j.exportedSdkLibs
 }
 
@@ -1486,9 +1499,17 @@ type Library struct {
 }
 
 func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework", ctx.ModuleName()+".jar")
+	j.dexpreopter.isSDKLibrary = j.deviceProperties.IsSDKLibrary
 	j.compile(ctx)
 
 	if Bool(j.properties.Installable) || ctx.Host() {
+		if j.deviceProperties.UncompressDex {
+			alignedOutputFile := android.PathForModuleOut(ctx, "aligned", ctx.ModuleName()+".jar")
+			TransformZipAlign(ctx, alignedOutputFile, j.outputFile)
+			j.outputFile = alignedOutputFile
+		}
+
 		j.installFile = ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),
 			ctx.ModuleName()+".jar", j.outputFile)
 	}
@@ -1504,6 +1525,7 @@ func LibraryFactory() android.Module {
 	module.AddProperties(
 		&module.Module.properties,
 		&module.Module.deviceProperties,
+		&module.Module.dexpreoptProperties,
 		&module.Module.protoProperties)
 
 	InitJavaModule(module, android.HostAndDeviceSupported)
@@ -1574,6 +1596,7 @@ func TestFactory() android.Module {
 	module.AddProperties(
 		&module.Module.properties,
 		&module.Module.deviceProperties,
+		&module.Module.dexpreoptProperties,
 		&module.Module.protoProperties,
 		&module.testProperties)
 
@@ -1670,6 +1693,7 @@ func BinaryFactory() android.Module {
 	module.AddProperties(
 		&module.Module.properties,
 		&module.Module.deviceProperties,
+		&module.Module.dexpreoptProperties,
 		&module.Module.protoProperties,
 		&module.binaryProperties)
 
@@ -1799,10 +1823,16 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 var _ Dependency = (*Import)(nil)
 
 func (j *Import) HeaderJars() android.Paths {
+	if j.combinedClasspathFile == nil {
+		return nil
+	}
 	return android.Paths{j.combinedClasspathFile}
 }
 
 func (j *Import) ImplementationJars() android.Paths {
+	if j.combinedClasspathFile == nil {
+		return nil
+	}
 	return android.Paths{j.combinedClasspathFile}
 }
 
@@ -1811,6 +1841,9 @@ func (j *Import) ResourceJars() android.Paths {
 }
 
 func (j *Import) ImplementationAndResourcesJars() android.Paths {
+	if j.combinedClasspathFile == nil {
+		return nil
+	}
 	return android.Paths{j.combinedClasspathFile}
 }
 
@@ -1821,6 +1854,10 @@ func (j *Import) AidlIncludeDirs() android.Paths {
 func (j *Import) ExportedSdkLibs() []string {
 	return j.exportedSdkLibs
 }
+
+// Add compile time check for interface implementation
+var _ android.IDEInfo = (*Import)(nil)
+var _ android.IDECustomizedModuleName = (*Import)(nil)
 
 // Collect information for opening IDE project files in java/jdeps.go.
 const (
@@ -1889,6 +1926,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 	module.AddProperties(
 		&CompilerProperties{},
 		&CompilerDeviceProperties{},
+		&DexpreoptProperties{},
 		&android.ProtoProperties{},
 		&aaptProperties{},
 		&androidLibraryProperties{},

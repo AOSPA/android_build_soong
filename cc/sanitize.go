@@ -36,7 +36,7 @@ var (
 	asanLdflags = []string{"-Wl,-u,__asan_preinit"}
 	asanLibs    = []string{"libasan"}
 
-	hwasanCflags = []string{"-mllvm", "-hwasan-with-ifunc=0", "-fno-omit-frame-pointer", "-Wno-frame-larger-than="}
+	hwasanCflags = []string{"-mllvm", "-hwasan-with-ifunc=0", "-fno-omit-frame-pointer", "-Wno-frame-larger-than=", "-mllvm", "-hwasan-create-frame-descriptions=0"}
 
 	cfiCflags = []string{"-flto", "-fsanitize-cfi-cross-dso",
 		"-fsanitize-blacklist=external/compiler-rt/lib/cfi/cfi_blacklist.txt"}
@@ -49,7 +49,7 @@ var (
 	cfiStaticLibsMutex    sync.Mutex
 	hwasanStaticLibsMutex sync.Mutex
 
-	intOverflowCflags   = []string{"-fsanitize-blacklist=build/soong/cc/config/integer_overflow_blacklist.txt"}
+	intOverflowCflags = []string{"-fsanitize-blacklist=build/soong/cc/config/integer_overflow_blacklist.txt"}
 
 	// Pass -Xclang before -fsanitize-minimal-runtime to work around a driver
 	// check which rejects -fsanitize-minimal-runtime together with
@@ -58,7 +58,7 @@ var (
 	// TODO(pcc): Remove the -Xclang once LLVM r346526 is rolled into the compiler.
 	minimalRuntimeFlags = []string{"-Xclang", "-fsanitize-minimal-runtime", "-fno-sanitize-trap=integer,undefined",
 		"-fno-sanitize-recover=integer,undefined"}
-	hwasanGlobalOptions = []string{"heap_history_size=4095"}
+	hwasanGlobalOptions = []string{"heap_history_size=1023,stack_history_size=512"}
 )
 
 type sanitizerType int
@@ -128,6 +128,7 @@ type SanitizeProperties struct {
 			Cfi              *bool    `android:"arch_variant"`
 			Integer_overflow *bool    `android:"arch_variant"`
 			Misc_undefined   []string `android:"arch_variant"`
+			No_recover       []string
 		}
 
 		// value to pass to -fsanitize-recover=
@@ -376,6 +377,22 @@ func (sanitize *sanitize) deps(ctx BaseModuleContext, deps Deps) Deps {
 	return deps
 }
 
+func toDisableImplicitIntegerChange(flags []string) bool {
+	// Returns true if any flag is fsanitize*integer, and there is
+	// no explicit flag about sanitize=implicit-integer-sign-change.
+	for _, f := range flags {
+		if strings.Contains(f, "sanitize=implicit-integer-sign-change") {
+			return false
+		}
+	}
+	for _, f := range flags {
+		if strings.HasPrefix(f, "-fsanitize") && strings.Contains(f, "integer") {
+			return true
+		}
+	}
+	return false
+}
+
 func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	minimalRuntimeLib := config.UndefinedBehaviorSanitizerMinimalRuntimeLibrary(ctx.toolchain()) + ".a"
 	minimalRuntimePath := "${config.ClangAsanLibDir}/" + minimalRuntimeLib
@@ -533,6 +550,10 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 				flags.LdFlags = append(flags.LdFlags, "-Wl,--exclude-libs,"+minimalRuntimeLib)
 			}
 		}
+		// http://b/119329758, Android core does not boot up with this sanitizer yet.
+		if toDisableImplicitIntegerChange(flags.CFlags) {
+			flags.CFlags = append(flags.CFlags, "-fno-sanitize=implicit-integer-sign-change")
+		}
 	}
 
 	if len(diagSanitizers) > 0 {
@@ -543,6 +564,11 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	if sanitize.Properties.Sanitize.Recover != nil {
 		flags.CFlags = append(flags.CFlags, "-fsanitize-recover="+
 			strings.Join(sanitize.Properties.Sanitize.Recover, ","))
+	}
+
+	if sanitize.Properties.Sanitize.Diag.No_recover != nil {
+		flags.CFlags = append(flags.CFlags, "-fno-sanitize-recover="+
+			strings.Join(sanitize.Properties.Sanitize.Diag.No_recover, ","))
 	}
 
 	// Link a runtime library if needed.
@@ -576,9 +602,12 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		sanitize.runtimeLibrary = runtimeLibrary
 
 		// When linking against VNDK, use the vendor variant of the runtime lib
-		sanitize.androidMkRuntimeLibrary = sanitize.runtimeLibrary
 		if ctx.useVndk() {
 			sanitize.androidMkRuntimeLibrary = sanitize.runtimeLibrary + vendorSuffix
+		} else if ctx.inRecovery() {
+			sanitize.androidMkRuntimeLibrary = sanitize.runtimeLibrary + recoverySuffix
+		} else {
+			sanitize.androidMkRuntimeLibrary = sanitize.runtimeLibrary
 		}
 	}
 
