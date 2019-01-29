@@ -16,8 +16,10 @@ package cc
 
 import (
 	"fmt"
+	"strings"
 
 	"android/soong/android"
+	"android/soong/cc/config"
 )
 
 //
@@ -56,7 +58,7 @@ func ObjectFactory() android.Module {
 func (compiler *objectCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags {
 	flags = compiler.baseCompiler.compilerFlags(ctx, flags, deps)
 	// SDLLVM does not currently support the "-fno-addrsig" option
-	if flags.Sdclang {
+	if flags.Sdclang && !strings.Contains(config.SDClangPath, "8.0") {
 		flags.CFlags, _ = filterList(flags.CFlags, []string{"-fno-addrsig"})
 	}
 	return flags

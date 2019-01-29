@@ -33,9 +33,9 @@ var (
 
 		// Use C99-compliant printf functions (%zd).
 		"-D__USE_MINGW_ANSI_STDIO=1",
-		// Admit to using >= Vista. Both are needed because of <_mingw.h>.
-		"-D_WIN32_WINNT=0x0600",
-		"-DWINVER=0x0600",
+		// Admit to using >= Windows 7. Both are needed because of <_mingw.h>.
+		"-D_WIN32_WINNT=0x0601",
+		"-DWINVER=0x0601",
 		// Get 64-bit off_t and related functions.
 		"-D_FILE_OFFSET_BITS=64",
 
@@ -140,6 +140,9 @@ func init() {
 	pctx.StaticVariable("WindowsX8664ClangCppflags", strings.Join(windowsX8664ClangCppflags, " "))
 
 	pctx.StaticVariable("WindowsIncludeFlags", strings.Join(windowsIncludeFlags, " "))
+	// Yasm flags
+	pctx.StaticVariable("WindowsX86YasmFlags", "-f win32 -m x86")
+	pctx.StaticVariable("WindowsX8664YasmFlags", "-f win64 -m amd64")
 }
 
 type toolchainWindows struct {
@@ -226,6 +229,14 @@ func (t *toolchainWindowsX8664) ClangLdflags() string {
 
 func (t *toolchainWindowsX8664) ClangLldflags() string {
 	return "${config.WindowsClangLldflags} ${config.WindowsX8664ClangLldflags}"
+}
+
+func (t *toolchainWindowsX86) YasmFlags() string {
+	return "${config.WindowsX86YasmFlags}"
+}
+
+func (t *toolchainWindowsX8664) YasmFlags() string {
+	return "${config.WindowsX8664YasmFlags}"
 }
 
 func (t *toolchainWindows) ShlibSuffix() string {

@@ -482,7 +482,7 @@ func (c *config) PlatformSdkCodename() string {
 }
 
 func (c *config) MinSupportedSdkVersion() int {
-	return 14
+	return 16
 }
 
 func (c *config) DefaultAppTargetSdkInt() int {
@@ -569,6 +569,10 @@ func (c *config) UnbundledBuild() bool {
 	return Bool(c.productVariables.Unbundled_build)
 }
 
+func (c *config) UnbundledBuildPrebuiltSdks() bool {
+	return Bool(c.productVariables.Unbundled_build) && !Bool(c.productVariables.Unbundled_build_sdks_from_source)
+}
+
 func (c *config) IsPdkBuild() bool {
 	return Bool(c.productVariables.Pdk)
 }
@@ -579,6 +583,10 @@ func (c *config) MinimizeJavaDebugInfo() bool {
 
 func (c *config) Debuggable() bool {
 	return Bool(c.productVariables.Debuggable)
+}
+
+func (c *config) Eng() bool {
+	return Bool(c.productVariables.Eng)
 }
 
 func (c *config) DevicePrefer32BitApps() bool {
@@ -623,6 +631,14 @@ func (c *config) EnableCFI() bool {
 		return true
 	} else {
 		return *c.productVariables.EnableCFI
+	}
+}
+
+func (c *config) EnableXOM() bool {
+	if c.productVariables.EnableXOM == nil {
+		return false
+	} else {
+		return Bool(c.productVariables.EnableXOM)
 	}
 }
 
@@ -720,12 +736,16 @@ func (c *config) ModulesLoadedByPrivilegedModules() []string {
 	return c.productVariables.ModulesLoadedByPrivilegedModules
 }
 
-func (c *config) DefaultStripDex() bool {
-	return Bool(c.productVariables.DefaultStripDex)
-}
-
 func (c *config) DisableDexPreopt(name string) bool {
 	return Bool(c.productVariables.DisableDexPreopt) || InList(name, c.productVariables.DisableDexPreoptModules)
+}
+
+func (c *config) DexpreoptGlobalConfig() string {
+	return String(c.productVariables.DexpreoptGlobalConfig)
+}
+
+func (c *config) DexPreoptProfileDir() string {
+	return String(c.productVariables.DexPreoptProfileDir)
 }
 
 func (c *deviceConfig) Arches() []Arch {
@@ -842,6 +862,18 @@ func (c *deviceConfig) PlatPrivateSepolicyDirs() []string {
 	return c.config.productVariables.BoardPlatPrivateSepolicyDirs
 }
 
+func (c *config) SecondArchIsTranslated() bool {
+	deviceTargets := c.Targets[Android]
+	if len(deviceTargets) < 2 {
+		return false
+	}
+
+	arch := deviceTargets[0].Arch
+
+	return (arch.ArchType == X86 || arch.ArchType == X86_64) &&
+		(hasArmAbi(arch) || hasArmAndroidArch(deviceTargets))
+}
+
 func (c *config) IntegerOverflowDisabledForPath(path string) bool {
 	if c.productVariables.IntegerOverflowExcludePaths == nil {
 		return false
@@ -861,6 +893,13 @@ func (c *config) CFIEnabledForPath(path string) bool {
 		return false
 	}
 	return PrefixInList(path, *c.productVariables.CFIIncludePaths)
+}
+
+func (c *config) XOMDisabledForPath(path string) bool {
+	if c.productVariables.XOMExcludePaths == nil {
+		return false
+	}
+	return PrefixInList(path, *c.productVariables.XOMExcludePaths)
 }
 
 func (c *config) VendorConfig(name string) VendorConfig {
@@ -883,6 +922,10 @@ func (c vendorConfig) IsSet(name string) bool {
 
 func (c *config) NdkAbis() bool {
 	return Bool(c.productVariables.Ndk_abis)
+}
+
+func (c *config) ExcludeDraftNdkApis() bool {
+	return Bool(c.productVariables.Exclude_draft_ndk_apis)
 }
 
 func (c *config) FlattenApex() bool {

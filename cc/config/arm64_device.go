@@ -68,6 +68,10 @@ var (
 		"kryo": []string{
 			"-mcpu=kryo",
 		},
+		"kryo385": []string{
+			// Use cortex-a53 because kryo385 is not supported in GCC/clang.
+			"-mcpu=cortex-a53",
+		},
 		"exynos-m1": []string{
 			"-mcpu=exynos-m1",
 		},
@@ -93,7 +97,9 @@ func init() {
 		"cortex-a76",
 		"kryo",
 		"kryo300",
-		"denver64")
+		"kryo385",
+		"exynos-m1",
+		"exynos-m2")
 
 	pctx.StaticVariable("arm64GccVersion", arm64GccVersion)
 
@@ -143,6 +149,7 @@ var (
 		"cortex-a75": "${config.Arm64ClangCortexA55Cflags}",
 		"cortex-a76": "${config.Arm64ClangCortexA55Cflags}",
 		"kryo":       "${config.Arm64ClangKryoCflags}",
+		"kryo385":    "${config.Arm64ClangCortexA53Cflags}",
 		"exynos-m1":  "${config.Arm64ClangExynosM1Cflags}",
 		"exynos-m2":  "${config.Arm64ClangExynosM2Cflags}",
 	}
@@ -219,10 +226,7 @@ func arm64ToolchainFactory(arch android.Arch) Toolchain {
 
 	var extraLdflags string
 	switch arch.CpuVariant {
-	case "cortex-a53", "cortex-a72", "cortex-a73", "kryo", "exynos-m1", "exynos-m2",
-		// This variant might not need the workaround but leave it
-		// in the list since it has had the workaround on before.
-		"denver64":
+	case "cortex-a53", "cortex-a72", "cortex-a73", "kryo", "exynos-m1", "exynos-m2":
 		extraLdflags = "-Wl,--fix-cortex-a53-843419"
 	}
 

@@ -59,7 +59,7 @@ func (c *Module) AndroidMk() android.AndroidMkData {
 
 	ret := android.AndroidMkData{
 		OutputFile: c.outputFile,
-		Required:   c.Properties.AndroidMkRuntimeLibs,
+		Required:   append(c.Properties.AndroidMkRuntimeLibs, c.Properties.ApexesProvidingSharedLibs...),
 		Include:    "$(BUILD_SYSTEM)/soong_cc_prebuilt.mk",
 
 		Extra: []android.AndroidMkExtraFunc{
@@ -151,6 +151,7 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 		ret.Class = "HEADER_LIBRARIES"
 	}
 
+	ret.DistFile = library.distFile
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		library.androidMkWriteExportedFlags(w)
 		fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES := ")
@@ -194,6 +195,7 @@ func (binary *binaryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.Andr
 	ctx.subAndroidMk(ret, binary.baseInstaller)
 
 	ret.Class = "EXECUTABLES"
+	ret.DistFile = binary.distFile
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", binary.unstrippedOutputFile.String())
 		if len(binary.symlinks) > 0 {

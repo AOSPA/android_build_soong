@@ -145,6 +145,7 @@ bootstrap_go_package {
         "cc/util.go",
         "cc/vndk.go",
         "cc/vndk_prebuilt.go",
+        "cc/xom.go",
 
         "cc/cmakelists.go",
         "cc/compdb.go",
@@ -223,6 +224,7 @@ bootstrap_go_package {
         "soong",
         "soong-android",
         "soong-cc",
+        "soong-dexpreopt",
         "soong-genrule",
         "soong-java-config",
         "soong-tradefed",
@@ -237,6 +239,7 @@ bootstrap_go_package {
         "java/app.go",
         "java/builder.go",
         "java/dex.go",
+        "java/dexpreopt.go",
         "java/droiddoc.go",
         "java/gen.go",
         "java/genrule.go",
@@ -352,6 +355,9 @@ bootstrap_go_package {
         "apex/apex.go",
         "apex/key.go",
     ],
+    testSrcs: [
+        "apex/apex_test.go",
+    ],
     pluginFor: ["soong_build"],
 }
 
@@ -435,7 +441,7 @@ toolchain_library {
             src: "prebuilts/gcc/linux-x86/host/x86_64-w64-mingw32-4.8/x86_64-w64-mingw32/lib/libwinpthread.a",
         },
     },
-    notice: "../../prebuilts/gcc/linux-x86/host/x86_64-w64-mingw32-4.8/licenses/mingw-w64-svn-r5861/mingw-w64-libraries/winpthreads/COPYING",
+    notice: ":mingw-libwinpthread-notice",
 }
 
 toolchain_library {

@@ -16,6 +16,8 @@ package cc
 
 import (
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -32,19 +34,21 @@ type LibraryProperties struct {
 		Srcs   []string `android:"arch_variant"`
 		Cflags []string `android:"arch_variant"`
 
-		Enabled           *bool    `android:"arch_variant"`
-		Whole_static_libs []string `android:"arch_variant"`
-		Static_libs       []string `android:"arch_variant"`
-		Shared_libs       []string `android:"arch_variant"`
+		Enabled            *bool    `android:"arch_variant"`
+		Whole_static_libs  []string `android:"arch_variant"`
+		Static_libs        []string `android:"arch_variant"`
+		Shared_libs        []string `android:"arch_variant"`
+		System_shared_libs []string `android:"arch_variant"`
 	} `android:"arch_variant"`
 	Shared struct {
 		Srcs   []string `android:"arch_variant"`
 		Cflags []string `android:"arch_variant"`
 
-		Enabled           *bool    `android:"arch_variant"`
-		Whole_static_libs []string `android:"arch_variant"`
-		Static_libs       []string `android:"arch_variant"`
-		Shared_libs       []string `android:"arch_variant"`
+		Enabled            *bool    `android:"arch_variant"`
+		Whole_static_libs  []string `android:"arch_variant"`
+		Static_libs        []string `android:"arch_variant"`
+		Shared_libs        []string `android:"arch_variant"`
+		System_shared_libs []string `android:"arch_variant"`
 	} `android:"arch_variant"`
 
 	// local file name to pass to the linker as -unexported_symbols_list
@@ -267,6 +271,9 @@ type libraryDecorator struct {
 	// Location of the linked, unstripped library for shared libraries
 	unstrippedOutputFile android.Path
 
+	// Location of the file that should be copied to dist dir when requested
+	distFile android.OptionalPath
+
 	versionScriptPath android.ModuleGenPath
 
 	// Decorated interafaces
@@ -344,6 +351,24 @@ func (library *libraryDecorator) compilerFlags(ctx ModuleContext, flags Flags, d
 
 	flags = library.baseCompiler.compilerFlags(ctx, flags, deps)
 	if library.buildStubs() {
+		// Remove -include <file> when compiling stubs. Otherwise, the force included
+		// headers might cause conflicting types error with the symbols in the
+		// generated stubs source code. e.g.
+		// double acos(double); // in header
+		// void acos() {} // in the generated source code
+		removeInclude := func(flags []string) []string {
+			ret := flags[:0]
+			for _, f := range flags {
+				if strings.HasPrefix(f, "-include ") {
+					continue
+				}
+				ret = append(ret, f)
+			}
+			return ret
+		}
+		flags.GlobalFlags = removeInclude(flags.GlobalFlags)
+		flags.CFlags = removeInclude(flags.CFlags)
+
 		flags = addStubLibraryCompilerFlags(flags)
 	}
 	return flags
@@ -370,7 +395,7 @@ func extractExportIncludesFromFlags(flags []string) []string {
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	if library.buildStubs() {
-		objs, versionScript := compileStubLibrary(ctx, flags, String(library.Properties.Stubs.Symbol_file), library.MutatedProperties.StubsVersion, "")
+		objs, versionScript := compileStubLibrary(ctx, flags, String(library.Properties.Stubs.Symbol_file), library.MutatedProperties.StubsVersion, "--apex")
 		library.versionScriptPath = versionScript
 		return objs
 	}
@@ -408,11 +433,11 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	buildFlags := flagsToBuilderFlags(flags)
 
 	if library.static() {
-		srcs := android.PathsForModuleSrc(ctx, library.Properties.Static.Srcs)
+		srcs := ctx.ExpandSources(library.Properties.Static.Srcs, nil)
 		objs = objs.Append(compileObjs(ctx, buildFlags, android.DeviceStaticLibrary,
 			srcs, library.baseCompiler.pathDeps, library.baseCompiler.cFlagsDeps))
 	} else if library.shared() {
-		srcs := android.PathsForModuleSrc(ctx, library.Properties.Shared.Srcs)
+		srcs := ctx.ExpandSources(library.Properties.Shared.Srcs, nil)
 		objs = objs.Append(compileObjs(ctx, buildFlags, android.DeviceSharedLibrary,
 			srcs, library.baseCompiler.pathDeps, library.baseCompiler.cFlagsDeps))
 	}
@@ -484,7 +509,29 @@ func (library *libraryDecorator) linkerInit(ctx BaseModuleContext) {
 	}
 }
 
+func (library *libraryDecorator) compilerDeps(ctx DepsContext, deps Deps) Deps {
+	deps = library.baseCompiler.compilerDeps(ctx, deps)
+
+	if library.static() {
+		android.ExtractSourcesDeps(ctx, library.Properties.Static.Srcs)
+	} else if library.shared() {
+		android.ExtractSourcesDeps(ctx, library.Properties.Shared.Srcs)
+	}
+
+	return deps
+}
+
 func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
+	if library.static() {
+		if library.Properties.Static.System_shared_libs != nil {
+			library.baseLinker.Properties.System_shared_libs = library.Properties.Static.System_shared_libs
+		}
+	} else if library.shared() {
+		if library.Properties.Shared.System_shared_libs != nil {
+			library.baseLinker.Properties.System_shared_libs = library.Properties.Shared.System_shared_libs
+		}
+	}
+
 	deps = library.baseLinker.linkerDeps(ctx, deps)
 
 	if library.static() {
@@ -542,10 +589,16 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 	outputFile := android.PathForModuleOut(ctx, fileName)
 	builderFlags := flagsToBuilderFlags(flags)
 
-	if Bool(library.baseLinker.Properties.Use_version_lib) && ctx.Host() {
-		versionedOutputFile := outputFile
-		outputFile = android.PathForModuleOut(ctx, "unversioned", fileName)
-		library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+	if Bool(library.baseLinker.Properties.Use_version_lib) {
+		if ctx.Host() {
+			versionedOutputFile := outputFile
+			outputFile = android.PathForModuleOut(ctx, "unversioned", fileName)
+			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+		} else {
+			versionedOutputFile := android.PathForModuleOut(ctx, "versioned", fileName)
+			library.distFile = android.OptionalPathForPath(versionedOutputFile)
+			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+		}
 	}
 
 	TransformObjToStaticLib(ctx, library.objects.objFiles, builderFlags, outputFile, objs.tidyFiles)
@@ -619,10 +672,23 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 
 	library.unstrippedOutputFile = outputFile
 
-	if Bool(library.baseLinker.Properties.Use_version_lib) && ctx.Host() {
-		versionedOutputFile := outputFile
-		outputFile = android.PathForModuleOut(ctx, "unversioned", fileName)
-		library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+	if Bool(library.baseLinker.Properties.Use_version_lib) {
+		if ctx.Host() {
+			versionedOutputFile := outputFile
+			outputFile = android.PathForModuleOut(ctx, "unversioned", fileName)
+			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+		} else {
+			versionedOutputFile := android.PathForModuleOut(ctx, "versioned", fileName)
+			library.distFile = android.OptionalPathForPath(versionedOutputFile)
+
+			if library.stripper.needsStrip(ctx) {
+				out := android.PathForModuleOut(ctx, "versioned-stripped", fileName)
+				library.distFile = android.OptionalPathForPath(out)
+				library.stripper.strip(ctx, versionedOutputFile, out, builderFlags)
+			}
+
+			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+		}
 	}
 
 	sharedLibs := deps.SharedLibs
@@ -741,6 +807,7 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 			"-I" + android.PathForModuleGen(ctx, "sysprop", "include").String(),
 		}
 		library.reexportFlags(flags)
+		library.reexportDeps(library.baseCompiler.pathDeps)
 		library.reuseExportedFlags = append(library.reuseExportedFlags, flags...)
 	}
 
@@ -899,8 +966,19 @@ func NewLibrary(hod android.HostOrDeviceSupported) (*Module, *libraryDecorator) 
 func reuseStaticLibrary(mctx android.BottomUpMutatorContext, static, shared *Module) {
 	if staticCompiler, ok := static.compiler.(*libraryDecorator); ok {
 		sharedCompiler := shared.compiler.(*libraryDecorator)
+
+		// Check libraries in addition to cflags, since libraries may be exporting different
+		// include directories.
 		if len(staticCompiler.Properties.Static.Cflags) == 0 &&
-			len(sharedCompiler.Properties.Shared.Cflags) == 0 {
+			len(sharedCompiler.Properties.Shared.Cflags) == 0 &&
+			len(staticCompiler.Properties.Static.Whole_static_libs) == 0 &&
+			len(sharedCompiler.Properties.Shared.Whole_static_libs) == 0 &&
+			len(staticCompiler.Properties.Static.Static_libs) == 0 &&
+			len(sharedCompiler.Properties.Shared.Static_libs) == 0 &&
+			len(staticCompiler.Properties.Static.Shared_libs) == 0 &&
+			len(sharedCompiler.Properties.Shared.Shared_libs) == 0 &&
+			staticCompiler.Properties.Static.System_shared_libs == nil &&
+			sharedCompiler.Properties.Shared.System_shared_libs == nil {
 
 			mctx.AddInterVariantDependency(reuseObjTag, shared, static)
 			sharedCompiler.baseCompiler.Properties.OriginalSrcs =
@@ -936,30 +1014,64 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 	}
 }
 
-// Version mutator splits a module into the mandatory non-stubs variant
-// (which is named "impl") and zero or more stubs variants.
-func versionMutator(mctx android.BottomUpMutatorContext) {
-	if mctx.Os() != android.Android {
-		return
-	}
+// maps a module name to the list of stubs versions available for the module
+func stubsVersionsFor(config android.Config) map[string][]string {
+	return config.Once("stubVersions", func() interface{} {
+		return make(map[string][]string)
+	}).(map[string][]string)
+}
 
+var stubsVersionsLock sync.Mutex
+
+func latestStubsVersionFor(config android.Config, name string) string {
+	versions, ok := stubsVersionsFor(config)[name]
+	if ok && len(versions) > 0 {
+		// the versions are alreay sorted in ascending order
+		return versions[len(versions)-1]
+	}
+	return ""
+}
+
+// Version mutator splits a module into the mandatory non-stubs variant
+// (which is unnamed) and zero or more stubs variants.
+func VersionMutator(mctx android.BottomUpMutatorContext) {
 	if m, ok := mctx.Module().(*Module); ok && !m.inRecovery() && m.linker != nil {
-		if library, ok := m.linker.(*libraryDecorator); ok && library.buildShared() {
-			versions := []string{""}
+		if library, ok := m.linker.(*libraryDecorator); ok && library.buildShared() &&
+			len(library.Properties.Stubs.Versions) > 0 {
+			versions := []string{}
 			for _, v := range library.Properties.Stubs.Versions {
+				if _, err := strconv.Atoi(v); err != nil {
+					mctx.PropertyErrorf("versions", "%q is not a number", v)
+				}
 				versions = append(versions, v)
 			}
+			sort.Slice(versions, func(i, j int) bool {
+				left, _ := strconv.Atoi(versions[i])
+				right, _ := strconv.Atoi(versions[j])
+				return left < right
+			})
+
+			// save the list of versions for later use
+			copiedVersions := make([]string, len(versions))
+			copy(copiedVersions, versions)
+			stubsVersionsLock.Lock()
+			defer stubsVersionsLock.Unlock()
+			stubsVersionsFor(mctx.Config())[mctx.ModuleName()] = copiedVersions
+
+			// "" is for the non-stubs variant
+			versions = append([]string{""}, versions...)
+
 			modules := mctx.CreateVariations(versions...)
 			for i, m := range modules {
 				l := m.(*Module).linker.(*libraryDecorator)
-				if i == 0 {
-					l.MutatedProperties.BuildStubs = false
-					continue
+				if versions[i] != "" {
+					l.MutatedProperties.BuildStubs = true
+					l.MutatedProperties.StubsVersion = versions[i]
+					m.(*Module).Properties.HideFromMake = true
+					m.(*Module).sanitize = nil
+					m.(*Module).stl = nil
+					m.(*Module).Properties.PreventInstall = true
 				}
-				// Mark that this variant is for stubs.
-				l.MutatedProperties.BuildStubs = true
-				l.MutatedProperties.StubsVersion = versions[i]
-				m.(*Module).Properties.HideFromMake = true
 			}
 		} else {
 			mctx.CreateVariations("")

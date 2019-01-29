@@ -94,8 +94,6 @@ var (
 
 	deviceGlobalLldflags = append(ClangFilterUnknownLldflags(deviceGlobalLdflags),
 		[]string{
-			"-Wl,--pack-dyn-relocs=android+relr",
-			"-Wl,--use-android-relr-tags",
 			"-fuse-ld=lld",
 		}...)
 
@@ -121,18 +119,19 @@ var (
 	}
 
 	CStdVersion               = "gnu99"
-	CppStdVersion             = "gnu++14"
+	CppStdVersion             = "gnu++17"
 	ExperimentalCStdVersion   = "gnu11"
-	ExperimentalCppStdVersion = "gnu++1z"
+	ExperimentalCppStdVersion = "gnu++2a"
 
 	NdkMaxPrebuiltVersionInt = 27
 
 	SDClang                  = false
+	SDClangPath              = ""
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r344140b"
-	ClangDefaultShortVersion = "8.0.4"
+	ClangDefaultVersion      = "clang-r346389b"
+	ClangDefaultShortVersion = "8.0.6"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -394,6 +393,7 @@ func setSdclangVars() {
 		return sdclangAEFlag + " " + sdclangFlags2
 	})
 
+	SDClangPath = sdclangPath
 	// Find the path to SDLLVM's ASan libraries
 	// TODO (b/117846004): Disable setting SDClangAsanLibDir due to unit test path issues
 	//absPath := sdclangPath

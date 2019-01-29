@@ -17,6 +17,7 @@ package cc
 import (
 	"android/soong/android"
 	"fmt"
+	"strconv"
 )
 
 func getNdkStlFamily(m *Module) string {
@@ -110,6 +111,26 @@ func (stl *stl) begin(ctx BaseModuleContext) {
 	}()
 }
 
+func needsLibAndroidSupport(ctx BaseModuleContext) bool {
+	versionStr, err := normalizeNdkApiLevel(ctx, ctx.sdkVersion(), ctx.Arch())
+	if err != nil {
+		ctx.PropertyErrorf("sdk_version", err.Error())
+	}
+
+	if versionStr == "current" {
+		return false
+	}
+
+	version, err := strconv.Atoi(versionStr)
+	if err != nil {
+		panic(fmt.Sprintf(
+			"invalid API level returned from normalizeNdkApiLevel: %q",
+			versionStr))
+	}
+
+	return version < 21
+}
+
 func (stl *stl) deps(ctx BaseModuleContext, deps Deps) Deps {
 	switch stl.Properties.SelectedStl {
 	case "libstdc++":
@@ -141,7 +162,9 @@ func (stl *stl) deps(ctx BaseModuleContext, deps Deps) Deps {
 		} else {
 			deps.StaticLibs = append(deps.StaticLibs, stl.Properties.SelectedStl, "ndk_libc++abi")
 		}
-		deps.StaticLibs = append(deps.StaticLibs, "ndk_libandroid_support")
+		if needsLibAndroidSupport(ctx) {
+			deps.StaticLibs = append(deps.StaticLibs, "ndk_libandroid_support")
+		}
 		if ctx.Arch().ArchType == android.Arm {
 			deps.StaticLibs = append(deps.StaticLibs, "ndk_libunwind")
 		}
@@ -228,7 +251,7 @@ func init() {
 		android.Linux:  []string{"-lgcc_s", "-lgcc", "-lc", "-lgcc_s", "-lgcc"},
 		android.Darwin: []string{"-lc", "-lSystem"},
 		android.Windows: []string{"-Wl,--start-group", "-lmingw32", "-lgcc", "-lgcc_eh",
-			"-lmoldname", "-lmingwex", "-lmsvcr110", "-lmsvcrt", "-lpthread",
+			"-lmoldname", "-lmingwex", "-lmsvcrt", "-lucrt", "-lpthread",
 			"-ladvapi32", "-lshell32", "-luser32", "-lkernel32", "-lpsapi",
 			"-Wl,--end-group"},
 	}

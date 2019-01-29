@@ -54,17 +54,19 @@ type variableProperties struct {
 			Cflags []string
 		}
 
-		Device_uses_hwc2 struct {
-			Cflags []string
-		}
-
 		Override_rs_driver struct {
 			Cflags []string
 		}
 
 		// Product_is_iot is true for Android Things devices.
 		Product_is_iot struct {
-			Cflags []string
+			Cflags       []string
+			Enabled      bool
+			Exclude_srcs []string
+			Init_rc      []string
+			Shared_libs  []string
+			Srcs         []string
+			Static_libs  []string
 		}
 
 		// treble_linker_namespaces is true when the system/vendor linker namespace separation is
@@ -203,39 +205,43 @@ type productVariables struct {
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 
-	Allow_missing_dependencies *bool `json:",omitempty"`
-	Unbundled_build            *bool `json:",omitempty"`
-	Malloc_not_svelte          *bool `json:",omitempty"`
-	Safestack                  *bool `json:",omitempty"`
-	HostStaticBinaries         *bool `json:",omitempty"`
-	Binder32bit                *bool `json:",omitempty"`
-	UseGoma                    *bool `json:",omitempty"`
-	Debuggable                 *bool `json:",omitempty"`
-	Eng                        *bool `json:",omitempty"`
-	Device_uses_hwc2           *bool `json:",omitempty"`
-	Treble_linker_namespaces   *bool `json:",omitempty"`
-	Enforce_vintf_manifest     *bool `json:",omitempty"`
-	Pdk                        *bool `json:",omitempty"`
-	Uml                        *bool `json:",omitempty"`
-	Use_lmkd_stats_log         *bool `json:",omitempty"`
-	Arc                        *bool `json:",omitempty"`
 	Real_hal                   *bool `json:",omitempty"`
 	Qmaa_hal                   *bool `json:",omitempty"`
-	MinimizeJavaDebugInfo      *bool `json:",omitempty"`
 	Device_support_hwfde       *bool `json:",omitempty"`
 	Device_support_hwfde_perf  *bool `json:",omitempty"`
+	Allow_missing_dependencies       *bool `json:",omitempty"`
+	Unbundled_build                  *bool `json:",omitempty"`
+	Unbundled_build_sdks_from_source *bool `json:",omitempty"`
+	Malloc_not_svelte                *bool `json:",omitempty"`
+	Safestack                        *bool `json:",omitempty"`
+	HostStaticBinaries               *bool `json:",omitempty"`
+	Binder32bit                      *bool `json:",omitempty"`
+	UseGoma                          *bool `json:",omitempty"`
+	Debuggable                       *bool `json:",omitempty"`
+	Eng                              *bool `json:",omitempty"`
+	Treble_linker_namespaces         *bool `json:",omitempty"`
+	Enforce_vintf_manifest           *bool `json:",omitempty"`
+	Pdk                              *bool `json:",omitempty"`
+	Uml                              *bool `json:",omitempty"`
+	Use_lmkd_stats_log               *bool `json:",omitempty"`
+	Arc                              *bool `json:",omitempty"`
+	MinimizeJavaDebugInfo            *bool `json:",omitempty"`
 
 	UncompressPrivAppDex             *bool    `json:",omitempty"`
 	ModulesLoadedByPrivilegedModules []string `json:",omitempty"`
-	DefaultStripDex                  *bool    `json:",omitempty"`
-	DisableDexPreopt                 *bool    `json:",omitempty"`
-	DisableDexPreoptModules          []string `json:",omitempty"`
+
+	DisableDexPreopt        *bool    `json:",omitempty"`
+	DisableDexPreoptModules []string `json:",omitempty"`
+	DexPreoptProfileDir     *string  `json:",omitempty"`
 
 	IntegerOverflowExcludePaths *[]string `json:",omitempty"`
 
 	EnableCFI       *bool     `json:",omitempty"`
 	CFIExcludePaths *[]string `json:",omitempty"`
 	CFIIncludePaths *[]string `json:",omitempty"`
+
+	EnableXOM       *bool     `json:",omitempty"`
+	XOMExcludePaths *[]string `json:",omitempty"`
 
 	VendorPath          *string `json:",omitempty"`
 	OdmPath             *string `json:",omitempty"`
@@ -281,9 +287,12 @@ type productVariables struct {
 
 	VendorVars map[string]map[string]string `json:",omitempty"`
 
-	Ndk_abis *bool `json:",omitempty"`
+	Ndk_abis               *bool `json:",omitempty"`
+	Exclude_draft_ndk_apis *bool `json:",omitempty"`
 
 	FlattenApex *bool `json:",omitempty"`
+
+	DexpreoptGlobalConfig *string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

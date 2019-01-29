@@ -51,12 +51,12 @@ type BinaryLinkerProperties struct {
 }
 
 func init() {
-	android.RegisterModuleType("cc_binary", binaryFactory)
+	android.RegisterModuleType("cc_binary", BinaryFactory)
 	android.RegisterModuleType("cc_binary_host", binaryHostFactory)
 }
 
 // Module factory for binaries
-func binaryFactory() android.Module {
+func BinaryFactory() android.Module {
 	module, _ := NewBinary(android.HostAndDeviceSupported)
 	return module.Init()
 }
@@ -88,6 +88,9 @@ type binaryDecorator struct {
 
 	// Output archive of gcno coverage information
 	coverageOutputFile android.OptionalPath
+
+	// Location of the file that should be copied to dist dir when requested
+	distFile android.OptionalPath
 }
 
 var _ linker = (*binaryDecorator)(nil)
@@ -296,9 +299,6 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 
 	var linkerDeps android.Paths
 
-	sharedLibs := deps.SharedLibs
-	sharedLibs = append(sharedLibs, deps.LateSharedLibs...)
-
 	if deps.LinkerFlagsFile.Valid() {
 		flags.LdFlags = append(flags.LdFlags, "$$(cat "+deps.LinkerFlagsFile.String()+")")
 		linkerDeps = append(linkerDeps, deps.LinkerFlagsFile.Path())
@@ -330,10 +330,23 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 			flagsToBuilderFlags(flags), afterPrefixSymbols)
 	}
 
-	if Bool(binary.baseLinker.Properties.Use_version_lib) && ctx.Host() {
-		versionedOutputFile := outputFile
-		outputFile = android.PathForModuleOut(ctx, "unversioned", fileName)
-		binary.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+	if Bool(binary.baseLinker.Properties.Use_version_lib) {
+		if ctx.Host() {
+			versionedOutputFile := outputFile
+			outputFile = android.PathForModuleOut(ctx, "unversioned", fileName)
+			binary.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+		} else {
+			versionedOutputFile := android.PathForModuleOut(ctx, "versioned", fileName)
+			binary.distFile = android.OptionalPathForPath(versionedOutputFile)
+
+			if binary.stripper.needsStrip(ctx) {
+				out := android.PathForModuleOut(ctx, "versioned-stripped", fileName)
+				binary.distFile = android.OptionalPathForPath(out)
+				binary.stripper.strip(ctx, versionedOutputFile, out, builderFlags)
+			}
+
+			binary.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
+		}
 	}
 
 	if ctx.Os() == android.LinuxBionic && !binary.static() {
@@ -347,8 +360,15 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		binary.injectHostBionicLinkerSymbols(ctx, outputFile, deps.DynamicLinker.Path(), injectedOutputFile)
 	}
 
-	linkerDeps = append(linkerDeps, deps.SharedLibsDeps...)
-	linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
+	var sharedLibs android.Paths
+	// Ignore shared libs for static executables.
+	if !binary.static() {
+		sharedLibs = deps.SharedLibs
+		sharedLibs = append(sharedLibs, deps.LateSharedLibs...)
+		linkerDeps = append(linkerDeps, deps.SharedLibsDeps...)
+		linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
+	}
+
 	linkerDeps = append(linkerDeps, objs.tidyFiles...)
 	linkerDeps = append(linkerDeps, flags.LdFlagsDeps...)
 

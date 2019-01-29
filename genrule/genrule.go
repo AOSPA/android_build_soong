@@ -28,6 +28,8 @@ import (
 )
 
 func init() {
+	android.RegisterModuleType("genrule_defaults", defaultsFactory)
+
 	android.RegisterModuleType("gensrcs", GenSrcsFactory)
 	android.RegisterModuleType("genrule", GenRuleFactory)
 }
@@ -88,10 +90,14 @@ type generatorProperties struct {
 
 	// list of input files
 	Srcs []string `android:"arch_variant"`
+
+	// input files to exclude
+	Exclude_srcs []string `android:"arch_variant"`
 }
 
 type Module struct {
 	android.ModuleBase
+	android.DefaultableModuleBase
 
 	// For other packages to make their own genrules with extra
 	// properties
@@ -228,7 +234,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	var srcFiles android.Paths
 	for _, in := range g.properties.Srcs {
-		paths := ctx.ExpandSources([]string{in}, nil)
+		paths := ctx.ExpandSources([]string{in}, g.properties.Exclude_srcs)
 		srcFiles = append(srcFiles, paths...)
 		addLocationLabel(in, paths.Strings())
 	}
@@ -499,6 +505,7 @@ func NewGenRule() *Module {
 func GenRuleFactory() android.Module {
 	m := NewGenRule()
 	android.InitAndroidModule(m)
+	android.InitDefaultableModule(m)
 	return m
 }
 
@@ -509,3 +516,35 @@ type genRuleProperties struct {
 
 var Bool = proptools.Bool
 var String = proptools.String
+
+//
+// Defaults
+//
+type Defaults struct {
+	android.ModuleBase
+	android.DefaultsModuleBase
+}
+
+func (*Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+}
+
+func (d *Defaults) DepsMutator(ctx android.BottomUpMutatorContext) {
+}
+
+func defaultsFactory() android.Module {
+	return DefaultsFactory()
+}
+
+func DefaultsFactory(props ...interface{}) android.Module {
+	module := &Defaults{}
+
+	module.AddProperties(props...)
+	module.AddProperties(
+		&generatorProperties{},
+		&genRuleProperties{},
+	)
+
+	android.InitDefaultsModule(module)
+
+	return module
+}

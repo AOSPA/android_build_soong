@@ -75,6 +75,10 @@ type BaseCompilerProperties struct {
 	// be added to the include path using -I
 	Local_include_dirs []string `android:"arch_variant,variant_prepend"`
 
+	// Add the directory containing the Android.bp file to the list of include
+	// directories. Defaults to true.
+	Include_build_directory *bool
+
 	// list of generated sources to compile. These are the names of gensrcs or
 	// genrule modules.
 	Generated_sources []string `android:"arch_variant"`
@@ -288,8 +292,11 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.YasmFlags = append(flags.YasmFlags, f)
 	}
 
-	flags.GlobalFlags = append(flags.GlobalFlags, "-I"+android.PathForModuleSrc(ctx).String())
-	flags.YasmFlags = append(flags.YasmFlags, "-I"+android.PathForModuleSrc(ctx).String())
+	if compiler.Properties.Include_build_directory == nil ||
+		*compiler.Properties.Include_build_directory {
+		flags.GlobalFlags = append(flags.GlobalFlags, "-I"+android.PathForModuleSrc(ctx).String())
+		flags.YasmFlags = append(flags.YasmFlags, "-I"+android.PathForModuleSrc(ctx).String())
+	}
 
 	if !(ctx.useSdk() || ctx.useVndk()) || ctx.Host() {
 		flags.SystemIncludeFlags = append(flags.SystemIncludeFlags,
@@ -299,6 +306,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	}
 
 	if ctx.useSdk() {
+		// TODO: Switch to --sysroot.
 		// The NDK headers are installed to a common sysroot. While a more
 		// typical Soong approach would be to only make the headers for the
 		// library you're using available, we're trying to emulate the NDK
@@ -307,6 +315,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			"-isystem "+getCurrentIncludePath(ctx).String(),
 			"-isystem "+getCurrentIncludePath(ctx).Join(ctx, config.NDKTriple(tc)).String())
 
+		// TODO: Migrate to API suffixed triple?
 		// Traditionally this has come from android/api-level.h, but with the
 		// libc headers unified it must be set by the build system since we
 		// don't have per-API level copies of that header now.
@@ -316,14 +325,6 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		flags.GlobalFlags = append(flags.GlobalFlags,
 			"-D__ANDROID_API__="+version)
-
-		// Until the full NDK has been migrated to using ndk_headers, we still
-		// need to add the legacy sysroot includes to get the full set of
-		// headers.
-		legacyIncludes := fmt.Sprintf(
-			"prebuilts/ndk/current/platforms/android-%s/arch-%s/usr/include",
-			ctx.sdkVersion(), ctx.Arch().ArchType.String())
-		flags.SystemIncludeFlags = append(flags.SystemIncludeFlags, "-isystem "+legacyIncludes)
 	}
 
 	if ctx.useVndk() {
@@ -420,9 +421,6 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		cppStd = config.CppStdVersion
 	case "experimental":
 		cppStd = config.ExperimentalCppStdVersion
-	case "c++17", "gnu++17":
-		// Map c++17 and gnu++17 to their 1z equivalents, until 17 is finalized.
-		cppStd = strings.Replace(String(compiler.Properties.Cpp_std), "17", "1z", 1)
 	}
 
 	if compiler.Properties.Gnu_extensions != nil && *compiler.Properties.Gnu_extensions == false {
