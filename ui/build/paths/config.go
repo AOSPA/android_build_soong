@@ -74,6 +74,12 @@ func GetConfig(name string) PathConfig {
 }
 
 var Configuration = map[string]PathConfig{
+	"aarch64-linux-android-ar":      Log,
+	"aarch64-linux-android-gcc":     Log,
+	"aarch64-linux-android-ld":      Log,
+	"aarch64-linux-android-nm":      Log,
+	"aarch64-linux-android-objcopy": Log,
+	"aarch64-linux-android-objdump": Log,
 	"awk":       Allowed,
 	"bash":      Allowed,
 	"bc":        Allowed,
@@ -99,6 +105,7 @@ var Configuration = map[string]PathConfig{
 	"openssl":   Allowed,
 	"patch":     Allowed,
 	"perl":      Log,
+	"printf":    Log,
 	"pstree":    Allowed,
 	"python":    Allowed,
 	"python2.7": Allowed,
