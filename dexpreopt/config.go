@@ -32,7 +32,11 @@ type GlobalConfig struct {
 
 	DisableGenerateProfile bool // don't generate profiles
 
-	BootJars         []string // jars that form the boot image
+	PreoptBootClassPathDexFiles     []string // file paths of boot class path files
+	PreoptBootClassPathDexLocations []string // virtual locations of boot class path files
+
+	BootJars         []string // modules for jars that form the boot class path
+	PreoptBootJars   []string // modules for jars that form the boot image
 	SystemServerJars []string // jars that form the system server
 	SystemServerApps []string // apps that are loaded into system server
 	SpeedApps        []string // apps that should be speed optimized
@@ -110,6 +114,7 @@ type ModuleConfig struct {
 
 	PresignedPrebuilt bool
 
+	NoStripping     bool
 	StripInputPath  string
 	StripOutputPath string
 }

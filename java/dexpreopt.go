@@ -28,10 +28,11 @@ import (
 type dexpreopter struct {
 	dexpreoptProperties DexpreoptProperties
 
-	installPath  android.OutputPath
-	isPrivApp    bool
-	isSDKLibrary bool
-	isTest       bool
+	installPath     android.OutputPath
+	uncompressedDex bool
+	isSDKLibrary    bool
+	isTest          bool
+	isInstallable   bool
 
 	builtInstalled []string
 }
@@ -41,6 +42,9 @@ type DexpreoptProperties struct {
 		// If false, prevent dexpreopting and stripping the dex file from the final jar.  Defaults to
 		// true.
 		Enabled *bool
+
+		// If true, never strip the dex files from the final jar when dexpreopting.  Defaults to false.
+		No_stripping *bool
 
 		// If true, generate an app image (.art file) for this module.
 		App_image *bool
@@ -71,6 +75,10 @@ func (d *dexpreopter) dexpreoptDisabled(ctx android.ModuleContext) bool {
 	}
 
 	if !BoolDefault(d.dexpreoptProperties.Dex_preopt.Enabled, true) {
+		return true
+	}
+
+	if !d.isInstallable {
 		return true
 	}
 
@@ -140,19 +148,13 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		deps = append(deps, profileClassListing.Path())
 	}
 
-	uncompressedDex := false
-	if ctx.Config().UncompressPrivAppDex() &&
-		(d.isPrivApp || inList(ctx.ModuleName(), ctx.Config().ModulesLoadedByPrivilegedModules())) {
-		uncompressedDex = true
-	}
-
 	dexpreoptConfig := dexpreopt.ModuleConfig{
 		Name:                ctx.ModuleName(),
 		DexLocation:         dexLocation,
 		BuildPath:           android.PathForModuleOut(ctx, "dexpreopt", ctx.ModuleName()+".jar").String(),
 		DexPath:             dexJarFile.String(),
 		PreferCodeIntegrity: false,
-		UncompressedDex:     uncompressedDex,
+		UncompressedDex:     d.uncompressedDex,
 		HasApkLibraries:     false,
 		PreoptFlags:         nil,
 
@@ -172,6 +174,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		NoCreateAppImage:    !BoolDefault(d.dexpreoptProperties.Dex_preopt.App_image, true),
 		ForceCreateAppImage: BoolDefault(d.dexpreoptProperties.Dex_preopt.App_image, false),
 
+		NoStripping:     Bool(d.dexpreoptProperties.Dex_preopt.No_stripping),
 		StripInputPath:  dexJarFile.String(),
 		StripOutputPath: strippedDexJarFile.String(),
 	}

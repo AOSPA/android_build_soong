@@ -103,36 +103,232 @@ module {
 }
 */
 
-var archVariants = map[ArchType][]string{}
-var archFeatures = map[ArchType][]string{}
-var archFeatureMap = map[ArchType]map[string][]string{}
-
-func RegisterArchVariants(arch ArchType, variants ...string) {
-	checkCalledFromInit()
-	archVariants[arch] = append(archVariants[arch], variants...)
+var archVariants = map[ArchType][]string{
+	Arm: {
+		"armv7-a",
+		"armv7-a-neon",
+		"armv8-a",
+		"armv8-2a",
+		"cortex-a7",
+		"cortex-a8",
+		"cortex-a9",
+		"cortex-a15",
+		"cortex-a53",
+		"cortex-a53-a57",
+		"cortex-a55",
+		"cortex-a72",
+		"cortex-a73",
+		"cortex-a75",
+		"cortex-a76",
+		"krait",
+		"kryo",
+		"kryo300",
+		"kryo385",
+		"exynos-m1",
+		"exynos-m2",
+	},
+	Arm64: {
+		"armv8_a",
+		"armv8_2a",
+		"cortex-a53",
+		"cortex-a55",
+		"cortex-a72",
+		"cortex-a73",
+		"cortex-a75",
+		"cortex-a76",
+		"kryo",
+		"kryo300",
+		"kryo385",
+		"exynos-m1",
+		"exynos-m2",
+	},
+	Mips: {
+		"mips32_fp",
+		"mips32r2_fp",
+		"mips32r2_fp_xburst",
+		"mips32r2dsp_fp",
+		"mips32r2dspr2_fp",
+		"mips32r6",
+	},
+	Mips64: {
+		"mips64r2",
+		"mips64r6",
+	},
+	X86: {
+		"atom",
+		"haswell",
+		"ivybridge",
+		"sandybridge",
+		"silvermont",
+		"x86_64",
+	},
+	X86_64: {
+		"haswell",
+		"ivybridge",
+		"sandybridge",
+		"silvermont",
+	},
 }
 
-func RegisterArchFeatures(arch ArchType, features ...string) {
-	checkCalledFromInit()
-	archFeatures[arch] = append(archFeatures[arch], features...)
+var archFeatures = map[ArchType][]string{
+	Arm: {
+		"neon",
+	},
+	Mips: {
+		"dspr2",
+		"rev6",
+		"msa",
+	},
+	Mips64: {
+		"rev6",
+		"msa",
+	},
+	X86: {
+		"ssse3",
+		"sse4",
+		"sse4_1",
+		"sse4_2",
+		"aes_ni",
+		"avx",
+		"popcnt",
+		"movbe",
+	},
+	X86_64: {
+		"ssse3",
+		"sse4",
+		"sse4_1",
+		"sse4_2",
+		"aes_ni",
+		"avx",
+		"popcnt",
+	},
 }
 
-func RegisterArchVariantFeatures(arch ArchType, variant string, features ...string) {
+var archFeatureMap = map[ArchType]map[string][]string{
+	Arm: {
+		"armv7-a-neon": {
+			"neon",
+		},
+		"armv8-a": {
+			"neon",
+		},
+		"armv8-2a": {
+			"neon",
+		},
+	},
+	Mips: {
+		"mips32r2dspr2_fp": {
+			"dspr2",
+		},
+		"mips32r6": {
+			"rev6",
+		},
+	},
+	Mips64: {
+		"mips64r6": {
+			"rev6",
+		},
+	},
+	X86: {
+		"atom": {
+			"ssse3",
+			"movbe",
+		},
+		"haswell": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"aes_ni",
+			"avx",
+			"popcnt",
+			"movbe",
+		},
+		"ivybridge": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"aes_ni",
+			"avx",
+			"popcnt",
+		},
+		"sandybridge": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"popcnt",
+		},
+		"silvermont": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"aes_ni",
+			"popcnt",
+			"movbe",
+		},
+		"x86_64": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"popcnt",
+		},
+	},
+	X86_64: {
+		"haswell": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"aes_ni",
+			"avx",
+			"popcnt",
+		},
+		"ivybridge": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"aes_ni",
+			"avx",
+			"popcnt",
+		},
+		"sandybridge": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"popcnt",
+		},
+		"silvermont": {
+			"ssse3",
+			"sse4",
+			"sse4_1",
+			"sse4_2",
+			"aes_ni",
+			"popcnt",
+		},
+	},
+}
+
+var defaultArchFeatureMap = map[OsType]map[ArchType][]string{}
+
+func RegisterDefaultArchVariantFeatures(os OsType, arch ArchType, features ...string) {
 	checkCalledFromInit()
-	if variant != "" && !InList(variant, archVariants[arch]) {
-		panic(fmt.Errorf("Invalid variant %q for arch %q", variant, arch))
-	}
 
 	for _, feature := range features {
 		if !InList(feature, archFeatures[arch]) {
-			panic(fmt.Errorf("Invalid feature %q for arch %q variant %q", feature, arch, variant))
+			panic(fmt.Errorf("Invalid feature %q for arch %q variant \"\"", feature, arch))
 		}
 	}
 
-	if archFeatureMap[arch] == nil {
-		archFeatureMap[arch] = make(map[string][]string)
+	if defaultArchFeatureMap[os] == nil {
+		defaultArchFeatureMap[os] = make(map[ArchType][]string)
 	}
-	archFeatureMap[arch][variant] = features
+	defaultArchFeatureMap[os][arch] = features
 }
 
 // An Arch indicates a single CPU architecture.
@@ -197,6 +393,7 @@ var (
 	LinuxBionic = NewOsType("linux_bionic", Host, false)
 	Windows     = NewOsType("windows", HostCross, true)
 	Android     = NewOsType("android", Device, false)
+	Fuchsia     = NewOsType("fuchsia", Device, false)
 
 	osArchTypeMap = map[OsType][]ArchType{
 		Linux:       []ArchType{X86, X86_64},
@@ -204,6 +401,7 @@ var (
 		Darwin:      []ArchType{X86_64},
 		Windows:     []ArchType{X86, X86_64},
 		Android:     []ArchType{Arm, Arm64, Mips, Mips64, X86, X86_64},
+		Fuchsia:     []ArchType{Arm64, X86_64},
 	}
 )
 
@@ -952,7 +1150,7 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 			return
 		}
 
-		arch, err := decodeArch(archName, archVariant, cpuVariant, abi)
+		arch, err := decodeArch(os, archName, archVariant, cpuVariant, abi)
 		if err != nil {
 			targetErr = err
 			return
@@ -997,7 +1195,12 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 	}
 
 	if variables.DeviceArch != nil && *variables.DeviceArch != "" {
-		addTarget(Android, *variables.DeviceArch, variables.DeviceArchVariant,
+		var target = Android
+		if Bool(variables.Fuchsia) {
+			target = Fuchsia
+		}
+
+		addTarget(target, *variables.DeviceArch, variables.DeviceArchVariant,
 			variables.DeviceCpuVariant, variables.DeviceAbi)
 
 		if variables.DeviceSecondaryArch != nil && *variables.DeviceSecondaryArch != "" {
@@ -1082,6 +1285,7 @@ func getMegaDeviceConfig() []archConfig {
 		{"arm", "armv7-a-neon", "cortex-a76", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "krait", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "kryo", []string{"armeabi-v7a"}},
+		{"arm", "armv7-a-neon", "kryo300", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "kryo385", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "exynos-m1", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "exynos-m2", []string{"armeabi-v7a"}},
@@ -1093,6 +1297,7 @@ func getMegaDeviceConfig() []archConfig {
 		{"arm64", "armv8-a", "exynos-m2", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "cortex-a75", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "cortex-a76", []string{"arm64-v8a"}},
+		{"arm64", "armv8-2a", "kryo300", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "kryo385", []string{"arm64-v8a"}},
 		{"mips", "mips32-fp", "", []string{"mips"}},
 		{"mips", "mips32r2-fp", "", []string{"mips"}},
@@ -1127,11 +1332,11 @@ func getNdkAbisConfig() []archConfig {
 	}
 }
 
-func decodeArchSettings(archConfigs []archConfig) ([]Target, error) {
+func decodeArchSettings(os OsType, archConfigs []archConfig) ([]Target, error) {
 	var ret []Target
 
 	for _, config := range archConfigs {
-		arch, err := decodeArch(config.arch, &config.archVariant,
+		arch, err := decodeArch(os, config.arch, &config.archVariant,
 			&config.cpuVariant, &config.abi)
 		if err != nil {
 			return nil, err
@@ -1147,7 +1352,7 @@ func decodeArchSettings(archConfigs []archConfig) ([]Target, error) {
 }
 
 // Convert a set of strings from product variables into a single Arch struct
-func decodeArch(arch string, archVariant, cpuVariant *string, abi *[]string) (Arch, error) {
+func decodeArch(os OsType, arch string, archVariant, cpuVariant *string, abi *[]string) (Arch, error) {
 	stringPtr := func(p *string) string {
 		if p != nil {
 			return *p
@@ -1190,8 +1395,14 @@ func decodeArch(arch string, archVariant, cpuVariant *string, abi *[]string) (Ar
 		}
 	}
 
-	if featureMap, ok := archFeatureMap[archType]; ok {
-		a.ArchFeatures = featureMap[a.ArchVariant]
+	if a.ArchVariant == "" {
+		if featureMap, ok := defaultArchFeatureMap[os]; ok {
+			a.ArchFeatures = featureMap[archType]
+		}
+	} else {
+		if featureMap, ok := archFeatureMap[archType]; ok {
+			a.ArchFeatures = featureMap[a.ArchVariant]
+		}
 	}
 
 	return a, nil
