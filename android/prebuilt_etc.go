@@ -125,7 +125,8 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx ModuleContext) {
 	p.outputFilePath = PathForModuleOut(ctx, filename).OutputPath
 	p.installDirPath = PathForModuleInstall(ctx, "etc", String(p.properties.Sub_dir))
 
-	// This ensures that outputFilePath has the same name as this module.
+	// This ensures that outputFilePath has the correct name for others to
+	// use, as the source file may have a different name.
 	ctx.Build(pctx, BuildParams{
 		Rule:   Cp,
 		Output: p.outputFilePath,
@@ -144,6 +145,9 @@ func (p *PrebuiltEtc) AndroidMk() AndroidMkData {
 			fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
 			fmt.Fprintln(w, "LOCAL_MODULE :=", name+nameSuffix)
 			fmt.Fprintln(w, "LOCAL_MODULE_CLASS := ETC")
+			if p.commonProperties.Owner != nil {
+				fmt.Fprintln(w, "LOCAL_MODULE_OWNER :=", *p.commonProperties.Owner)
+			}
 			fmt.Fprintln(w, "LOCAL_MODULE_TAGS := optional")
 			fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", p.outputFilePath.String())
 			fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", "$(OUT_DIR)/"+p.installDirPath.RelPathString())

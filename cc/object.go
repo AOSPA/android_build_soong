@@ -124,3 +124,7 @@ func (object *objectLinker) link(ctx ModuleContext,
 	ctx.CheckbuildFile(outputFile)
 	return outputFile
 }
+
+func (object *objectLinker) unstrippedOutputFilePath() android.Path {
+	return nil
+}

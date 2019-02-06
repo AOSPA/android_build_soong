@@ -202,10 +202,10 @@ func TestConfig(buildDir string, env map[string]string) Config {
 		productVariables: productVariables{
 			DeviceName:           stringPtr("test_device"),
 			Platform_sdk_version: intPtr(26),
-			AAPTConfig:           &[]string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
+			AAPTConfig:           []string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
 			AAPTPreferredConfig:  stringPtr("xhdpi"),
 			AAPTCharacteristics:  stringPtr("nosdcard"),
-			AAPTPrebuiltDPI:      &[]string{"xhdpi", "xxhdpi"},
+			AAPTPrebuiltDPI:      []string{"xhdpi", "xxhdpi"},
 		},
 
 		buildDir:     buildDir,
@@ -222,6 +222,22 @@ func TestConfig(buildDir string, env map[string]string) Config {
 	}
 
 	return Config{config}
+}
+
+func TestArchConfigFuchsia(buildDir string, env map[string]string) Config {
+	testConfig := TestConfig(buildDir, env)
+	config := testConfig.config
+
+	config.Targets = map[OsType][]Target{
+		Fuchsia: []Target{
+			{Fuchsia, Arch{ArchType: Arm64, ArchVariant: "", Native: true}},
+		},
+		BuildOs: []Target{
+			{BuildOs, Arch{ArchType: X86_64}},
+		},
+	}
+
+	return testConfig
 }
 
 // TestConfig returns a Config object suitable for using for tests that need to run the arch mutator
@@ -241,6 +257,7 @@ func TestArchConfig(buildDir string, env map[string]string) Config {
 	}
 
 	config.BuildOsVariant = config.Targets[BuildOs][0].String()
+	config.BuildOsCommonVariant = getCommonTargets(config.Targets[BuildOs])[0].String()
 
 	return testConfig
 }
@@ -459,10 +476,7 @@ func (c *config) DeviceName() string {
 }
 
 func (c *config) ResourceOverlays() []string {
-	if c.productVariables.ResourceOverlays == nil {
-		return nil
-	}
-	return *c.productVariables.ResourceOverlays
+	return c.productVariables.ResourceOverlays
 }
 
 func (c *config) PlatformVersionName() string {
@@ -527,7 +541,7 @@ func (c *config) PlatformVersionCombinedCodenames() []string {
 }
 
 func (c *config) ProductAAPTConfig() []string {
-	return stringSlice(c.productVariables.AAPTConfig)
+	return c.productVariables.AAPTConfig
 }
 
 func (c *config) ProductAAPTPreferredConfig() string {
@@ -539,7 +553,7 @@ func (c *config) ProductAAPTCharacteristics() string {
 }
 
 func (c *config) ProductAAPTPrebuiltDPI() []string {
-	return stringSlice(c.productVariables.AAPTPrebuiltDPI)
+	return c.productVariables.AAPTPrebuiltDPI
 }
 
 func (c *config) DefaultAppCertificateDir(ctx PathContext) SourcePath {
@@ -651,6 +665,10 @@ func (c *config) EnableCFI() bool {
 	}
 }
 
+func (c *config) DisableScudo() bool {
+	return Bool(c.productVariables.DisableScudo)
+}
+
 func (c *config) EnableXOM() bool {
 	if c.productVariables.EnableXOM == nil {
 		return true
@@ -717,10 +735,10 @@ func (c *config) ArtUseReadBarrier() bool {
 func (c *config) EnforceRROForModule(name string) bool {
 	enforceList := c.productVariables.EnforceRROTargets
 	if enforceList != nil {
-		if len(*enforceList) == 1 && (*enforceList)[0] == "*" {
+		if len(enforceList) == 1 && (enforceList)[0] == "*" {
 			return true
 		}
-		return InList(name, *enforceList)
+		return InList(name, enforceList)
 	}
 	return false
 }
@@ -728,7 +746,7 @@ func (c *config) EnforceRROForModule(name string) bool {
 func (c *config) EnforceRROExcludedOverlay(path string) bool {
 	excluded := c.productVariables.EnforceRROExcludedOverlays
 	if excluded != nil {
-		for _, exclude := range *excluded {
+		for _, exclude := range excluded {
 			if strings.HasPrefix(path, exclude) {
 				return true
 			}
@@ -773,6 +791,10 @@ func (c *config) DexPreoptProfileDir() string {
 	return String(c.productVariables.DexPreoptProfileDir)
 }
 
+func (c *config) FrameworksBaseDirExists(ctx PathContext) bool {
+	return ExistentPathForSource(ctx, "frameworks", "base").Valid()
+}
+
 func (c *deviceConfig) Arches() []Arch {
 	var arches []Arch
 	for _, target := range c.config.Targets[Android] {
@@ -809,10 +831,7 @@ func (c *deviceConfig) ExtraVndkVersions() []string {
 }
 
 func (c *deviceConfig) SystemSdkVersions() []string {
-	if c.config.productVariables.DeviceSystemSdkVersions == nil {
-		return nil
-	}
-	return *c.config.productVariables.DeviceSystemSdkVersions
+	return c.config.productVariables.DeviceSystemSdkVersions
 }
 
 func (c *deviceConfig) PlatformSystemSdkVersions() []string {
@@ -855,12 +874,12 @@ func (c *deviceConfig) NativeCoverageEnabled() bool {
 func (c *deviceConfig) CoverageEnabledForPath(path string) bool {
 	coverage := false
 	if c.config.productVariables.CoveragePaths != nil {
-		if PrefixInList(path, *c.config.productVariables.CoveragePaths) {
+		if PrefixInList(path, c.config.productVariables.CoveragePaths) {
 			coverage = true
 		}
 	}
 	if coverage && c.config.productVariables.CoverageExcludePaths != nil {
-		if PrefixInList(path, *c.config.productVariables.CoverageExcludePaths) {
+		if PrefixInList(path, c.config.productVariables.CoverageExcludePaths) {
 			coverage = false
 		}
 	}
@@ -888,7 +907,27 @@ func (c *deviceConfig) PlatPrivateSepolicyDirs() []string {
 }
 
 func (c *deviceConfig) OverrideManifestPackageNameFor(name string) (manifestName string, overridden bool) {
-	overrides := c.config.productVariables.ManifestPackageNameOverrides
+	return findOverrideValue(c.config.productVariables.ManifestPackageNameOverrides, name,
+		"invalid override rule %q in PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES should be <module_name>:<manifest_name>")
+}
+
+func (c *deviceConfig) OverrideCertificateFor(name string) (certificatePath string, overridden bool) {
+	return findOverrideValue(c.config.productVariables.CertificateOverrides, name,
+		"invalid override rule %q in PRODUCT_CERTIFICATE_OVERRIDES should be <module_name>:<certificate_module_name>")
+}
+
+func (c *deviceConfig) OverridePackageNameFor(name string) string {
+	newName, overridden := findOverrideValue(
+		c.config.productVariables.PackageNameOverrides,
+		name,
+		"invalid override rule %q in PRODUCT_PACKAGE_NAME_OVERRIDES should be <module_name>:<package_name>")
+	if overridden {
+		return newName
+	}
+	return name
+}
+
+func findOverrideValue(overrides []string, name string, errorMsg string) (newValue string, overridden bool) {
 	if overrides == nil || len(overrides) == 0 {
 		return "", false
 	}
@@ -896,7 +935,7 @@ func (c *deviceConfig) OverrideManifestPackageNameFor(name string) (manifestName
 		split := strings.Split(o, ":")
 		if len(split) != 2 {
 			// This shouldn't happen as this is first checked in make, but just in case.
-			panic(fmt.Errorf("invalid override rule %q in PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES should be <module_name>:<manifest_name>", o))
+			panic(fmt.Errorf(errorMsg, o))
 		}
 		if matchPattern(split[0], name) {
 			return substPattern(split[0], split[1], name), true
@@ -921,28 +960,28 @@ func (c *config) IntegerOverflowDisabledForPath(path string) bool {
 	if c.productVariables.IntegerOverflowExcludePaths == nil {
 		return false
 	}
-	return PrefixInList(path, *c.productVariables.IntegerOverflowExcludePaths)
+	return PrefixInList(path, c.productVariables.IntegerOverflowExcludePaths)
 }
 
 func (c *config) CFIDisabledForPath(path string) bool {
 	if c.productVariables.CFIExcludePaths == nil {
 		return false
 	}
-	return PrefixInList(path, *c.productVariables.CFIExcludePaths)
+	return PrefixInList(path, c.productVariables.CFIExcludePaths)
 }
 
 func (c *config) CFIEnabledForPath(path string) bool {
 	if c.productVariables.CFIIncludePaths == nil {
 		return false
 	}
-	return PrefixInList(path, *c.productVariables.CFIIncludePaths)
+	return PrefixInList(path, c.productVariables.CFIIncludePaths)
 }
 
 func (c *config) XOMDisabledForPath(path string) bool {
 	if c.productVariables.XOMExcludePaths == nil {
 		return false
 	}
-	return PrefixInList(path, *c.productVariables.XOMExcludePaths)
+	return PrefixInList(path, c.productVariables.XOMExcludePaths)
 }
 
 func (c *config) VendorConfig(name string) VendorConfig {
@@ -993,12 +1032,4 @@ func (c *config) HiddenAPIFlags() string {
 
 func (c *config) HiddenAPIExtraAppUsageJars() []string {
 	return c.productVariables.HiddenAPIExtraAppUsageJars
-}
-
-func stringSlice(s *[]string) []string {
-	if s != nil {
-		return *s
-	} else {
-		return nil
-	}
 }

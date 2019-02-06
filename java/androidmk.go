@@ -33,9 +33,6 @@ func (library *Library) AndroidMkHostDex(w io.Writer, name string, data android.
 		} else {
 			fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", library.implementationAndResourcesJar.String())
 		}
-		if library.installFile == nil {
-			fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
-		}
 		if library.dexJarFile != nil {
 			fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", library.dexJarFile.String())
 		}
@@ -384,6 +381,15 @@ func (ddoc *Droiddoc) AndroidMk() android.AndroidMkData {
 					fmt.Fprintln(w, ".PHONY:", ddoc.Name()+"-check-last-released-api")
 					fmt.Fprintln(w, ddoc.Name()+"-check-last-released-api:",
 						ddoc.checkLastReleasedApiTimestamp.String())
+
+					if ddoc.Name() == "api-stubs-docs" || ddoc.Name() == "system-api-stubs-docs" {
+						fmt.Fprintln(w, ".PHONY: checkapi")
+						fmt.Fprintln(w, "checkapi:",
+							ddoc.checkLastReleasedApiTimestamp.String())
+
+						fmt.Fprintln(w, ".PHONY: droidcore")
+						fmt.Fprintln(w, "droidcore: checkapi")
+					}
 				}
 				apiFilePrefix := "INTERNAL_PLATFORM_"
 				if String(ddoc.properties.Api_tag_name) != "" {
@@ -462,6 +468,15 @@ func (dstubs *Droidstubs) AndroidMk() android.AndroidMkData {
 					fmt.Fprintln(w, ".PHONY:", dstubs.Name()+"-check-last-released-api")
 					fmt.Fprintln(w, dstubs.Name()+"-check-last-released-api:",
 						dstubs.checkLastReleasedApiTimestamp.String())
+
+					if dstubs.Name() == "api-stubs-docs" || dstubs.Name() == "system-api-stubs-docs" {
+						fmt.Fprintln(w, ".PHONY: checkapi")
+						fmt.Fprintln(w, "checkapi:",
+							dstubs.checkLastReleasedApiTimestamp.String())
+
+						fmt.Fprintln(w, ".PHONY: droidcore")
+						fmt.Fprintln(w, "droidcore: checkapi")
+					}
 				}
 				if dstubs.checkNullabilityWarningsTimestamp != nil {
 					fmt.Fprintln(w, ".PHONY:", dstubs.Name()+"-check-nullability-warnings")

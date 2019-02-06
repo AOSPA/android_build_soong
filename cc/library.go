@@ -29,27 +29,23 @@ import (
 	"android/soong/genrule"
 )
 
+type StaticSharedLibraryProperties struct {
+	Srcs   []string `android:"arch_variant"`
+	Cflags []string `android:"arch_variant"`
+
+	Enabled            *bool    `android:"arch_variant"`
+	Whole_static_libs  []string `android:"arch_variant"`
+	Static_libs        []string `android:"arch_variant"`
+	Shared_libs        []string `android:"arch_variant"`
+	System_shared_libs []string `android:"arch_variant"`
+
+	Export_shared_lib_headers []string `android:"arch_variant"`
+	Export_static_lib_headers []string `android:"arch_variant"`
+}
+
 type LibraryProperties struct {
-	Static struct {
-		Srcs   []string `android:"arch_variant"`
-		Cflags []string `android:"arch_variant"`
-
-		Enabled            *bool    `android:"arch_variant"`
-		Whole_static_libs  []string `android:"arch_variant"`
-		Static_libs        []string `android:"arch_variant"`
-		Shared_libs        []string `android:"arch_variant"`
-		System_shared_libs []string `android:"arch_variant"`
-	} `android:"arch_variant"`
-	Shared struct {
-		Srcs   []string `android:"arch_variant"`
-		Cflags []string `android:"arch_variant"`
-
-		Enabled            *bool    `android:"arch_variant"`
-		Whole_static_libs  []string `android:"arch_variant"`
-		Static_libs        []string `android:"arch_variant"`
-		Shared_libs        []string `android:"arch_variant"`
-		System_shared_libs []string `android:"arch_variant"`
-	} `android:"arch_variant"`
+	Static StaticSharedLibraryProperties `android:"arch_variant"`
+	Shared StaticSharedLibraryProperties `android:"arch_variant"`
 
 	// local file name to pass to the linker as -unexported_symbols_list
 	Unexported_symbols_list *string `android:"arch_variant"`
@@ -91,6 +87,19 @@ type LibraryProperties struct {
 	// binaries would be installed by default (in PRODUCT_PACKAGES) the other library will be removed
 	// from PRODUCT_PACKAGES.
 	Overrides []string
+
+	// Properties for ABI compatibility checker
+	Header_abi_checker struct {
+		// Path to a symbol file that specifies the symbols to be included in the generated
+		// ABI dump file
+		Symbol_file *string
+
+		// Symbol versions that should be ignored from the symbol file
+		Exclude_symbol_versions []string
+
+		// Symbol tags that should be ignored from the symbol file
+		Exclude_symbol_tags []string
+	}
 }
 
 type LibraryMutatedProperties struct {
@@ -539,6 +548,9 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 			library.Properties.Static.Whole_static_libs...)
 		deps.StaticLibs = append(deps.StaticLibs, library.Properties.Static.Static_libs...)
 		deps.SharedLibs = append(deps.SharedLibs, library.Properties.Static.Shared_libs...)
+
+		deps.ReexportSharedLibHeaders = append(deps.ReexportSharedLibHeaders, library.Properties.Static.Export_shared_lib_headers...)
+		deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, library.Properties.Static.Export_static_lib_headers...)
 	} else if library.shared() {
 		if ctx.toolchain().Bionic() && !Bool(library.baseLinker.Properties.Nocrt) {
 			if !ctx.useSdk() {
@@ -560,16 +572,23 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.WholeStaticLibs = append(deps.WholeStaticLibs, library.Properties.Shared.Whole_static_libs...)
 		deps.StaticLibs = append(deps.StaticLibs, library.Properties.Shared.Static_libs...)
 		deps.SharedLibs = append(deps.SharedLibs, library.Properties.Shared.Shared_libs...)
+
+		deps.ReexportSharedLibHeaders = append(deps.ReexportSharedLibHeaders, library.Properties.Shared.Export_shared_lib_headers...)
+		deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, library.Properties.Shared.Export_static_lib_headers...)
 	}
 	if ctx.useVndk() {
 		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, library.baseLinker.Properties.Target.Vendor.Exclude_static_libs)
 		deps.SharedLibs = removeListFromList(deps.SharedLibs, library.baseLinker.Properties.Target.Vendor.Exclude_shared_libs)
 		deps.StaticLibs = removeListFromList(deps.StaticLibs, library.baseLinker.Properties.Target.Vendor.Exclude_static_libs)
+		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, library.baseLinker.Properties.Target.Vendor.Exclude_shared_libs)
+		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, library.baseLinker.Properties.Target.Vendor.Exclude_static_libs)
 	}
 	if ctx.inRecovery() {
 		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, library.baseLinker.Properties.Target.Recovery.Exclude_static_libs)
 		deps.SharedLibs = removeListFromList(deps.SharedLibs, library.baseLinker.Properties.Target.Recovery.Exclude_shared_libs)
 		deps.StaticLibs = removeListFromList(deps.StaticLibs, library.baseLinker.Properties.Target.Recovery.Exclude_static_libs)
+		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, library.baseLinker.Properties.Target.Recovery.Exclude_shared_libs)
+		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, library.baseLinker.Properties.Target.Recovery.Exclude_static_libs)
 	}
 
 	android.ExtractSourceDeps(ctx, library.Properties.Unexported_symbols_list)
@@ -696,9 +715,11 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 		}
 	}
 
-	sharedLibs := deps.SharedLibs
+	sharedLibs := deps.EarlySharedLibs
+	sharedLibs = append(sharedLibs, deps.SharedLibs...)
 	sharedLibs = append(sharedLibs, deps.LateSharedLibs...)
 
+	linkerDeps = append(linkerDeps, deps.EarlySharedLibsDeps...)
 	linkerDeps = append(linkerDeps, deps.SharedLibsDeps...)
 	linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
 	linkerDeps = append(linkerDeps, objs.tidyFiles...)
@@ -717,6 +738,10 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	library.linkSAbiDumpFiles(ctx, objs, fileName, ret)
 
 	return ret
+}
+
+func (library *libraryDecorator) unstrippedOutputFilePath() android.Path {
+	return library.unstrippedOutputFile
 }
 
 func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
@@ -756,7 +781,10 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 			SourceAbiFlags = append(SourceAbiFlags, reexportedInclude)
 		}
 		exportedHeaderFlags := strings.Join(SourceAbiFlags, " ")
-		library.sAbiOutputFile = TransformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags)
+		library.sAbiOutputFile = TransformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags,
+			android.OptionalPathForModuleSrc(ctx, library.Properties.Header_abi_checker.Symbol_file),
+			library.Properties.Header_abi_checker.Exclude_symbol_versions,
+			library.Properties.Header_abi_checker.Exclude_symbol_tags)
 
 		refAbiDumpFile := getRefAbiDumpFile(ctx, vndkVersion, fileName)
 		if refAbiDumpFile != nil {
@@ -862,6 +890,18 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 				if vndkVersion != "current" && vndkVersion != "" {
 					library.baseInstaller.subDir += "-" + vndkVersion
 				}
+			}
+		} else if len(library.Properties.Stubs.Versions) > 0 && android.DirectlyInAnyApex(ctx, ctx.ModuleName()) {
+			// If a library in an APEX has stable versioned APIs, we basically don't need
+			// to have the platform variant of the library in /system partition because
+			// platform components can just use the lib from the APEX without fearing about
+			// compatibility. However, if the library is required for some early processes
+			// before the APEX is activated, the platform variant may also be required.
+			// In that case, it is installed to the subdirectory 'bootstrap' in order to
+			// be distinguished/isolated from other non-bootstrap libraries in /system/lib
+			// so that the bootstrap libraries are used only when the APEX isn't ready.
+			if !library.buildStubs() && ctx.Arch().Native {
+				library.baseInstaller.subDir = "bootstrap"
 			}
 		}
 		library.baseInstaller.install(ctx, file)

@@ -118,7 +118,7 @@ func init() {
 	// projects, and hence cannot built 'aapt2'. Use the SDK prebuilt instead.
 	hostBinToolVariableWithPrebuilt := func(name, prebuiltDir, tool string) {
 		pctx.VariableFunc(name, func(ctx android.PackageVarContext) string {
-			if !android.ExistentPathForSource(ctx, "frameworks/base").Valid() {
+			if !ctx.Config().FrameworksBaseDirExists(ctx) {
 				return filepath.Join(prebuiltDir, runtime.GOOS, "bin", tool)
 			} else {
 				return pctx.HostBinToolPath(ctx, tool).String()
@@ -177,6 +177,29 @@ func apexMutator(mctx android.BottomUpMutatorContext) {
 	}
 }
 
+type apexNativeDependencies struct {
+	// List of native libraries
+	Native_shared_libs []string
+	// List of native executables
+	Binaries []string
+}
+type apexMultilibProperties struct {
+	// Native dependencies whose compile_multilib is "first"
+	First apexNativeDependencies
+
+	// Native dependencies whose compile_multilib is "both"
+	Both apexNativeDependencies
+
+	// Native dependencies whose compile_multilib is "prefer32"
+	Prefer32 apexNativeDependencies
+
+	// Native dependencies whose compile_multilib is "32"
+	Lib32 apexNativeDependencies
+
+	// Native dependencies whose compile_multilib is "64"
+	Lib64 apexNativeDependencies
+}
+
 type apexBundleProperties struct {
 	// Json manifest file describing meta info of this APEX bundle. Default:
 	// "apex_manifest.json"
@@ -218,36 +241,29 @@ type apexBundleProperties struct {
 	// Default is false.
 	Use_vendor *bool
 
-	Multilib struct {
-		First struct {
-			// List of native libraries whose compile_multilib is "first"
-			Native_shared_libs []string
-			// List of native executables whose compile_multilib is "first"
-			Binaries []string
+	// For telling the apex to ignore special handling for system libraries such as bionic. Default is false.
+	Ignore_system_library_special_case *bool
+
+	Multilib apexMultilibProperties
+}
+
+type apexTargetBundleProperties struct {
+	Target struct {
+		// Multilib properties only for android.
+		Android struct {
+			Multilib apexMultilibProperties
 		}
-		Both struct {
-			// List of native libraries whose compile_multilib is "both"
-			Native_shared_libs []string
-			// List of native executables whose compile_multilib is "both"
-			Binaries []string
+		// Multilib properties only for host.
+		Host struct {
+			Multilib apexMultilibProperties
 		}
-		Prefer32 struct {
-			// List of native libraries whose compile_multilib is "prefer32"
-			Native_shared_libs []string
-			// List of native executables whose compile_multilib is "prefer32"
-			Binaries []string
+		// Multilib properties only for host linux_bionic.
+		Linux_bionic struct {
+			Multilib apexMultilibProperties
 		}
-		Lib32 struct {
-			// List of native libraries whose compile_multilib is "32"
-			Native_shared_libs []string
-			// List of native executables whose compile_multilib is "32"
-			Binaries []string
-		}
-		Lib64 struct {
-			// List of native libraries whose compile_multilib is "64"
-			Native_shared_libs []string
-			// List of native executables whose compile_multilib is "64"
-			Binaries []string
+		// Multilib properties only for host linux_glibc.
+		Linux_glibc struct {
+			Multilib apexMultilibProperties
 		}
 	}
 }
@@ -329,17 +345,18 @@ func (class apexFileClass) NameInMake() string {
 type apexFile struct {
 	builtFile  android.Path
 	moduleName string
-	archType   android.ArchType
 	installDir string
 	class      apexFileClass
 	module     android.Module
+	symlinks   []string
 }
 
 type apexBundle struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 
-	properties apexBundleProperties
+	properties       apexBundleProperties
+	targetProperties apexTargetBundleProperties
 
 	apexTypes apexPackaging
 
@@ -372,9 +389,26 @@ func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext,
 	}, executableTag, binaries...)
 }
 
+func (a *apexBundle) combineProperties(ctx android.BottomUpMutatorContext) {
+	if ctx.Os().Class == android.Device {
+		proptools.AppendProperties(&a.properties.Multilib, &a.targetProperties.Target.Android.Multilib, nil)
+	} else {
+		proptools.AppendProperties(&a.properties.Multilib, &a.targetProperties.Target.Host.Multilib, nil)
+		if ctx.Os().Bionic() {
+			proptools.AppendProperties(&a.properties.Multilib, &a.targetProperties.Target.Linux_bionic.Multilib, nil)
+		} else {
+			proptools.AppendProperties(&a.properties.Multilib, &a.targetProperties.Target.Linux_glibc.Multilib, nil)
+		}
+	}
+}
+
 func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
+
 	targets := ctx.MultiTargets()
 	config := ctx.DeviceConfig()
+
+	a.combineProperties(ctx)
+
 	has32BitTarget := false
 	for _, target := range targets {
 		if target.Arch.ArchType.Multilib == "lib32" {
@@ -396,7 +430,8 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 			a.properties.Multilib.Both.Binaries, target.String(),
 			a.getImageVariation(config))
 
-		if i == 0 {
+		isPrimaryAbi := i == 0
+		if isPrimaryAbi {
 			// When multilib.* is omitted for binaries, it implies
 			// multilib.first.
 			ctx.AddFarVariationDependencies([]blueprint.Variation{
@@ -483,12 +518,20 @@ func (a *apexBundle) getImageVariation(config android.DeviceConfig) string {
 	}
 }
 
-func (a *apexBundle) IsSanitizerEnabled() bool {
-	// APEX can be mutated for sanitizers
-	return true
+func (a *apexBundle) IsSanitizerEnabled(ctx android.BaseModuleContext, sanitizerName string) bool {
+	globalSanitizerNames := []string{}
+	if a.Host() {
+		globalSanitizerNames = ctx.Config().SanitizeHost()
+	} else {
+		arches := ctx.Config().SanitizeDeviceArch()
+		if len(arches) == 0 || android.InList(a.Arch().ArchType.Name, arches) {
+			globalSanitizerNames = ctx.Config().SanitizeDevice()
+		}
+	}
+	return android.InList(sanitizerName, globalSanitizerNames)
 }
 
-func getCopyManifestForNativeLibrary(cc *cc.Module) (fileToCopy android.Path, dirInApex string) {
+func getCopyManifestForNativeLibrary(cc *cc.Module, handleSpecialLibs bool) (fileToCopy android.Path, dirInApex string) {
 	// Decide the APEX-local directory by the multilib of the library
 	// In the future, we may query this to the module.
 	switch cc.Arch().ArchType.Multilib {
@@ -500,18 +543,20 @@ func getCopyManifestForNativeLibrary(cc *cc.Module) (fileToCopy android.Path, di
 	if !cc.Arch().Native {
 		dirInApex = filepath.Join(dirInApex, cc.Arch().ArchType.String())
 	}
-	switch cc.Name() {
-	case "libc", "libm", "libdl":
-		// Special case for bionic libs. This is to prevent the bionic libs
-		// from being included in the search path /apex/com.android.apex/lib.
-		// This exclusion is required because bionic libs in the runtime APEX
-		// are available via the legacy paths /system/lib/libc.so, etc. By the
-		// init process, the bionic libs in the APEX are bind-mounted to the
-		// legacy paths and thus will be loaded into the default linker namespace.
-		// If the bionic libs are directly in /apex/com.android.apex/lib then
-		// the same libs will be again loaded to the runtime linker namespace,
-		// which will result double loading of bionic libs that isn't supported.
-		dirInApex = filepath.Join(dirInApex, "bionic")
+	if handleSpecialLibs {
+		switch cc.Name() {
+		case "libc", "libm", "libdl":
+			// Special case for bionic libs. This is to prevent the bionic libs
+			// from being included in the search path /apex/com.android.apex/lib.
+			// This exclusion is required because bionic libs in the runtime APEX
+			// are available via the legacy paths /system/lib/libc.so, etc. By the
+			// init process, the bionic libs in the APEX are bind-mounted to the
+			// legacy paths and thus will be loaded into the default linker namespace.
+			// If the bionic libs are directly in /apex/com.android.apex/lib then
+			// the same libs will be again loaded to the runtime linker namespace,
+			// which will result double loading of bionic libs that isn't supported.
+			dirInApex = filepath.Join(dirInApex, "bionic")
+		}
 	}
 
 	fileToCopy = cc.OutputFile().Path()
@@ -554,6 +599,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		return
 	}
 
+	handleSpecialLibs := !android.Bool(a.properties.Ignore_system_library_special_case)
+
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		if _, ok := parent.(*apexBundle); ok {
 			// direct dependencies
@@ -562,16 +609,21 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			switch depTag {
 			case sharedLibTag:
 				if cc, ok := child.(*cc.Module); ok {
-					fileToCopy, dirInApex := getCopyManifestForNativeLibrary(cc)
-					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, cc.Arch().ArchType, dirInApex, nativeSharedLib, cc})
+					fileToCopy, dirInApex := getCopyManifestForNativeLibrary(cc, handleSpecialLibs)
+					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, dirInApex, nativeSharedLib, cc, nil})
 					return true
 				} else {
 					ctx.PropertyErrorf("native_shared_libs", "%q is not a cc_library or cc_library_shared module", depName)
 				}
 			case executableTag:
 				if cc, ok := child.(*cc.Module); ok {
+					if !cc.Arch().Native {
+						// There is only one 'bin' directory so we shouldn't bother copying in
+						// native-bridge'd binaries and only use main ones.
+						return true
+					}
 					fileToCopy, dirInApex := getCopyManifestForExecutable(cc)
-					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, cc.Arch().ArchType, dirInApex, nativeExecutable, cc})
+					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, dirInApex, nativeExecutable, cc, cc.Symlinks()})
 					return true
 				} else {
 					ctx.PropertyErrorf("binaries", "%q is not a cc_binary module", depName)
@@ -582,7 +634,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					if fileToCopy == nil {
 						ctx.PropertyErrorf("java_libs", "%q is not configured to be compiled into dex", depName)
 					} else {
-						filesInfo = append(filesInfo, apexFile{fileToCopy, depName, java.Arch().ArchType, dirInApex, javaSharedLib, java})
+						filesInfo = append(filesInfo, apexFile{fileToCopy, depName, dirInApex, javaSharedLib, java, nil})
 					}
 					return true
 				} else {
@@ -591,7 +643,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			case prebuiltTag:
 				if prebuilt, ok := child.(*android.PrebuiltEtc); ok {
 					fileToCopy, dirInApex := getCopyManifestForPrebuiltEtc(prebuilt)
-					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, prebuilt.Arch().ArchType, dirInApex, etc, prebuilt})
+					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, dirInApex, etc, prebuilt, nil})
 					return true
 				} else {
 					ctx.PropertyErrorf("prebuilts", "%q is not a prebuilt_etc module", depName)
@@ -625,8 +677,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						return false
 					}
 					depName := ctx.OtherModuleName(child)
-					fileToCopy, dirInApex := getCopyManifestForNativeLibrary(cc)
-					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, cc.Arch().ArchType, dirInApex, nativeSharedLib, cc})
+					fileToCopy, dirInApex := getCopyManifestForNativeLibrary(cc, handleSpecialLibs)
+					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, dirInApex, nativeSharedLib, cc, nil})
 					return true
 				}
 			}
@@ -719,6 +771,10 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, keyFile and
 		dest_path := filepath.Join(android.PathForModuleOut(ctx, "image"+suffix).String(), dest)
 		copyCommands = append(copyCommands, "mkdir -p "+filepath.Dir(dest_path))
 		copyCommands = append(copyCommands, "cp "+src.String()+" "+dest_path)
+		for _, sym := range a.filesInfo[i].symlinks {
+			symlinkDest := filepath.Join(filepath.Dir(dest_path), sym)
+			copyCommands = append(copyCommands, "ln -s "+filepath.Base(dest)+" "+symlinkDest)
+		}
 	}
 	implicitInputs := append(android.Paths(nil), filesToCopy...)
 	implicitInputs = append(implicitInputs, manifest)
@@ -734,6 +790,9 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, keyFile and
 			pathInApex := filepath.Join(f.installDir, f.builtFile.Base())
 			if f.installDir == "bin" {
 				executablePaths = append(executablePaths, pathInApex)
+				for _, s := range f.symlinks {
+					executablePaths = append(executablePaths, filepath.Join("bin", s))
+				}
 			} else {
 				readOnlyPaths = append(readOnlyPaths, pathInApex)
 			}
@@ -866,7 +925,7 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 			Input:  manifest,
 			Output: copiedManifest,
 		})
-		a.filesInfo = append(a.filesInfo, apexFile{copiedManifest, ctx.ModuleName() + ".apex_manifest.json", android.Common, ".", etc, nil})
+		a.filesInfo = append(a.filesInfo, apexFile{copiedManifest, ctx.ModuleName() + ".apex_manifest.json", ".", etc, nil, nil})
 
 		for _, fi := range a.filesInfo {
 			dir := filepath.Join("apex", ctx.ModuleName(), fi.installDir)
@@ -892,57 +951,92 @@ func (a *apexBundle) AndroidMk() android.AndroidMkData {
 }
 
 func (a *apexBundle) androidMkForType(apexType apexPackaging) android.AndroidMkData {
-	// Only image APEXes can be flattened.
-	if a.flattened && apexType.image() {
-		return android.AndroidMkData{
-			Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
-				moduleNames := []string{}
-				for _, fi := range a.filesInfo {
-					if !android.InList(fi.moduleName, moduleNames) {
-						moduleNames = append(moduleNames, fi.moduleName)
+	return android.AndroidMkData{
+		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
+			moduleNames := []string{}
+			for _, fi := range a.filesInfo {
+				if !android.InList(fi.moduleName, moduleNames) {
+					moduleNames = append(moduleNames, fi.moduleName)
+				}
+			}
+
+			for _, fi := range a.filesInfo {
+				if cc, ok := fi.module.(*cc.Module); ok && cc.Properties.HideFromMake {
+					continue
+				}
+				fmt.Fprintln(w, "\ninclude $(CLEAR_VARS)")
+				fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
+				fmt.Fprintln(w, "LOCAL_MODULE :=", fi.moduleName)
+				if a.flattened {
+					// /system/apex/<name>/{lib|framework|...}
+					fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", filepath.Join("$(OUT_DIR)",
+						a.installDir.RelPathString(), name, fi.installDir))
+				} else {
+					// /apex/<name>/{lib|framework|...}
+					fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", filepath.Join("$(PRODUCT_OUT)",
+						"apex", name, fi.installDir))
+				}
+				fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", fi.builtFile.String())
+				fmt.Fprintln(w, "LOCAL_MODULE_CLASS :=", fi.class.NameInMake())
+				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !a.installable())
+				if fi.module != nil {
+					archStr := fi.module.Target().Arch.ArchType.String()
+					host := false
+					switch fi.module.Target().Os.Class {
+					case android.Host:
+						if archStr != "common" {
+							fmt.Fprintln(w, "LOCAL_MODULE_HOST_ARCH :=", archStr)
+						}
+						host = true
+					case android.HostCross:
+						if archStr != "common" {
+							fmt.Fprintln(w, "LOCAL_MODULE_HOST_CROSS_ARCH :=", archStr)
+						}
+						host = true
+					case android.Device:
+						if archStr != "common" {
+							fmt.Fprintln(w, "LOCAL_MODULE_TARGET_ARCH :=", archStr)
+						}
+					}
+					if host {
+						makeOs := fi.module.Target().Os.String()
+						if fi.module.Target().Os == android.Linux || fi.module.Target().Os == android.LinuxBionic {
+							makeOs = "linux"
+						}
+						fmt.Fprintln(w, "LOCAL_MODULE_HOST_OS :=", makeOs)
+						fmt.Fprintln(w, "LOCAL_IS_HOST_MODULE := true")
 					}
 				}
+				if fi.class == javaSharedLib {
+					javaModule := fi.module.(*java.Library)
+					// soong_java_prebuilt.mk sets LOCAL_MODULE_SUFFIX := .jar  Therefore
+					// we need to remove the suffix from LOCAL_MODULE_STEM, otherwise
+					// we will have foo.jar.jar
+					fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", strings.TrimSuffix(fi.builtFile.Base(), ".jar"))
+					fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", javaModule.ImplementationAndResourcesJars()[0].String())
+					fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", javaModule.HeaderJars()[0].String())
+					fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", fi.builtFile.String())
+					fmt.Fprintln(w, "LOCAL_DEX_PREOPT := false")
+					fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
+				} else if fi.class == nativeSharedLib || fi.class == nativeExecutable {
+					fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
+					if cc, ok := fi.module.(*cc.Module); ok && cc.UnstrippedOutputFile() != nil {
+						fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", cc.UnstrippedOutputFile().String())
+					}
+					fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_prebuilt.mk")
+				} else {
+					fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
+					fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
+				}
+			}
+			if a.flattened && apexType.image() {
+				// Only image APEXes can be flattened.
 				fmt.Fprintln(w, "\ninclude $(CLEAR_VARS)")
 				fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
 				fmt.Fprintln(w, "LOCAL_MODULE :=", name)
 				fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES :=", strings.Join(moduleNames, " "))
 				fmt.Fprintln(w, "include $(BUILD_PHONY_PACKAGE)")
-
-				for _, fi := range a.filesInfo {
-					if cc, ok := fi.module.(*cc.Module); ok && cc.Properties.HideFromMake {
-						continue
-					}
-					fmt.Fprintln(w, "\ninclude $(CLEAR_VARS)")
-					fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
-					fmt.Fprintln(w, "LOCAL_MODULE :=", fi.moduleName)
-					fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", filepath.Join("$(OUT_DIR)", a.installDir.RelPathString(), name, fi.installDir))
-					fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", fi.builtFile.String())
-					fmt.Fprintln(w, "LOCAL_MODULE_CLASS :=", fi.class.NameInMake())
-					fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !a.installable())
-					archStr := fi.archType.String()
-					if archStr != "common" {
-						fmt.Fprintln(w, "LOCAL_MODULE_TARGET_ARCH :=", archStr)
-					}
-					if fi.class == javaSharedLib {
-						javaModule := fi.module.(*java.Library)
-						// soong_java_prebuilt.mk sets LOCAL_MODULE_SUFFIX := .jar  Therefore
-						// we need to remove the suffix from LOCAL_MODULE_STEM, otherwise
-						// we will have foo.jar.jar
-						fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", strings.TrimSuffix(fi.builtFile.Base(), ".jar"))
-						fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", javaModule.ImplementationAndResourcesJars()[0].String())
-						fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", javaModule.HeaderJars()[0].String())
-						fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", fi.builtFile.String())
-						fmt.Fprintln(w, "LOCAL_DEX_PREOPT := false")
-						fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
-					} else {
-						fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
-						fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
-					}
-				}
-			}}
-	} else {
-		return android.AndroidMkData{
-			Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
+			} else {
 				// zip-apex is the less common type so have the name refer to the image-apex
 				// only and use {name}.zip if you want the zip-apex
 				if apexType == zipApex && a.apexTypes == both {
@@ -957,13 +1051,14 @@ func (a *apexBundle) androidMkForType(apexType apexPackaging) android.AndroidMkD
 				fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", name+apexType.suffix())
 				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !a.installable())
 				fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES :=", String(a.properties.Key))
+				fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(moduleNames, " "))
 				fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
 
 				if apexType == imageApex {
 					fmt.Fprintln(w, "ALL_MODULES.$(LOCAL_MODULE).BUNDLE :=", a.bundleModuleFile.String())
 				}
-			}}
-	}
+			}
+		}}
 }
 
 func ApexBundleFactory() android.Module {
@@ -971,6 +1066,7 @@ func ApexBundleFactory() android.Module {
 		outputFiles: map[apexPackaging]android.WritablePath{},
 	}
 	module.AddProperties(&module.properties)
+	module.AddProperties(&module.targetProperties)
 	module.Prefer32(func(ctx android.BaseModuleContext, base *android.ModuleBase, class android.OsClass) bool {
 		return class == android.Device && ctx.Config().DevicePrefer32BitExecutables()
 	})
