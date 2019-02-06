@@ -95,11 +95,38 @@ func GenerateDexpreoptRule(global GlobalConfig, module ModuleConfig) (rule *Rule
 
 	rule = &Rule{}
 
-	dexpreoptDisabled := contains(global.DisablePreoptModules, module.Name)
+	generateProfile := module.ProfileClassListing != "" && !global.DisableGenerateProfile
 
-	if contains(global.BootJars, module.Name) {
-		// Don't preopt individual boot jars, they will be preopted together
-		dexpreoptDisabled = true
+	var profile string
+	if generateProfile {
+		profile = profileCommand(global, module, rule)
+	}
+
+	if !dexpreoptDisabled(global, module) {
+		// Don't preopt individual boot jars, they will be preopted together.
+		// This check is outside dexpreoptDisabled because they still need to be stripped.
+		if !contains(global.BootJars, module.Name) {
+			appImage := (generateProfile || module.ForceCreateAppImage || global.DefaultAppImages) &&
+				!module.NoCreateAppImage
+
+			generateDM := shouldGenerateDM(module, global)
+
+			for _, arch := range module.Archs {
+				imageLocation := module.DexPreoptImageLocation
+				if imageLocation == "" {
+					imageLocation = global.DefaultDexPreoptImageLocation[arch]
+				}
+				dexpreoptCommand(global, module, rule, profile, arch, imageLocation, appImage, generateDM)
+			}
+		}
+	}
+
+	return rule, nil
+}
+
+func dexpreoptDisabled(global GlobalConfig, module ModuleConfig) bool {
+	if contains(global.DisablePreoptModules, module.Name) {
+		return true
 	}
 
 	// If OnlyPreoptBootImageAndSystemServer=true and module is not in boot class path skip
@@ -108,32 +135,10 @@ func GenerateDexpreoptRule(global GlobalConfig, module ModuleConfig) (rule *Rule
 	// or performance. If PreoptExtractedApk is true, we ignore the only preopt boot image options.
 	if global.OnlyPreoptBootImageAndSystemServer && !contains(global.BootJars, module.Name) &&
 		!contains(global.SystemServerJars, module.Name) && !module.PreoptExtractedApk {
-		dexpreoptDisabled = true
+		return true
 	}
 
-	generateProfile := module.ProfileClassListing != "" && !global.DisableGenerateProfile
-
-	var profile string
-	if generateProfile {
-		profile = profileCommand(global, module, rule)
-	}
-
-	if !dexpreoptDisabled {
-		appImage := (generateProfile || module.ForceCreateAppImage || global.DefaultAppImages) &&
-			!module.NoCreateAppImage
-
-		generateDM := shouldGenerateDM(module, global)
-
-		for _, arch := range module.Archs {
-			imageLocation := module.DexPreoptImageLocation
-			if imageLocation == "" {
-				imageLocation = global.DefaultDexPreoptImageLocation[arch]
-			}
-			dexpreoptCommand(global, module, rule, profile, arch, imageLocation, appImage, generateDM)
-		}
-	}
-
-	return rule, nil
+	return false
 }
 
 func profileCommand(global GlobalConfig, module ModuleConfig, rule *Rule) string {
@@ -192,6 +197,9 @@ func dexpreoptCommand(global GlobalConfig, module ModuleConfig, rule *Rule, prof
 			pathtools.ReplaceExtension(filepath.Base(path), "odex"))
 	}
 
+	bcp := strings.Join(global.PreoptBootClassPathDexFiles, ":")
+	bcp_locations := strings.Join(global.PreoptBootClassPathDexLocations, ":")
+
 	odexPath := toOdexPath(filepath.Join(filepath.Dir(module.BuildPath), base))
 	odexInstallPath := toOdexPath(module.DexLocation)
 	if odexOnSystemOther(module, global) {
@@ -200,6 +208,8 @@ func dexpreoptCommand(global GlobalConfig, module ModuleConfig, rule *Rule, prof
 
 	vdexPath := pathtools.ReplaceExtension(odexPath, "vdex")
 	vdexInstallPath := pathtools.ReplaceExtension(odexInstallPath, "vdex")
+
+	invocationPath := pathtools.ReplaceExtension(odexPath, "invocation")
 
 	// bootImageLocation is $OUT/dex_bootjars/system/framework/boot.art, but dex2oat actually reads
 	// $OUT/dex_bootjars/system/framework/arm64/boot.art
@@ -265,11 +275,11 @@ func dexpreoptCommand(global GlobalConfig, module ModuleConfig, rule *Rule, prof
 		const hidlManager = "android.hidl.manager-V1.0-java"
 
 		conditionalClassLoaderContextHost29 = append(conditionalClassLoaderContextHost29,
-      pathForLibrary(module, hidlManager))
+			pathForLibrary(module, hidlManager))
 		conditionalClassLoaderContextTarget29 = append(conditionalClassLoaderContextTarget29,
 			filepath.Join("/system/framework", hidlManager+".jar"))
 		conditionalClassLoaderContextHost29 = append(conditionalClassLoaderContextHost29,
-      pathForLibrary(module, hidlBase))
+			pathForLibrary(module, hidlBase))
 		conditionalClassLoaderContextTarget29 = append(conditionalClassLoaderContextTarget29,
 			filepath.Join("/system/framework", hidlBase+".jar"))
 	} else {
@@ -291,7 +301,7 @@ func dexpreoptCommand(global GlobalConfig, module ModuleConfig, rule *Rule, prof
 		rule.Command().Textf(`uses_library_names="%s"`, strings.Join(verifyUsesLibs, " "))
 		rule.Command().Textf(`optional_uses_library_names="%s"`, strings.Join(verifyOptionalUsesLibs, " "))
 		rule.Command().Textf(`aapt_binary="%s"`, global.Tools.Aapt)
-		rule.Command().Textf(`dex_preopt_host_libraries="%s"`, strings.Join(classLoaderContextHost, " " ))
+		rule.Command().Textf(`dex_preopt_host_libraries="%s"`, strings.Join(classLoaderContextHost, " "))
 		rule.Command().Textf(`dex_preopt_target_libraries="%s"`, strings.Join(classLoaderContextTarget, " "))
 		rule.Command().Textf(`conditional_host_libs_28="%s"`, strings.Join(conditionalClassLoaderContextHost28, " "))
 		rule.Command().Textf(`conditional_target_libs_28="%s"`, strings.Join(conditionalClassLoaderContextTarget28, " "))
@@ -305,8 +315,12 @@ func dexpreoptCommand(global GlobalConfig, module ModuleConfig, rule *Rule, prof
 		Text(`ANDROID_LOG_TAGS="*:e"`).
 		Tool(global.Tools.Dex2oat).
 		Flag("--avoid-storing-invocation").
+		FlagWithOutput("--write-invocation-to=", invocationPath).ImplicitOutput(invocationPath).
 		Flag("--runtime-arg").FlagWithArg("-Xms", global.Dex2oatXms).
 		Flag("--runtime-arg").FlagWithArg("-Xmx", global.Dex2oatXmx).
+		Flag("--runtime-arg").FlagWithArg("-Xbootclasspath:", bcp).
+		Implicits(global.PreoptBootClassPathDexFiles).
+		Flag("--runtime-arg").FlagWithArg("-Xbootclasspath-locations:", bcp_locations).
 		Flag("${class_loader_context_arg}").
 		Flag("${stored_class_loader_context_arg}").
 		FlagWithArg("--boot-image=", bootImageLocation).Implicit(bootImagePath).
@@ -435,6 +449,14 @@ func dexpreoptCommand(global GlobalConfig, module ModuleConfig, rule *Rule, prof
 // dex2oat time it will not be stripped even if strip=true.
 func shouldStripDex(module ModuleConfig, global GlobalConfig) bool {
 	strip := !global.DefaultNoStripping
+
+	if dexpreoptDisabled(global, module) {
+		strip = false
+	}
+
+	if module.NoStripping {
+		strip = false
+	}
 
 	// Don't strip modules that are not on the system partition in case the oat/vdex version in system ROM
 	// doesn't match the one in other partitions. It needs to be able to fall back to the APK for that case.

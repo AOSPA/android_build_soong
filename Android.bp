@@ -243,20 +243,24 @@ bootstrap_go_package {
         "java/droiddoc.go",
         "java/gen.go",
         "java/genrule.go",
+        "java/hiddenapi.go",
         "java/jacoco.go",
         "java/java.go",
         "java/jdeps.go",
         "java/java_resources.go",
         "java/prebuilt_apis.go",
         "java/proto.go",
+        "java/sdk.go",
         "java/sdk_library.go",
         "java/support_libraries.go",
         "java/system_modules.go",
     ],
     testSrcs: [
         "java/app_test.go",
+        "java/dexpreopt_test.go",
         "java/java_test.go",
         "java/jdeps_test.go",
+        "java/sdk_test.go",
     ],
     pluginFor: ["soong_build"],
 }
@@ -282,6 +286,7 @@ bootstrap_go_package {
     deps: [
         "blueprint",
         "soong-android",
+        "soong-tradefed",
     ],
     srcs: [
         "python/androidmk.go",

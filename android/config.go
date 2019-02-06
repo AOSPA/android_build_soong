@@ -303,7 +303,7 @@ func NewConfig(srcDir, buildDir string) (Config, error) {
 	}
 
 	if archConfig != nil {
-		androidTargets, err := decodeArchSettings(archConfig)
+		androidTargets, err := decodeArchSettings(Android, archConfig)
 		if err != nil {
 			return Config{}, err
 		}
@@ -561,6 +561,19 @@ func (c *config) DefaultAppCertificate(ctx PathContext) (pem, key SourcePath) {
 	}
 }
 
+func (c *config) ApexKeyDir(ctx ModuleContext) SourcePath {
+	// TODO(b/121224311): define another variable such as TARGET_APEX_KEY_OVERRIDE
+	defaultCert := String(c.productVariables.DefaultAppCertificate)
+	if defaultCert == "" || filepath.Dir(defaultCert) == "build/target/product/security" {
+		// When defaultCert is unset or is set to the testkeys path, use the APEX keys
+		// that is under the module dir
+		return PathForModuleSrc(ctx).SourcePath
+	} else {
+		// If not, APEX keys are under the specified directory
+		return PathForSource(ctx, filepath.Dir(defaultCert))
+	}
+}
+
 func (c *config) AllowMissingDependencies() bool {
 	return Bool(c.productVariables.Allow_missing_dependencies)
 }
@@ -571,6 +584,10 @@ func (c *config) UnbundledBuild() bool {
 
 func (c *config) UnbundledBuildPrebuiltSdks() bool {
 	return Bool(c.productVariables.Unbundled_build) && !Bool(c.productVariables.Unbundled_build_sdks_from_source)
+}
+
+func (c *config) Fuchsia() bool {
+	return Bool(c.productVariables.Fuchsia)
 }
 
 func (c *config) IsPdkBuild() bool {
@@ -636,7 +653,7 @@ func (c *config) EnableCFI() bool {
 
 func (c *config) EnableXOM() bool {
 	if c.productVariables.EnableXOM == nil {
-		return false
+		return true
 	} else {
 		return Bool(c.productVariables.EnableXOM)
 	}
@@ -734,6 +751,14 @@ func (c *config) UncompressPrivAppDex() bool {
 
 func (c *config) ModulesLoadedByPrivilegedModules() []string {
 	return c.productVariables.ModulesLoadedByPrivilegedModules
+}
+
+func (c *config) BootJars() []string {
+	return c.productVariables.BootJars
+}
+
+func (c *config) PreoptBootJars() []string {
+	return c.productVariables.PreoptBootJars
 }
 
 func (c *config) DisableDexPreopt(name string) bool {
@@ -862,6 +887,24 @@ func (c *deviceConfig) PlatPrivateSepolicyDirs() []string {
 	return c.config.productVariables.BoardPlatPrivateSepolicyDirs
 }
 
+func (c *deviceConfig) OverrideManifestPackageNameFor(name string) (manifestName string, overridden bool) {
+	overrides := c.config.productVariables.ManifestPackageNameOverrides
+	if overrides == nil || len(overrides) == 0 {
+		return "", false
+	}
+	for _, o := range overrides {
+		split := strings.Split(o, ":")
+		if len(split) != 2 {
+			// This shouldn't happen as this is first checked in make, but just in case.
+			panic(fmt.Errorf("invalid override rule %q in PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES should be <module_name>:<manifest_name>", o))
+		}
+		if matchPattern(split[0], name) {
+			return substPattern(split[0], split[1], name), true
+		}
+	}
+	return "", false
+}
+
 func (c *config) SecondArchIsTranslated() bool {
 	deviceTargets := c.Targets[Android]
 	if len(deviceTargets) < 2 {
@@ -930,6 +973,26 @@ func (c *config) ExcludeDraftNdkApis() bool {
 
 func (c *config) FlattenApex() bool {
 	return Bool(c.productVariables.FlattenApex)
+}
+
+func (c *config) EnforceSystemCertificate() bool {
+	return Bool(c.productVariables.EnforceSystemCertificate)
+}
+
+func (c *config) EnforceSystemCertificateWhitelist() []string {
+	return c.productVariables.EnforceSystemCertificateWhitelist
+}
+
+func (c *config) HiddenAPIStubFlags() string {
+	return String(c.productVariables.HiddenAPIStubFlags)
+}
+
+func (c *config) HiddenAPIFlags() string {
+	return String(c.productVariables.HiddenAPIFlags)
+}
+
+func (c *config) HiddenAPIExtraAppUsageJars() []string {
+	return c.productVariables.HiddenAPIExtraAppUsageJars
 }
 
 func stringSlice(s *[]string) []string {

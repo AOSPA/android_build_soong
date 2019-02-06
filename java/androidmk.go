@@ -22,6 +22,30 @@ import (
 	"android/soong/android"
 )
 
+func (library *Library) AndroidMkHostDex(w io.Writer, name string, data android.AndroidMkData) {
+	if Bool(library.deviceProperties.Hostdex) && !library.Host() {
+		fmt.Fprintln(w, "include $(CLEAR_VARS)")
+		fmt.Fprintln(w, "LOCAL_MODULE := "+name+"-hostdex")
+		fmt.Fprintln(w, "LOCAL_IS_HOST_MODULE := true")
+		fmt.Fprintln(w, "LOCAL_MODULE_CLASS := JAVA_LIBRARIES")
+		if library.dexJarFile != nil {
+			fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", library.dexJarFile.String())
+		} else {
+			fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", library.implementationAndResourcesJar.String())
+		}
+		if library.installFile == nil {
+			fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
+		}
+		if library.dexJarFile != nil {
+			fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", library.dexJarFile.String())
+		}
+		fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", library.headerJarFile.String())
+		fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", library.implementationAndResourcesJar.String())
+		fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES := "+strings.Join(data.Required, " "))
+		fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
+	}
+}
+
 func (library *Library) AndroidMk() android.AndroidMkData {
 	return android.AndroidMkData{
 		Class:      "JAVA_LIBRARIES",
@@ -69,23 +93,7 @@ func (library *Library) AndroidMk() android.AndroidMkData {
 		},
 		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
 			android.WriteAndroidMkData(w, data)
-
-			if Bool(library.deviceProperties.Hostdex) && !library.Host() {
-				fmt.Fprintln(w, "include $(CLEAR_VARS)")
-				fmt.Fprintln(w, "LOCAL_MODULE := "+name+"-hostdex")
-				fmt.Fprintln(w, "LOCAL_IS_HOST_MODULE := true")
-				fmt.Fprintln(w, "LOCAL_MODULE_CLASS := JAVA_LIBRARIES")
-				if library.installFile == nil {
-					fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
-				}
-				if library.dexJarFile != nil {
-					fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", library.dexJarFile.String())
-				}
-				fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", library.headerJarFile.String())
-				fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", library.implementationAndResourcesJar.String())
-				fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES := "+strings.Join(data.Required, " "))
-				fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
-			}
+			library.AndroidMkHostDex(w, name, data)
 		},
 	}
 }
@@ -157,6 +165,12 @@ func (binary *Binary) AndroidMk() android.AndroidMkData {
 				func(w io.Writer, outputFile android.Path) {
 					fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", binary.headerJarFile.String())
 					fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", binary.implementationAndResourcesJar.String())
+					if binary.dexJarFile != nil {
+						fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", binary.dexJarFile.String())
+					}
+					if len(binary.dexpreopter.builtInstalled) > 0 {
+						fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", strings.Join(binary.dexpreopter.builtInstalled, " "))
+					}
 				},
 			},
 			Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {

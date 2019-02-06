@@ -230,6 +230,9 @@ type productVariables struct {
 	UncompressPrivAppDex             *bool    `json:",omitempty"`
 	ModulesLoadedByPrivilegedModules []string `json:",omitempty"`
 
+	BootJars       []string `json:",omitempty"`
+	PreoptBootJars []string `json:",omitempty"`
+
 	DisableDexPreopt        *bool    `json:",omitempty"`
 	DisableDexPreoptModules []string `json:",omitempty"`
 	DexPreoptProfileDir     *string  `json:",omitempty"`
@@ -272,6 +275,8 @@ type productVariables struct {
 
 	Product_is_iot *bool `json:",omitempty"`
 
+	Fuchsia *bool `json:",omitempty"`
+
 	DeviceKernelHeaders []string `json:",omitempty"`
 
 	ExtraVndkVersions []string `json:",omitempty"`
@@ -293,6 +298,16 @@ type productVariables struct {
 	FlattenApex *bool `json:",omitempty"`
 
 	DexpreoptGlobalConfig *string `json:",omitempty"`
+
+	ManifestPackageNameOverrides []string `json:",omitempty"`
+
+	EnforceSystemCertificate          *bool    `json:",omitempty"`
+	EnforceSystemCertificateWhitelist []string `json:",omitempty"`
+
+	// TODO(ccross): move these to a Singleton in Soong
+	HiddenAPIStubFlags         *string  `json:",omitempty"`
+	HiddenAPIFlags             *string  `json:",omitempty"`
+	HiddenAPIExtraAppUsageJars []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
