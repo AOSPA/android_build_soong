@@ -61,7 +61,7 @@ func testConfig(env map[string]string) android.Config {
 		env["ANDROID_JAVA8_HOME"] = "jdk8"
 	}
 	config := android.TestArchConfig(buildDir, env)
-	config.TestProductVariables.DeviceSystemSdkVersions = &[]string{"14", "15"}
+	config.TestProductVariables.DeviceSystemSdkVersions = []string{"14", "15"}
 	return config
 
 }
@@ -71,6 +71,7 @@ func testContext(config android.Config, bp string,
 
 	ctx := android.NewTestArchContext()
 	ctx.RegisterModuleType("android_app", android.ModuleFactoryAdaptor(AndroidAppFactory))
+	ctx.RegisterModuleType("android_app_certificate", android.ModuleFactoryAdaptor(AndroidAppCertificateFactory))
 	ctx.RegisterModuleType("android_library", android.ModuleFactoryAdaptor(AndroidLibraryFactory))
 	ctx.RegisterModuleType("android_test", android.ModuleFactoryAdaptor(AndroidTestFactory))
 	ctx.RegisterModuleType("android_test_helper_app", android.ModuleFactoryAdaptor(AndroidTestHelperAppFactory))
@@ -83,6 +84,7 @@ func testContext(config android.Config, bp string,
 	ctx.RegisterModuleType("java_defaults", android.ModuleFactoryAdaptor(defaultsFactory))
 	ctx.RegisterModuleType("java_system_modules", android.ModuleFactoryAdaptor(SystemModulesFactory))
 	ctx.RegisterModuleType("java_genrule", android.ModuleFactoryAdaptor(genRuleFactory))
+	ctx.RegisterModuleType("java_plugin", android.ModuleFactoryAdaptor(PluginFactory))
 	ctx.RegisterModuleType("filegroup", android.ModuleFactoryAdaptor(android.FileGroupFactory))
 	ctx.RegisterModuleType("genrule", android.ModuleFactoryAdaptor(genrule.GenRuleFactory))
 	ctx.RegisterModuleType("droiddoc", android.ModuleFactoryAdaptor(DroiddocFactory))
@@ -115,12 +117,14 @@ func testContext(config android.Config, bp string,
 		"core-lambda-stubs",
 		"framework",
 		"ext",
+		"updatable_media_stubs",
 		"android_stubs_current",
 		"android_system_stubs_current",
 		"android_test_stubs_current",
 		"core.current.stubs",
 		"core.platform.api.stubs",
 		"kotlin-stdlib",
+		"kotlin-annotations",
 	}
 
 	for _, extra := range extraModules {
@@ -224,6 +228,9 @@ func testContext(config android.Config, bp string,
 		"bar-doc/IFoo.aidl":              nil,
 		"bar-doc/known_oj_tags.txt":      nil,
 		"external/doclava/templates-sdk": nil,
+
+		"cert/new_cert.x509.pem": nil,
+		"cert/new_cert.pk8":      nil,
 	}
 
 	for k, v := range fs {
@@ -568,68 +575,6 @@ func TestGeneratedSources(t *testing.T) {
 		javac.Inputs[1].String() != genrule.Output.String() ||
 		javac.Inputs[2].String() != "b.java" {
 		t.Errorf(`foo inputs %v != ["a.java", ".../gen.java", "b.java"]`, javac.Inputs)
-	}
-}
-
-func TestKotlin(t *testing.T) {
-	ctx := testJava(t, `
-		java_library {
-			name: "foo",
-			srcs: ["a.java", "b.kt"],
-		}
-
-		java_library {
-			name: "bar",
-			srcs: ["b.kt"],
-			libs: ["foo"],
-			static_libs: ["baz"],
-		}
-
-		java_library {
-			name: "baz",
-			srcs: ["c.java"],
-		}
-		`)
-
-	fooKotlinc := ctx.ModuleForTests("foo", "android_common").Rule("kotlinc")
-	fooJavac := ctx.ModuleForTests("foo", "android_common").Rule("javac")
-	fooJar := ctx.ModuleForTests("foo", "android_common").Output("combined/foo.jar")
-
-	if len(fooKotlinc.Inputs) != 2 || fooKotlinc.Inputs[0].String() != "a.java" ||
-		fooKotlinc.Inputs[1].String() != "b.kt" {
-		t.Errorf(`foo kotlinc inputs %v != ["a.java", "b.kt"]`, fooKotlinc.Inputs)
-	}
-
-	if len(fooJavac.Inputs) != 1 || fooJavac.Inputs[0].String() != "a.java" {
-		t.Errorf(`foo inputs %v != ["a.java"]`, fooJavac.Inputs)
-	}
-
-	if !strings.Contains(fooJavac.Args["classpath"], fooKotlinc.Output.String()) {
-		t.Errorf("foo classpath %v does not contain %q",
-			fooJavac.Args["classpath"], fooKotlinc.Output.String())
-	}
-
-	if !inList(fooKotlinc.Output.String(), fooJar.Inputs.Strings()) {
-		t.Errorf("foo jar inputs %v does not contain %q",
-			fooJar.Inputs.Strings(), fooKotlinc.Output.String())
-	}
-
-	fooHeaderJar := ctx.ModuleForTests("foo", "android_common").Output("turbine-combined/foo.jar")
-	bazHeaderJar := ctx.ModuleForTests("baz", "android_common").Output("turbine-combined/baz.jar")
-	barKotlinc := ctx.ModuleForTests("bar", "android_common").Rule("kotlinc")
-
-	if len(barKotlinc.Inputs) != 1 || barKotlinc.Inputs[0].String() != "b.kt" {
-		t.Errorf(`bar kotlinc inputs %v != ["b.kt"]`, barKotlinc.Inputs)
-	}
-
-	if !inList(fooHeaderJar.Output.String(), barKotlinc.Implicits.Strings()) {
-		t.Errorf(`expected %q in bar implicits %v`,
-			fooHeaderJar.Output.String(), barKotlinc.Implicits.Strings())
-	}
-
-	if !inList(bazHeaderJar.Output.String(), barKotlinc.Implicits.Strings()) {
-		t.Errorf(`expected %q in bar implicits %v`,
-			bazHeaderJar.Output.String(), barKotlinc.Implicits.Strings())
 	}
 }
 
@@ -1011,7 +956,7 @@ func TestPatchModule(t *testing.T) {
 		checkPatchModuleFlag(t, ctx, "foo", "")
 		expected := "java.base=.:" + buildDir
 		checkPatchModuleFlag(t, ctx, "bar", expected)
-		expected = "java.base=" + strings.Join([]string{".", buildDir, moduleToPath("ext"), moduleToPath("framework")}, ":")
+		expected = "java.base=" + strings.Join([]string{".", buildDir, moduleToPath("ext"), moduleToPath("framework"), moduleToPath("updatable_media_stubs")}, ":")
 		checkPatchModuleFlag(t, ctx, "baz", expected)
 	})
 }

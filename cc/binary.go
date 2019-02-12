@@ -196,7 +196,7 @@ func (binary *binaryDecorator) linkerInit(ctx BaseModuleContext) {
 			if binary.Properties.Static_executable == nil && ctx.Config().HostStaticBinaries() {
 				binary.Properties.Static_executable = BoolPtr(true)
 			}
-		} else {
+		} else if !ctx.Fuchsia() {
 			// Static executables are not supported on Darwin or Windows
 			binary.Properties.Static_executable = nil
 		}
@@ -249,7 +249,11 @@ func (binary *binaryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Flags
 				} else {
 					switch ctx.Os() {
 					case android.Android:
-						flags.DynamicLinker = "/system/bin/linker"
+						if ctx.bootstrap() {
+							flags.DynamicLinker = "/system/bin/bootstrap/linker"
+						} else {
+							flags.DynamicLinker = "/system/bin/linker"
+						}
 						if flags.Toolchain.Is64Bit() {
 							flags.DynamicLinker += "64"
 						}
@@ -363,8 +367,10 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 	var sharedLibs android.Paths
 	// Ignore shared libs for static executables.
 	if !binary.static() {
-		sharedLibs = deps.SharedLibs
+		sharedLibs = deps.EarlySharedLibs
+		sharedLibs = append(sharedLibs, deps.SharedLibs...)
 		sharedLibs = append(sharedLibs, deps.LateSharedLibs...)
+		linkerDeps = append(linkerDeps, deps.EarlySharedLibsDeps...)
 		linkerDeps = append(linkerDeps, deps.SharedLibsDeps...)
 		linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
 	}
@@ -380,11 +386,8 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 	objs.coverageFiles = append(objs.coverageFiles, deps.WholeStaticLibObjs.coverageFiles...)
 	binary.coverageOutputFile = TransformCoverageFilesToLib(ctx, objs, builderFlags, binary.getStem(ctx))
 
-	return ret
-}
-
-func (binary *binaryDecorator) install(ctx ModuleContext, file android.Path) {
-	binary.baseInstaller.install(ctx, file)
+	// Need to determine symlinks early since some targets (ie APEX) need this
+	// information but will not call 'install'
 	for _, symlink := range binary.Properties.Symlinks {
 		binary.symlinks = append(binary.symlinks,
 			symlink+String(binary.Properties.Suffix)+ctx.toolchain().ExecutableSuffix())
@@ -399,6 +402,19 @@ func (binary *binaryDecorator) install(ctx ModuleContext, file android.Path) {
 		}
 	}
 
+	return ret
+}
+
+func (binary *binaryDecorator) unstrippedOutputFilePath() android.Path {
+	return binary.unstrippedOutputFile
+}
+
+func (binary *binaryDecorator) symlinkList() []string {
+	return binary.symlinks
+}
+
+func (binary *binaryDecorator) install(ctx ModuleContext, file android.Path) {
+	binary.baseInstaller.install(ctx, file)
 	for _, symlink := range binary.symlinks {
 		ctx.InstallSymlink(binary.baseInstaller.installDir(ctx), symlink, binary.baseInstaller.path)
 	}

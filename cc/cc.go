@@ -96,9 +96,9 @@ type Deps struct {
 
 type PathDeps struct {
 	// Paths to .so files
-	SharedLibs, LateSharedLibs android.Paths
+	SharedLibs, EarlySharedLibs, LateSharedLibs android.Paths
 	// Paths to the dependencies to use for .so files (.so.toc files)
-	SharedLibsDeps, LateSharedLibsDeps android.Paths
+	SharedLibsDeps, EarlySharedLibsDeps, LateSharedLibsDeps android.Paths
 	// Paths to .a files
 	StaticLibs, LateStaticLibs, WholeStaticLibs android.Paths
 
@@ -262,9 +262,10 @@ type ModuleContextIntf interface {
 	getVndkExtendsModuleName() string
 	isPgoCompile() bool
 	useClangLld(actx ModuleContext) bool
-	isApex() bool
+	apexName() string
 	hasStubsVariants() bool
 	isStubs() bool
+	bootstrap() bool
 }
 
 type ModuleContext interface {
@@ -309,6 +310,7 @@ type linker interface {
 
 	link(ctx ModuleContext, flags Flags, deps PathDeps, objs Objects) android.Path
 	appendLdflags([]string)
+	unstrippedOutputFilePath() android.Path
 }
 
 type installer interface {
@@ -332,6 +334,7 @@ type dependencyTag struct {
 var (
 	sharedDepTag          = dependencyTag{name: "shared", library: true}
 	sharedExportDepTag    = dependencyTag{name: "shared", library: true, reexportFlags: true}
+	earlySharedDepTag     = dependencyTag{name: "early_shared", library: true}
 	lateSharedDepTag      = dependencyTag{name: "late shared", library: true}
 	staticDepTag          = dependencyTag{name: "static", library: true}
 	staticExportDepTag    = dependencyTag{name: "static", library: true, reexportFlags: true}
@@ -405,6 +408,13 @@ type Module struct {
 
 func (c *Module) OutputFile() android.OptionalPath {
 	return c.outputFile
+}
+
+func (c *Module) UnstrippedOutputFile() android.Path {
+	if c.linker != nil {
+		return c.linker.unstrippedOutputFilePath()
+	}
+	return nil
 }
 
 func (c *Module) Init() android.Module {
@@ -565,6 +575,10 @@ func (c *Module) HasStubsVariants() bool {
 	return false
 }
 
+func (c *Module) bootstrap() bool {
+	return Bool(c.Properties.Bootstrap)
+}
+
 type baseModuleContext struct {
 	android.BaseContext
 	moduleContextImpl
@@ -603,7 +617,7 @@ func (ctx *moduleContextImpl) staticBinary() bool {
 }
 
 func (ctx *moduleContextImpl) useSdk() bool {
-	if ctx.ctx.Device() && !ctx.useVndk() && !ctx.inRecovery() {
+	if ctx.ctx.Device() && !ctx.useVndk() && !ctx.inRecovery() && !ctx.ctx.Fuchsia() {
 		return String(ctx.mod.Properties.Sdk_version) != ""
 	}
 	return false
@@ -672,6 +686,11 @@ func (ctx *moduleContextImpl) shouldCreateVndkSourceAbiDump() bool {
 	if ctx.ctx.Config().IsEnvTrue("SKIP_ABI_CHECKS") {
 		return false
 	}
+
+	if ctx.ctx.Fuchsia() {
+		return false
+	}
+
 	if sanitize := ctx.mod.sanitize; sanitize != nil {
 		if !sanitize.isVariantOnProductionDevice() {
 			return false
@@ -718,9 +737,8 @@ func (ctx *moduleContextImpl) getVndkExtendsModuleName() string {
 	return ctx.mod.getVndkExtendsModuleName()
 }
 
-// Tests if this module is built for APEX
-func (ctx *moduleContextImpl) isApex() bool {
-	return ctx.mod.ApexName() != ""
+func (ctx *moduleContextImpl) apexName() string {
+	return ctx.mod.ApexName()
 }
 
 func (ctx *moduleContextImpl) hasStubsVariants() bool {
@@ -729,6 +747,10 @@ func (ctx *moduleContextImpl) hasStubsVariants() bool {
 
 func (ctx *moduleContextImpl) isStubs() bool {
 	return ctx.mod.IsStubs()
+}
+
+func (ctx *moduleContextImpl) bootstrap() bool {
+	return ctx.mod.bootstrap()
 }
 
 func newBaseModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Module {
@@ -769,6 +791,15 @@ func (c *Module) Name() string {
 		name = p.Name(name)
 	}
 	return name
+}
+
+func (c *Module) Symlinks() []string {
+	if p, ok := c.installer.(interface {
+		symlinkList() []string
+	}); ok {
+		return p.symlinkList()
+	}
+	return nil
 }
 
 // orderDeps reorders dependencies into a list such that if module A depends on B, then
@@ -1142,11 +1173,11 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		deps.ReexportSharedLibHeaders, _ = rewriteNdkLibs(deps.ReexportSharedLibHeaders)
 	}
 
+	buildStubs := false
 	if c.linker != nil {
 		if library, ok := c.linker.(*libraryDecorator); ok {
 			if library.buildStubs() {
-				// Stubs lib does not have dependency to other libraries. Don't proceed.
-				return
+				buildStubs = true
 			}
 		}
 	}
@@ -1156,7 +1187,20 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		if inList(lib, deps.ReexportHeaderLibHeaders) {
 			depTag = headerExportDepTag
 		}
-		actx.AddVariationDependencies(nil, depTag, lib)
+		if buildStubs {
+			actx.AddFarVariationDependencies([]blueprint.Variation{
+				{Mutator: "arch", Variation: ctx.Target().String()},
+				{Mutator: "image", Variation: c.imageVariation()},
+			}, depTag, lib)
+		} else {
+			actx.AddVariationDependencies(nil, depTag, lib)
+		}
+	}
+
+	if buildStubs {
+		// Stubs lib does not have dependency to other static/shared libraries.
+		// Don't proceed.
+		return
 	}
 
 	actx.AddVariationDependencies([]blueprint.Variation{
@@ -1537,7 +1581,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					// If not building for APEX, use stubs only when it is from
 					// an APEX (and not from platform)
 					useThisDep = (depInPlatform != depIsStubs)
-					if c.inRecovery() || Bool(c.Properties.Bootstrap) {
+					if c.inRecovery() || c.bootstrap() {
 						// However, for recovery or bootstrap modules,
 						// always link to non-stub variant
 						useThisDep = !depIsStubs
@@ -1583,6 +1627,11 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		case ndkStubDepTag, sharedDepTag, sharedExportDepTag:
 			ptr = &depPaths.SharedLibs
 			depPtr = &depPaths.SharedLibsDeps
+			depFile = ccDep.linker.(libraryInterface).toc()
+			directSharedDeps = append(directSharedDeps, ccDep)
+		case earlySharedDepTag:
+			ptr = &depPaths.EarlySharedLibs
+			depPtr = &depPaths.EarlySharedLibsDeps
 			depFile = ccDep.linker.(libraryInterface).toc()
 			directSharedDeps = append(directSharedDeps, ccDep)
 		case lateSharedDepTag, ndkLateStubDepTag:
@@ -1678,7 +1727,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 		// Export the shared libs to Make.
 		switch depTag {
-		case sharedDepTag, sharedExportDepTag, lateSharedDepTag:
+		case sharedDepTag, sharedExportDepTag, lateSharedDepTag, earlySharedDepTag:
 			if dependentLibrary, ok := ccDep.linker.(*libraryDecorator); ok {
 				if dependentLibrary.buildStubs() && android.InAnyApex(depName) {
 					// Add the dependency to the APEX(es) providing the library so that
@@ -1694,6 +1743,11 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			// they merely serve as Make dependencies and do not affect this lib itself.
 			c.Properties.AndroidMkSharedLibs = append(
 				c.Properties.AndroidMkSharedLibs, makeLibName(depName))
+		case ndkStubDepTag, ndkLateStubDepTag:
+			ndkStub := ccDep.linker.(*stubDecorator)
+			c.Properties.AndroidMkSharedLibs = append(
+				c.Properties.AndroidMkSharedLibs,
+				depName+"."+ndkStub.properties.ApiLevel)
 		case staticDepTag, staticExportDepTag, lateStaticDepTag:
 			c.Properties.AndroidMkStaticLibs = append(
 				c.Properties.AndroidMkStaticLibs, makeLibName(depName))
@@ -1813,6 +1867,16 @@ func (c *Module) IsInstallableToApex() bool {
 	return false
 }
 
+func (c *Module) imageVariation() string {
+	variation := "core"
+	if c.useVndk() {
+		variation = "vendor"
+	} else if c.inRecovery() {
+		variation = "recovery"
+	}
+	return variation
+}
+
 //
 // Defaults
 //
@@ -1823,9 +1887,6 @@ type Defaults struct {
 }
 
 func (*Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-}
-
-func (d *Defaults) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func defaultsFactory() android.Module {
