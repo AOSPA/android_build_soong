@@ -686,9 +686,9 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	TransformSharedObjectToToc(ctx, outputFile, tocFile, builderFlags)
 
 	if library.stripper.needsStrip(ctx) {
-		// b/80093681, GNU strip/objcopy bug.
-		// Use llvm-{strip,objcopy} when clang lld is used.
-		builderFlags.stripUseLlvmStrip = library.baseLinker.useClangLld(ctx)
+		if ctx.Darwin() {
+			builderFlags.stripUseGnuStrip = true
+		}
 		strippedOutputFile := outputFile
 		outputFile = android.PathForModuleOut(ctx, "unstripped", fileName)
 		library.stripper.strip(ctx, outputFile, strippedOutputFile, builderFlags)
@@ -968,8 +968,10 @@ func (library *libraryDecorator) stubsVersion() string {
 	return library.MutatedProperties.StubsVersion
 }
 
+var versioningMacroNamesListKey = android.NewOnceKey("versioningMacroNamesList")
+
 func versioningMacroNamesList(config android.Config) *map[string]string {
-	return config.Once("versioningMacroNamesList", func() interface{} {
+	return config.Once(versioningMacroNamesListKey, func() interface{} {
 		m := make(map[string]string)
 		return &m
 	}).(*map[string]string)
@@ -1030,6 +1032,9 @@ func reuseStaticLibrary(mctx android.BottomUpMutatorContext, static, shared *Mod
 				sharedCompiler.baseCompiler.Properties.Srcs
 			sharedCompiler.baseCompiler.Properties.Srcs = nil
 			sharedCompiler.baseCompiler.Properties.Generated_sources = nil
+		} else {
+			// This dep is just to reference static variant from shared variant
+			mctx.AddInterVariantDependency(staticVariantTag, shared, static)
 		}
 	}
 }
@@ -1059,9 +1064,11 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 	}
 }
 
+var stubVersionsKey = android.NewOnceKey("stubVersions")
+
 // maps a module name to the list of stubs versions available for the module
 func stubsVersionsFor(config android.Config) map[string][]string {
-	return config.Once("stubVersions", func() interface{} {
+	return config.Once(stubVersionsKey, func() interface{} {
 		return make(map[string][]string)
 	}).(map[string][]string)
 }
