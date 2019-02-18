@@ -63,6 +63,10 @@ var fixSteps = []fixStep{
 		fix:  rewriteIncorrectAndroidmkPrebuilts,
 	},
 	{
+		name: "rewriteCtsModuleTypes",
+		fix:  rewriteCtsModuleTypes,
+	},
+	{
 		name: "rewriteIncorrectAndroidmkAndroidLibraries",
 		fix:  rewriteIncorrectAndroidmkAndroidLibraries,
 	},
@@ -205,6 +209,11 @@ func rewriteIncorrectAndroidmkPrebuilts(f *Fixer) error {
 		if mod.Type != "java_import" {
 			continue
 		}
+		host, _ := getLiteralBoolPropertyValue(mod, "host")
+		if host {
+			mod.Type = "java_import_host"
+			removeProperty(mod, "host")
+		}
 		srcs, ok := getLiteralListProperty(mod, "srcs")
 		if !ok {
 			continue
@@ -227,6 +236,52 @@ func rewriteIncorrectAndroidmkPrebuilts(f *Fixer) error {
 			// An android_library_import doesn't get installed, so setting "installable = false" isn't supported
 			removeProperty(mod, "installable")
 		}
+	}
+
+	return nil
+}
+
+func rewriteCtsModuleTypes(f *Fixer) error {
+	for _, def := range f.tree.Defs {
+		mod, ok := def.(*parser.Module)
+		if !ok {
+			continue
+		}
+
+		if mod.Type != "cts_support_package" && mod.Type != "cts_package" &&
+			mod.Type != "cts_target_java_library" &&
+			mod.Type != "cts_host_java_library" {
+
+			continue
+		}
+
+		var defStr string
+		switch mod.Type {
+		case "cts_support_package":
+			mod.Type = "android_test"
+			defStr = "cts_support_defaults"
+		case "cts_package":
+			mod.Type = "android_test"
+			defStr = "cts_defaults"
+		case "cts_target_java_library":
+			mod.Type = "java_library"
+			defStr = "cts_defaults"
+		case "cts_host_java_library":
+			mod.Type = "java_library_host"
+			defStr = "cts_defaults"
+		}
+
+		defaults := &parser.Property{
+			Name: "defaults",
+			Value: &parser.List{
+				Values: []parser.Expression{
+					&parser.String{
+						Value: defStr,
+					},
+				},
+			},
+		}
+		mod.Properties = append(mod.Properties, defaults)
 	}
 
 	return nil
@@ -703,6 +758,24 @@ func getLiteralStringPropertyValue(mod *parser.Module, name string) (s string, f
 	}
 
 	return stringValue.Value, true
+}
+
+func getLiteralBoolProperty(mod *parser.Module, name string) (b *parser.Bool, found bool) {
+	prop, ok := mod.GetProperty(name)
+	if !ok {
+		return nil, false
+	}
+	b, ok = prop.Value.(*parser.Bool)
+	return b, ok
+}
+
+func getLiteralBoolPropertyValue(mod *parser.Module, name string) (s bool, found bool) {
+	boolValue, ok := getLiteralBoolProperty(mod, name)
+	if !ok {
+		return false, false
+	}
+
+	return boolValue.Value, true
 }
 
 func propertyIndex(props []*parser.Property, propertyName string) int {

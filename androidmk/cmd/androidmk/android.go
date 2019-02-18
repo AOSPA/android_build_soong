@@ -42,6 +42,7 @@ type variableAssignmentContext struct {
 
 var rewriteProperties = map[string](func(variableAssignmentContext) error){
 	// custom functions
+	"LOCAL_32_BIT_ONLY":           local32BitOnly,
 	"LOCAL_AIDL_INCLUDES":         localAidlIncludes,
 	"LOCAL_C_INCLUDES":            localIncludeDirs,
 	"LOCAL_EXPORT_C_INCLUDE_DIRS": exportIncludeDirs,
@@ -144,6 +145,7 @@ func init() {
 			"LOCAL_AAPT_FLAGS":            "aaptflags",
 			"LOCAL_PACKAGE_SPLITS":        "package_splits",
 			"LOCAL_COMPATIBILITY_SUITE":   "test_suites",
+			"LOCAL_OVERRIDES_PACKAGES":    "overrides",
 
 			"LOCAL_ANNOTATION_PROCESSORS":        "annotation_processors",
 			"LOCAL_ANNOTATION_PROCESSOR_CLASSES": "annotation_processor_classes",
@@ -156,6 +158,10 @@ func init() {
 			"LOCAL_SHARED_ANDROID_LIBRARIES": "android_libs",
 			"LOCAL_STATIC_ANDROID_LIBRARIES": "android_static_libs",
 			"LOCAL_ADDITIONAL_CERTIFICATES":  "additional_certificates",
+
+			// Jacoco filters:
+			"LOCAL_JACK_COVERAGE_INCLUDE_FILTER": "jacoco.include_filter",
+			"LOCAL_JACK_COVERAGE_EXCLUDE_FILTER": "jacoco.exclude_filter",
 		})
 
 	addStandardProperties(bpparser.BoolType,
@@ -357,6 +363,20 @@ func exportIncludeDirs(ctx variableAssignmentContext) error {
 	// Add any paths that could not be converted to local relative paths to export_include_dirs
 	// anyways, they will cause an error if they don't exist and can be fixed manually.
 	return splitAndAssign(ctx, classifyLocalOrGlobalPath, map[string]string{"global": "export_include_dirs", "local": "export_include_dirs"})
+}
+
+func local32BitOnly(ctx variableAssignmentContext) error {
+	val, err := makeVariableToBlueprint(ctx.file, ctx.mkvalue, bpparser.BoolType)
+	if err != nil {
+		return err
+	}
+	if val.(*bpparser.Bool).Value {
+		thirtyTwo := &bpparser.String{
+			Value: "32",
+		}
+		setVariable(ctx.file, false, ctx.prefix, "compile_multilib", thirtyTwo, true)
+	}
+	return nil
 }
 
 func localAidlIncludes(ctx variableAssignmentContext) error {
@@ -738,27 +758,31 @@ var conditionalTranslations = map[string]map[bool]string{
 		true: "product_variables.pdk"},
 }
 
-func mydir(args []string) string {
-	return "."
+func mydir(args []string) []string {
+	return []string{"."}
 }
 
-func allFilesUnder(wildcard string) func(args []string) string {
-	return func(args []string) string {
-		dir := ""
+func allFilesUnder(wildcard string) func(args []string) []string {
+	return func(args []string) []string {
+		dirs := []string{""}
 		if len(args) > 0 {
-			dir = strings.TrimSpace(args[0])
+			dirs = strings.Fields(args[0])
 		}
 
-		return fmt.Sprintf("%s/**/"+wildcard, dir)
+		paths := make([]string, len(dirs))
+		for i := range paths {
+			paths[i] = fmt.Sprintf("%s/**/"+wildcard, dirs[i])
+		}
+		return paths
 	}
 }
 
-func allSubdirJavaFiles(args []string) string {
-	return "**/*.java"
+func allSubdirJavaFiles(args []string) []string {
+	return []string{"**/*.java"}
 }
 
-func includeIgnored(args []string) string {
-	return include_ignored
+func includeIgnored(args []string) []string {
+	return []string{include_ignored}
 }
 
 var moduleTypes = map[string]string{
@@ -779,6 +803,11 @@ var moduleTypes = map[string]string{
 	"BUILD_HOST_JAVA_LIBRARY":        "java_library_host",
 	"BUILD_HOST_DALVIK_JAVA_LIBRARY": "java_library_host_dalvik",
 	"BUILD_PACKAGE":                  "android_app",
+
+	"BUILD_CTS_SUPPORT_PACKAGE":     "cts_support_package",     // will be rewritten to android_test by bpfix
+	"BUILD_CTS_PACKAGE":             "cts_package",             // will be rewritten to android_test by bpfix
+	"BUILD_CTS_TARGET_JAVA_LIBRARY": "cts_target_java_library", // will be rewritten to java_library by bpfix
+	"BUILD_CTS_HOST_JAVA_LIBRARY":   "cts_host_java_library",   // will be rewritten to java_library_host by bpfix
 }
 
 var prebuiltTypes = map[string]string{

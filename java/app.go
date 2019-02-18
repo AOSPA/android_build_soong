@@ -184,6 +184,11 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	// TODO: LOCAL_PACKAGE_OVERRIDES
 	//    $(addprefix --rename-manifest-package , $(PRIVATE_MANIFEST_PACKAGE_NAME)) \
 
+	manifestPackageName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(ctx.ModuleName())
+	if overridden {
+		linkFlags = append(linkFlags, "--rename-manifest-package "+manifestPackageName)
+	}
+
 	a.aapt.buildActions(ctx, sdkContext(a), linkFlags...)
 
 	// apps manifests are handled by aapt, don't let Module see them
@@ -213,7 +218,6 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		installDir = filepath.Join("app", ctx.ModuleName())
 	}
 	a.dexpreopter.installPath = android.PathForModuleInstall(ctx, installDir, ctx.ModuleName()+".apk")
-	a.dexpreopter.isPrivApp = Bool(a.appProperties.Privileged)
 
 	if ctx.ModuleName() != "framework-res" {
 		a.Module.compile(ctx, a.aaptSrcJar)
@@ -257,8 +261,22 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	certificates = append([]Certificate{a.certificate}, certificateDeps...)
 
-	packageFile := android.PathForModuleOut(ctx, "package.apk")
+	packageFile := android.PathForModuleOut(ctx, ctx.ModuleName()+".apk")
 	CreateAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates)
+
+	if !a.Module.Platform() {
+		certPath := a.certificate.Pem.String()
+		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
+		if strings.HasPrefix(certPath, systemCertPath) {
+			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
+			whitelist := ctx.Config().EnforceSystemCertificateWhitelist()
+
+			if enforceSystemCert && !inList(a.Module.Name(), whitelist) {
+				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
+			}
+		}
+	}
+
 	a.outputFile = packageFile
 
 	bundleFile := android.PathForModuleOut(ctx, "base.zip")
