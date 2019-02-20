@@ -26,9 +26,9 @@ type PathConfig struct {
 	// Whether to exit with an error instead of invoking the underlying tool.
 	Error bool
 
-	// Whether we use a toybox prebuilt for this tool. Since we don't have
-	// toybox for Darwin, we'll use the host version instead.
-	Toybox bool
+	// Whether we use a linux-specific prebuilt for this tool. On Darwin,
+	// we'll allow the host executable instead.
+	LinuxOnlyPrebuilt bool
 }
 
 var Allowed = PathConfig{
@@ -59,11 +59,11 @@ var Missing = PathConfig{
 	Error:   true,
 }
 
-var Toybox = PathConfig{
-	Symlink: false,
-	Log:     true,
-	Error:   true,
-	Toybox:  true,
+var LinuxOnlyPrebuilt = PathConfig{
+	Symlink:           false,
+	Log:               true,
+	Error:             true,
+	LinuxOnlyPrebuilt: true,
 }
 
 func GetConfig(name string) PathConfig {
@@ -80,7 +80,6 @@ var Configuration = map[string]PathConfig{
 	"aarch64-linux-android-nm":      Log,
 	"aarch64-linux-android-objcopy": Log,
 	"aarch64-linux-android-objdump": Log,
-	"awk":       Allowed,
 	"bash":      Allowed,
 	"bc":        Allowed,
 	"bzip2":     Allowed,
@@ -111,7 +110,6 @@ var Configuration = map[string]PathConfig{
 	"python3":   Allowed,
 	"realpath":  Allowed,
 	"rsync":     Allowed,
-	"sed":       Allowed,
 	"sh":        Allowed,
 	"tar":       Allowed,
 	"timeout":   Allowed,
@@ -136,65 +134,66 @@ var Configuration = map[string]PathConfig{
 	"pkg-config": Forbidden,
 
 	// On Linux we'll use the toybox versions of these instead.
-	"basename":  Toybox,
-	"cat":       Toybox,
-	"chmod":     Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"basename":  LinuxOnlyPrebuilt,
+	"cat":       LinuxOnlyPrebuilt,
+	"chmod":     LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"cmp":       Log,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"cp":        Log,
-	"comm":      Toybox,
-	"cut":       Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"comm":      LinuxOnlyPrebuilt,
+	"cut":       LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"dirname":   Log,
-	"du":        Toybox,
-	"echo":      Toybox,
-	"env":       Toybox,
-	"expr":      Toybox,
-	"head":      Toybox,
-	"getconf":   Toybox,
-	"hostname":  Toybox,
-	"id":        Toybox,
-	"ln":        Toybox,
-	"ls":        Toybox,
-	"md5sum":    Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"du":        LinuxOnlyPrebuilt,
+	"echo":      LinuxOnlyPrebuilt,
+	"env":       LinuxOnlyPrebuilt,
+	"expr":      LinuxOnlyPrebuilt,
+	"head":      LinuxOnlyPrebuilt,
+	"getconf":   LinuxOnlyPrebuilt,
+	"hostname":  LinuxOnlyPrebuilt,
+	"id":        LinuxOnlyPrebuilt,
+	"ln":        LinuxOnlyPrebuilt,
+	"ls":        LinuxOnlyPrebuilt,
+	"md5sum":    LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"mkdir":     Log,
-	"mktemp":    Toybox,
-	"mv":        Toybox,
-	"od":        Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"mktemp":    LinuxOnlyPrebuilt,
+	"mv":        LinuxOnlyPrebuilt,
+	"od":        LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"paste":     Log,
-	"pgrep":     Toybox,
-	"pkill":     Toybox,
-	"ps":        Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"pgrep":     LinuxOnlyPrebuilt,
+	"pkill":     LinuxOnlyPrebuilt,
+	"ps":        LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"pwd":       Log,
-	"readlink":  Toybox,
-	"rm":        Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"readlink":  LinuxOnlyPrebuilt,
+	"rm":        LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"rmdir":     Log,
-	"setsid":    Toybox,
-	"sha1sum":   Toybox,
-	"sha256sum": Toybox,
-	"sha512sum": Toybox,
-	"sleep":     Toybox,
-	"sort":      Toybox,
-	"stat":      Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"sed":       LinuxOnlyPrebuilt,
+	"setsid":    LinuxOnlyPrebuilt,
+	"sha1sum":   LinuxOnlyPrebuilt,
+	"sha256sum": LinuxOnlyPrebuilt,
+	"sha512sum": LinuxOnlyPrebuilt,
+	"sleep":     LinuxOnlyPrebuilt,
+	"sort":      LinuxOnlyPrebuilt,
+	"stat":      LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"tail":      Log,
-	"tee":       Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"tee":       LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"touch":     Log,
-	"true":      Toybox,
-	"uname":     Toybox,
-	"uniq":      Toybox,
-	"unix2dos":  Toybox,
-	"wc":        Toybox,
-	"whoami":    Toybox,
-	"which":     Toybox,
-	"xargs":     Toybox,
-	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"true":      LinuxOnlyPrebuilt,
+	"uname":     LinuxOnlyPrebuilt,
+	"uniq":      LinuxOnlyPrebuilt,
+	"unix2dos":  LinuxOnlyPrebuilt,
+	"wc":        LinuxOnlyPrebuilt,
+	"whoami":    LinuxOnlyPrebuilt,
+	"which":     LinuxOnlyPrebuilt,
+	"xargs":     LinuxOnlyPrebuilt,
+	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"xxd":       Log,
 }
 
@@ -204,10 +203,10 @@ func init() {
 		Configuration["sw_vers"] = Allowed
 		Configuration["xcrun"] = Allowed
 
-		// We don't have toybox prebuilts for darwin, so allow the
-		// host versions.
+		// We don't have darwin prebuilts for some tools (like toybox),
+		// so allow the host versions.
 		for name, config := range Configuration {
-			if config.Toybox {
+			if config.LinuxOnlyPrebuilt {
 				Configuration[name] = Allowed
 			}
 		}

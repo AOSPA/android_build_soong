@@ -212,6 +212,10 @@ type apexBundleProperties struct {
 	// "apex_manifest.json"
 	Manifest *string
 
+	// AndroidManifest.xml file used for the zip container of this APEX bundle.
+	// If unspecified, a default one is automatically generated.
+	AndroidManifest *string
+
 	// Determines the file contexts file for setting security context to each file in this APEX bundle.
 	// Specifically, when this is set to <value>, /system/sepolicy/apex/<value>_file_contexts file is
 	// used.
@@ -253,18 +257,8 @@ type apexBundleProperties struct {
 
 	Multilib apexMultilibProperties
 
-	Prefer_sanitize struct {
-		// Prefer native libraries with asan if available
-		Address *bool
-		// Prefer native libraries with hwasan if available
-		Hwaddress *bool
-		// Prefer native libraries with tsan if available
-		Thread *bool
-		// Prefer native libraries with integer_overflow if available
-		Integer_overflow *bool
-		// Prefer native libraries with cfi if available
-		Cfi *bool
-	}
+	// List of sanitizer names that this APEX is enabled for
+	SanitizerNames []string `blueprint:"mutated"`
 }
 
 type apexTargetBundleProperties struct {
@@ -513,10 +507,26 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 	ctx.AddDependency(ctx.Module(), keyTag, String(a.properties.Key))
 
-	cert := android.SrcIsModule(String(a.properties.Certificate))
+	cert := android.SrcIsModule(a.getCertString(ctx))
 	if cert != "" {
 		ctx.AddDependency(ctx.Module(), certificateTag, cert)
 	}
+
+	if String(a.properties.Manifest) != "" {
+		android.ExtractSourceDeps(ctx, a.properties.Manifest)
+	}
+
+	if String(a.properties.AndroidManifest) != "" {
+		android.ExtractSourceDeps(ctx, a.properties.AndroidManifest)
+	}
+}
+
+func (a *apexBundle) getCertString(ctx android.BaseContext) string {
+	certificate, overridden := ctx.DeviceConfig().OverrideCertificateFor(ctx.ModuleName())
+	if overridden {
+		return ":" + certificate
+	}
+	return String(a.properties.Certificate)
 }
 
 func (a *apexBundle) Srcs() android.Paths {
@@ -539,29 +549,15 @@ func (a *apexBundle) getImageVariation(config android.DeviceConfig) string {
 	}
 }
 
+func (a *apexBundle) EnableSanitizer(sanitizerName string) {
+	if !android.InList(sanitizerName, a.properties.SanitizerNames) {
+		a.properties.SanitizerNames = append(a.properties.SanitizerNames, sanitizerName)
+	}
+}
+
 func (a *apexBundle) IsSanitizerEnabled(ctx android.BaseModuleContext, sanitizerName string) bool {
-	// If this APEX is configured to prefer a sanitizer, use it
-	switch sanitizerName {
-	case "asan":
-		if proptools.Bool(a.properties.Prefer_sanitize.Address) {
-			return true
-		}
-	case "hwasan":
-		if proptools.Bool(a.properties.Prefer_sanitize.Hwaddress) {
-			return true
-		}
-	case "tsan":
-		if proptools.Bool(a.properties.Prefer_sanitize.Thread) {
-			return true
-		}
-	case "cfi":
-		if proptools.Bool(a.properties.Prefer_sanitize.Cfi) {
-			return true
-		}
-	case "integer_overflow":
-		if proptools.Bool(a.properties.Prefer_sanitize.Integer_overflow) {
-			return true
-		}
+	if android.InList(sanitizerName, a.properties.SanitizerNames) {
+		return true
 	}
 
 	// Then follow the global setting
@@ -805,7 +801,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, keyFile and
 		certificate = java.Certificate{pem, key}
 	}
 
-	manifest := android.PathForModuleSrc(ctx, proptools.StringDefault(a.properties.Manifest, "apex_manifest.json"))
+	manifest := ctx.ExpandSource(proptools.StringDefault(a.properties.Manifest, "apex_manifest.json"), "manifest")
 
 	var abis []string
 	for _, target := range ctx.MultiTargets() {
@@ -901,6 +897,12 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, keyFile and
 			optFlags = append(optFlags, "--override_apk_package_name "+manifestPackageName)
 		}
 
+		if a.properties.AndroidManifest != nil {
+			androidManifestFile := ctx.ExpandSource(proptools.String(a.properties.AndroidManifest), "androidManifest")
+			implicitInputs = append(implicitInputs, androidManifestFile)
+			optFlags = append(optFlags, "--android_manifest "+androidManifestFile.String())
+		}
+
 		ctx.Build(pctx, android.BuildParams{
 			Rule:        apexRule,
 			Implicits:   implicitInputs,
@@ -966,7 +968,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, keyFile and
 	})
 
 	// Install to $OUT/soong/{target,host}/.../apex
-	if a.installable() && !ctx.Config().FlattenApex() {
+	if a.installable() && (!ctx.Config().FlattenApex() || apexType.zip()) {
 		ctx.InstallFile(android.PathForModuleInstall(ctx, "apex"), ctx.ModuleName()+suffix, a.outputFiles[apexType])
 	}
 }
@@ -975,7 +977,7 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 	if a.installable() {
 		// For flattened APEX, do nothing but make sure that apex_manifest.json file is also copied along
 		// with other ordinary files.
-		manifest := android.PathForModuleSrc(ctx, proptools.StringDefault(a.properties.Manifest, "apex_manifest.json"))
+		manifest := ctx.ExpandSource(proptools.StringDefault(a.properties.Manifest, "apex_manifest.json"), "manifest")
 
 		// rename to apex_manifest.json
 		copiedManifest := android.PathForModuleOut(ctx, "apex_manifest.json")
@@ -1011,7 +1013,7 @@ func (a *apexBundle) AndroidMk() android.AndroidMkData {
 		}}
 }
 
-func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string) []string {
+func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string, apexType apexPackaging) []string {
 	moduleNames := []string{}
 
 	for _, fi := range a.filesInfo {
@@ -1024,7 +1026,7 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string) []st
 		fmt.Fprintln(w, "\ninclude $(CLEAR_VARS)")
 		fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
 		fmt.Fprintln(w, "LOCAL_MODULE :=", fi.moduleName)
-		if a.flattened {
+		if a.flattened && apexType.image() {
 			// /system/apex/<name>/{lib|framework|...}
 			fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", filepath.Join("$(OUT_DIR)",
 				a.installDir.RelPathString(), name, fi.installDir))
@@ -1093,7 +1095,7 @@ func (a *apexBundle) androidMkForType(apexType apexPackaging) android.AndroidMkD
 		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
 			moduleNames := []string{}
 			if a.installable() {
-				moduleNames = a.androidMkForFiles(w, name, moduleDir)
+				moduleNames = a.androidMkForFiles(w, name, moduleDir, apexType)
 			}
 
 			if a.flattened && apexType.image() {
