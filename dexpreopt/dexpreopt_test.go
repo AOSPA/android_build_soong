@@ -15,6 +15,7 @@
 package dexpreopt
 
 import (
+	"android/soong/android"
 	"reflect"
 	"strings"
 	"testing"
@@ -66,7 +67,6 @@ var testModuleConfig = ModuleConfig{
 	DexLocation:            "",
 	BuildPath:              "",
 	DexPath:                "",
-	UseEmbeddedDex:         false,
 	UncompressedDex:        false,
 	HasApkLibraries:        false,
 	PreoptFlags:            nil,
@@ -100,7 +100,7 @@ func TestDexPreopt(t *testing.T) {
 		t.Error(err)
 	}
 
-	wantInstalls := []Install{
+	wantInstalls := []android.RuleBuilderInstall{
 		{"out/test/oat/arm/package.odex", "/system/app/test/oat/arm/test.odex"},
 		{"out/test/oat/arm/package.vdex", "/system/app/test/oat/arm/test.vdex"},
 	}
@@ -126,7 +126,7 @@ func TestDexPreoptSystemOther(t *testing.T) {
 		t.Error(err)
 	}
 
-	wantInstalls := []Install{
+	wantInstalls := []android.RuleBuilderInstall{
 		{"out/test/oat/arm/package.odex", "/system_other/app/test/oat/arm/test.odex"},
 		{"out/test/oat/arm/package.vdex", "/system_other/app/test/oat/arm/test.vdex"},
 	}
@@ -150,7 +150,7 @@ func TestDexPreoptProfile(t *testing.T) {
 		t.Error(err)
 	}
 
-	wantInstalls := []Install{
+	wantInstalls := []android.RuleBuilderInstall{
 		{"out/test/profile.prof", "/system/app/test/test.apk.prof"},
 		{"out/test/oat/arm/package.art", "/system/app/test/oat/arm/test.art"},
 		{"out/test/oat/arm/package.odex", "/system/app/test/oat/arm/test.odex"},

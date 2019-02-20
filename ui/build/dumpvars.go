@@ -206,6 +206,7 @@ func runMakeProductConfig(ctx Context, config Config) {
 		// Not used, but useful to be in the soong.log
 		"BUILD_BROKEN_ANDROIDMK_EXPORTS",
 		"BUILD_BROKEN_DUP_COPY_HEADERS",
+		"BUILD_BROKEN_ENG_DEBUG_TAGS",
 	}, exportEnvVars...), BannerVars...)
 
 	make_vars, err := dumpMakeVars(ctx, config, config.Arguments(), allVars, true)
@@ -213,11 +214,13 @@ func runMakeProductConfig(ctx Context, config Config) {
 		ctx.Fatalln("Error dumping make vars:", err)
 	}
 
+	env := config.Environment()
 	// Print the banner like make does
-	ctx.Writer.Print(Banner(make_vars))
+	if !env.IsEnvTrue("ANDROID_QUIET_BUILD") {
+		ctx.Writer.Print(Banner(make_vars))
+	}
 
 	// Populate the environment
-	env := config.Environment()
 	for _, name := range exportEnvVars {
 		if make_vars[name] == "" {
 			env.Unset(name)
