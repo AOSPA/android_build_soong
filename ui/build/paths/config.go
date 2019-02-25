@@ -84,7 +84,6 @@ var Configuration = map[string]PathConfig{
 	"bash":      Allowed,
 	"bc":        Allowed,
 	"bzip2":     Allowed,
-	"cp":        Allowed,
 	"date":      Allowed,
 	"dd":        Allowed,
 	"diff":      Allowed,
@@ -96,7 +95,6 @@ var Configuration = map[string]PathConfig{
 	"grep":      Allowed,
 	"gzip":      Allowed,
 	"hexdump":   Allowed,
-	"hostname":  Allowed,
 	"jar":       Allowed,
 	"java":      Allowed,
 	"javap":     Allowed,
@@ -142,6 +140,8 @@ var Configuration = map[string]PathConfig{
 	"chmod":     Toybox,
 	// TODO (b/121282416): switch back to Toybox when build is hermetic
 	"cmp":       Log,
+	// TODO (b/121282416): switch back to Toybox when build is hermetic
+	"cp":        Log,
 	"comm":      Toybox,
 	"cut":       Toybox,
 	// TODO (b/121282416): switch back to Toybox when build is hermetic
@@ -152,6 +152,7 @@ var Configuration = map[string]PathConfig{
 	"expr":      Toybox,
 	"head":      Toybox,
 	"getconf":   Toybox,
+	"hostname":  Toybox,
 	"id":        Toybox,
 	"ln":        Toybox,
 	"ls":        Toybox,

@@ -67,7 +67,7 @@ var hiddenAPIEncodeDexRule = pctx.AndroidStaticRule("hiddenAPIEncodeDex", bluepr
 		`for INPUT_DEX in $$(find $tmpDir/dex-input -maxdepth 1 -name 'classes*.dex' | sort); do ` +
 		`  echo "--input-dex=$${INPUT_DEX}"; ` +
 		`  echo "--output-dex=$tmpDir/dex-output/$$(basename $${INPUT_DEX})"; ` +
-		`done | xargs ${config.HiddenAPI} encode --api-flags=$flags && ` +
+		`done | xargs ${config.HiddenAPI} encode --api-flags=$flagsCsv $hiddenapiFlags && ` +
 		`${config.SoongZipCmd} $soongZipFlags -o $tmpDir/dex.jar -C $tmpDir/dex-output -f "$tmpDir/dex-output/classes*.dex" && ` +
 		`${config.MergeZipsCmd} -D -zipToNotStrip $tmpDir/dex.jar -stripFile "classes*.dex" $out $tmpDir/dex.jar $in`,
 	CommandDeps: []string{
@@ -75,32 +75,47 @@ var hiddenAPIEncodeDexRule = pctx.AndroidStaticRule("hiddenAPIEncodeDex", bluepr
 		"${config.SoongZipCmd}",
 		"${config.MergeZipsCmd}",
 	},
-}, "flags", "tmpDir", "soongZipFlags")
+}, "flagsCsv", "hiddenapiFlags", "tmpDir", "soongZipFlags")
 
 func hiddenAPIEncodeDex(ctx android.ModuleContext, output android.WritablePath, dexInput android.WritablePath,
 	uncompressDex bool) {
 
-	flags := &bootImagePath{ctx.Config().HiddenAPIFlags()}
+	flagsCsv := &bootImagePath{ctx.Config().HiddenAPIFlags()}
 
 	// The encode dex rule requires unzipping and rezipping the classes.dex files, ensure that if it was uncompressed
 	// in the input it stays uncompressed in the output.
 	soongZipFlags := ""
+	hiddenapiFlags := ""
+	tmpOutput := output
+	tmpDir := android.PathForModuleOut(ctx, "hiddenapi", "dex")
 	if uncompressDex {
 		soongZipFlags = "-L 0"
+		tmpOutput = android.PathForModuleOut(ctx, "hiddenapi", "unaligned", "unaligned.jar")
+		tmpDir = android.PathForModuleOut(ctx, "hiddenapi", "unaligned")
+	}
+	// If frameworks/base doesn't exist we must be building with the 'master-art' manifest.
+	// Disable assertion that all methods/fields have hidden API flags assigned.
+	if !ctx.Config().FrameworksBaseDirExists(ctx) {
+		hiddenapiFlags = "--no-force-assign-all"
 	}
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        hiddenAPIEncodeDexRule,
 		Description: "hiddenapi encode dex",
 		Input:       dexInput,
-		Output:      output,
-		Implicit:    flags,
+		Output:      tmpOutput,
+		Implicit:    flagsCsv,
 		Args: map[string]string{
-			"flags":         flags.String(),
-			"tmpDir":        android.PathForModuleOut(ctx, "hiddenapi", "dex").String(),
-			"soongZipFlags": soongZipFlags,
+			"flagsCsv":       flagsCsv.String(),
+			"tmpDir":         tmpDir.String(),
+			"soongZipFlags":  soongZipFlags,
+			"hiddenapiFlags": hiddenapiFlags,
 		},
 	})
+
+	if uncompressDex {
+		TransformZipAlign(ctx, output, tmpOutput)
+	}
 
 	hiddenAPISaveDexInputs(ctx, dexInput)
 }

@@ -130,8 +130,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r346389c"
-	ClangDefaultShortVersion = "8.0.7"
+	ClangDefaultVersion      = "clang-r349610"
+	ClangDefaultShortVersion = "8.0.8"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -160,8 +160,13 @@ func init() {
 
 	pctx.StaticVariable("CommonClangGlobalCflags",
 		strings.Join(append(ClangFilterUnknownCflags(commonGlobalCflags), "${ClangExtraCflags}"), " "))
-	pctx.StaticVariable("DeviceClangGlobalCflags",
-		strings.Join(append(ClangFilterUnknownCflags(deviceGlobalCflags), "${ClangExtraTargetCflags}"), " "))
+	pctx.VariableFunc("DeviceClangGlobalCflags", func(ctx android.PackageVarContext) string {
+		if ctx.Config().Fuchsia() {
+			return strings.Join(ClangFilterUnknownCflags(deviceGlobalCflags), " ")
+		} else {
+			return strings.Join(append(ClangFilterUnknownCflags(deviceGlobalCflags), "${ClangExtraTargetCflags}"), " ")
+		}
+	})
 	pctx.StaticVariable("HostClangGlobalCflags",
 		strings.Join(ClangFilterUnknownCflags(hostGlobalCflags), " "))
 	pctx.StaticVariable("NoOverrideClangGlobalCflags",
@@ -181,7 +186,6 @@ func init() {
 			"hardware/libhardware/include",
 			"hardware/libhardware_legacy/include",
 			"hardware/ril/include",
-			"libnativehelper/include",
 			"frameworks/native/include",
 			"frameworks/native/opengl/include",
 			"frameworks/av/include",
