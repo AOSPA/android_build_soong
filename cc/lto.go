@@ -111,14 +111,6 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 			flags.LdFlags = append(flags.LdFlags, "-Wl,-plugin-opt,-inline-threshold=0")
 			flags.LdFlags = append(flags.LdFlags, "-Wl,-plugin-opt,-unroll-threshold=0")
 		}
-
-		if flags.Sdclang {
-			flags.CFlags = append(flags.CFlags, "-fuse-ld=qcld")
-			flags.LdFlags = append(flags.LdFlags, "-fuse-ld=qcld")
-			if ctx.Target().Arch.ArchType.Name == "arm64" {
-				flags.LdFlags = append(flags.LdFlags, "-Wl,-m,aarch64linux_androideabi")
-			}
-		}
 	}
 	return flags
 }
