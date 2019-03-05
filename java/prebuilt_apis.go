@@ -30,10 +30,10 @@ import (
 // It also creates <module>-api.<scope>.latest for the lastest <ver>.
 //
 func init() {
-	android.RegisterModuleType("prebuilt_apis", prebuiltApisFactory)
+	android.RegisterModuleType("prebuilt_apis", PrebuiltApisFactory)
 
 	android.PreArchMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.TopDown("prebuilt_apis", prebuiltApisMutator).Parallel()
+		ctx.TopDown("prebuilt_apis", PrebuiltApisMutator).Parallel()
 	})
 }
 
@@ -103,19 +103,25 @@ func createFilegroup(mctx android.TopDownMutatorContext, module string, scope st
 	mctx.CreateModule(android.ModuleFactoryAdaptor(android.FileGroupFactory), &filegroupProps)
 }
 
-func prebuiltSdkStubs(mctx android.TopDownMutatorContext) {
+func getPrebuiltFiles(mctx android.TopDownMutatorContext, name string) []string {
 	mydir := mctx.ModuleDir() + "/"
-	// <apiver>/<scope>/<module>.jar
 	var files []string
 	for _, apiver := range mctx.Module().(*prebuiltApis).properties.Api_dirs {
 		for _, scope := range []string{"public", "system", "test", "core"} {
-			vfiles, err := mctx.GlobWithDeps(mydir+apiver+"/"+scope+"*/*.jar", nil)
+			vfiles, err := mctx.GlobWithDeps(mydir+apiver+"/"+scope+"/"+name, nil)
 			if err != nil {
-				mctx.ModuleErrorf("failed to glob jar files under %q: %s", mydir+apiver+"/"+scope, err)
+				mctx.ModuleErrorf("failed to glob %s files under %q: %s", name, mydir+apiver+"/"+scope, err)
 			}
 			files = append(files, vfiles...)
 		}
 	}
+	return files
+}
+
+func prebuiltSdkStubs(mctx android.TopDownMutatorContext) {
+	mydir := mctx.ModuleDir() + "/"
+	// <apiver>/<scope>/<module>.jar
+	files := getPrebuiltFiles(mctx, "*.jar")
 
 	for _, f := range files {
 		// create a Import module for each jar file
@@ -128,10 +134,8 @@ func prebuiltSdkStubs(mctx android.TopDownMutatorContext) {
 func prebuiltApiFiles(mctx android.TopDownMutatorContext) {
 	mydir := mctx.ModuleDir() + "/"
 	// <apiver>/<scope>/api/<module>.txt
-	files, err := mctx.GlobWithDeps(mydir+"*/*/api/*.txt", nil)
-	if err != nil {
-		mctx.ModuleErrorf("failed to glob api txt files under %q: %s", mydir, err)
-	}
+	files := getPrebuiltFiles(mctx, "api/*.txt")
+
 	if len(files) == 0 {
 		mctx.ModuleErrorf("no api file found under %q", mydir)
 	}
@@ -161,6 +165,7 @@ func prebuiltApiFiles(mctx android.TopDownMutatorContext) {
 			strings.Compare(apiver, info.apiver) > 0) {
 			info.apiver = apiver
 			info.path = localPath
+			m[key] = info
 		}
 	}
 	// create filegroups for the latest version of (<module>, <scope>) pairs
@@ -176,14 +181,14 @@ func prebuiltApiFiles(mctx android.TopDownMutatorContext) {
 	}
 }
 
-func prebuiltApisMutator(mctx android.TopDownMutatorContext) {
+func PrebuiltApisMutator(mctx android.TopDownMutatorContext) {
 	if _, ok := mctx.Module().(*prebuiltApis); ok {
 		prebuiltApiFiles(mctx)
 		prebuiltSdkStubs(mctx)
 	}
 }
 
-func prebuiltApisFactory() android.Module {
+func PrebuiltApisFactory() android.Module {
 	module := &prebuiltApis{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidModule(module)
