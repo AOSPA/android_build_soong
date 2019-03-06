@@ -54,15 +54,21 @@ var (
 
 	embeddedPar = pctx.AndroidStaticRule("embeddedPar",
 		blueprint.RuleParams{
-			// `echo -n` to trim the newline, since the python code just wants the name.
-			// /bin/sh (used by ninja) on Mac turns off posix mode, and stops supporting -n.
-			// Explicitly use bash instead.
-			Command: `/bin/bash -c "echo -n '$main' > $entryPoint" &&` +
-				`$mergeParCmd -p --prefix $launcher -e $entryPoint $out $srcsZips && ` +
-				`chmod +x $out && (rm -f $entryPoint)`,
+			Command: `rm -f $out.main && ` +
+				`sed 's/ENTRY_POINT/$main/' build/soong/python/scripts/main.py >$out.main &&` +
+				`$mergeParCmd -p -pm $out.main --prefix $launcher $out $srcsZips && ` +
+				`chmod +x $out && rm -rf $out.main`,
+			CommandDeps: []string{"$mergeParCmd", "$parCmd", "build/soong/python/scripts/main.py"},
+		},
+		"main", "srcsZips", "launcher")
+
+	embeddedParNoMain = pctx.AndroidStaticRule("embeddedParNoMain",
+		blueprint.RuleParams{
+			Command: `$mergeParCmd -p --prefix $launcher $out $srcsZips && ` +
+				`chmod +x $out`,
 			CommandDeps: []string{"$mergeParCmd"},
 		},
-		"main", "entryPoint", "srcsZips", "launcher")
+		"srcsZips", "launcher")
 )
 
 func init() {
@@ -108,21 +114,30 @@ func registerBuildActionForParFile(ctx android.ModuleContext, embeddedLauncher b
 		// added launcherPath to the implicits Ninja dependencies.
 		implicits = append(implicits, launcherPath.Path())
 
-		// .intermediate output path for entry_point.txt
-		entryPoint := android.PathForModuleOut(ctx, entryPointFile).String()
-
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        embeddedPar,
-			Description: "embedded python archive",
-			Output:      binFile,
-			Implicits:   implicits,
-			Args: map[string]string{
-				"main":       strings.Replace(strings.TrimSuffix(main, pyExt), "/", ".", -1),
-				"entryPoint": entryPoint,
-				"srcsZips":   strings.Join(srcsZips.Strings(), " "),
-				"launcher":   launcherPath.String(),
-			},
-		})
+		if main == "" {
+			ctx.Build(pctx, android.BuildParams{
+				Rule:        embeddedParNoMain,
+				Description: "embedded python archive",
+				Output:      binFile,
+				Implicits:   implicits,
+				Args: map[string]string{
+					"srcsZips": strings.Join(srcsZips.Strings(), " "),
+					"launcher": launcherPath.String(),
+				},
+			})
+		} else {
+			ctx.Build(pctx, android.BuildParams{
+				Rule:        embeddedPar,
+				Description: "embedded python archive",
+				Output:      binFile,
+				Implicits:   implicits,
+				Args: map[string]string{
+					"main":     strings.Replace(strings.TrimSuffix(main, pyExt), "/", ".", -1),
+					"srcsZips": strings.Join(srcsZips.Strings(), " "),
+					"launcher": launcherPath.String(),
+				},
+			})
+		}
 	}
 
 	return binFile

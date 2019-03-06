@@ -28,7 +28,7 @@ import (
 // graph.
 type RuleBuilder struct {
 	commands       []*RuleBuilderCommand
-	installs       []RuleBuilderInstall
+	installs       RuleBuilderInstalls
 	temporariesSet map[string]bool
 	restat         bool
 	missingDeps    []string
@@ -44,6 +44,23 @@ func NewRuleBuilder() *RuleBuilder {
 // RuleBuilderInstall is a tuple of install from and to locations.
 type RuleBuilderInstall struct {
 	From, To string
+}
+
+type RuleBuilderInstalls []RuleBuilderInstall
+
+// String returns the RuleBuilderInstalls in the form used by $(call copy-many-files) in Make, a space separated
+// list of from:to tuples.
+func (installs RuleBuilderInstalls) String() string {
+	sb := strings.Builder{}
+	for i, install := range installs {
+		if i != 0 {
+			sb.WriteRune(' ')
+		}
+		sb.WriteString(install.From)
+		sb.WriteRune(':')
+		sb.WriteString(install.To)
+	}
+	return sb.String()
 }
 
 // MissingDeps adds modules to the list of missing dependencies.  If MissingDeps
@@ -145,8 +162,8 @@ func (r *RuleBuilder) Outputs() []string {
 }
 
 // Installs returns the list of tuples passed to Install.
-func (r *RuleBuilder) Installs() []RuleBuilderInstall {
-	return append([]RuleBuilderInstall(nil), r.installs...)
+func (r *RuleBuilder) Installs() RuleBuilderInstalls {
+	return append(RuleBuilderInstalls(nil), r.installs...)
 }
 
 func (r *RuleBuilder) toolsSet() map[string]bool {
@@ -292,6 +309,15 @@ func (c *RuleBuilderCommand) Flag(flag string) *RuleBuilderCommand {
 // outputs.
 func (c *RuleBuilderCommand) FlagWithArg(flag, arg string) *RuleBuilderCommand {
 	return c.Text(flag + arg)
+}
+
+// FlagForEachArg adds the specified flag joined with each argument to the command line.  The result is identical to
+// calling FlagWithArg for argument.
+func (c *RuleBuilderCommand) FlagForEachArg(flag string, args []string) *RuleBuilderCommand {
+	for _, arg := range args {
+		c.FlagWithArg(flag, arg)
+	}
+	return c
 }
 
 // FlagWithArg adds the specified flag and list of arguments to the command line, with the arguments joined by sep
