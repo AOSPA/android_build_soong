@@ -146,6 +146,8 @@ func main() {
 	if *pyMain != "" && !*emulatePar {
 		log.Fatal(errors.New("must specify -p when specifying a Python __main__.py via -pm"))
 	}
+	// TODO (b/124804356) This is a hotfix to unblock QP1A.190212.003
+	*ignoreDuplicates = true
 
 	// do merge
 	err = mergeZips(readers, writer, *manifest, *entrypoint, *pyMain, *sortEntries, *emulateJar, *emulatePar,

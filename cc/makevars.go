@@ -25,24 +25,24 @@ import (
 	"android/soong/cc/config"
 )
 
-const (
-	modulesAddedWall          = "ModulesAddedWall"
-	modulesUsingWnoError      = "ModulesUsingWnoError"
-	modulesMissingProfileFile = "ModulesMissingProfileFile"
+var (
+	modulesAddedWallKey          = android.NewOnceKey("ModulesAddedWall")
+	modulesUsingWnoErrorKey      = android.NewOnceKey("ModulesUsingWnoError")
+	modulesMissingProfileFileKey = android.NewOnceKey("ModulesMissingProfileFile")
 )
 
 func init() {
 	android.RegisterMakeVarsProvider(pctx, makeVarsProvider)
 }
 
-func getNamedMapForConfig(config android.Config, name string) *sync.Map {
-	return config.Once(name, func() interface{} {
+func getNamedMapForConfig(config android.Config, key android.OnceKey) *sync.Map {
+	return config.Once(key, func() interface{} {
 		return &sync.Map{}
 	}).(*sync.Map)
 }
 
-func makeStringOfKeys(ctx android.MakeVarsContext, setName string) string {
-	set := getNamedMapForConfig(ctx.Config(), setName)
+func makeStringOfKeys(ctx android.MakeVarsContext, key android.OnceKey) string {
+	set := getNamedMapForConfig(ctx.Config(), key)
 	keys := []string{}
 	set.Range(func(key interface{}, value interface{}) bool {
 		keys = append(keys, key.(string))
@@ -102,7 +102,7 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 
 	// Filter vendor_public_library that are exported to make
 	exportedVendorPublicLibraries := []string{}
-	ctx.SingletonContext().VisitAllModules(func(module android.Module) {
+	ctx.VisitAllModules(func(module android.Module) {
 		if ccModule, ok := module.(*Module); ok {
 			baseName := ccModule.BaseModuleName()
 			if inList(baseName, vendorPublicLibraries) && module.ExportedToMake() {
@@ -119,9 +119,9 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("LSDUMP_PATHS", strings.Join(lsdumpPaths, " "))
 
 	ctx.Strict("ANDROID_WARNING_ALLOWED_PROJECTS", makeStringOfWarningAllowedProjects())
-	ctx.Strict("SOONG_MODULES_ADDED_WALL", makeStringOfKeys(ctx, modulesAddedWall))
-	ctx.Strict("SOONG_MODULES_USING_WNO_ERROR", makeStringOfKeys(ctx, modulesUsingWnoError))
-	ctx.Strict("SOONG_MODULES_MISSING_PGO_PROFILE_FILE", makeStringOfKeys(ctx, modulesMissingProfileFile))
+	ctx.Strict("SOONG_MODULES_ADDED_WALL", makeStringOfKeys(ctx, modulesAddedWallKey))
+	ctx.Strict("SOONG_MODULES_USING_WNO_ERROR", makeStringOfKeys(ctx, modulesUsingWnoErrorKey))
+	ctx.Strict("SOONG_MODULES_MISSING_PGO_PROFILE_FILE", makeStringOfKeys(ctx, modulesMissingProfileFileKey))
 
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_CFLAGS", strings.Join(asanCflags, " "))
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_LDFLAGS", strings.Join(asanLdflags, " "))
@@ -180,14 +180,6 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 		makeVarsToolchain(ctx, "2ND_", hostTargets[1])
 	}
 
-	crossTargets := ctx.Config().Targets[android.Windows]
-	if len(crossTargets) > 0 {
-		makeVarsToolchain(ctx, "", crossTargets[0])
-		if len(crossTargets) > 1 {
-			makeVarsToolchain(ctx, "2ND_", crossTargets[1])
-		}
-	}
-
 	deviceTargets := ctx.Config().Targets[android.Android]
 	makeVarsToolchain(ctx, "", deviceTargets[0])
 	if len(deviceTargets) > 1 {
@@ -211,8 +203,6 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 	switch target.Os.Class {
 	case android.Host:
 		typePrefix = "HOST_"
-	case android.HostCross:
-		typePrefix = "HOST_CROSS_"
 	case android.Device:
 		typePrefix = "TARGET_"
 	}
@@ -313,10 +303,6 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 		ctx.Strict(makePrefix+"STRIP", gccCmd(toolchain, "strip"))
 	}
 
-	if target.Os == android.Windows {
-		ctx.Strict(makePrefix+"OBJDUMP", gccCmd(toolchain, "objdump"))
-	}
-
 	if target.Os.Class == android.Device {
 		ctx.Strict(makePrefix+"OBJCOPY", gccCmd(toolchain, "objcopy"))
 		ctx.Strict(makePrefix+"LD", gccCmd(toolchain, "ld"))
@@ -325,7 +311,7 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 		ctx.Strict(makePrefix+"TOOLS_PREFIX", gccCmd(toolchain, ""))
 	}
 
-	if target.Os.Class == android.Host || target.Os.Class == android.HostCross {
+	if target.Os.Class == android.Host {
 		ctx.Strict(makePrefix+"AVAILABLE_LIBRARIES", strings.Join(toolchain.AvailableLibraries(), " "))
 	}
 

@@ -106,6 +106,7 @@ var Configuration = map[string]PathConfig{
 	"printf":    Log,
 	"pstree":    Allowed,
 	"python":    Allowed,
+	"python2":   Allowed,
 	"python2.7": Allowed,
 	"python3":   Allowed,
 	"realpath":  Allowed,
