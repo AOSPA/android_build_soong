@@ -53,6 +53,10 @@ func (cov *coverage) flags(ctx ModuleContext, flags Flags) Flags {
 		flags.Coverage = true
 		flags.GlobalFlags = append(flags.GlobalFlags, "--coverage", "-O0")
 		cov.linkCoverage = true
+
+		// Override -Wframe-larger-than and non-default optimization
+		// flags that the module may use.
+		flags.CFlags = append(flags.CFlags, "-Wno-frame-larger-than=", "-O0")
 	}
 
 	// Even if we don't have coverage enabled, if any of our object files were compiled
@@ -109,8 +113,6 @@ func coverageMutator(mctx android.BottomUpMutatorContext) {
 		if mctx.Host() {
 			// TODO(dwillemsen): because of -nodefaultlibs, we must depend on libclang_rt.profile-*.a
 			// Just turn off for now.
-		} else if c.useVndk() || c.hasVendorVariant() {
-			// Do not enable coverage for VNDK libraries
 		} else if c.IsStubs() {
 			// Do not enable coverage for platform stub libraries
 		} else if c.isNDKStubLibrary() {
