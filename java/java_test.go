@@ -24,6 +24,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc"
+	"android/soong/dexpreopt"
 	"android/soong/genrule"
 )
 
@@ -101,8 +102,6 @@ func testContext(config android.Config, bp string,
 		ctx.BottomUp("link", cc.LinkageMutator).Parallel()
 		ctx.BottomUp("begin", cc.BeginMutator).Parallel()
 	})
-
-	ctx.Register()
 
 	bp += GatherRequiredDepsForTest()
 
@@ -188,6 +187,11 @@ func testContext(config android.Config, bp string,
 
 func run(t *testing.T, ctx *android.TestContext, config android.Config) {
 	t.Helper()
+
+	pathCtx := android.PathContextForTesting(config, nil)
+	setDexpreoptTestGlobalConfig(config, dexpreopt.GlobalConfigForTests(pathCtx))
+
+	ctx.Register()
 	_, errs := ctx.ParseFileList(".", []string{"Android.bp", "prebuilts/sdk/Android.bp"})
 	android.FailIfErrored(t, errs)
 	_, errs = ctx.PrepareBuildActions(config)

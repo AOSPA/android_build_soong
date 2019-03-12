@@ -33,17 +33,6 @@ var (
 	DefaultLambdaStubsLibrary     = "core-lambda-stubs"
 	SdkLambdaStubsPath            = "prebuilts/sdk/tools/core-lambda-stubs.jar"
 
-	// A list of the non-boot jars that provide hidden APIs, i.e. libraries.
-	HiddenAPIProvidingNonBootJars = []string{
-		"android.test.base",
-	}
-
-	// A list of the non-boot jars that provide information about usages of the hidden API.
-	HiddenAPIExtraAppUsageJars = []string{
-		// The core-oj-hiddenapi provides information for the core-oj jar.
-		"core-oj-hiddenapi",
-	}
-
 	DefaultJacocoExcludeFilter = []string{"org.junit.*", "org.jacoco.*", "org.mockito.*"}
 
 	InstrumentFrameworkModules = []string{
@@ -56,16 +45,6 @@ var (
 		"core-libart",
 		"updatable-media",
 	}
-
-	ManifestMergerClasspath = []string{
-		"prebuilts/gradle-plugin/com/android/tools/build/manifest-merger/26.1.0/manifest-merger-26.1.0.jar",
-		"prebuilts/gradle-plugin/com/android/tools/common/26.1.0/common-26.1.0.jar",
-		"prebuilts/gradle-plugin/com/android/tools/sdk-common/26.1.0/sdk-common-26.1.0.jar",
-		"prebuilts/gradle-plugin/com/android/tools/sdklib/26.1.0/sdklib-26.1.0.jar",
-		"prebuilts/gradle-plugin/org/jetbrains/kotlin/kotlin-runtime/1.0.5/kotlin-runtime-1.0.5.jar",
-		"prebuilts/gradle-plugin/org/jetbrains/kotlin/kotlin-stdlib/1.1.3/kotlin-stdlib-1.1.3.jar",
-		"prebuilts/misc/common/guava/guava-21.0.jar",
-	}
 )
 
 func init() {
@@ -73,6 +52,7 @@ func init() {
 
 	pctx.StaticVariable("JavacHeapSize", "2048M")
 	pctx.StaticVariable("JavacHeapFlags", "-J-Xmx${JavacHeapSize}")
+	pctx.StaticVariable("DexFlags", "-JXX:+TieredCompilation -JXX:TieredStopAtLevel=1")
 
 	pctx.StaticVariable("CommonJdkFlags", strings.Join([]string{
 		`-Xmaxerrs 9999999`,
@@ -163,8 +143,7 @@ func init() {
 
 	pctx.SourcePathVariable("ManifestFixerCmd", "build/soong/scripts/manifest_fixer.py")
 
-	pctx.SourcePathsVariable("ManifestMergerJars", " ", ManifestMergerClasspath...)
-	pctx.SourcePathsVariable("ManifestMergerClasspath", ":", ManifestMergerClasspath...)
+	pctx.HostBinToolVariable("ManifestMergerCmd", "manifest-merger")
 
 	pctx.HostBinToolVariable("ZipAlign", "zipalign")
 

@@ -1931,6 +1931,10 @@ func (c *Module) imageVariation() string {
 	return variation
 }
 
+func (c *Module) IDEInfo(dpInfo *android.IdeInfo) {
+	dpInfo.Srcs = append(dpInfo.Srcs, c.Srcs().Strings()...)
+}
+
 //
 // Defaults
 //
