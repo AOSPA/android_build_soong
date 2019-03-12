@@ -775,20 +775,8 @@ func (c *config) BootJars() []string {
 	return c.productVariables.BootJars
 }
 
-func (c *config) PreoptBootJars() []string {
-	return c.productVariables.PreoptBootJars
-}
-
-func (c *config) DisableDexPreopt(name string) bool {
-	return Bool(c.productVariables.DisableDexPreopt) || InList(name, c.productVariables.DisableDexPreoptModules)
-}
-
 func (c *config) DexpreoptGlobalConfig() string {
 	return String(c.productVariables.DexpreoptGlobalConfig)
-}
-
-func (c *config) DexPreoptProfileDir() string {
-	return String(c.productVariables.DexPreoptProfileDir)
 }
 
 func (c *config) FrameworksBaseDirExists(ctx PathContext) bool {
@@ -944,6 +932,8 @@ func findOverrideValue(overrides []string, name string, errorMsg string) (newVal
 	return "", false
 }
 
+// SecondArchIsTranslated returns true if the primary device arch is X86 or X86_64 and the device also has an arch
+// that is Arm or Arm64.
 func (c *config) SecondArchIsTranslated() bool {
 	deviceTargets := c.Targets[Android]
 	if len(deviceTargets) < 2 {
@@ -952,8 +942,7 @@ func (c *config) SecondArchIsTranslated() bool {
 
 	arch := deviceTargets[0].Arch
 
-	return (arch.ArchType == X86 || arch.ArchType == X86_64) &&
-		(hasArmAbi(arch) || hasArmAndroidArch(deviceTargets))
+	return (arch.ArchType == X86 || arch.ArchType == X86_64) && hasArmAndroidArch(deviceTargets)
 }
 
 func (c *config) IntegerOverflowDisabledForPath(path string) bool {
