@@ -65,7 +65,7 @@ func (library *Library) AndroidMk() android.AndroidMkData {
 					fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", library.dexJarFile.String())
 				}
 				if len(library.dexpreopter.builtInstalled) > 0 {
-					fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", strings.Join(library.dexpreopter.builtInstalled, " "))
+					fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", library.dexpreopter.builtInstalled)
 				}
 				fmt.Fprintln(w, "LOCAL_SDK_VERSION :=", library.sdkVersion())
 				fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", library.implementationAndResourcesJar.String())
@@ -131,6 +131,28 @@ func (prebuilt *Import) AndroidMk() android.AndroidMkData {
 	}
 }
 
+func (prebuilt *DexImport) AndroidMk() android.AndroidMkData {
+	return android.AndroidMkData{
+		Class:      "JAVA_LIBRARIES",
+		OutputFile: android.OptionalPathForPath(prebuilt.maybeStrippedDexJarFile),
+		Include:    "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
+		Extra: []android.AndroidMkExtraFunc{
+			func(w io.Writer, outputFile android.Path) {
+				if prebuilt.dexJarFile != nil {
+					fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", prebuilt.dexJarFile.String())
+					// TODO(b/125517186): export the dex jar as a classes jar to match some mis-uses in Make until
+					// boot_jars_package_check.mk can check dex jars.
+					fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", prebuilt.dexJarFile.String())
+					fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", prebuilt.dexJarFile.String())
+				}
+				if len(prebuilt.dexpreopter.builtInstalled) > 0 {
+					fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", prebuilt.dexpreopter.builtInstalled)
+				}
+			},
+		},
+	}
+}
+
 func (prebuilt *AARImport) AndroidMk() android.AndroidMkData {
 	return android.AndroidMkData{
 		Class:      "JAVA_LIBRARIES",
@@ -166,7 +188,7 @@ func (binary *Binary) AndroidMk() android.AndroidMkData {
 						fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", binary.dexJarFile.String())
 					}
 					if len(binary.dexpreopter.builtInstalled) > 0 {
-						fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", strings.Join(binary.dexpreopter.builtInstalled, " "))
+						fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", binary.dexpreopter.builtInstalled)
 					}
 				},
 			},
@@ -260,7 +282,7 @@ func (app *AndroidApp) AndroidMk() android.AndroidMkData {
 					fmt.Fprintln(w, "LOCAL_SOONG_JNI_LIBS_"+jniLib.target.Arch.ArchType.String(), "+=", jniLib.name)
 				}
 				if len(app.dexpreopter.builtInstalled) > 0 {
-					fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", strings.Join(app.dexpreopter.builtInstalled, " "))
+					fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", app.dexpreopter.builtInstalled)
 				}
 			},
 		},

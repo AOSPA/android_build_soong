@@ -36,7 +36,7 @@ func init() {
 	android.RegisterModuleType("java_defaults", defaultsFactory)
 
 	android.RegisterModuleType("java_library", LibraryFactory)
-	android.RegisterModuleType("java_library_static", LibraryFactory)
+	android.RegisterModuleType("java_library_static", LibraryStaticFactory)
 	android.RegisterModuleType("java_library_host", LibraryHostFactory)
 	android.RegisterModuleType("java_binary", BinaryFactory)
 	android.RegisterModuleType("java_binary_host", BinaryHostFactory)
@@ -44,6 +44,7 @@ func init() {
 	android.RegisterModuleType("java_test_host", TestHostFactory)
 	android.RegisterModuleType("java_import", ImportFactory)
 	android.RegisterModuleType("java_import_host", ImportFactoryHost)
+	android.RegisterModuleType("dex_import", DexImportFactory)
 
 	android.RegisterSingletonType("logtags", LogtagsSingleton)
 }
@@ -78,12 +79,11 @@ type CompilerProperties struct {
 	// list of files that should be excluded from java_resources and java_resource_dirs
 	Exclude_java_resources []string `android:"arch_variant"`
 
-	// don't build against the default libraries (bootclasspath, legacy-test, core-junit,
-	// ext, and framework for device targets)
+	// don't build against the default libraries (bootclasspath, ext, and framework for device
+	// targets)
 	No_standard_libs *bool
 
-	// don't build against the framework libraries (legacy-test, core-junit,
-	// ext, and framework for device targets)
+	// don't build against the framework libraries (ext, and framework for device targets)
 	No_framework_libs *bool
 
 	// list of module-specific flags that will be used for javac compiles
@@ -338,8 +338,8 @@ type Dependency interface {
 }
 
 type SdkLibraryDependency interface {
-	HeaderJars(ctx android.BaseContext, sdkVersion string) android.Paths
-	ImplementationJars(ctx android.BaseContext, sdkVersion string) android.Paths
+	SdkHeaderJars(ctx android.BaseContext, sdkVersion string) android.Paths
+	SdkImplementationJars(ctx android.BaseContext, sdkVersion string) android.Paths
 }
 
 type SrcDependency interface {
@@ -698,6 +698,15 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			}
 		}
 		switch dep := module.(type) {
+		case SdkLibraryDependency:
+			switch tag {
+			case libTag:
+				deps.classpath = append(deps.classpath, dep.SdkHeaderJars(ctx, j.sdkVersion())...)
+				// names of sdk libs that are directly depended are exported
+				j.exportedSdkLibs = append(j.exportedSdkLibs, otherName)
+			default:
+				ctx.ModuleErrorf("dependency on java_sdk_library %q can only be in libs", otherName)
+			}
 		case Dependency:
 			switch tag {
 			case bootClasspathTag:
@@ -748,15 +757,6 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			}
 
 			deps.aidlIncludeDirs = append(deps.aidlIncludeDirs, dep.AidlIncludeDirs()...)
-		case SdkLibraryDependency:
-			switch tag {
-			case libTag:
-				deps.classpath = append(deps.classpath, dep.HeaderJars(ctx, j.sdkVersion())...)
-				// names of sdk libs that are directly depended are exported
-				j.exportedSdkLibs = append(j.exportedSdkLibs, otherName)
-			default:
-				ctx.ModuleErrorf("dependency on java_sdk_library %q can only be in libs", otherName)
-			}
 		case android.SourceFileProducer:
 			switch tag {
 			case libTag:
@@ -1239,8 +1239,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 		j.dexJarFile = dexOutputFile
 
 		// Dexpreopting
-		j.dexpreopter.isInstallable = Bool(j.properties.Installable)
-		j.dexpreopter.uncompressedDex = j.deviceProperties.UncompressDex
 		dexOutputFile = j.dexpreopt(ctx, dexOutputFile)
 
 		j.maybeStrippedDexJarFile = dexOutputFile
@@ -1416,11 +1414,14 @@ type Library struct {
 	Module
 }
 
-func (j *Library) shouldUncompressDex(ctx android.ModuleContext) bool {
-	// Store uncompressed (and do not strip) dex files from boot class path jars that are
-	// in an apex.
-	if inList(ctx.ModuleName(), ctx.Config().BootJars()) &&
-		android.DirectlyInAnyApex(ctx, ctx.ModuleName()) {
+func shouldUncompressDex(ctx android.ModuleContext, dexpreopter *dexpreopter) bool {
+	// Store uncompressed (and do not strip) dex files from boot class path jars.
+	if inList(ctx.ModuleName(), ctx.Config().BootJars()) {
+		return true
+	}
+
+	// Store uncompressed dex files that are preopted on /system.
+	if !dexpreopter.dexpreoptDisabled(ctx) && (ctx.Host() || !odexOnSystemOther(ctx, dexpreopter.installPath)) {
 		return true
 	}
 	if ctx.Config().UncompressPrivAppDex() &&
@@ -1434,7 +1435,9 @@ func (j *Library) shouldUncompressDex(ctx android.ModuleContext) bool {
 func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework", ctx.ModuleName()+".jar")
 	j.dexpreopter.isSDKLibrary = j.deviceProperties.IsSDKLibrary
-	j.deviceProperties.UncompressDex = j.shouldUncompressDex(ctx)
+	j.dexpreopter.isInstallable = Bool(j.properties.Installable)
+	j.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &j.dexpreopter)
+	j.deviceProperties.UncompressDex = j.dexpreopter.uncompressedDex
 	j.compile(ctx)
 
 	if (Bool(j.properties.Installable) || ctx.Host()) && !android.DirectlyInAnyApex(ctx, ctx.ModuleName()) {
@@ -1447,6 +1450,17 @@ func (j *Library) DepsMutator(ctx android.BottomUpMutatorContext) {
 	j.deps(ctx)
 }
 
+// java_library builds and links sources into a `.jar` file for the device, and possibly for the host as well.
+//
+// By default, a java_library has a single variant that produces a `.jar` file containing `.class` files that were
+// compiled against the device bootclasspath.  This jar is not suitable for installing on a device, but can be used
+// as a `static_libs` dependency of another module.
+//
+// Specifying `installable: true` will product a `.jar` file containing `classes.dex` files, suitable for installing on
+// a device.
+//
+// Specifying `host_supported: true` will produce two variants, one compiled against the device bootclasspath and one
+// compiled against the host bootclasspath.
 func LibraryFactory() android.Module {
 	module := &Library{}
 
@@ -1460,6 +1474,15 @@ func LibraryFactory() android.Module {
 	return module
 }
 
+// java_library_static is an obsolete alias for java_library.
+func LibraryStaticFactory() android.Module {
+	return LibraryFactory()
+}
+
+// java_library_host builds and links sources into a `.jar` file for the host.
+//
+// A java_library_host has a single variant that produces a `.jar` file containing `.class` files that were
+// compiled against the host bootclasspath.
 func LibraryHostFactory() android.Module {
 	module := &Library{}
 
@@ -1505,7 +1528,7 @@ type Test struct {
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	j.testConfig = tradefed.AutoGenJavaTestConfig(ctx, j.testProperties.Test_config, j.testProperties.Test_config_template)
+	j.testConfig = tradefed.AutoGenJavaTestConfig(ctx, j.testProperties.Test_config, j.testProperties.Test_config_template, j.testProperties.Test_suites)
 	j.data = ctx.ExpandSources(j.testProperties.Data, nil)
 
 	j.Library.GenerateAndroidBuildActions(ctx)
@@ -1518,6 +1541,14 @@ func (j *Test) DepsMutator(ctx android.BottomUpMutatorContext) {
 	android.ExtractSourcesDeps(ctx, j.testProperties.Data)
 }
 
+// java_test builds a and links sources into a `.jar` file for the device, and possibly for the host as well, and
+// creates an `AndroidTest.xml` file to allow running the test with `atest` or a `TEST_MAPPING` file.
+//
+// By default, a java_test has a single variant that produces a `.jar` file containing `classes.dex` files that were
+// compiled against the device bootclasspath.
+//
+// Specifying `host_supported: true` will produce two variants, one compiled against the device bootclasspath and one
+// compiled against the host bootclasspath.
 func TestFactory() android.Module {
 	module := &Test{}
 
@@ -1535,6 +1566,11 @@ func TestFactory() android.Module {
 	return module
 }
 
+// java_test_host builds a and links sources into a `.jar` file for the host, and creates an `AndroidTest.xml` file to
+// allow running the test with `atest` or a `TEST_MAPPING` file.
+//
+// A java_test_host has a single variant that produces a `.jar` file containing `.class` files that were
+// compiled against the host bootclasspath.
 func TestHostFactory() android.Module {
 	module := &Test{}
 
@@ -1616,6 +1652,14 @@ func (j *Binary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 }
 
+// java_binary builds a `.jar` file and a shell script that executes it for the device, and possibly for the host
+// as well.
+//
+// By default, a java_binary has a single variant that produces a `.jar` file containing `classes.dex` files that were
+// compiled against the device bootclasspath.
+//
+// Specifying `host_supported: true` will produce two variants, one compiled against the device bootclasspath and one
+// compiled against the host bootclasspath.
 func BinaryFactory() android.Module {
 	module := &Binary{}
 
@@ -1633,6 +1677,10 @@ func BinaryFactory() android.Module {
 	return module
 }
 
+// java_binary_host builds a `.jar` file and a shell script that executes it for the host.
+//
+// A java_binary_host has a single variant that produces a `.jar` file containing `.class` files that were
+// compiled against the host bootclasspath.
 func BinaryHostFactory() android.Module {
 	module := &Binary{}
 
@@ -1814,6 +1862,13 @@ func (j *Import) IDECustomizedModuleName() string {
 
 var _ android.PrebuiltInterface = (*Import)(nil)
 
+// java_import imports one or more `.jar` files into the build graph as if they were built by a java_library module.
+//
+// By default, a java_import has a single variant that expects a `.jar` file containing `.class` files that were
+// compiled against an Android classpath.
+//
+// Specifying `host_supported: true` will produce two variants, one for use as a dependency of device modules and one
+// for host modules.
 func ImportFactory() android.Module {
 	module := &Import{}
 
@@ -1824,6 +1879,11 @@ func ImportFactory() android.Module {
 	return module
 }
 
+// java_import imports one or more `.jar` files into the build graph as if they were built by a java_library_host
+// module.
+//
+// A java_import_host has a single variant that expects a `.jar` file containing `.class` files that were
+// compiled against a host bootclasspath.
 func ImportFactoryHost() android.Module {
 	module := &Import{}
 
@@ -1831,6 +1891,113 @@ func ImportFactoryHost() android.Module {
 
 	android.InitPrebuiltModule(module, &module.properties.Jars)
 	InitJavaModule(module, android.HostSupported)
+	return module
+}
+
+// dex_import module
+
+type DexImportProperties struct {
+	Jars []string
+}
+
+type DexImport struct {
+	android.ModuleBase
+	android.DefaultableModuleBase
+	prebuilt android.Prebuilt
+
+	properties DexImportProperties
+
+	dexJarFile              android.Path
+	maybeStrippedDexJarFile android.Path
+
+	dexpreopter
+}
+
+func (j *DexImport) Prebuilt() *android.Prebuilt {
+	return &j.prebuilt
+}
+
+func (j *DexImport) PrebuiltSrcs() []string {
+	return j.properties.Jars
+}
+
+func (j *DexImport) Name() string {
+	return j.prebuilt.Name(j.ModuleBase.Name())
+}
+
+func (j *DexImport) DepsMutator(ctx android.BottomUpMutatorContext) {
+	android.ExtractSourcesDeps(ctx, j.properties.Jars)
+}
+
+func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if len(j.properties.Jars) != 1 {
+		ctx.PropertyErrorf("jars", "exactly one jar must be provided")
+	}
+
+	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework", ctx.ModuleName()+".jar")
+	j.dexpreopter.isInstallable = true
+	j.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &j.dexpreopter)
+
+	inputJar := ctx.ExpandSource(j.properties.Jars[0], "jars")
+	dexOutputFile := android.PathForModuleOut(ctx, ctx.ModuleName()+".jar")
+
+	if j.dexpreopter.uncompressedDex {
+		rule := android.NewRuleBuilder()
+
+		temporary := android.PathForModuleOut(ctx, ctx.ModuleName()+".jar.unaligned")
+		rule.Temporary(temporary)
+
+		// use zip2zip to uncompress classes*.dex files
+		rule.Command().
+			Tool(ctx.Config().HostToolPath(ctx, "zip2zip")).
+			FlagWithInput("-i ", inputJar).
+			FlagWithOutput("-o ", temporary).
+			FlagWithArg("-0 ", "'classes*.dex'")
+
+		// use zipalign to align uncompressed classes*.dex files
+		rule.Command().
+			Tool(ctx.Config().HostToolPath(ctx, "zipalign")).
+			Flag("-f").
+			Text("4").
+			Input(temporary).
+			Output(dexOutputFile)
+
+		rule.DeleteTemporaryFiles()
+
+		rule.Build(pctx, ctx, "uncompress_dex", "uncompress dex")
+	} else {
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.Cp,
+			Input:  inputJar,
+			Output: dexOutputFile,
+		})
+	}
+
+	j.dexJarFile = dexOutputFile
+
+	dexOutputFile = j.dexpreopt(ctx, dexOutputFile)
+
+	j.maybeStrippedDexJarFile = dexOutputFile
+
+	ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),
+		ctx.ModuleName()+".jar", dexOutputFile)
+}
+
+func (j *DexImport) DexJar() android.Path {
+	return j.dexJarFile
+}
+
+// dex_import imports a `.jar` file containing classes.dex files.
+//
+// A dex_import module cannot be used as a dependency of a java_* or android_* module, it can only be installed
+// to the device.
+func DexImportFactory() android.Module {
+	module := &DexImport{}
+
+	module.AddProperties(&module.properties)
+
+	android.InitPrebuiltModule(module, &module.properties.Jars)
+	InitJavaModule(module, android.DeviceSupported)
 	return module
 }
 
@@ -1845,6 +2012,37 @@ type Defaults struct {
 func (*Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 
+// java_defaults provides a set of properties that can be inherited by other java or android modules.
+//
+// A module can use the properties from a java_defaults module using `defaults: ["defaults_module_name"]`.  Each
+// property in the defaults module that exists in the depending module will be prepended to the depending module's
+// value for that property.
+//
+// Example:
+//
+//     java_defaults {
+//         name: "example_defaults",
+//         srcs: ["common/**/*.java"],
+//         javacflags: ["-Xlint:all"],
+//         aaptflags: ["--auto-add-overlay"],
+//     }
+//
+//     java_library {
+//         name: "example",
+//         defaults: ["example_defaults"],
+//         srcs: ["example/**/*.java"],
+//     }
+//
+// is functionally identical to:
+//
+//     java_library {
+//         name: "example",
+//         srcs: [
+//             "common/**/*.java",
+//             "example/**/*.java",
+//         ],
+//         javacflags: ["-Xlint:all"],
+//     }
 func defaultsFactory() android.Module {
 	return DefaultsFactory()
 }
@@ -1865,6 +2063,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&ImportProperties{},
 		&AARImportProperties{},
 		&sdkLibraryProperties{},
+		&DexImportProperties{},
 	)
 
 	android.InitDefaultsModule(module)

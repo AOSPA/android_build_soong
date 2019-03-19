@@ -15,8 +15,6 @@
 package java
 
 import (
-	"path/filepath"
-
 	"github.com/google/blueprint"
 
 	"android/soong/android"
@@ -59,7 +57,14 @@ func (h *hiddenAPI) hiddenAPI(ctx android.ModuleContext, dexJar android.ModuleOu
 
 	if !ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
 		isBootJar := inList(ctx.ModuleName(), ctx.Config().BootJars())
-		if isBootJar || inList(ctx.ModuleName(), config.HiddenAPIExtraAppUsageJars) {
+		// Check to see if this module provides part of the hiddenapi, i.e. is a boot jar or a white listed
+		// library.
+		isProvidingJar := isBootJar || inList(ctx.ModuleName(), config.HiddenAPIProvidingNonBootJars)
+
+		// If this module provides part of the hiddenapi or is a special module that simply provides information
+		// about the hiddenapi then extract information about the hiddenapi from the UnsupportedAppUsage
+		// annotations compiled into the classes.jar.
+		if isProvidingJar || inList(ctx.ModuleName(), config.HiddenAPIExtraAppUsageJars) {
 			// Derive the greylist from classes jar.
 			flagsCSV := android.PathForModuleOut(ctx, "hiddenapi", "flags.csv")
 			metadataCSV := android.PathForModuleOut(ctx, "hiddenapi", "metadata.csv")
@@ -67,7 +72,10 @@ func (h *hiddenAPI) hiddenAPI(ctx android.ModuleContext, dexJar android.ModuleOu
 			h.flagsCSVPath = flagsCSV
 			h.metadataCSVPath = metadataCSV
 		}
-		if isBootJar {
+
+		// If this module provides part of the hiddenapi then encode the information about the hiddenapi into
+		// the dex file created for this module.
+		if isProvidingJar {
 			hiddenAPIJar := android.PathForModuleOut(ctx, "hiddenapi", ctx.ModuleName()+".jar")
 			h.bootDexJarPath = dexJar
 			hiddenAPIEncodeDex(ctx, hiddenAPIJar, dexJar, uncompressDex)
@@ -165,14 +173,3 @@ func hiddenAPIEncodeDex(ctx android.ModuleContext, output android.WritablePath, 
 		TransformZipAlign(ctx, output, tmpOutput)
 	}
 }
-
-type hiddenAPIPath struct {
-	path string
-}
-
-var _ android.Path = (*hiddenAPIPath)(nil)
-
-func (p *hiddenAPIPath) String() string { return p.path }
-func (p *hiddenAPIPath) Ext() string    { return filepath.Ext(p.path) }
-func (p *hiddenAPIPath) Base() string   { return filepath.Base(p.path) }
-func (p *hiddenAPIPath) Rel() string    { return p.path }
