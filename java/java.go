@@ -44,6 +44,8 @@ func init() {
 	android.RegisterModuleType("java_test_host", TestHostFactory)
 	android.RegisterModuleType("java_import", ImportFactory)
 	android.RegisterModuleType("java_import_host", ImportFactoryHost)
+	android.RegisterModuleType("java_device_for_host", DeviceForHostFactory)
+	android.RegisterModuleType("java_host_for_device", HostForDeviceFactory)
 	android.RegisterModuleType("dex_import", DexImportFactory)
 
 	android.RegisterSingletonType("logtags", LogtagsSingleton)
@@ -61,11 +63,11 @@ func init() {
 type CompilerProperties struct {
 	// list of source files used to compile the Java module.  May be .java, .logtags, .proto,
 	// or .aidl files.
-	Srcs []string `android:"arch_variant"`
+	Srcs []string `android:"path,arch_variant"`
 
 	// list of source files that should not be used to build the Java module.
 	// This is most useful in the arch/multilib variants to remove non-common files
-	Exclude_srcs []string `android:"arch_variant"`
+	Exclude_srcs []string `android:"path,arch_variant"`
 
 	// list of directories containing Java resources
 	Java_resource_dirs []string `android:"arch_variant"`
@@ -74,10 +76,10 @@ type CompilerProperties struct {
 	Exclude_java_resource_dirs []string `android:"arch_variant"`
 
 	// list of files to use as Java resources
-	Java_resources []string `android:"arch_variant"`
+	Java_resources []string `android:"path,arch_variant"`
 
 	// list of files that should be excluded from java_resources and java_resource_dirs
-	Exclude_java_resources []string `android:"arch_variant"`
+	Exclude_java_resources []string `android:"path,arch_variant"`
 
 	// don't build against the default libraries (bootclasspath, ext, and framework for device
 	// targets)
@@ -99,10 +101,10 @@ type CompilerProperties struct {
 	Static_libs []string `android:"arch_variant"`
 
 	// manifest file to be included in resulting jar
-	Manifest *string
+	Manifest *string `android:"path"`
 
 	// if not blank, run jarjar using the specified rules file
-	Jarjar_rules *string `android:"arch_variant"`
+	Jarjar_rules *string `android:"path,arch_variant"`
 
 	// If not blank, set the java version passed to javac as -source and -target
 	Java_version *string
@@ -125,7 +127,7 @@ type CompilerProperties struct {
 
 	Openjdk9 struct {
 		// List of source files that should only be used when passing -source 1.9
-		Srcs []string
+		Srcs []string `android:"path"`
 
 		// List of javac flags that should only be used when passing -source 1.9
 		Javacflags []string
@@ -171,7 +173,7 @@ type CompilerProperties struct {
 	Instrument bool `blueprint:"mutated"`
 
 	// List of files to include in the META-INF/services folder of the resulting jar.
-	Services []string `android:"arch_variant"`
+	Services []string `android:"path,arch_variant"`
 }
 
 type CompilerDeviceProperties struct {
@@ -240,7 +242,7 @@ type CompilerDeviceProperties struct {
 		Proguard_flags []string
 
 		// Specifies the locations of files containing proguard flags.
-		Proguard_flags_files []string
+		Proguard_flags_files []string `android:"path"`
 	}
 
 	// When targeting 1.9, override the modules to use with --system
@@ -287,7 +289,8 @@ type Module struct {
 	proguardDictionary android.Path
 
 	// output file of the module, which may be a classes jar or a dex jar
-	outputFile android.Path
+	outputFile       android.Path
+	extraOutputFiles android.Paths
 
 	exportAidlIncludeDirs android.Paths
 
@@ -321,7 +324,7 @@ type Module struct {
 }
 
 func (j *Module) Srcs() android.Paths {
-	return android.Paths{j.outputFile}
+	return append(android.Paths{j.outputFile}, j.extraOutputFiles...)
 }
 
 func (j *Module) DexJarFile() android.Path {
@@ -476,13 +479,6 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	ctx.AddFarVariationDependencies([]blueprint.Variation{
 		{Mutator: "arch", Variation: ctx.Config().BuildOsCommonVariant},
 	}, pluginTag, j.properties.Plugins...)
-
-	android.ExtractSourcesDeps(ctx, j.properties.Srcs)
-	android.ExtractSourcesDeps(ctx, j.properties.Exclude_srcs)
-	android.ExtractSourcesDeps(ctx, j.properties.Java_resources)
-	android.ExtractSourceDeps(ctx, j.properties.Manifest)
-	android.ExtractSourceDeps(ctx, j.properties.Jarjar_rules)
-	android.ExtractSourcesDeps(ctx, j.properties.Services)
 
 	if j.hasSrcExt(".proto") {
 		protoDeps(ctx, &j.protoProperties)
@@ -946,7 +942,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 	if flags.javaVersion == "1.9" {
 		j.properties.Srcs = append(j.properties.Srcs, j.properties.Openjdk9.Srcs...)
 	}
-	srcFiles := ctx.ExpandSources(j.properties.Srcs, j.properties.Exclude_srcs)
+	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
 	if hasSrcExt(srcFiles.Strings(), ".proto") {
 		flags = protoFlags(ctx, &j.properties, &j.protoProperties, flags)
 	}
@@ -962,7 +958,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 	j.expandIDEInfoCompiledSrcs = append(j.expandIDEInfoCompiledSrcs, srcFiles.Strings()...)
 
 	if j.properties.Jarjar_rules != nil {
-		j.expandJarjarRules = ctx.ExpandSource(*j.properties.Jarjar_rules, "jarjar_rules")
+		j.expandJarjarRules = android.PathForModuleSrc(ctx, *j.properties.Jarjar_rules)
 	}
 
 	jarName := ctx.ModuleName() + ".jar"
@@ -1137,10 +1133,10 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars ...android.Path
 
 	manifest := j.overrideManifest
 	if !manifest.Valid() && j.properties.Manifest != nil {
-		manifest = android.OptionalPathForPath(ctx.ExpandSource(*j.properties.Manifest, "manifest"))
+		manifest = android.OptionalPathForPath(android.PathForModuleSrc(ctx, *j.properties.Manifest))
 	}
 
-	services := ctx.ExpandSources(j.properties.Services, nil)
+	services := android.PathsForModuleSrc(ctx, j.properties.Services)
 	if len(services) > 0 {
 		servicesJar := android.PathForModuleOut(ctx, "services", jarName)
 		var zipargs []string
@@ -1529,15 +1525,15 @@ type testProperties struct {
 
 	// the name of the test configuration (for example "AndroidTest.xml") that should be
 	// installed with the module.
-	Test_config *string `android:"arch_variant"`
+	Test_config *string `android:"path,arch_variant"`
 
 	// the name of the test configuration template (for example "AndroidTestTemplate.xml") that
 	// should be installed with the module.
-	Test_config_template *string `android:"arch_variant"`
+	Test_config_template *string `android:"path,arch_variant"`
 
 	// list of files or filegroup modules that provide data that should be installed alongside
 	// the test
-	Data []string
+	Data []string `android:"path"`
 }
 
 type Test struct {
@@ -1551,16 +1547,9 @@ type Test struct {
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.testConfig = tradefed.AutoGenJavaTestConfig(ctx, j.testProperties.Test_config, j.testProperties.Test_config_template, j.testProperties.Test_suites)
-	j.data = ctx.ExpandSources(j.testProperties.Data, nil)
+	j.data = android.PathsForModuleSrc(ctx, j.testProperties.Data)
 
 	j.Library.GenerateAndroidBuildActions(ctx)
-}
-
-func (j *Test) DepsMutator(ctx android.BottomUpMutatorContext) {
-	j.deps(ctx)
-	android.ExtractSourceDeps(ctx, j.testProperties.Test_config)
-	android.ExtractSourceDeps(ctx, j.testProperties.Test_config_template)
-	android.ExtractSourcesDeps(ctx, j.testProperties.Data)
 }
 
 // java_test builds a and links sources into a `.jar` file for the device, and possibly for the host as well, and
@@ -1613,7 +1602,7 @@ func TestHostFactory() android.Module {
 
 type binaryProperties struct {
 	// installable script to execute the resulting jar
-	Wrapper *string
+	Wrapper *string `android:"path"`
 
 	// Name of the class containing main to be inserted into the manifest as Main-Class.
 	Main_class *string
@@ -1652,7 +1641,7 @@ func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		j.isWrapperVariant = true
 
 		if j.binaryProperties.Wrapper != nil {
-			j.wrapperFile = ctx.ExpandSource(*j.binaryProperties.Wrapper, "wrapper")
+			j.wrapperFile = android.PathForModuleSrc(ctx, *j.binaryProperties.Wrapper)
 		} else {
 			j.wrapperFile = android.PathForSource(ctx, "build/soong/scripts/jar-wrapper.sh")
 		}
@@ -1669,8 +1658,6 @@ func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 func (j *Binary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if ctx.Arch().ArchType == android.Common {
 		j.deps(ctx)
-	} else {
-		android.ExtractSourceDeps(ctx, j.binaryProperties.Wrapper)
 	}
 }
 
@@ -1723,7 +1710,7 @@ func BinaryHostFactory() android.Module {
 //
 
 type ImportProperties struct {
-	Jars []string
+	Jars []string `android:"path"`
 
 	Sdk_version *string
 
@@ -1739,7 +1726,7 @@ type ImportProperties struct {
 	Exclude_dirs []string
 
 	// if set to true, run Jetifier against .jar file. Defaults to false.
-	Jetifier_enabled *bool
+	Jetifier *bool
 }
 
 type Import struct {
@@ -1774,18 +1761,17 @@ func (j *Import) Name() string {
 }
 
 func (j *Import) DepsMutator(ctx android.BottomUpMutatorContext) {
-	android.ExtractSourcesDeps(ctx, j.properties.Jars)
 	ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
 }
 
 func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	jars := ctx.ExpandSources(j.properties.Jars, nil)
+	jars := android.PathsForModuleSrc(ctx, j.properties.Jars)
 
 	jarName := ctx.ModuleName() + ".jar"
 	outputFile := android.PathForModuleOut(ctx, "combined", jarName)
 	TransformJarsToJar(ctx, outputFile, "for prebuilts", jars, android.OptionalPath{},
 		false, j.properties.Exclude_files, j.properties.Exclude_dirs)
-	if Bool(j.properties.Jetifier_enabled) {
+	if Bool(j.properties.Jetifier) {
 		inputFile := outputFile
 		outputFile = android.PathForModuleOut(ctx, "jetifier", jarName)
 		TransformJetifier(ctx, outputFile, inputFile)
@@ -2082,6 +2068,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&androidLibraryProperties{},
 		&appProperties{},
 		&appTestProperties{},
+		&overridableAppProperties{},
 		&ImportProperties{},
 		&AARImportProperties{},
 		&sdkLibraryProperties{},

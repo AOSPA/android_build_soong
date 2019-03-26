@@ -504,9 +504,9 @@ endif # b==false
 //  # b==false
 // echo end
 //
-// ANDROIDMK TRANSLATION ERROR: endif from unsupported contitional
+// ANDROIDMK TRANSLATION ERROR: endif from unsupported conditional
 // endif
-// ANDROIDMK TRANSLATION ERROR: endif from unsupported contitional
+// ANDROIDMK TRANSLATION ERROR: endif from unsupported conditional
 // endif
 		`,
 	},
@@ -631,12 +631,14 @@ include $(call all-makefiles-under,$(LOCAL_PATH))
 			LOCAL_SRC_FILES := test.jar
 			LOCAL_MODULE_CLASS := JAVA_LIBRARIES
 			LOCAL_STATIC_ANDROID_LIBRARIES :=
+			LOCAL_JETIFIER_ENABLED := true
 			include $(BUILD_PREBUILT)
 		`,
 		expected: `
 			java_import {
 				jars: ["test.jar"],
 
+				jetifier: true,
 			}
 		`,
 	},
@@ -1063,6 +1065,52 @@ vts_config {
 	name: "vtsconf",
 }
 `,
+	},
+	{
+		desc: "comment with ESC",
+		in: `
+# Comment line 1 \
+# Comment line 2
+`,
+		expected: `
+// Comment line 1 \
+// Comment line 2
+`,
+	},
+	{
+		desc: "Merge with variable reference",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_STATIC_ANDROID_LIBRARIES := $(FOO)
+LOCAL_STATIC_JAVA_LIBRARIES := javalib
+LOCAL_JAVA_RESOURCE_DIRS := $(FOO)
+include $(BUILD_PACKAGE)
+`,
+		expected: `
+android_app {
+	name: "foo",
+	static_libs: FOO,
+	static_libs: ["javalib"],
+	java_resource_dirs: FOO,
+}
+`,
+	},
+	{
+		desc: "LOCAL_JACK_ENABLED and LOCAL_JACK_FLAGS skipped",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_JACK_ENABLED := incremental
+LOCAL_JACK_FLAGS := --multi-dex native
+include $(BUILD_PACKAGE)
+		`,
+		expected: `
+android_app {
+	name: "foo",
+
+}
+		`,
 	},
 }
 
