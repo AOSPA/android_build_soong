@@ -30,6 +30,12 @@ type TestProperties struct {
 	Isolated *bool
 }
 
+// Test option struct.
+type TestOptions struct {
+	// The UID that you want to run the test as on a device.
+	Run_test_as *string
+}
+
 type TestBinaryProperties struct {
 	// Create a separate binary for each source file.  Useful when there is
 	// global state that can not be torn down and reset between each test suite.
@@ -42,7 +48,7 @@ type TestBinaryProperties struct {
 
 	// list of files or filegroup modules that provide data that should be installed alongside
 	// the test
-	Data []string
+	Data []string `android:"path"`
 
 	// list of compatibility suites (for example "cts", "vts") that the module should be
 	// installed into.
@@ -50,11 +56,14 @@ type TestBinaryProperties struct {
 
 	// the name of the test configuration (for example "AndroidTest.xml") that should be
 	// installed with the module.
-	Test_config *string `android:"arch_variant"`
+	Test_config *string `android:"path,arch_variant"`
 
 	// the name of the test configuration template (for example "AndroidTestTemplate.xml") that
 	// should be installed with the module.
-	Test_config_template *string `android:"arch_variant"`
+	Test_config_template *string `android:"path,arch_variant"`
+
+	// Test options.
+	Test_options TestOptions
 }
 
 func init() {
@@ -120,6 +129,10 @@ func testPerSrcMutator(mctx android.BottomUpMutatorContext) {
 	if m, ok := mctx.Module().(*Module); ok {
 		if test, ok := m.linker.(testPerSrc); ok {
 			if test.testPerSrc() && len(test.srcs()) > 0 {
+				if duplicate, found := checkDuplicate(test.srcs()); found {
+					mctx.PropertyErrorf("srcs", "found a duplicate entry %q", duplicate)
+					return
+				}
 				testNames := make([]string, len(test.srcs()))
 				for i, src := range test.srcs() {
 					testNames[i] = strings.TrimSuffix(filepath.Base(src), filepath.Ext(src))
@@ -131,6 +144,17 @@ func testPerSrcMutator(mctx android.BottomUpMutatorContext) {
 			}
 		}
 	}
+}
+
+func checkDuplicate(values []string) (duplicate string, found bool) {
+	seen := make(map[string]string)
+	for _, v := range values {
+		if duplicate, found = seen[v]; found {
+			return
+		}
+		seen[v] = v
+	}
+	return
 }
 
 type testDecorator struct {
@@ -226,10 +250,6 @@ func (test *testBinary) linkerInit(ctx BaseModuleContext) {
 }
 
 func (test *testBinary) linkerDeps(ctx DepsContext, deps Deps) Deps {
-	android.ExtractSourcesDeps(ctx, test.Properties.Data)
-	android.ExtractSourceDeps(ctx, test.Properties.Test_config)
-	android.ExtractSourceDeps(ctx, test.Properties.Test_config_template)
-
 	deps = test.testDecorator.linkerDeps(ctx, deps)
 	deps = test.binaryDecorator.linkerDeps(ctx, deps)
 	return deps
@@ -242,11 +262,16 @@ func (test *testBinary) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 }
 
 func (test *testBinary) install(ctx ModuleContext, file android.Path) {
-	test.data = ctx.ExpandSources(test.Properties.Data, nil)
+	test.data = android.PathsForModuleSrc(ctx, test.Properties.Data)
 	optionsMap := map[string]string{}
 	if Bool(test.testDecorator.Properties.Isolated) {
 		optionsMap["not-shardable"] = "true"
 	}
+
+	if test.Properties.Test_options.Run_test_as != nil {
+		optionsMap["run-test-as"] = String(test.Properties.Test_options.Run_test_as)
+	}
+
 	test.testConfig = tradefed.AutoGenNativeTestConfig(ctx, test.Properties.Test_config,
 		test.Properties.Test_config_template,
 		test.Properties.Test_suites, optionsMap)
@@ -323,7 +348,7 @@ func NewTestLibrary(hod android.HostOrDeviceSupported) *Module {
 type BenchmarkProperties struct {
 	// list of files or filegroup modules that provide data that should be installed alongside
 	// the test
-	Data []string
+	Data []string `android:"path"`
 
 	// list of compatibility suites (for example "cts", "vts") that the module should be
 	// installed into.
@@ -331,11 +356,11 @@ type BenchmarkProperties struct {
 
 	// the name of the test configuration (for example "AndroidTest.xml") that should be
 	// installed with the module.
-	Test_config *string `android:"arch_variant"`
+	Test_config *string `android:"path,arch_variant"`
 
 	// the name of the test configuration template (for example "AndroidTestTemplate.xml") that
 	// should be installed with the module.
-	Test_config_template *string `android:"arch_variant"`
+	Test_config_template *string `android:"path,arch_variant"`
 }
 
 type benchmarkDecorator struct {
@@ -361,17 +386,13 @@ func (benchmark *benchmarkDecorator) linkerProps() []interface{} {
 }
 
 func (benchmark *benchmarkDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
-	android.ExtractSourcesDeps(ctx, benchmark.Properties.Data)
-	android.ExtractSourceDeps(ctx, benchmark.Properties.Test_config)
-	android.ExtractSourceDeps(ctx, benchmark.Properties.Test_config_template)
-
 	deps = benchmark.binaryDecorator.linkerDeps(ctx, deps)
 	deps.StaticLibs = append(deps.StaticLibs, "libgoogle-benchmark")
 	return deps
 }
 
 func (benchmark *benchmarkDecorator) install(ctx ModuleContext, file android.Path) {
-	benchmark.data = ctx.ExpandSources(benchmark.Properties.Data, nil)
+	benchmark.data = android.PathsForModuleSrc(ctx, benchmark.Properties.Data)
 	benchmark.testConfig = tradefed.AutoGenNativeBenchmarkTestConfig(ctx, benchmark.Properties.Test_config,
 		benchmark.Properties.Test_config_template, benchmark.Properties.Test_suites)
 

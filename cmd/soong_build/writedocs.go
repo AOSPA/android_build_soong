@@ -34,7 +34,7 @@ type perPackageTemplateData struct {
 
 type moduleTypeTemplateData struct {
 	Name       string
-	Synopsis   string
+	Synopsis   template.HTML
 	Properties []bpdoc.Property
 }
 
@@ -276,8 +276,9 @@ li a:hover:not(.active) {
     {{- else -}}
       <div class="simple" id="{{getModule}}.{{.Name}}">
         <span class="fixed">&nbsp;</span><b>{{.Name}} {{range .OtherNames}}, {{.}}{{end -}}</b>
-        {{- if .Text -}}{{.Text}}{{- end -}}
-        {{- with .OtherTexts -}}{{.}}{{- end -}}<i>{{.Type}}</i>
+        <i>{{.Type}}</i>
+        {{- if .Text -}}{{if ne .Text "\n"}}, {{end}}{{.Text}}{{- end -}}
+        {{- with .OtherTexts -}}{{.}}{{- end -}}
 	{{- if .Default -}}<i>Default: {{.Default}}</i>{{- end -}}
       </div>
     {{- end}}

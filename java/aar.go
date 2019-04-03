@@ -27,7 +27,7 @@ type AndroidLibraryDependency interface {
 	Dependency
 	ExportPackage() android.Path
 	ExportedProguardFlagFiles() android.Paths
-	ExportedRRODirs() android.Paths
+	ExportedRRODirs() []rroDir
 	ExportedStaticPackages() android.Paths
 	ExportedManifest() android.Path
 }
@@ -64,10 +64,10 @@ type aaptProperties struct {
 	Resource_dirs []string
 
 	// list of zip files containing Android resources.
-	Resource_zips []string
+	Resource_zips []string `android:"path"`
 
 	// path to AndroidManifest.xml.  If unset, defaults to "AndroidManifest.xml".
-	Manifest *string
+	Manifest *string `android:"path"`
 }
 
 type aapt struct {
@@ -75,7 +75,7 @@ type aapt struct {
 	exportPackage         android.Path
 	manifestPath          android.Path
 	proguardOptionsFile   android.Path
-	rroDirs               android.Paths
+	rroDirs               []rroDir
 	rTxt                  android.Path
 	extraAaptPackagesFile android.Path
 	isLibrary             bool
@@ -83,14 +83,23 @@ type aapt struct {
 	useEmbeddedDex        bool
 	usesNonSdkApis        bool
 
+	splitNames []string
+	splits     []split
+
 	aaptProperties aaptProperties
+}
+
+type split struct {
+	name   string
+	suffix string
+	path   android.Path
 }
 
 func (a *aapt) ExportPackage() android.Path {
 	return a.exportPackage
 }
 
-func (a *aapt) ExportedRRODirs() android.Paths {
+func (a *aapt) ExportedRRODirs() []rroDir {
 	return a.rroDirs
 }
 
@@ -99,7 +108,7 @@ func (a *aapt) ExportedManifest() android.Path {
 }
 
 func (a *aapt) aapt2Flags(ctx android.ModuleContext, sdkContext sdkContext, manifestPath android.Path) (flags []string,
-	deps android.Paths, resDirs, overlayDirs []globbedResourceDir, rroDirs, resZips android.Paths) {
+	deps android.Paths, resDirs, overlayDirs []globbedResourceDir, rroDirs []rroDir, resZips android.Paths) {
 
 	hasVersionCode := false
 	hasVersionName := false
@@ -121,7 +130,7 @@ func (a *aapt) aapt2Flags(ctx android.ModuleContext, sdkContext sdkContext, mani
 	// Find implicit or explicit asset and resource dirs
 	assetDirs := android.PathsWithOptionalDefaultForModuleSrc(ctx, a.aaptProperties.Asset_dirs, "assets")
 	resourceDirs := android.PathsWithOptionalDefaultForModuleSrc(ctx, a.aaptProperties.Resource_dirs, "res")
-	resourceZips := ctx.ExpandSources(a.aaptProperties.Resource_zips, nil)
+	resourceZips := android.PathsForModuleSrc(ctx, a.aaptProperties.Resource_zips)
 
 	var linkDeps android.Paths
 
@@ -180,8 +189,6 @@ func (a *aapt) deps(ctx android.BottomUpMutatorContext, sdkContext sdkContext) {
 	if sdkDep.frameworkResModule != "" {
 		ctx.AddVariationDependencies(nil, frameworkResTag, sdkDep.frameworkResModule)
 	}
-
-	android.ExtractSourcesDeps(ctx, a.aaptProperties.Resource_zips)
 }
 
 func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext sdkContext, extraLinkFlags ...string) {
@@ -250,8 +257,23 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext sdkContext, ex
 		compiledOverlay = append(compiledOverlay, aapt2Compile(ctx, dir.dir, dir.files).Paths()...)
 	}
 
+	var splitPackages android.WritablePaths
+	var splits []split
+
+	for _, s := range a.splitNames {
+		suffix := strings.Replace(s, ",", "_", -1)
+		path := android.PathForModuleOut(ctx, "package_"+suffix+".apk")
+		linkFlags = append(linkFlags, "--split", path.String()+":"+s)
+		splitPackages = append(splitPackages, path)
+		splits = append(splits, split{
+			name:   s,
+			suffix: suffix,
+			path:   path,
+		})
+	}
+
 	aapt2Link(ctx, packageRes, srcJar, proguardOptionsFile, rTxt, extraPackages,
-		linkFlags, linkDeps, compiledRes, compiledOverlay)
+		linkFlags, linkDeps, compiledRes, compiledOverlay, splitPackages)
 
 	a.aaptSrcJar = srcJar
 	a.exportPackage = packageRes
@@ -260,11 +282,12 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext sdkContext, ex
 	a.rroDirs = rroDirs
 	a.extraAaptPackagesFile = extraPackages
 	a.rTxt = rTxt
+	a.splits = splits
 }
 
 // aaptLibs collects libraries from dependencies and sdk_version and converts them into paths
-func aaptLibs(ctx android.ModuleContext, sdkContext sdkContext) (transitiveStaticLibs, staticLibManifests,
-	staticRRODirs, deps android.Paths, flags []string) {
+func aaptLibs(ctx android.ModuleContext, sdkContext sdkContext) (transitiveStaticLibs, staticLibManifests android.Paths,
+	staticRRODirs []rroDir, deps android.Paths, flags []string) {
 
 	var sharedLibs android.Paths
 
@@ -292,7 +315,16 @@ func aaptLibs(ctx android.ModuleContext, sdkContext sdkContext) (transitiveStati
 				transitiveStaticLibs = append(transitiveStaticLibs, aarDep.ExportedStaticPackages()...)
 				transitiveStaticLibs = append(transitiveStaticLibs, exportPackage)
 				staticLibManifests = append(staticLibManifests, aarDep.ExportedManifest())
-				staticRRODirs = append(staticRRODirs, aarDep.ExportedRRODirs()...)
+
+			outer:
+				for _, d := range aarDep.ExportedRRODirs() {
+					for _, e := range staticRRODirs {
+						if d.path == e.path {
+							continue outer
+						}
+					}
+					staticRRODirs = append(staticRRODirs, d)
+				}
 			}
 		}
 	})
@@ -309,7 +341,6 @@ func aaptLibs(ctx android.ModuleContext, sdkContext sdkContext) (transitiveStati
 	}
 
 	transitiveStaticLibs = android.FirstUniquePaths(transitiveStaticLibs)
-	staticRRODirs = android.FirstUniquePaths(staticRRODirs)
 
 	return transitiveStaticLibs, staticLibManifests, staticRRODirs, deps, flags
 }
@@ -406,7 +437,7 @@ func AndroidLibraryFactory() android.Module {
 //
 
 type AARImportProperties struct {
-	Aars []string
+	Aars []string `android:"path"`
 
 	Sdk_version     *string
 	Min_sdk_version *string
@@ -415,7 +446,7 @@ type AARImportProperties struct {
 	Libs        []string
 
 	// if set to true, run Jetifier against .aar file. Defaults to false.
-	Jetifier_enabled *bool
+	Jetifier *bool
 }
 
 type AARImport struct {
@@ -459,7 +490,7 @@ func (a *AARImport) ExportedProguardFlagFiles() android.Paths {
 	return android.Paths{a.proguardFlags}
 }
 
-func (a *AARImport) ExportedRRODirs() android.Paths {
+func (a *AARImport) ExportedRRODirs() []rroDir {
 	return nil
 }
 
@@ -509,7 +540,7 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	aarName := ctx.ModuleName() + ".aar"
 	var aar android.Path
 	aar = android.PathForModuleSrc(ctx, a.properties.Aars[0])
-	if Bool(a.properties.Jetifier_enabled) {
+	if Bool(a.properties.Jetifier) {
 		inputFile := aar
 		aar = android.PathForModuleOut(ctx, "jetifier", aarName)
 		TransformJetifier(ctx, aar.(android.WritablePath), inputFile)
@@ -566,7 +597,7 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	overlayRes := append(android.Paths{flata}, transitiveStaticLibs...)
 
 	aapt2Link(ctx, a.exportPackage, srcJar, proguardOptionsFile, rTxt, a.extraAaptPackagesFile,
-		linkFlags, linkDeps, nil, overlayRes)
+		linkFlags, linkDeps, nil, overlayRes, nil)
 }
 
 var _ Dependency = (*AARImport)(nil)

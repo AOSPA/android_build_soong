@@ -17,6 +17,7 @@ package android
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 // sh_binary is for shell scripts (and batch files) that are installed as
@@ -28,11 +29,12 @@ import (
 func init() {
 	RegisterModuleType("sh_binary", ShBinaryFactory)
 	RegisterModuleType("sh_binary_host", ShBinaryHostFactory)
+	RegisterModuleType("sh_test", ShTestFactory)
 }
 
 type shBinaryProperties struct {
 	// Source file of this prebuilt.
-	Src *string `android:"arch_variant"`
+	Src *string `android:"path,arch_variant"`
 
 	// optional subdirectory under which this file is installed into
 	Sub_dir *string `android:"arch_variant"`
@@ -48,6 +50,16 @@ type shBinaryProperties struct {
 	Installable *bool
 }
 
+type TestProperties struct {
+	// list of compatibility suites (for example "cts", "vts") that the module should be
+	// installed into.
+	Test_suites []string `android:"arch_variant"`
+
+	// the name of the test configuration (for example "AndroidTest.xml") that should be
+	// installed with the module.
+	Test_config *string `android:"arch_variant"`
+}
+
 type ShBinary struct {
 	ModuleBase
 
@@ -57,17 +69,20 @@ type ShBinary struct {
 	outputFilePath OutputPath
 }
 
+type ShTest struct {
+	ShBinary
+
+	testProperties TestProperties
+}
+
 func (s *ShBinary) DepsMutator(ctx BottomUpMutatorContext) {
 	if s.properties.Src == nil {
 		ctx.PropertyErrorf("src", "missing prebuilt source file")
 	}
-
-	// To support ":modulename" in src
-	ExtractSourceDeps(ctx, s.properties.Src)
 }
 
 func (s *ShBinary) SourceFilePath(ctx ModuleContext) Path {
-	return ctx.ExpandSource(String(s.properties.Src), "src")
+	return PathForModuleSrc(ctx, String(s.properties.Src))
 }
 
 func (s *ShBinary) OutputFile() OutputPath {
@@ -83,7 +98,7 @@ func (s *ShBinary) Installable() bool {
 }
 
 func (s *ShBinary) GenerateAndroidBuildActions(ctx ModuleContext) {
-	s.sourceFilePath = ctx.ExpandSource(String(s.properties.Src), "src")
+	s.sourceFilePath = PathForModuleSrc(ctx, String(s.properties.Src))
 	filename := String(s.properties.Filename)
 	filename_from_src := Bool(s.properties.Filename_from_src)
 	if filename == "" {
@@ -122,10 +137,23 @@ func (s *ShBinary) AndroidMk() AndroidMkData {
 	}
 }
 
+func (s *ShTest) AndroidMk() AndroidMkData {
+	data := s.ShBinary.AndroidMk()
+	data.Class = "NATIVE_TESTS"
+	data.Extra = append(data.Extra, func(w io.Writer, outputFile Path) {
+		fmt.Fprintln(w, "LOCAL_COMPATIBILITY_SUITE :=",
+			strings.Join(s.testProperties.Test_suites, " "))
+		fmt.Fprintln(w, "LOCAL_TEST_CONFIG :=", String(s.testProperties.Test_config))
+	})
+	return data
+}
+
 func InitShBinaryModule(s *ShBinary) {
 	s.AddProperties(&s.properties)
 }
 
+// sh_binary is for a shell script or batch file to be installed as an
+// executable binary to <partition>/bin.
 func ShBinaryFactory() Module {
 	module := &ShBinary{}
 	InitShBinaryModule(module)
@@ -133,9 +161,20 @@ func ShBinaryFactory() Module {
 	return module
 }
 
+// sh_binary_host is for a shell script to be installed as an executable binary
+// to $(HOST_OUT)/bin.
 func ShBinaryHostFactory() Module {
 	module := &ShBinary{}
 	InitShBinaryModule(module)
 	InitAndroidArchModule(module, HostSupported, MultilibFirst)
+	return module
+}
+
+func ShTestFactory() Module {
+	module := &ShTest{}
+	InitShBinaryModule(&module.ShBinary)
+	module.AddProperties(&module.testProperties)
+
+	InitAndroidArchModule(module, HostAndDeviceSupported, MultilibFirst)
 	return module
 }

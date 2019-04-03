@@ -68,6 +68,8 @@ func init() {
 
 		ctx.TopDown("lto_deps", ltoDepsMutator)
 		ctx.BottomUp("lto", ltoMutator).Parallel()
+
+		ctx.TopDown("double_loadable", checkDoubleLoadableLibraries).Parallel()
 	})
 
 	pctx.Import("android/soong/cc/config")
@@ -268,6 +270,7 @@ type ModuleContextIntf interface {
 	hasStubsVariants() bool
 	isStubs() bool
 	bootstrap() bool
+	mustUseVendorVariant() bool
 }
 
 type ModuleContext interface {
@@ -560,6 +563,10 @@ func (c *Module) isVndkExt() bool {
 	return false
 }
 
+func (c *Module) mustUseVendorVariant() bool {
+	return c.isVndkSp() || inList(c.Name(), config.VndkMustUseVendorVariantList)
+}
+
 func (c *Module) getVndkExtendsModuleName() string {
 	if vndkdep := c.vndkdep; vndkdep != nil {
 		return vndkdep.getVndkExtendsModuleName()
@@ -599,6 +606,14 @@ func (c *Module) HasStubsVariants() bool {
 
 func (c *Module) bootstrap() bool {
 	return Bool(c.Properties.Bootstrap)
+}
+
+func isBionic(name string) bool {
+	switch name {
+	case "libc", "libm", "libdl", "linker":
+		return true
+	}
+	return false
 }
 
 type baseModuleContext struct {
@@ -701,6 +716,10 @@ func (ctx *moduleContextImpl) isVndkSp() bool {
 
 func (ctx *moduleContextImpl) isVndkExt() bool {
 	return ctx.mod.isVndkExt()
+}
+
+func (ctx *moduleContextImpl) mustUseVendorVariant() bool {
+	return ctx.mod.mustUseVendorVariant()
 }
 
 func (ctx *moduleContextImpl) inRecovery() bool {
@@ -1474,30 +1493,44 @@ func checkLinkType(ctx android.ModuleContext, from *Module, to *Module, tag depe
 }
 
 // Tests whether the dependent library is okay to be double loaded inside a single process.
-// If a library is a member of VNDK and at the same time dependencies of an LLNDK library,
-// it is subject to be double loaded. Such lib should be explicitly marked as double_loaded: true
+// If a library has a vendor variant and is a (transitive) dependency of an LLNDK library,
+// it is subject to be double loaded. Such lib should be explicitly marked as double_loadable: true
 // or as vndk-sp (vndk: { enabled: true, support_system_process: true}).
-func checkDoubleLoadableLibries(ctx android.ModuleContext, from *Module, to *Module) {
-	if _, ok := from.linker.(*libraryDecorator); !ok {
-		return
-	}
+func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
+	check := func(child, parent android.Module) bool {
+		to, ok := child.(*Module)
+		if !ok {
+			// follow thru cc.Defaults, etc.
+			return true
+		}
 
-	if inList(ctx.ModuleName(), llndkLibraries) ||
-		(from.useVndk() && Bool(from.VendorProperties.Double_loadable)) {
-		_, depIsLlndk := to.linker.(*llndkStubDecorator)
-		depIsVndkSp := false
-		if to.vndkdep != nil && to.vndkdep.isVndkSp() {
-			depIsVndkSp = true
+		if lib, ok := to.linker.(*libraryDecorator); !ok || !lib.shared() {
+			return false
 		}
-		depIsVndk := false
-		if to.vndkdep != nil && to.vndkdep.isVndk() {
-			depIsVndk = true
+
+		// if target lib has no vendor variant, keep checking dependency graph
+		if !to.hasVendorVariant() {
+			return true
 		}
-		depIsDoubleLoadable := Bool(to.VendorProperties.Double_loadable)
-		if !depIsLlndk && !depIsVndkSp && !depIsDoubleLoadable && depIsVndk {
-			ctx.ModuleErrorf("links VNDK library %q that isn't double loadable (not also LL-NDK, "+
-				"VNDK-SP, or explicitly marked as 'double_loadable').",
-				ctx.OtherModuleName(to))
+
+		if to.isVndkSp() || inList(child.Name(), llndkLibraries) || Bool(to.VendorProperties.Double_loadable) {
+			return false
+		}
+
+		var stringPath []string
+		for _, m := range ctx.GetWalkPath() {
+			stringPath = append(stringPath, m.Name())
+		}
+		ctx.ModuleErrorf("links a library %q which is not LL-NDK, "+
+			"VNDK-SP, or explicitly marked as 'double_loadable:true'. "+
+			"(dependency: %s)", ctx.OtherModuleName(to), strings.Join(stringPath, " -> "))
+		return false
+	}
+	if module, ok := ctx.Module().(*Module); ok {
+		if lib, ok := module.linker.(*libraryDecorator); ok && lib.shared() {
+			if inList(ctx.ModuleName(), llndkLibraries) || Bool(module.VendorProperties.Double_loadable) {
+				ctx.WalkDeps(check)
+			}
 		}
 	}
 }
@@ -1668,7 +1701,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			}
 
 			checkLinkType(ctx, c, ccDep, t)
-			checkDoubleLoadableLibries(ctx, c, ccDep)
 		}
 
 		var ptr *android.Paths
@@ -1766,7 +1798,12 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			isLLndk := inList(libName, llndkLibraries)
 			isVendorPublicLib := inList(libName, vendorPublicLibraries)
 			bothVendorAndCoreVariantsExist := ccDep.hasVendorVariant() || isLLndk
-			if c.useVndk() && bothVendorAndCoreVariantsExist {
+
+			if ctx.DeviceConfig().VndkUseCoreVariant() && ccDep.isVndk() && !ccDep.mustUseVendorVariant() {
+				// The vendor module is a no-vendor-variant VNDK library.  Depend on the
+				// core module instead.
+				return libName
+			} else if c.useVndk() && bothVendorAndCoreVariantsExist {
 				// The vendor module in Make will have been renamed to not conflict with the core
 				// module, so update the dependency name here accordingly.
 				return libName + vendorSuffix
@@ -1905,6 +1942,8 @@ func (c *Module) getMakeLinkType() string {
 		// TODO(b/114741097): use the correct ndk stl once build errors have been fixed
 		//family, link := getNdkStlFamilyAndLinkType(c)
 		//return fmt.Sprintf("native:ndk:%s:%s", family, link)
+	} else if inList(c.Name(), vndkUsingCoreVariantLibraries) {
+		return "native:platform_vndk"
 	} else {
 		return "native:platform"
 	}

@@ -158,6 +158,9 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 			if len(library.Properties.Overrides) > 0 {
 				fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES := "+strings.Join(library.Properties.Overrides, " "))
 			}
+			if len(library.post_install_cmds) > 0 {
+				fmt.Fprintln(w, "LOCAL_POST_INSTALL_CMD := "+strings.Join(library.post_install_cmds, "&& "))
+			}
 		})
 	} else if library.header() {
 		ret.Class = "HEADER_LIBRARIES"
@@ -181,6 +184,12 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 
 		if library.coverageOutputFile.Valid() {
 			fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", library.coverageOutputFile.String())
+		}
+
+		if library.useCoreVariant {
+			fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
+			fmt.Fprintln(w, "LOCAL_NO_NOTICE_FILE := true")
+			fmt.Fprintln(w, "LOCAL_VNDK_DEPEND_ON_CORE_VARIANT := true")
 		}
 	})
 
@@ -230,6 +239,9 @@ func (binary *binaryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.Andr
 
 		if len(binary.Properties.Overrides) > 0 {
 			fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES := "+strings.Join(binary.Properties.Overrides, " "))
+		}
+		if len(binary.post_install_cmds) > 0 {
+			fmt.Fprintln(w, "LOCAL_POST_INSTALL_CMD := "+strings.Join(binary.post_install_cmds, "&& "))
 		}
 	})
 }

@@ -26,9 +26,9 @@ func init() {
 
 type fileGroupProperties struct {
 	// srcs lists files that will be included in this filegroup
-	Srcs []string
+	Srcs []string `android:"path"`
 
-	Exclude_srcs []string
+	Exclude_srcs []string `android:"path"`
 
 	// The base path to the files.  May be used by other modules to determine which portion
 	// of the path to use.  For example, when a filegroup is used as data in a cc_test rule,
@@ -49,9 +49,9 @@ type fileGroup struct {
 
 var _ SourceFileProducer = (*fileGroup)(nil)
 
-// filegroup modules contain a list of files, and can be used to export files across package
-// boundaries.  filegroups (and genrules) can be referenced from srcs properties of other modules
-// using the syntax ":module".
+// filegroup contains a list of files that are referenced by other modules
+// properties (such as "srcs") using the syntax ":<name>". filegroup are
+// also be used to export files across package boundaries.
 func FileGroupFactory() Module {
 	module := &fileGroup{}
 	module.AddProperties(&module.properties)
@@ -59,13 +59,12 @@ func FileGroupFactory() Module {
 	return module
 }
 
-func (fg *fileGroup) DepsMutator(ctx BottomUpMutatorContext) {
-	ExtractSourcesDeps(ctx, fg.properties.Srcs)
-	ExtractSourcesDeps(ctx, fg.properties.Exclude_srcs)
-}
-
 func (fg *fileGroup) GenerateAndroidBuildActions(ctx ModuleContext) {
-	fg.srcs = ctx.ExpandSourcesSubDir(fg.properties.Srcs, fg.properties.Exclude_srcs, String(fg.properties.Path))
+	fg.srcs = PathsForModuleSrcExcludes(ctx, fg.properties.Srcs, fg.properties.Exclude_srcs)
+
+	if fg.properties.Path != nil {
+		fg.srcs = PathsWithModuleSrcSubDir(ctx, fg.srcs, String(fg.properties.Path))
+	}
 }
 
 func (fg *fileGroup) Srcs() Paths {

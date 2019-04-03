@@ -76,6 +76,8 @@ var rewriteProperties = map[string](func(variableAssignmentContext) error){
 
 	"LOCAL_ANNOTATION_PROCESSOR_CLASSES": skip, // Soong gets the processor classes from the plugin
 	"LOCAL_CTS_TEST_PACKAGE":             skip, // Obsolete
+	"LOCAL_JACK_ENABLED":                 skip, // Obselete
+	"LOCAL_JACK_FLAGS":                   skip, // Obselete
 }
 
 // adds a group of properties all having the same type
@@ -199,6 +201,7 @@ func init() {
 			"LOCAL_DEX_PREOPT_GENERATE_PROFILE": "dex_preopt.profile_guided",
 
 			"LOCAL_PRIVATE_PLATFORM_APIS": "platform_apis",
+			"LOCAL_JETIFIER_ENABLED":      "jetifier",
 		})
 }
 
