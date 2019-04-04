@@ -163,13 +163,9 @@ type Flags struct {
 
 	GroupStaticLibs bool
 
-	protoDeps        android.Paths
-	protoFlags       []string // Flags that apply to proto source files
-	protoOutTypeFlag string   // The output type, --cpp_out for example
-	protoOutParams   []string // Flags that modify the output of proto generated files
-	protoC           bool     // Whether to use C instead of C++
-	protoOptionsFile bool     // Whether to look for a .options file next to the .proto
-	ProtoRoot        bool
+	proto            android.ProtoFlags
+	protoC           bool // Whether to use C instead of C++
+	protoOptionsFile bool // Whether to look for a .options file next to the .proto
 }
 
 type ObjectLinkerProperties struct {
@@ -271,6 +267,7 @@ type ModuleContextIntf interface {
 	isStubs() bool
 	bootstrap() bool
 	mustUseVendorVariant() bool
+	nativeCoverage() bool
 }
 
 type ModuleContext interface {
@@ -316,6 +313,8 @@ type linker interface {
 	link(ctx ModuleContext, flags Flags, deps PathDeps, objs Objects) android.Path
 	appendLdflags([]string)
 	unstrippedOutputFilePath() android.Path
+
+	nativeCoverage() bool
 }
 
 type installer interface {
@@ -608,6 +607,10 @@ func (c *Module) bootstrap() bool {
 	return Bool(c.Properties.Bootstrap)
 }
 
+func (c *Module) nativeCoverage() bool {
+	return c.linker != nil && c.linker.nativeCoverage()
+}
+
 func isBionic(name string) bool {
 	switch name {
 	case "libc", "libm", "libdl", "linker":
@@ -796,6 +799,10 @@ func (ctx *moduleContextImpl) isStubs() bool {
 
 func (ctx *moduleContextImpl) bootstrap() bool {
 	return ctx.mod.bootstrap()
+}
+
+func (ctx *moduleContextImpl) nativeCoverage() bool {
+	return ctx.mod.nativeCoverage()
 }
 
 func newBaseModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Module {
@@ -1606,6 +1613,10 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			return
 		}
 
+		if depTag == android.ProtoPluginDepTag {
+			return
+		}
+
 		if dep.Target().Os != ctx.Os() {
 			ctx.ModuleErrorf("OS mismatch between %q and %q", ctx.ModuleName(), depName)
 			return
@@ -1986,6 +1997,11 @@ type Defaults struct {
 func (*Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 
+// cc_defaults provides a set of properties that can be inherited by other cc
+// modules. A module can use the properties from a cc_defaults using
+// `defaults: ["<:default_module_name>"]`. Properties of both modules are
+// merged (when possible) by prepending the default module's values to the
+// depending module's values.
 func defaultsFactory() android.Module {
 	return DefaultsFactory()
 }
