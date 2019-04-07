@@ -454,8 +454,9 @@ func (module *SdkLibrary) createDocs(mctx android.TopDownMutatorContext, apiScop
 		Merge_annotations_dirs           []string
 		Merge_inclusion_annotations_dirs []string
 		Check_api                        struct {
-			Current       ApiToCheck
-			Last_released ApiToCheck
+			Current                   ApiToCheck
+			Last_released             ApiToCheck
+			Ignore_missing_latest_api *bool
 		}
 		Aidl struct {
 			Include_dirs       []string
@@ -524,6 +525,7 @@ func (module *SdkLibrary) createDocs(mctx android.TopDownMutatorContext, apiScop
 		module.latestApiFilegroupName(apiScope))
 	props.Check_api.Last_released.Removed_api_file = proptools.StringPtr(
 		module.latestRemovedApiFilegroupName(apiScope))
+	props.Check_api.Ignore_missing_latest_api = proptools.BoolPtr(true)
 	props.Srcs_lib = module.sdkLibraryProperties.Srcs_lib
 	props.Srcs_lib_whitelist_dirs = module.sdkLibraryProperties.Srcs_lib_whitelist_dirs
 	props.Srcs_lib_whitelist_pkgs = module.sdkLibraryProperties.Srcs_lib_whitelist_pkgs
@@ -607,6 +609,10 @@ func (module *SdkLibrary) PrebuiltJars(ctx android.BaseContext, sdkVersion strin
 	dir := filepath.Join("prebuilts", "sdk", v, api)
 	jar := filepath.Join(dir, module.BaseModuleName()+".jar")
 	jarPath := android.ExistentPathForSource(ctx, jar)
+	if !jarPath.Valid() {
+		ctx.PropertyErrorf("sdk_library", "invalid sdk version %q, %q does not exist", v, jar)
+		return nil
+	}
 	return android.Paths{jarPath.Path()}
 }
 

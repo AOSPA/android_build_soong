@@ -240,8 +240,9 @@ func (r *RuleBuilder) Build(pctx PackageContext, ctx BuilderContext, name string
 	if len(r.Commands()) > 0 {
 		ctx.Build(pctx, BuildParams{
 			Rule: ctx.Rule(pctx, name, blueprint.RuleParams{
-				Command:     strings.Join(proptools.NinjaEscape(r.Commands()), " && "),
+				Command:     strings.Join(proptools.NinjaEscapeList(r.Commands()), " && "),
 				CommandDeps: r.Tools().Strings(),
+				Restat:      r.restat,
 			}),
 			Implicits:   r.Inputs(),
 			Outputs:     r.Outputs(),
@@ -299,7 +300,7 @@ func (c *RuleBuilderCommand) FlagForEachArg(flag string, args []string) *RuleBui
 	return c
 }
 
-// FlagWithArg adds the specified flag and list of arguments to the command line, with the arguments joined by sep
+// FlagWithList adds the specified flag and list of arguments to the command line, with the arguments joined by sep
 // and no separator between the flag and arguments.  The flag and arguments should not contain input or output paths or
 // the rule will not have them listed in its dependencies or outputs.
 func (c *RuleBuilderCommand) FlagWithList(flag string, list []string, sep string) *RuleBuilderCommand {

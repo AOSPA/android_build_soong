@@ -154,6 +154,7 @@ type ModuleContext interface {
 	// Deprecated: use WalkDeps instead to support multiple dependency tags on the same module
 	VisitDepsDepthFirstIf(pred func(Module) bool, visit func(Module))
 	WalkDeps(visit func(Module, Module) bool)
+	WalkDepsBlueprint(visit func(blueprint.Module, blueprint.Module) bool)
 
 	Variable(pctx PackageContext, name, value string)
 	Rule(pctx PackageContext, name string, params blueprint.RuleParams, argNames ...string) blueprint.Rule
@@ -192,6 +193,7 @@ type Module interface {
 	GetProperties() []interface{}
 
 	BuildParamsForTests() []BuildParams
+	RuleParamsForTests() map[blueprint.Rule]blueprint.RuleParams
 	VariablesForTests() map[string]string
 }
 
@@ -476,6 +478,7 @@ type ModuleBase struct {
 
 	// For tests
 	buildParams []BuildParams
+	ruleParams  map[blueprint.Rule]blueprint.RuleParams
 	variables   map[string]string
 
 	prefer32 func(ctx BaseModuleContext, base *ModuleBase, class OsClass) bool
@@ -493,6 +496,10 @@ func (a *ModuleBase) GetProperties() []interface{} {
 
 func (a *ModuleBase) BuildParamsForTests() []BuildParams {
 	return a.buildParams
+}
+
+func (a *ModuleBase) RuleParamsForTests() map[blueprint.Rule]blueprint.RuleParams {
+	return a.ruleParams
 }
 
 func (a *ModuleBase) VariablesForTests() map[string]string {
@@ -794,6 +801,10 @@ func (a *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		variables:              make(map[string]string),
 	}
 
+	if ctx.config.captureBuild {
+		ctx.ruleParams = make(map[blueprint.Rule]blueprint.RuleParams)
+	}
+
 	desc := "//" + ctx.ModuleDir() + ":" + ctx.ModuleName() + " "
 	var suffix []string
 	if ctx.Os().Class != Device && ctx.Os().Class != Generic {
@@ -853,6 +864,7 @@ func (a *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 
 	a.buildParams = ctx.buildParams
+	a.ruleParams = ctx.ruleParams
 	a.variables = ctx.variables
 }
 
@@ -876,6 +888,7 @@ type androidModuleContext struct {
 
 	// For tests
 	buildParams []BuildParams
+	ruleParams  map[blueprint.Rule]blueprint.RuleParams
 	variables   map[string]string
 }
 
@@ -930,12 +943,12 @@ func convertBuildParams(params BuildParams) blueprint.BuildParams {
 		bparams.Implicits = append(bparams.Implicits, params.Implicit.String())
 	}
 
-	bparams.Outputs = proptools.NinjaEscape(bparams.Outputs)
-	bparams.ImplicitOutputs = proptools.NinjaEscape(bparams.ImplicitOutputs)
-	bparams.Inputs = proptools.NinjaEscape(bparams.Inputs)
-	bparams.Implicits = proptools.NinjaEscape(bparams.Implicits)
-	bparams.OrderOnly = proptools.NinjaEscape(bparams.OrderOnly)
-	bparams.Depfile = proptools.NinjaEscape([]string{bparams.Depfile})[0]
+	bparams.Outputs = proptools.NinjaEscapeList(bparams.Outputs)
+	bparams.ImplicitOutputs = proptools.NinjaEscapeList(bparams.ImplicitOutputs)
+	bparams.Inputs = proptools.NinjaEscapeList(bparams.Inputs)
+	bparams.Implicits = proptools.NinjaEscapeList(bparams.Implicits)
+	bparams.OrderOnly = proptools.NinjaEscapeList(bparams.OrderOnly)
+	bparams.Depfile = proptools.NinjaEscapeList([]string{bparams.Depfile})[0]
 
 	return bparams
 }
@@ -951,7 +964,13 @@ func (a *androidModuleContext) Variable(pctx PackageContext, name, value string)
 func (a *androidModuleContext) Rule(pctx PackageContext, name string, params blueprint.RuleParams,
 	argNames ...string) blueprint.Rule {
 
-	return a.ModuleContext.Rule(pctx.PackageContext, name, params, argNames...)
+	rule := a.ModuleContext.Rule(pctx.PackageContext, name, params, argNames...)
+
+	if a.config.captureBuild {
+		a.ruleParams[rule] = params
+	}
+
+	return rule
 }
 
 func (a *androidModuleContext) Build(pctx PackageContext, params BuildParams) {
@@ -1065,6 +1084,10 @@ func (a *androidModuleContext) VisitDepsDepthFirstIf(pred func(Module) bool, vis
 		func(module blueprint.Module) {
 			visit(module.(Module))
 		})
+}
+
+func (a *androidModuleContext) WalkDepsBlueprint(visit func(blueprint.Module, blueprint.Module) bool) {
+	a.ModuleContext.WalkDeps(visit)
 }
 
 func (a *androidModuleContext) WalkDeps(visit func(Module, Module) bool) {
