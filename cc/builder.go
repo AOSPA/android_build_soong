@@ -26,7 +26,6 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/pathtools"
 
 	"android/soong/android"
 	"android/soong/cc/config"
@@ -70,6 +69,8 @@ var (
 			CommandDeps:    []string{"$ldCmd"},
 			Rspfile:        "${out}.rsp",
 			RspfileContent: "${in}",
+			// clang -Wl,--out-implib doesn't update its output file if it hasn't changed.
+			Restat: true,
 		},
 		"ldCmd", "crtBegin", "libFlags", "crtEnd", "ldFlags")
 
@@ -259,13 +260,9 @@ type builderFlags struct {
 	stripAddGnuDebuglink   bool
 	stripUseGnuStrip       bool
 
-	protoDeps        android.Paths
-	protoFlags       string
-	protoOutTypeFlag string
-	protoOutParams   string
+	proto            android.ProtoFlags
 	protoC           bool
 	protoOptionsFile bool
-	protoRoot        bool
 }
 
 type Objects struct {
@@ -605,7 +602,7 @@ func transformDarwinObjToStaticLib(ctx android.ModuleContext, objFiles android.P
 // and shared libraries, to a shared library (.so) or dynamic executable
 func TransformObjToDynamicBinary(ctx android.ModuleContext,
 	objFiles, sharedLibs, staticLibs, lateStaticLibs, wholeStaticLibs, deps android.Paths,
-	crtBegin, crtEnd android.OptionalPath, groupLate bool, flags builderFlags, outputFile android.WritablePath, implicitOutputs android.WritablePaths) {
+	crtBegin, crtEnd android.OptionalPath, groupLate bool, flags builderFlags, outputFile android.WritablePath) {
 
 	var ldCmd string
 	var extraFlags string
@@ -649,11 +646,7 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 	}
 
 	for _, lib := range sharedLibs {
-		libFile := lib.String()
-		if ctx.Windows() {
-			libFile = pathtools.ReplaceExtension(libFile, "a")
-		}
-		libFlagsList = append(libFlagsList, libFile)
+		libFlagsList = append(libFlagsList, lib.String())
 	}
 
 	deps = append(deps, staticLibs...)
@@ -664,12 +657,11 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 	}
 
 	ctx.Build(pctx, android.BuildParams{
-		Rule:            ld,
-		Description:     "link " + outputFile.Base(),
-		Output:          outputFile,
-		ImplicitOutputs: implicitOutputs,
-		Inputs:          objFiles,
-		Implicits:       deps,
+		Rule:        ld,
+		Description: "link " + outputFile.Base(),
+		Output:      outputFile,
+		Inputs:      objFiles,
+		Implicits:   deps,
 		Args: map[string]string{
 			"ldCmd":    ldCmd,
 			"crtBegin": crtBegin.String(),
