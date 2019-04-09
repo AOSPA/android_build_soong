@@ -149,7 +149,7 @@ type BaseLinkerProperties struct {
 	Pack_relocations *bool `android:"arch_variant"`
 
 	// local file name to pass to the linker as --version_script
-	Version_script *string `android:"arch_variant"`
+	Version_script *string `android:"path,arch_variant"`
 
 	// Local file name to pass to the linker as --symbol-ordering-file
 	Symbol_ordering_file *string `android:"arch_variant"`
@@ -281,16 +281,6 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.LateStaticLibs = append(deps.LateStaticLibs, "libwinpthread")
 	}
 
-	// Version_script is not needed when linking stubs lib where the version
-	// script is created from the symbol map file.
-	if !linker.dynamicProperties.BuildStubs {
-		android.ExtractSourceDeps(ctx, linker.Properties.Version_script)
-		android.ExtractSourceDeps(ctx,
-			linker.Properties.Target.Vendor.Version_script)
-	}
-
-	android.ExtractSourceDeps(ctx, linker.Properties.Symbol_ordering_file)
-
 	return deps
 }
 
@@ -298,10 +288,6 @@ func (linker *baseLinker) useClangLld(ctx ModuleContext) bool {
 	// Clang lld is not ready for for Darwin host executables yet.
 	// See https://lld.llvm.org/AtomLLD.html for status of lld for Mach-O.
 	if ctx.Darwin() {
-		return false
-	}
-	// http://b/110800681 - lld cannot link Android's Windows modules yet.
-	if ctx.Windows() {
 		return false
 	}
 	if linker.Properties.Use_clang_lld != nil {
@@ -357,7 +343,7 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 			// darwin defaults to treating undefined symbols as errors
 			flags.LdFlags = append(flags.LdFlags, "-Wl,-undefined,dynamic_lookup")
 		}
-	} else if !ctx.Darwin() {
+	} else if !ctx.Darwin() && !ctx.Windows() {
 		flags.LdFlags = append(flags.LdFlags, "-Wl,--no-undefined")
 	}
 
@@ -394,7 +380,7 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 
 	flags.LdFlags = append(flags.LdFlags, proptools.NinjaAndShellEscapeList(linker.Properties.Ldflags)...)
 
-	if ctx.Host() {
+	if ctx.Host() && !ctx.Windows() {
 		rpath_prefix := `\$$ORIGIN/`
 		if ctx.Darwin() {
 			rpath_prefix = "@loader_path/"
