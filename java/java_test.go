@@ -175,8 +175,8 @@ func testContext(config android.Config, bp string,
 		"prebuilts/apk/app_xxhdpi.apk": nil,
 
 		// For framework-res, which is an implicit dependency for framework
-		"AndroidManifest.xml":                   nil,
-		"build/target/product/security/testkey": nil,
+		"AndroidManifest.xml":                        nil,
+		"build/make/target/product/security/testkey": nil,
 
 		"build/soong/scripts/jar-wrapper.sh": nil,
 
