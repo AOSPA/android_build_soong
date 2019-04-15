@@ -103,6 +103,7 @@ func testContext(config android.Config, bp string,
 	ctx.RegisterModuleType("cc_library", android.ModuleFactoryAdaptor(cc.LibraryFactory))
 	ctx.RegisterModuleType("cc_object", android.ModuleFactoryAdaptor(cc.ObjectFactory))
 	ctx.RegisterModuleType("toolchain_library", android.ModuleFactoryAdaptor(cc.ToolchainLibraryFactory))
+	ctx.RegisterModuleType("llndk_library", android.ModuleFactoryAdaptor(cc.LlndkLibraryFactory))
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("link", cc.LinkageMutator).Parallel()
 		ctx.BottomUp("begin", cc.BeginMutator).Parallel()
@@ -137,6 +138,9 @@ func testContext(config android.Config, bp string,
 		"prebuilts/sdk/17/public/android.jar":         nil,
 		"prebuilts/sdk/17/public/framework.aidl":      nil,
 		"prebuilts/sdk/17/system/android.jar":         nil,
+		"prebuilts/sdk/25/public/android.jar":         nil,
+		"prebuilts/sdk/25/public/framework.aidl":      nil,
+		"prebuilts/sdk/25/system/android.jar":         nil,
 		"prebuilts/sdk/current/core/android.jar":      nil,
 		"prebuilts/sdk/current/public/android.jar":    nil,
 		"prebuilts/sdk/current/public/framework.aidl": nil,
