@@ -170,6 +170,7 @@ var Configuration = map[string]PathConfig{
 	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"rmdir":     Log,
 	"sed":       LinuxOnlyPrebuilt,
+	"seq":       LinuxOnlyPrebuilt,
 	"setsid":    LinuxOnlyPrebuilt,
 	"sha1sum":   LinuxOnlyPrebuilt,
 	"sha256sum": LinuxOnlyPrebuilt,

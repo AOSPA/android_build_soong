@@ -98,6 +98,10 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 
 	global := dexpreoptGlobalConfig(ctx)
 	bootImage := defaultBootImageConfig(ctx)
+	defaultBootImage := bootImage
+	if global.UseApexImage {
+		bootImage = apexBootImageConfig(ctx)
+	}
 
 	var archs []android.ArchType
 	for _, a := range ctx.MultiTargets() {
@@ -162,8 +166,11 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		Archs:           archs,
 		DexPreoptImages: images,
 
-		PreoptBootClassPathDexFiles:     bootImage.dexPaths.Paths(),
-		PreoptBootClassPathDexLocations: bootImage.dexLocations,
+		// We use the dex paths and dex locations of the default boot image, as it
+		// contains the full dexpreopt boot classpath. Other images may just contain a subset of
+		// the dexpreopt boot classpath.
+		PreoptBootClassPathDexFiles:     defaultBootImage.dexPaths.Paths(),
+		PreoptBootClassPathDexLocations: defaultBootImage.dexLocations,
 
 		PreoptExtractedApk: false,
 
