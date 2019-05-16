@@ -977,6 +977,17 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, apexType ap
 			optFlags = append(optFlags, "--android_manifest "+androidManifestFile.String())
 		}
 
+		targetSdkVersion := ctx.Config().DefaultAppTargetSdk()
+		if targetSdkVersion == ctx.Config().PlatformSdkCodename() &&
+			ctx.Config().UnbundledBuild() &&
+			!ctx.Config().UnbundledBuildUsePrebuiltSdks() &&
+			ctx.Config().IsEnvTrue("UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT") {
+			apiFingerprint := java.ApiFingerprintPath(ctx)
+			targetSdkVersion += fmt.Sprintf(".$$(cat %s)", apiFingerprint.String())
+			implicitInputs = append(implicitInputs, apiFingerprint)
+		}
+		optFlags = append(optFlags, "--target_sdk_version "+targetSdkVersion)
+
 		ctx.Build(pctx, android.BuildParams{
 			Rule:        apexRule,
 			Implicits:   implicitInputs,
@@ -1362,11 +1373,15 @@ func (p *Prebuilt) Srcs() android.Paths {
 	return android.Paths{p.outputApex}
 }
 
+func (p *Prebuilt) InstallFilename() string {
+	return proptools.StringDefault(p.properties.Filename, p.BaseModuleName()+imageApexSuffix)
+}
+
 func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// TODO(jungjw): Check the key validity.
 	p.inputApex = p.Prebuilt().SingleSourcePath(ctx)
 	p.installDir = android.PathForModuleInstall(ctx, "apex")
-	p.installFilename = proptools.StringDefault(p.properties.Filename, ctx.ModuleName()+imageApexSuffix)
+	p.installFilename = p.InstallFilename()
 	if !strings.HasSuffix(p.installFilename, imageApexSuffix) {
 		ctx.ModuleErrorf("filename should end in %s for prebuilt_apex", imageApexSuffix)
 	}

@@ -97,7 +97,7 @@ func testContext(config android.Config, bp string,
 		ctx.TopDown("java_sdk_library", SdkLibraryMutator).Parallel()
 	})
 	ctx.RegisterPreSingletonType("overlay", android.SingletonFactoryAdaptor(OverlaySingletonFactory))
-	ctx.RegisterPreSingletonType("sdk", android.SingletonFactoryAdaptor(sdkSingletonFactory))
+	ctx.RegisterPreSingletonType("sdk_versions", android.SingletonFactoryAdaptor(sdkPreSingletonFactory))
 
 	// Register module types and mutators from cc needed for JNI testing
 	ctx.RegisterModuleType("cc_library", android.ModuleFactoryAdaptor(cc.LibraryFactory))
@@ -131,6 +131,7 @@ func testContext(config android.Config, bp string,
 		"api/system-removed.txt": nil,
 		"api/test-current.txt":   nil,
 		"api/test-removed.txt":   nil,
+		"framework/aidl/a.aidl":  nil,
 
 		"prebuilts/sdk/14/public/android.jar":         nil,
 		"prebuilts/sdk/14/public/framework.aidl":      nil,
@@ -367,6 +368,7 @@ func TestDefaults(t *testing.T) {
 			srcs: ["a.java"],
 			libs: ["bar"],
 			static_libs: ["baz"],
+			optimize: {enabled: false},
 		}
 
 		java_library {
@@ -382,6 +384,22 @@ func TestDefaults(t *testing.T) {
 		java_library {
 			name: "baz",
 			srcs: ["c.java"],
+		}
+
+		android_test {
+			name: "atestOptimize",
+			defaults: ["defaults"],
+			optimize: {enabled: true},
+		}
+
+		android_test {
+			name: "atestNoOptimize",
+			defaults: ["defaults"],
+		}
+
+		android_test {
+			name: "atestDefault",
+			srcs: ["a.java"],
 		}
 		`)
 
@@ -400,6 +418,21 @@ func TestDefaults(t *testing.T) {
 	baz := ctx.ModuleForTests("baz", "android_common").Rule("javac").Output.String()
 	if len(combineJar.Inputs) != 2 || combineJar.Inputs[1].String() != baz {
 		t.Errorf("foo combineJar inputs %v does not contain %q", combineJar.Inputs, baz)
+	}
+
+	atestOptimize := ctx.ModuleForTests("atestOptimize", "android_common").MaybeRule("r8")
+	if atestOptimize.Output == nil {
+		t.Errorf("atestOptimize should optimize APK")
+	}
+
+	atestNoOptimize := ctx.ModuleForTests("atestNoOptimize", "android_common").MaybeRule("d8")
+	if atestNoOptimize.Output == nil {
+		t.Errorf("atestNoOptimize should not optimize APK")
+	}
+
+	atestDefault := ctx.ModuleForTests("atestDefault", "android_common").MaybeRule("r8")
+	if atestDefault.Output == nil {
+		t.Errorf("atestDefault should optimize APK")
 	}
 }
 

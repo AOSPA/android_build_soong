@@ -318,7 +318,7 @@ type productVariables struct {
 	ProductHiddenAPIStubsSystem []string `json:",omitempty"`
 	ProductHiddenAPIStubsTest   []string `json:",omitempty"`
 
-	TargetFSConfigGen *string `json:",omitempty"`
+	TargetFSConfigGen []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
