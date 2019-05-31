@@ -108,6 +108,7 @@ var Configuration = map[string]PathConfig{
 	"python3":  Allowed,
 	"realpath": Allowed,
 	"rsync":    Allowed,
+	"sed":      Allowed,
 	"sh":       Allowed,
 	"tar":      Allowed,
 	"timeout":  Allowed,
@@ -169,7 +170,6 @@ var Configuration = map[string]PathConfig{
 	"rm":        LinuxOnlyPrebuilt,
 	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"rmdir":     Log,
-	"sed":       LinuxOnlyPrebuilt,
 	"seq":       LinuxOnlyPrebuilt,
 	"setsid":    LinuxOnlyPrebuilt,
 	"sha1sum":   LinuxOnlyPrebuilt,
