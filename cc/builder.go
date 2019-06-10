@@ -122,12 +122,25 @@ var (
 	_ = pctx.SourcePathVariable("stripPath", "build/soong/scripts/strip.sh")
 	_ = pctx.SourcePathVariable("xzCmd", "prebuilts/build-tools/${config.HostPrebuiltTag}/bin/xz")
 
+	// b/132822437: objcopy uses a file descriptor per .o file when called on .a files, which runs the system out of
+	// file descriptors on darwin.  Limit concurrent calls to 5 on darwin.
+	darwinStripPool = func() blueprint.Pool {
+		if runtime.GOOS == "darwin" {
+			return pctx.StaticPool("darwinStripPool", blueprint.PoolParams{
+				Depth: 5,
+			})
+		} else {
+			return nil
+		}
+	}()
+
 	strip = pctx.AndroidStaticRule("strip",
 		blueprint.RuleParams{
 			Depfile:     "${out}.d",
 			Deps:        blueprint.DepsGCC,
 			Command:     "CROSS_COMPILE=$crossCompile XZ=$xzCmd CLANG_BIN=${config.ClangBin} $stripPath ${args} -i ${in} -o ${out} -d ${out}.d",
 			CommandDeps: []string{"$stripPath", "$xzCmd"},
+			Pool:        darwinStripPool,
 		},
 		"args", "crossCompile")
 
@@ -256,6 +269,7 @@ type builderFlags struct {
 	groupStaticLibs bool
 
 	stripKeepSymbols       bool
+	stripKeepSymbolsList   string
 	stripKeepMiniDebugInfo bool
 	stripAddGnuDebuglink   bool
 	stripUseGnuStrip       bool
@@ -856,6 +870,9 @@ func TransformStrip(ctx android.ModuleContext, inputFile android.Path,
 	}
 	if flags.stripKeepSymbols {
 		args += " --keep-symbols"
+	}
+	if flags.stripKeepSymbolsList != "" {
+		args += " -k" + flags.stripKeepSymbolsList
 	}
 	if flags.stripUseGnuStrip {
 		args += " --use-gnu-strip"
