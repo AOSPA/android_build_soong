@@ -53,19 +53,12 @@ func (p *prebuiltLinker) PrebuiltSrcs() []string {
 	return p.properties.Srcs
 }
 
-type prebuiltLibraryInterface interface {
-	libraryInterface
-	prebuiltLinkerInterface
-	disablePrebuilt()
-}
-
 type prebuiltLibraryLinker struct {
 	*libraryDecorator
 	prebuiltLinker
 }
 
 var _ prebuiltLinkerInterface = (*prebuiltLibraryLinker)(nil)
-var _ prebuiltLibraryInterface = (*prebuiltLibraryLinker)(nil)
 
 func (p *prebuiltLibraryLinker) linkerInit(ctx BaseModuleContext) {}
 
@@ -121,10 +114,6 @@ func (p *prebuiltLibraryLinker) shared() bool {
 
 func (p *prebuiltLibraryLinker) nativeCoverage() bool {
 	return false
-}
-
-func (p *prebuiltLibraryLinker) disablePrebuilt() {
-	p.properties.Srcs = nil
 }
 
 // cc_prebuilt_library_shared installs a precompiled shared library that are
