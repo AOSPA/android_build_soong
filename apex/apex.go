@@ -1297,7 +1297,8 @@ type Prebuilt struct {
 
 type PrebuiltProperties struct {
 	// the path to the prebuilt .apex file to import.
-	Source string `blueprint:"mutated"`
+	Source       string `blueprint:"mutated"`
+	ForceDisable bool   `blueprint:"mutated"`
 
 	Src  *string
 	Arch struct {
@@ -1326,6 +1327,20 @@ func (p *Prebuilt) installable() bool {
 }
 
 func (p *Prebuilt) DepsMutator(ctx android.BottomUpMutatorContext) {
+	// If the device is configured to use flattened APEX, don't set
+	// p.properties.Source so that the prebuilt module (which is
+	// a non-flattened APEX) is not used.
+	forceDisable := ctx.Config().FlattenApex() && !ctx.Config().UnbundledBuild()
+
+	// b/137216042 don't use prebuilts when address sanitizer is on
+	forceDisable = forceDisable || android.InList("address", ctx.Config().SanitizeDevice()) ||
+		android.InList("hwaddress", ctx.Config().SanitizeDevice())
+
+	if forceDisable && p.prebuilt.SourceExists() {
+		p.properties.ForceDisable = true
+		return
+	}
+
 	// This is called before prebuilt_select and prebuilt_postdeps mutators
 	// The mutators requires that src to be set correctly for each arch so that
 	// arch variants are disabled when src is not provided for the arch.
@@ -1362,6 +1377,10 @@ func (p *Prebuilt) InstallFilename() string {
 }
 
 func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if p.properties.ForceDisable {
+		return
+	}
+
 	// TODO(jungjw): Check the key validity.
 	p.inputApex = p.Prebuilt().SingleSourcePath(ctx)
 	p.installDir = android.PathForModuleInstall(ctx, "apex")
