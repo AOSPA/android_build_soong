@@ -152,7 +152,7 @@ const (
 
 func init() {
 	android.RegisterArchFeatures(android.Arm,
-		"neon")
+		"neon", "aarch32")
 
 	android.RegisterArchVariants(android.Arm,
 		"armv7-a",
@@ -177,6 +177,9 @@ func init() {
 	android.RegisterArchVariantFeatures(android.Arm, "armv7-a-neon", "neon")
 	android.RegisterArchVariantFeatures(android.Arm, "armv8-a", "neon")
 	android.RegisterArchVariantFeatures(android.Arm, "armv8-2a", "neon")
+
+	android.RegisterArchVariantFeatures(android.Arm, "armv8-a", "aarch32")
+	android.RegisterArchVariantFeatures(android.Arm, "armv8-2a", "aarch32")
 
 	// Krait is not supported by GCC, but is supported by Clang, so
 	// override the definitions when building modules with Clang.
