@@ -37,6 +37,8 @@ func NewTestContext() *TestContext {
 
 	ctx.SetNameInterface(nameResolver)
 
+	ctx.preArch = append(ctx.preArch, registerLoadHookMutator)
+
 	ctx.postDeps = append(ctx.postDeps, registerPathDepsMutator)
 
 	return ctx
@@ -368,4 +370,15 @@ func FailIfNoMatchingErrors(t *testing.T, pattern string, errs []error) {
 			t.Errorf("errs[%d] = %s", i, err)
 		}
 	}
+}
+
+func AndroidMkEntriesForTest(t *testing.T, config Config, bpPath string, mod blueprint.Module) AndroidMkEntries {
+	var p AndroidMkEntriesProvider
+	var ok bool
+	if p, ok = mod.(AndroidMkEntriesProvider); !ok {
+		t.Errorf("module does not implmement AndroidMkEntriesProvider: " + mod.Name())
+	}
+	entries := p.AndroidMkEntries()
+	entries.fillInEntries(config, bpPath, mod)
+	return entries
 }

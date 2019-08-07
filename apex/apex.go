@@ -511,6 +511,17 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 					a.properties.Multilib.Prefer32.Binaries, target.String(),
 					a.getImageVariation(config))
 			}
+
+			if strings.HasPrefix(ctx.ModuleName(), "com.android.runtime") && target.Os.Class == android.Device {
+				for _, sanitizer := range ctx.Config().SanitizeDevice() {
+					if sanitizer == "hwaddress" {
+						addDependenciesForNativeModules(ctx,
+							[]string{"libclang_rt.hwasan-aarch64-android"},
+							nil, target.String(), a.getImageVariation(config))
+						break
+					}
+				}
+			}
 		}
 
 	}
@@ -1171,8 +1182,11 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string, apex
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
 		} else if fi.class == nativeSharedLib || fi.class == nativeExecutable {
 			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
-			if cc, ok := fi.module.(*cc.Module); ok && cc.UnstrippedOutputFile() != nil {
-				fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", cc.UnstrippedOutputFile().String())
+			if cc, ok := fi.module.(*cc.Module); ok {
+				if cc.UnstrippedOutputFile() != nil {
+					fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", cc.UnstrippedOutputFile().String())
+				}
+				cc.AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w)
 			}
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_prebuilt.mk")
 		} else {

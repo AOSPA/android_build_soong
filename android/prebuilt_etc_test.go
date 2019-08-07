@@ -15,12 +15,10 @@
 package android
 
 import (
-	"bufio"
-	"bytes"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
 )
 
@@ -32,6 +30,7 @@ func testPrebuiltEtc(t *testing.T, bp string) (*TestContext, Config) {
 	ctx.RegisterModuleType("prebuilt_etc_host", ModuleFactoryAdaptor(PrebuiltEtcHostFactory))
 	ctx.RegisterModuleType("prebuilt_usr_share", ModuleFactoryAdaptor(PrebuiltUserShareFactory))
 	ctx.RegisterModuleType("prebuilt_usr_share_host", ModuleFactoryAdaptor(PrebuiltUserShareHostFactory))
+	ctx.RegisterModuleType("prebuilt_font", ModuleFactoryAdaptor(PrebuiltFontFactory))
 	ctx.PreDepsMutators(func(ctx RegisterMutatorsContext) {
 		ctx.BottomUp("prebuilt_etc", prebuiltEtcMutator).Parallel()
 	})
@@ -139,45 +138,37 @@ func TestPrebuiltEtcGlob(t *testing.T) {
 }
 
 func TestPrebuiltEtcAndroidMk(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	ctx, config := testPrebuiltEtc(t, `
 		prebuilt_etc {
 			name: "foo",
 			src: "foo.conf",
 			owner: "abc",
 			filename_from_src: true,
+			required: ["modA", "moduleB"],
+			host_required: ["hostModA", "hostModB"],
+			target_required: ["targetModA"],
 		}
 	`)
 
-	data := AndroidMkData{}
-	data.Required = append(data.Required, "modA", "moduleB")
-
-	expected := map[string]string{
-		"LOCAL_MODULE":                "foo",
-		"LOCAL_MODULE_CLASS":          "ETC",
-		"LOCAL_MODULE_OWNER":          "abc",
-		"LOCAL_INSTALLED_MODULE_STEM": "foo.conf",
-		"LOCAL_REQUIRED_MODULES":      "modA moduleB",
+	expected := map[string][]string{
+		"LOCAL_MODULE":                  {"foo"},
+		"LOCAL_MODULE_CLASS":            {"ETC"},
+		"LOCAL_MODULE_OWNER":            {"abc"},
+		"LOCAL_INSTALLED_MODULE_STEM":   {"foo.conf"},
+		"LOCAL_REQUIRED_MODULES":        {"modA", "moduleB"},
+		"LOCAL_HOST_REQUIRED_MODULES":   {"hostModA", "hostModB"},
+		"LOCAL_TARGET_REQUIRED_MODULES": {"targetModA"},
 	}
 
 	mod := ctx.ModuleForTests("foo", "android_arm64_armv8-a_core").Module().(*PrebuiltEtc)
-	buf := &bytes.Buffer{}
-	mod.AndroidMk().Custom(buf, "foo", "", "", data)
-	for k, expected := range expected {
-		found := false
-		scanner := bufio.NewScanner(bytes.NewReader(buf.Bytes()))
-		for scanner.Scan() {
-			line := scanner.Text()
-			tok := strings.Split(line, " := ")
-			if tok[0] == k {
-				found = true
-				if tok[1] != expected {
-					t.Errorf("Incorrect %s '%s', expected '%s'", k, tok[1], expected)
-				}
+	entries := AndroidMkEntriesForTest(t, config, "", mod)
+	for k, expectedValue := range expected {
+		if value, ok := entries.EntryMap[k]; ok {
+			if !reflect.DeepEqual(value, expectedValue) {
+				t.Errorf("Incorrect %s '%s', expected '%s'", k, value, expectedValue)
 			}
-		}
-
-		if !found {
-			t.Errorf("No %s defined, saw %s", k, buf.String())
+		} else {
+			t.Errorf("No %s defined, saw %q", k, entries.EntryMap)
 		}
 	}
 }
@@ -225,6 +216,21 @@ func TestPrebuiltUserShareHostInstallDirPath(t *testing.T) {
 	buildOS := BuildOs.String()
 	p := ctx.ModuleForTests("foo.conf", buildOS+"_common").Module().(*PrebuiltEtc)
 	expected := filepath.Join("host", config.PrebuiltOS(), "usr", "share", "bar")
+	if p.installDirPath.RelPathString() != expected {
+		t.Errorf("expected %q, got %q", expected, p.installDirPath.RelPathString())
+	}
+}
+
+func TestPrebuiltFontInstallDirPath(t *testing.T) {
+	ctx, _ := testPrebuiltEtc(t, `
+		prebuilt_font {
+			name: "foo.conf",
+			src: "foo.conf",
+		}
+	`)
+
+	p := ctx.ModuleForTests("foo.conf", "android_arm64_armv8-a_core").Module().(*PrebuiltEtc)
+	expected := "target/product/test_device/system/fonts"
 	if p.installDirPath.RelPathString() != expected {
 		t.Errorf("expected %q, got %q", expected, p.installDirPath.RelPathString())
 	}

@@ -384,7 +384,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 
 	TransformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs, deps.StaticLibs,
 		deps.LateStaticLibs, deps.WholeStaticLibs, linkerDeps, deps.CrtBegin, deps.CrtEnd, true,
-		builderFlags, outputFile)
+		builderFlags, outputFile, nil)
 
 	objs.coverageFiles = append(objs.coverageFiles, deps.StaticLibObjs.coverageFiles...)
 	objs.coverageFiles = append(objs.coverageFiles, deps.WholeStaticLibObjs.coverageFiles...)
@@ -440,8 +440,8 @@ func (binary *binaryDecorator) install(ctx ModuleContext, file android.Path) {
 	// Bionic binaries (e.g. linker) is installed to the bootstrap subdirectory.
 	// The original path becomes a symlink to the corresponding file in the
 	// runtime APEX.
-	if isBionic(ctx.baseModuleName()) && ctx.Arch().Native && ctx.apexName() == "" && !ctx.inRecovery() {
-		if ctx.Device() {
+	if installToBootstrap(ctx.baseModuleName(), ctx.Config()) && ctx.Arch().Native && ctx.apexName() == "" && !ctx.inRecovery() {
+		if ctx.Device() && isBionic(ctx.baseModuleName()) {
 			binary.installSymlinkToRuntimeApex(ctx, file)
 		}
 		binary.baseInstaller.subDir = "bootstrap"

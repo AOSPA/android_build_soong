@@ -102,6 +102,10 @@ var fixSteps = []fixStep{
 		name: "rewriteAndroidTest",
 		fix:  rewriteAndroidTest,
 	},
+	{
+		name: "rewriteAndroidAppImport",
+		fix:  rewriteAndroidAppImport,
+	},
 }
 
 func NewFixRequest() FixRequest {
@@ -431,14 +435,6 @@ func getStringProperty(prop *parser.Property, fieldName string) string {
 	return ""
 }
 
-// Create sub_dir: attribute for the given path
-func makePrebuiltEtcDestination(mod *parser.Module, path string) {
-	mod.Properties = append(mod.Properties, &parser.Property{
-		Name:  "sub_dir",
-		Value: &parser.String{Value: path},
-	})
-}
-
 // Set the value of the given attribute to the error message
 func indicateAttributeError(mod *parser.Module, attributeName string, format string, a ...interface{}) error {
 	msg := fmt.Sprintf(format, a...)
@@ -464,18 +460,54 @@ func resolveLocalModule(mod *parser.Module, val parser.Expression) parser.Expres
 	return val
 }
 
-// A prefix to strip before setting 'filename' attribute and an array of boolean attributes to set.
-type filenamePrefixToFlags struct {
+// etcPrebuiltModuleUpdate contains information on updating certain parts of a defined module such as:
+//    * changing the module type from prebuilt_etc to a different one
+//    * stripping the prefix of the install path based on the module type
+//    * appending additional boolean properties to the prebuilt module
+type etcPrebuiltModuleUpdate struct {
+	// The prefix of the install path defined in local_module_path. The prefix is removed from local_module_path
+	// before setting the 'filename' attribute.
 	prefix string
-	flags  []string
+
+	// There is only one prebuilt module type in makefiles. In Soong, there are multiple versions  of
+	// prebuilts based on local_module_path. By default, it is "prebuilt_etc" if modType is blank. An
+	// example is if the local_module_path contains $(TARGET_OUT)/usr/share, the module type is
+	// considered as prebuilt_usr_share.
+	modType string
+
+	// Additional boolean attributes to be added in the prebuilt module. Each added boolean attribute
+	// has a value of true.
+	flags []string
 }
 
-var localModulePathRewrite = map[string][]filenamePrefixToFlags{
-	"HOST_OUT":                        {{prefix: "/etc"}},
+func (f etcPrebuiltModuleUpdate) update(m *parser.Module, path string) bool {
+	updated := false
+	if path == f.prefix {
+		updated = true
+	} else if trimmedPath := strings.TrimPrefix(path, f.prefix+"/"); trimmedPath != path {
+		m.Properties = append(m.Properties, &parser.Property{
+			Name:  "sub_dir",
+			Value: &parser.String{Value: trimmedPath},
+		})
+		updated = true
+	}
+	if updated {
+		for _, flag := range f.flags {
+			m.Properties = append(m.Properties, &parser.Property{Name: flag, Value: &parser.Bool{Value: true, Token: "true"}})
+		}
+		if f.modType != "" {
+			m.Type = f.modType
+		}
+	}
+	return updated
+}
+
+var localModuleUpdate = map[string][]etcPrebuiltModuleUpdate{
+	"HOST_OUT":                        {{prefix: "/etc", modType: "prebuilt_etc_host"}, {prefix: "/usr/share", modType: "prebuilt_usr_share_host"}},
 	"PRODUCT_OUT":                     {{prefix: "/system/etc"}, {prefix: "/vendor/etc", flags: []string{"proprietary"}}},
-	"TARGET_OUT":                      {{prefix: "/etc"}},
+	"TARGET_OUT":                      {{prefix: "/etc"}, {prefix: "/usr/share", modType: "prebuilt_usr_share"}, {prefix: "/fonts", modType: "prebuilt_font"}},
 	"TARGET_OUT_ETC":                  {{prefix: ""}},
-	"TARGET_OUT_PRODUCT":              {{prefix: "/etc", flags: []string{"product_specific"}}},
+	"TARGET_OUT_PRODUCT":              {{prefix: "/etc", flags: []string{"product_specific"}}, {prefix: "/fonts", modType: "prebuilt_font", flags: []string{"product_specific"}}},
 	"TARGET_OUT_PRODUCT_ETC":          {{prefix: "", flags: []string{"product_specific"}}},
 	"TARGET_OUT_ODM":                  {{prefix: "/etc", flags: []string{"device_specific"}}},
 	"TARGET_OUT_PRODUCT_SERVICES":     {{prefix: "/etc", flags: []string{"product_services_specific"}}},
@@ -497,27 +529,8 @@ func rewriteAndroidmkPrebuiltEtc(f *Fixer) error {
 			continue
 		}
 
-		// The rewriter converts LOCAL_SRC_FILES to `srcs` attribute. Convert
-		// it to 'src' attribute (which is where the file is installed). If the
-		// value 'srcs' is a list, we can convert it only if it contains a single
-		// element.
-		if srcs, ok := mod.GetProperty("srcs"); ok {
-			if srcList, ok := srcs.Value.(*parser.List); ok {
-				removeProperty(mod, "srcs")
-				if len(srcList.Values) == 1 {
-					mod.Properties = append(mod.Properties,
-						&parser.Property{Name: "src", NamePos: srcs.NamePos, ColonPos: srcs.ColonPos, Value: resolveLocalModule(mod, srcList.Values[0])})
-				} else if len(srcList.Values) > 1 {
-					indicateAttributeError(mod, "src", "LOCAL_SRC_FILES should contain at most one item")
-				}
-			} else if _, ok = srcs.Value.(*parser.Variable); ok {
-				removeProperty(mod, "srcs")
-				mod.Properties = append(mod.Properties,
-					&parser.Property{Name: "src", NamePos: srcs.NamePos, ColonPos: srcs.ColonPos, Value: resolveLocalModule(mod, srcs.Value)})
-			} else {
-				renameProperty(mod, "srcs", "src")
-			}
-		}
+		// 'srcs' --> 'src' conversion
+		convertToSingleSource(mod, "src")
 
 		// The rewriter converts LOCAL_MODULE_PATH attribute into a struct attribute
 		// 'local_module_path'. Analyze its contents and create the correct sub_dir:,
@@ -526,36 +539,22 @@ func rewriteAndroidmkPrebuiltEtc(f *Fixer) error {
 		if prop_local_module_path, ok := mod.GetProperty(local_module_path); ok {
 			removeProperty(mod, local_module_path)
 			prefixVariableName := getStringProperty(prop_local_module_path, "var")
-			path := getStringProperty(prop_local_module_path, "fixed")
-			if prefixRewrites, ok := localModulePathRewrite[prefixVariableName]; ok {
-				rewritten := false
-				for _, prefixRewrite := range prefixRewrites {
-					if path == prefixRewrite.prefix {
-						rewritten = true
-					} else if trimmedPath := strings.TrimPrefix(path, prefixRewrite.prefix+"/"); trimmedPath != path {
-						makePrebuiltEtcDestination(mod, trimmedPath)
-						rewritten = true
-					}
-					if rewritten {
-						for _, flag := range prefixRewrite.flags {
-							mod.Properties = append(mod.Properties, &parser.Property{Name: flag, Value: &parser.Bool{Value: true, Token: "true"}})
-						}
-						break
-					}
+			if moduleUpdates, ok := localModuleUpdate[prefixVariableName]; ok {
+				path := getStringProperty(prop_local_module_path, "fixed")
+				updated := false
+				for i := 0; i < len(moduleUpdates) && !updated; i++ {
+					updated = moduleUpdates[i].update(mod, path)
 				}
-				if !rewritten {
+				if !updated {
 					expectedPrefices := ""
 					sep := ""
-					for _, prefixRewrite := range prefixRewrites {
+					for _, moduleUpdate := range moduleUpdates {
 						expectedPrefices += sep
 						sep = ", "
-						expectedPrefices += prefixRewrite.prefix
+						expectedPrefices += moduleUpdate.prefix
 					}
 					return indicateAttributeError(mod, "filename",
 						"LOCAL_MODULE_PATH value under $(%s) should start with %s", prefixVariableName, expectedPrefices)
-				}
-				if prefixVariableName == "HOST_OUT" {
-					mod.Type = "prebuilt_etc_host"
 				}
 			} else {
 				return indicateAttributeError(mod, "filename", "Cannot handle $(%s) for the prebuilt_etc", prefixVariableName)
@@ -587,6 +586,62 @@ func rewriteAndroidTest(f *Fixer) error {
 		}
 	}
 	return nil
+}
+
+func rewriteAndroidAppImport(f *Fixer) error {
+	for _, def := range f.tree.Defs {
+		mod, ok := def.(*parser.Module)
+		if !(ok && mod.Type == "android_app_import") {
+			continue
+		}
+		// 'srcs' --> 'apk' conversion
+		convertToSingleSource(mod, "apk")
+		// Handle special certificate value, "PRESIGNED".
+		if cert, ok := mod.GetProperty("certificate"); ok {
+			if certStr, ok := cert.Value.(*parser.String); ok {
+				if certStr.Value == "PRESIGNED" {
+					removeProperty(mod, "certificate")
+					prop := &parser.Property{
+						Name: "presigned",
+						Value: &parser.Bool{
+							Value: true,
+						},
+					}
+					mod.Properties = append(mod.Properties, prop)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// Converts the default source list property, 'srcs', to a single source property with a given name.
+// "LOCAL_MODULE" reference is also resolved during the conversion process.
+func convertToSingleSource(mod *parser.Module, srcPropertyName string) {
+	if srcs, ok := mod.GetProperty("srcs"); ok {
+		if srcList, ok := srcs.Value.(*parser.List); ok {
+			removeProperty(mod, "srcs")
+			if len(srcList.Values) == 1 {
+				mod.Properties = append(mod.Properties,
+					&parser.Property{
+						Name:     srcPropertyName,
+						NamePos:  srcs.NamePos,
+						ColonPos: srcs.ColonPos,
+						Value:    resolveLocalModule(mod, srcList.Values[0])})
+			} else if len(srcList.Values) > 1 {
+				indicateAttributeError(mod, srcPropertyName, "LOCAL_SRC_FILES should contain at most one item")
+			}
+		} else if _, ok = srcs.Value.(*parser.Variable); ok {
+			removeProperty(mod, "srcs")
+			mod.Properties = append(mod.Properties,
+				&parser.Property{Name: srcPropertyName,
+					NamePos:  srcs.NamePos,
+					ColonPos: srcs.ColonPos,
+					Value:    resolveLocalModule(mod, srcs.Value)})
+		} else {
+			renameProperty(mod, "srcs", "apk")
+		}
+	}
 }
 
 func runPatchListMod(modFunc func(mod *parser.Module, buf []byte, patchlist *parser.PatchList) error) func(*Fixer) error {

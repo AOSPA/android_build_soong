@@ -15,40 +15,50 @@
 package java
 
 import (
-	"android/soong/android"
-	"android/soong/dexpreopt"
 	"path/filepath"
 	"strings"
+
+	"android/soong/android"
+	"android/soong/dexpreopt"
 )
 
 // dexpreoptGlobalConfig returns the global dexpreopt.config.  It is loaded once the first time it is called for any
 // ctx.Config(), and returns the same data for all future calls with the same ctx.Config().  A value can be inserted
 // for tests using setDexpreoptTestGlobalConfig.
 func dexpreoptGlobalConfig(ctx android.PathContext) dexpreopt.GlobalConfig {
+	return dexpreoptGlobalConfigRaw(ctx).global
+}
+
+type globalConfigAndRaw struct {
+	global dexpreopt.GlobalConfig
+	data   []byte
+}
+
+func dexpreoptGlobalConfigRaw(ctx android.PathContext) globalConfigAndRaw {
 	return ctx.Config().Once(dexpreoptGlobalConfigKey, func() interface{} {
 		if f := ctx.Config().DexpreoptGlobalConfig(); f != "" {
 			ctx.AddNinjaFileDeps(f)
-			globalConfig, err := dexpreopt.LoadGlobalConfig(ctx, f)
+			globalConfig, data, err := dexpreopt.LoadGlobalConfig(ctx, f)
 			if err != nil {
 				panic(err)
 			}
-			return globalConfig
+			return globalConfigAndRaw{globalConfig, data}
 		}
 
 		// No global config filename set, see if there is a test config set
 		return ctx.Config().Once(dexpreoptTestGlobalConfigKey, func() interface{} {
 			// Nope, return a config with preopting disabled
-			return dexpreopt.GlobalConfig{
+			return globalConfigAndRaw{dexpreopt.GlobalConfig{
 				DisablePreopt: true,
-			}
+			}, nil}
 		})
-	}).(dexpreopt.GlobalConfig)
+	}).(globalConfigAndRaw)
 }
 
 // setDexpreoptTestGlobalConfig sets a GlobalConfig that future calls to dexpreoptGlobalConfig will return.  It must
 // be called before the first call to dexpreoptGlobalConfig for the config.
 func setDexpreoptTestGlobalConfig(config android.Config, globalConfig dexpreopt.GlobalConfig) {
-	config.Once(dexpreoptTestGlobalConfigKey, func() interface{} { return globalConfig })
+	config.Once(dexpreoptTestGlobalConfigKey, func() interface{} { return globalConfigAndRaw{globalConfig, nil} })
 }
 
 var dexpreoptGlobalConfigKey = android.NewOnceKey("DexpreoptGlobalConfig")
@@ -71,6 +81,23 @@ func systemServerClasspath(ctx android.PathContext) []string {
 }
 
 var systemServerClasspathKey = android.NewOnceKey("systemServerClasspath")
+
+// dexpreoptTargets returns the list of targets that are relevant to dexpreopting, which excludes architectures
+// supported through native bridge.
+func dexpreoptTargets(ctx android.PathContext) []android.Target {
+	var targets []android.Target
+	for i, target := range ctx.Config().Targets[android.Android] {
+		if ctx.Config().SecondArchIsTranslated() && i > 0 {
+			break
+		}
+
+		if target.NativeBridge == android.NativeBridgeDisabled {
+			targets = append(targets, target)
+		}
+	}
+
+	return targets
+}
 
 // defaultBootImageConfig returns the bootImageConfig that will be used to dexpreopt modules.  It is computed once the
 // first time it is called for any ctx.Config(), and returns the same slice for all future calls with the same
@@ -111,8 +138,11 @@ func defaultBootImageConfig(ctx android.PathContext) bootImageConfig {
 		dir := android.PathForOutput(ctx, ctx.Config().DeviceName(), "dex_bootjars")
 		symbolsDir := android.PathForOutput(ctx, ctx.Config().DeviceName(), "dex_bootjars_unstripped")
 		images := make(map[android.ArchType]android.OutputPath)
+		zip := dir.Join(ctx, "boot.zip")
 
-		for _, target := range ctx.Config().Targets[android.Android] {
+		targets := dexpreoptTargets(ctx)
+
+		for _, target := range targets {
 			images[target.Arch.ArchType] = dir.Join(ctx,
 				"system/framework", target.Arch.ArchType.String()).Join(ctx, "boot.art")
 		}
@@ -125,6 +155,8 @@ func defaultBootImageConfig(ctx android.PathContext) bootImageConfig {
 			dir:          dir,
 			symbolsDir:   symbolsDir,
 			images:       images,
+			targets:      targets,
+			zip:          zip,
 		}
 	}).(bootImageConfig)
 }
@@ -166,7 +198,9 @@ func apexBootImageConfig(ctx android.PathContext) bootImageConfig {
 		symbolsDir := android.PathForOutput(ctx, ctx.Config().DeviceName(), "dex_apexjars_unstripped")
 		images := make(map[android.ArchType]android.OutputPath)
 
-		for _, target := range ctx.Config().Targets[android.Android] {
+		targets := dexpreoptTargets(ctx)
+
+		for _, target := range targets {
 			images[target.Arch.ArchType] = dir.Join(ctx,
 				"system/framework", target.Arch.ArchType.String(), "apex.art")
 		}
@@ -178,6 +212,7 @@ func apexBootImageConfig(ctx android.PathContext) bootImageConfig {
 			dexPaths:     bootDexPaths,
 			dir:          dir,
 			symbolsDir:   symbolsDir,
+			targets:      targets,
 			images:       images,
 		}
 	}).(bootImageConfig)

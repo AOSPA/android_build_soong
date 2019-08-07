@@ -15,17 +15,18 @@
 package java
 
 import (
-	"android/soong/android"
-	"android/soong/cc"
-
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/google/blueprint/proptools"
+
+	"android/soong/android"
+	"android/soong/cc"
 )
 
 var (
@@ -714,7 +715,7 @@ func TestCertificates(t *testing.T) {
 				}
 			`,
 			certificateOverride: "",
-			expected:            "build/target/product/security/testkey.x509.pem build/target/product/security/testkey.pk8",
+			expected:            "build/make/target/product/security/testkey.x509.pem build/make/target/product/security/testkey.pk8",
 		},
 		{
 			name: "module certificate property",
@@ -743,7 +744,7 @@ func TestCertificates(t *testing.T) {
 				}
 			`,
 			certificateOverride: "",
-			expected:            "build/target/product/security/expiredkey.x509.pem build/target/product/security/expiredkey.pk8",
+			expected:            "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
 		},
 		{
 			name: "certificate overrides",
@@ -880,7 +881,7 @@ func TestOverrideAndroidApp(t *testing.T) {
 			name: "foo",
 			srcs: ["a.java"],
 			certificate: "expiredkey",
-			overrides: ["baz"],
+			overrides: ["qux"],
 		}
 
 		override_android_app {
@@ -902,6 +903,7 @@ func TestOverrideAndroidApp(t *testing.T) {
 		`)
 
 	expectedVariants := []struct {
+		moduleName  string
 		variantName string
 		apkName     string
 		apkPath     string
@@ -910,24 +912,27 @@ func TestOverrideAndroidApp(t *testing.T) {
 		aaptFlag    string
 	}{
 		{
+			moduleName:  "foo",
 			variantName: "android_common",
 			apkPath:     "/target/product/test_device/system/app/foo/foo.apk",
-			signFlag:    "build/target/product/security/expiredkey.x509.pem build/target/product/security/expiredkey.pk8",
-			overrides:   []string{"baz"},
+			signFlag:    "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
+			overrides:   []string{"qux"},
 			aaptFlag:    "",
 		},
 		{
-			variantName: "bar_android_common",
+			moduleName:  "bar",
+			variantName: "android_common_bar",
 			apkPath:     "/target/product/test_device/system/app/bar/bar.apk",
 			signFlag:    "cert/new_cert.x509.pem cert/new_cert.pk8",
-			overrides:   []string{"baz", "foo"},
+			overrides:   []string{"qux", "foo"},
 			aaptFlag:    "",
 		},
 		{
-			variantName: "baz_android_common",
+			moduleName:  "baz",
+			variantName: "android_common_baz",
 			apkPath:     "/target/product/test_device/system/app/baz/baz.apk",
-			signFlag:    "build/target/product/security/expiredkey.x509.pem build/target/product/security/expiredkey.pk8",
-			overrides:   []string{"baz", "foo"},
+			signFlag:    "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
+			overrides:   []string{"qux", "foo"},
 			aaptFlag:    "--rename-manifest-package org.dandroid.bp",
 		},
 	}
@@ -968,6 +973,270 @@ func TestOverrideAndroidApp(t *testing.T) {
 		if !strings.Contains(aapt2Flags, expected.aaptFlag) {
 			t.Errorf("package renaming flag, %q is missing in aapt2 link flags, %q", expected.aaptFlag, aapt2Flags)
 		}
+	}
+}
+
+func TestOverrideAndroidAppDependency(t *testing.T) {
+	ctx := testJava(t, `
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+		}
+
+		override_android_app {
+			name: "bar",
+			base: "foo",
+			package_name: "org.dandroid.bp",
+		}
+
+		android_test {
+			name: "baz",
+			srcs: ["b.java"],
+			instrumentation_for: "foo",
+		}
+
+		android_test {
+			name: "qux",
+			srcs: ["b.java"],
+			instrumentation_for: "bar",
+		}
+		`)
+
+	// Verify baz, which depends on the overridden module foo, has the correct classpath javac arg.
+	javac := ctx.ModuleForTests("baz", "android_common").Rule("javac")
+	fooTurbine := filepath.Join(buildDir, ".intermediates", "foo", "android_common", "turbine-combined", "foo.jar")
+	if !strings.Contains(javac.Args["classpath"], fooTurbine) {
+		t.Errorf("baz classpath %v does not contain %q", javac.Args["classpath"], fooTurbine)
+	}
+
+	// Verify qux, which depends on the overriding module bar, has the correct classpath javac arg.
+	javac = ctx.ModuleForTests("qux", "android_common").Rule("javac")
+	barTurbine := filepath.Join(buildDir, ".intermediates", "foo", "android_common_bar", "turbine-combined", "foo.jar")
+	if !strings.Contains(javac.Args["classpath"], barTurbine) {
+		t.Errorf("qux classpath %v does not contain %q", javac.Args["classpath"], barTurbine)
+	}
+}
+
+func TestAndroidAppImport(t *testing.T) {
+	ctx := testJava(t, `
+		android_app_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			certificate: "platform",
+			dex_preopt: {
+				enabled: true,
+			},
+		}
+		`)
+
+	variant := ctx.ModuleForTests("foo", "android_common")
+
+	// Check dexpreopt outputs.
+	if variant.MaybeOutput("dexpreopt/oat/arm64/package.vdex").Rule == nil ||
+		variant.MaybeOutput("dexpreopt/oat/arm64/package.odex").Rule == nil {
+		t.Errorf("can't find dexpreopt outputs")
+	}
+
+	// Check cert signing flag.
+	signedApk := variant.Output("signed/foo.apk")
+	signingFlag := signedApk.Args["certificates"]
+	expected := "build/make/target/product/security/platform.x509.pem build/make/target/product/security/platform.pk8"
+	if expected != signingFlag {
+		t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected, signingFlag)
+	}
+}
+
+func TestAndroidAppImport_NoDexPreopt(t *testing.T) {
+	ctx := testJava(t, `
+		android_app_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			certificate: "platform",
+			dex_preopt: {
+				enabled: false,
+			},
+		}
+		`)
+
+	variant := ctx.ModuleForTests("foo", "android_common")
+
+	// Check dexpreopt outputs. They shouldn't exist.
+	if variant.MaybeOutput("dexpreopt/oat/arm64/package.vdex").Rule != nil ||
+		variant.MaybeOutput("dexpreopt/oat/arm64/package.odex").Rule != nil {
+		t.Errorf("dexpreopt shouldn't have run.")
+	}
+}
+
+func TestAndroidAppImport_Presigned(t *testing.T) {
+	ctx := testJava(t, `
+		android_app_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			presigned: true,
+			dex_preopt: {
+				enabled: true,
+			},
+		}
+		`)
+
+	variant := ctx.ModuleForTests("foo", "android_common")
+
+	// Check dexpreopt outputs.
+	if variant.MaybeOutput("dexpreopt/oat/arm64/package.vdex").Rule == nil ||
+		variant.MaybeOutput("dexpreopt/oat/arm64/package.odex").Rule == nil {
+		t.Errorf("can't find dexpreopt outputs")
+	}
+	// Make sure stripping wasn't done.
+	stripRule := variant.Output("dexpreopt/foo.apk")
+	if !strings.HasPrefix(stripRule.RuleParams.Command, "cp -f") {
+		t.Errorf("unexpected, non-skipping strip command: %q", stripRule.RuleParams.Command)
+	}
+
+	// Make sure signing was skipped and aligning was done instead.
+	if variant.MaybeOutput("signed/foo.apk").Rule != nil {
+		t.Errorf("signing rule shouldn't be included.")
+	}
+	if variant.MaybeOutput("zip-aligned/foo.apk").Rule == nil {
+		t.Errorf("can't find aligning rule")
+	}
+}
+
+func TestAndroidAppImport_DpiVariants(t *testing.T) {
+	bp := `
+		android_app_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			dpi_variants: {
+				xhdpi: {
+					apk: "prebuilts/apk/app_xhdpi.apk",
+				},
+				xxhdpi: {
+					apk: "prebuilts/apk/app_xxhdpi.apk",
+				},
+			},
+			certificate: "PRESIGNED",
+			dex_preopt: {
+				enabled: true,
+			},
+		}
+		`
+	testCases := []struct {
+		name                string
+		aaptPreferredConfig *string
+		aaptPrebuiltDPI     []string
+		expected            string
+	}{
+		{
+			name:                "no preferred",
+			aaptPreferredConfig: nil,
+			aaptPrebuiltDPI:     []string{},
+			expected:            "prebuilts/apk/app.apk",
+		},
+		{
+			name:                "AAPTPreferredConfig matches",
+			aaptPreferredConfig: proptools.StringPtr("xhdpi"),
+			aaptPrebuiltDPI:     []string{"xxhdpi", "lhdpi"},
+			expected:            "prebuilts/apk/app_xhdpi.apk",
+		},
+		{
+			name:                "AAPTPrebuiltDPI matches",
+			aaptPreferredConfig: proptools.StringPtr("mdpi"),
+			aaptPrebuiltDPI:     []string{"xxhdpi", "xhdpi"},
+			expected:            "prebuilts/apk/app_xxhdpi.apk",
+		},
+		{
+			name:                "non-first AAPTPrebuiltDPI matches",
+			aaptPreferredConfig: proptools.StringPtr("mdpi"),
+			aaptPrebuiltDPI:     []string{"ldpi", "xhdpi"},
+			expected:            "prebuilts/apk/app_xhdpi.apk",
+		},
+		{
+			name:                "no matches",
+			aaptPreferredConfig: proptools.StringPtr("mdpi"),
+			aaptPrebuiltDPI:     []string{"ldpi", "xxxhdpi"},
+			expected:            "prebuilts/apk/app.apk",
+		},
+	}
+
+	jniRuleRe := regexp.MustCompile("^if \\(zipinfo (\\S+)")
+	for _, test := range testCases {
+		config := testConfig(nil)
+		config.TestProductVariables.AAPTPreferredConfig = test.aaptPreferredConfig
+		config.TestProductVariables.AAPTPrebuiltDPI = test.aaptPrebuiltDPI
+		ctx := testAppContext(config, bp, nil)
+
+		run(t, ctx, config)
+
+		variant := ctx.ModuleForTests("foo", "android_common")
+		jniRuleCommand := variant.Output("jnis-uncompressed/foo.apk").RuleParams.Command
+		matches := jniRuleRe.FindStringSubmatch(jniRuleCommand)
+		if len(matches) != 2 {
+			t.Errorf("failed to extract the src apk path from %q", jniRuleCommand)
+		}
+		if test.expected != matches[1] {
+			t.Errorf("wrong src apk, expected: %q got: %q", test.expected, matches[1])
+		}
+	}
+}
+
+func TestStl(t *testing.T) {
+	ctx := testJava(t, cc.GatherRequiredDepsForTest(android.Android)+`
+		cc_library {
+			name: "libjni",
+		}
+
+		android_test {
+			name: "stl",
+			jni_libs: ["libjni"],
+			compile_multilib: "both",
+			sdk_version: "current",
+			stl: "c++_shared",
+		}
+
+		android_test {
+			name: "system",
+			jni_libs: ["libjni"],
+			compile_multilib: "both",
+			sdk_version: "current",
+		}
+		`)
+
+	testCases := []struct {
+		name string
+		jnis []string
+	}{
+		{"stl",
+			[]string{
+				"libjni.so",
+				"libc++.so",
+			},
+		},
+		{"system",
+			[]string{
+				"libjni.so",
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			app := ctx.ModuleForTests(test.name, "android_common")
+			jniLibZip := app.Output("jnilibs.zip")
+			var jnis []string
+			args := strings.Fields(jniLibZip.Args["jarArgs"])
+			for i := 0; i < len(args); i++ {
+				if args[i] == "-f" {
+					jnis = append(jnis, args[i+1])
+					i += 1
+				}
+			}
+			jnisJoined := strings.Join(jnis, " ")
+			for _, jni := range test.jnis {
+				if !strings.Contains(jnisJoined, jni) {
+					t.Errorf("missing jni %q in %q", jni, jnis)
+				}
+			}
+		})
 	}
 }
 
@@ -1148,3 +1417,4 @@ func TestUncompressDex(t *testing.T) {
 		})
 	}
 }
+

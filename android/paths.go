@@ -967,7 +967,7 @@ func pathForModule(ctx ModuleContext) OutputPath {
 // PathForVndkRefAbiDump returns an OptionalPath representing the path of the
 // reference abi dump for the given module. This is not guaranteed to be valid.
 func PathForVndkRefAbiDump(ctx ModuleContext, version, fileName string,
-	isLlndk, isGzip bool) OptionalPath {
+	isLlndkOrNdk, isVndk, isGzip bool) OptionalPath {
 
 	arches := ctx.DeviceConfig().Arches()
 	if len(arches) == 0 {
@@ -980,10 +980,12 @@ func PathForVndkRefAbiDump(ctx ModuleContext, version, fileName string,
 	}
 
 	var dirName string
-	if isLlndk {
+	if isLlndkOrNdk {
 		dirName = "ndk"
-	} else {
+	} else if isVndk {
 		dirName = "vndk"
+	} else {
+		dirName = "platform" // opt-in libs
 	}
 
 	binderBitness := ctx.DeviceConfig().BinderBitness()
@@ -1267,16 +1269,23 @@ func Rel(ctx PathContext, basePath string, targetPath string) string {
 // MaybeRel performs the same function as filepath.Rel, but reports errors to a PathContext, and returns false if
 // targetPath is not inside basePath.
 func MaybeRel(ctx PathContext, basePath string, targetPath string) (string, bool) {
+	rel, isRel, err := maybeRelErr(basePath, targetPath)
+	if err != nil {
+		reportPathError(ctx, err)
+	}
+	return rel, isRel
+}
+
+func maybeRelErr(basePath string, targetPath string) (string, bool, error) {
 	// filepath.Rel returns an error if one path is absolute and the other is not, handle that case first.
 	if filepath.IsAbs(basePath) != filepath.IsAbs(targetPath) {
-		return "", false
+		return "", false, nil
 	}
 	rel, err := filepath.Rel(basePath, targetPath)
 	if err != nil {
-		reportPathError(ctx, err)
-		return "", false
+		return "", false, err
 	} else if rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "/") {
-		return "", false
+		return "", false, nil
 	}
-	return rel, true
+	return rel, true, nil
 }
