@@ -1234,6 +1234,35 @@ func TestAndroidAppImport_Presigned(t *testing.T) {
 	}
 }
 
+func TestAndroidAppImport_DefaultDevCert(t *testing.T) {
+	ctx := testJava(t, `
+		android_app_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			default_dev_cert: true,
+			dex_preopt: {
+				enabled: true,
+			},
+		}
+		`)
+
+	variant := ctx.ModuleForTests("foo", "android_common")
+
+	// Check dexpreopt outputs.
+	if variant.MaybeOutput("dexpreopt/oat/arm64/package.vdex").Rule == nil ||
+		variant.MaybeOutput("dexpreopt/oat/arm64/package.odex").Rule == nil {
+		t.Errorf("can't find dexpreopt outputs")
+	}
+
+	// Check cert signing flag.
+	signedApk := variant.Output("signed/foo.apk")
+	signingFlag := signedApk.Args["certificates"]
+	expected := "build/make/target/product/security/testkey.x509.pem build/make/target/product/security/testkey.pk8"
+	if expected != signingFlag {
+		t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected, signingFlag)
+	}
+}
+
 func TestAndroidAppImport_DpiVariants(t *testing.T) {
 	bp := `
 		android_app_import {
@@ -1247,7 +1276,7 @@ func TestAndroidAppImport_DpiVariants(t *testing.T) {
 					apk: "prebuilts/apk/app_xxhdpi.apk",
 				},
 			},
-			certificate: "PRESIGNED",
+			presigned: true,
 			dex_preopt: {
 				enabled: true,
 			},
@@ -1378,7 +1407,7 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 							apk: "prebuilts/apk/app_arm64.apk",
 						},
 					},
-					certificate: "PRESIGNED",
+					presigned: true,
 					dex_preopt: {
 						enabled: true,
 					},
@@ -1397,7 +1426,7 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 							apk: "prebuilts/apk/app_arm.apk",
 						},
 					},
-					certificate: "PRESIGNED",
+					presigned: true,
 					dex_preopt: {
 						enabled: true,
 					},
