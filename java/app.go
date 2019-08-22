@@ -18,6 +18,7 @@ package java
 
 import (
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -29,12 +30,32 @@ import (
 	"android/soong/tradefed"
 )
 
+var supportedDpis = [...]string{"Ldpi", "Mdpi", "Hdpi", "Xhdpi", "Xxhdpi", "Xxxhdpi"}
+var dpiVariantsStruct reflect.Type
+
 func init() {
 	android.RegisterModuleType("android_app", AndroidAppFactory)
 	android.RegisterModuleType("android_test", AndroidTestFactory)
 	android.RegisterModuleType("android_test_helper_app", AndroidTestHelperAppFactory)
 	android.RegisterModuleType("android_app_certificate", AndroidAppCertificateFactory)
 	android.RegisterModuleType("override_android_app", OverrideAndroidAppModuleFactory)
+	android.RegisterModuleType("android_app_import", AndroidAppImportFactory)
+
+	// Dynamically construct a struct for the dpi_variants property in android_app_import.
+	perDpiStruct := reflect.StructOf([]reflect.StructField{
+		{
+			Name: "Apk",
+			Type: reflect.TypeOf((*string)(nil)),
+		},
+	})
+	dpiVariantsFields := make([]reflect.StructField, len(supportedDpis))
+	for i, dpi := range supportedDpis {
+		dpiVariantsFields[i] = reflect.StructField{
+			Name: string(dpi),
+			Type: perDpiStruct,
+		}
+	}
+	dpiVariantsStruct = reflect.StructOf(dpiVariantsFields)
 }
 
 // AndroidManifest.xml merging
@@ -65,6 +86,9 @@ type appProperties struct {
 
 	// list of native libraries that will be provided in or alongside the resulting jar
 	Jni_libs []string `android:"arch_variant"`
+
+	// STL library to use for JNI libraries.
+	Stl *string `android:"arch_variant"`
 
 	// Store native libraries uncompressed in the APK and set the android:extractNativeLibs="false" manifest
 	// flag so that they are used from inside the APK at runtime.  Defaults to true for android_test modules unless
@@ -134,10 +158,15 @@ type Certificate struct {
 func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 	a.Module.deps(ctx)
 
+	if String(a.appProperties.Stl) == "c++_shared" && a.sdkVersion() == "" {
+		ctx.PropertyErrorf("stl", "sdk_version must be set in order to use c++_shared")
+	}
+
 	if !Bool(a.properties.No_framework_libs) && !Bool(a.properties.No_standard_libs) {
 		a.aapt.deps(ctx, sdkContext(a))
 	}
 
+	embedJni := a.shouldEmbedJnis(ctx)
 	for _, jniTarget := range ctx.MultiTargets() {
 		variation := []blueprint.Variation{
 			{Mutator: "arch", Variation: jniTarget.String()},
@@ -147,8 +176,15 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 			target: jniTarget,
 		}
 		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
+		if String(a.appProperties.Stl) == "c++_shared" {
+			if embedJni {
+				ctx.AddFarVariationDependencies(variation, tag, "libc++")
+			}
+		}
 	}
+}
 
+func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutatorContext) {
 	cert := android.SrcIsModule(a.getCertString(ctx))
 	if cert != "" {
 		ctx.AddDependency(ctx.Module(), certificateTag, cert)
@@ -166,14 +202,14 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	a.aapt.uncompressedJNI = a.shouldUncompressJNI(ctx)
+	a.aapt.useEmbeddedNativeLibs = a.useEmbeddedNativeLibs(ctx)
 	a.aapt.useEmbeddedDex = Bool(a.appProperties.Use_embedded_dex)
 	a.generateAndroidBuildActions(ctx)
 }
 
-// shouldUncompressJNI returns true if the native libraries should be stored in the APK uncompressed and the
+// Returns true if the native libraries should be stored in the APK uncompressed and the
 // extractNativeLibs application flag should be set to false in the manifest.
-func (a *AndroidApp) shouldUncompressJNI(ctx android.ModuleContext) bool {
+func (a *AndroidApp) useEmbeddedNativeLibs(ctx android.ModuleContext) bool {
 	minSdkVersion, err := sdkVersionToNumber(ctx, a.minSdkVersion())
 	if err != nil {
 		ctx.PropertyErrorf("min_sdk_version", "invalid value %q: %s", a.minSdkVersion(), err)
@@ -188,11 +224,9 @@ func (a *AndroidApp) shouldUncompressDex(ctx android.ModuleContext) bool {
 		return true
 	}
 
-	// Uncompress dex in APKs of privileged apps, and modules used by privileged apps
-	// (even for unbundled builds, they may be preinstalled as prebuilts).
-	if ctx.Config().UncompressPrivAppDex() &&
-		(Bool(a.appProperties.Privileged) ||
-			inList(ctx.ModuleName(), ctx.Config().ModulesLoadedByPrivilegedModules())) {
+	// Uncompress dex in APKs of privileged apps (even for unbundled builds, they may
+	// be preinstalled as prebuilts).
+	if ctx.Config().UncompressPrivAppDex() && Bool(a.appProperties.Privileged) {
 		return true
 	}
 
@@ -200,12 +234,12 @@ func (a *AndroidApp) shouldUncompressDex(ctx android.ModuleContext) bool {
 		return false
 	}
 
-	// Uncompress if the dex files is preopted on /system.
-	if !a.dexpreopter.dexpreoptDisabled(ctx) && (ctx.Host() || !odexOnSystemOther(ctx, a.dexpreopter.installPath)) {
-		return true
-	}
+	return shouldUncompressDex(ctx, &a.dexpreopter)
+}
 
-	return false
+func (a *AndroidApp) shouldEmbedJnis(ctx android.BaseModuleContext) bool {
+	return ctx.Config().UnbundledBuild() || Bool(a.appProperties.Use_embedded_native_libs) ||
+		a.appProperties.AlwaysPackageNativeLibs
 }
 
 func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
@@ -296,11 +330,9 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) android.Path {
 func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, ctx android.ModuleContext) android.WritablePath {
 	var jniJarFile android.WritablePath
 	if len(jniLibs) > 0 {
-		embedJni := ctx.Config().UnbundledBuild() || Bool(a.appProperties.Use_embedded_native_libs) ||
-			a.appProperties.AlwaysPackageNativeLibs
-		if embedJni {
+		if a.shouldEmbedJnis(ctx) {
 			jniJarFile = android.PathForModuleOut(ctx, "jnilibs.zip")
-			TransformJniLibsToJar(ctx, jniJarFile, jniLibs, a.shouldUncompressJNI(ctx))
+			TransformJniLibsToJar(ctx, jniJarFile, jniLibs, a.useEmbeddedNativeLibs(ctx))
 		} else {
 			a.installJniLibs = jniLibs
 		}
@@ -308,37 +340,38 @@ func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, ctx android.ModuleContext
 	return jniJarFile
 }
 
-func (a *AndroidApp) certificateBuildActions(certificateDeps []Certificate, ctx android.ModuleContext) []Certificate {
-	cert := a.getCertString(ctx)
-	certModule := android.SrcIsModule(cert)
-	if certModule != "" {
-		a.certificate = certificateDeps[0]
-		certificateDeps = certificateDeps[1:]
-	} else if cert != "" {
-		defaultDir := ctx.Config().DefaultAppCertificateDir(ctx)
-		a.certificate = Certificate{
-			defaultDir.Join(ctx, cert+".x509.pem"),
-			defaultDir.Join(ctx, cert+".pk8"),
+// Reads and prepends a main cert from the default cert dir if it hasn't been set already, i.e. it
+// isn't a cert module reference. Also checks and enforces system cert restriction if applicable.
+func processMainCert(m android.ModuleBase, certPropValue string, certificates []Certificate, ctx android.ModuleContext) []Certificate {
+	if android.SrcIsModule(certPropValue) == "" {
+		var mainCert Certificate
+		if certPropValue != "" {
+			defaultDir := ctx.Config().DefaultAppCertificateDir(ctx)
+			mainCert = Certificate{
+				defaultDir.Join(ctx, certPropValue+".x509.pem"),
+				defaultDir.Join(ctx, certPropValue+".pk8"),
+			}
+		} else {
+			pem, key := ctx.Config().DefaultAppCertificate(ctx)
+			mainCert = Certificate{pem, key}
 		}
-	} else {
-		pem, key := ctx.Config().DefaultAppCertificate(ctx)
-		a.certificate = Certificate{pem, key}
+		certificates = append([]Certificate{mainCert}, certificates...)
 	}
 
-	if !a.Module.Platform() {
-		certPath := a.certificate.Pem.String()
+	if !m.Platform() {
+		certPath := certificates[0].Pem.String()
 		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
 		if strings.HasPrefix(certPath, systemCertPath) {
 			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
 			whitelist := ctx.Config().EnforceSystemCertificateWhitelist()
 
-			if enforceSystemCert && !inList(a.Module.Name(), whitelist) {
+			if enforceSystemCert && !inList(m.Name(), whitelist) {
 				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
 			}
 		}
 	}
 
-	return append([]Certificate{a.certificate}, certificateDeps...)
+	return certificates
 }
 
 func (a *AndroidApp) noticeBuildActions(ctx android.ModuleContext, installDir android.OutputPath) android.OptionalPath {
@@ -416,25 +449,26 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	dexJarFile := a.dexBuildActions(ctx)
 
-	jniLibs, certificateDeps := a.collectAppDeps(ctx)
+	jniLibs, certificateDeps := collectAppDeps(ctx)
 	jniJarFile := a.jniBuildActions(jniLibs, ctx)
 
 	if ctx.Failed() {
 		return
 	}
 
-	certificates := a.certificateBuildActions(certificateDeps, ctx)
+	certificates := processMainCert(a.ModuleBase, a.getCertString(ctx), certificateDeps, ctx)
+	a.certificate = certificates[0]
 
 	// Build a final signed app package.
 	// TODO(jungjw): Consider changing this to installApkName.
 	packageFile := android.PathForModuleOut(ctx, ctx.ModuleName()+".apk")
-	CreateAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates)
+	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates)
 	a.outputFile = packageFile
 
 	for _, split := range a.aapt.splits {
 		// Sign the split APKs
 		packageFile := android.PathForModuleOut(ctx, ctx.ModuleName()+"_"+split.suffix+".apk")
-		CreateAppPackage(ctx, packageFile, split.path, nil, nil, certificates)
+		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates)
 		a.extraOutputFiles = append(a.extraOutputFiles, packageFile)
 	}
 
@@ -450,7 +484,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 }
 
-func (a *AndroidApp) collectAppDeps(ctx android.ModuleContext) ([]jniLib, []Certificate) {
+func collectAppDeps(ctx android.ModuleContext) ([]jniLib, []Certificate) {
 	var jniLibs []jniLib
 	var certificates []Certificate
 
@@ -472,7 +506,6 @@ func (a *AndroidApp) collectAppDeps(ctx android.ModuleContext) ([]jniLib, []Cert
 				}
 			} else {
 				ctx.ModuleErrorf("jni_libs dependency %q must be a cc library", otherName)
-
 			}
 		} else if tag == certificateTag {
 			if dep, ok := module.(*AndroidAppCertificate); ok {
@@ -547,6 +580,8 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			a.additionalAaptFlags = append(a.additionalAaptFlags, "--rename-instrumentation-target-package "+manifestPackageName)
 		}
 	}
+	a.aapt.useEmbeddedNativeLibs = a.useEmbeddedNativeLibs(ctx)
+	a.aapt.useEmbeddedDex = Bool(a.appProperties.Use_embedded_dex)
 	a.generateAndroidBuildActions(ctx)
 
 	a.testConfig = tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config, a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites)
@@ -676,7 +711,225 @@ func OverrideAndroidAppModuleFactory() android.Module {
 	m := &OverrideAndroidApp{}
 	m.AddProperties(&overridableAppProperties{})
 
-	android.InitAndroidModule(m)
+	android.InitAndroidMultiTargetsArchModule(m, android.DeviceSupported, android.MultilibCommon)
 	android.InitOverrideModule(m)
 	return m
+}
+
+type AndroidAppImport struct {
+	android.ModuleBase
+	android.DefaultableModuleBase
+	prebuilt android.Prebuilt
+
+	properties AndroidAppImportProperties
+
+	outputFile  android.Path
+	certificate *Certificate
+
+	dexpreopter
+}
+
+type AndroidAppImportProperties struct {
+	// A prebuilt apk to import
+	Apk string
+
+	// Per-DPI settings. This property makes it possible to specify a different source apk path for
+	// each DPI.
+	//
+	// Example:
+	//
+	//     android_app_import {
+	//         name: "example_import",
+	//         apk: "prebuilts/example.apk",
+	//         dpi_variants: {
+	//             mdpi: {
+	//                 apk: "prebuilts/example_mdpi.apk",
+	//             },
+	//             xhdpi: {
+	//                 apk: "prebuilts/example_xhdpi.apk",
+	//             },
+	//         },
+	//         certificate: "PRESIGNED",
+	//     }
+	Dpi_variants interface{}
+
+	// The name of a certificate in the default certificate directory, blank to use the default
+	// product certificate, or an android_app_certificate module name in the form ":module".
+	Certificate *string
+
+	// Set this flag to true if the prebuilt apk is already signed. The certificate property must not
+	// be set for presigned modules.
+	Presigned *bool
+
+	// Specifies that this app should be installed to the priv-app directory,
+	// where the system will grant it additional privileges not available to
+	// normal apps.
+	Privileged *bool
+
+	// Names of modules to be overridden. Listed modules can only be other binaries
+	// (in Make or Soong).
+	// This does not completely prevent installation of the overridden binaries, but if both
+	// binaries would be installed by default (in PRODUCT_PACKAGES) the other binary will be removed
+	// from PRODUCT_PACKAGES.
+	Overrides []string
+}
+
+func getApkPathForDpi(dpiVariantsValue reflect.Value, dpi string) string {
+	dpiField := dpiVariantsValue.FieldByName(proptools.FieldNameForProperty(dpi))
+	if !dpiField.IsValid() {
+		return ""
+	}
+	apkValue := dpiField.FieldByName("Apk").Elem()
+	if apkValue.IsValid() {
+		return apkValue.String()
+	}
+	return ""
+}
+
+// Chooses a source APK path to use based on the module's per-DPI settings and the product config.
+func (a *AndroidAppImport) getSrcApkPath(ctx android.ModuleContext) string {
+	config := ctx.Config()
+	dpiVariantsValue := reflect.ValueOf(a.properties.Dpi_variants).Elem()
+	if !dpiVariantsValue.IsValid() {
+		return a.properties.Apk
+	}
+	// Match PRODUCT_AAPT_PREF_CONFIG first and then PRODUCT_AAPT_PREBUILT_DPI.
+	if config.ProductAAPTPreferredConfig() != "" {
+		if apk := getApkPathForDpi(dpiVariantsValue, config.ProductAAPTPreferredConfig()); apk != "" {
+			return apk
+		}
+	}
+	for _, dpi := range config.ProductAAPTPrebuiltDPI() {
+		if apk := getApkPathForDpi(dpiVariantsValue, dpi); apk != "" {
+			return apk
+		}
+	}
+
+	// No match. Use the generic one.
+	return a.properties.Apk
+}
+
+func (a *AndroidAppImport) DepsMutator(ctx android.BottomUpMutatorContext) {
+	cert := android.SrcIsModule(String(a.properties.Certificate))
+	if cert != "" {
+		ctx.AddDependency(ctx.Module(), certificateTag, cert)
+	}
+}
+
+func (a *AndroidAppImport) uncompressEmbeddedJniLibs(
+	ctx android.ModuleContext, inputPath android.Path, outputPath android.OutputPath) {
+	rule := android.NewRuleBuilder()
+	rule.Command().
+		Textf(`if (zipinfo %s 'lib/*.so' 2>/dev/null | grep -v ' stor ' >/dev/null) ; then`, inputPath).
+		Tool(ctx.Config().HostToolPath(ctx, "zip2zip")).
+		FlagWithInput("-i ", inputPath).
+		FlagWithOutput("-o ", outputPath).
+		FlagWithArg("-0 ", "'lib/**/*.so'").
+		Textf(`; else cp -f %s %s; fi`, inputPath, outputPath)
+	rule.Build(pctx, ctx, "uncompress-embedded-jni-libs", "Uncompress embedded JIN libs")
+}
+
+// Returns whether this module should have the dex file stored uncompressed in the APK.
+func (a *AndroidAppImport) shouldUncompressDex(ctx android.ModuleContext) bool {
+	if ctx.Config().UnbundledBuild() {
+		return false
+	}
+
+	// Uncompress dex in APKs of privileged apps
+	if ctx.Config().UncompressPrivAppDex() && Bool(a.properties.Privileged) {
+		return true
+	}
+
+	return shouldUncompressDex(ctx, &a.dexpreopter)
+}
+
+func (a *AndroidAppImport) uncompressDex(
+	ctx android.ModuleContext, inputPath android.Path, outputPath android.OutputPath) {
+	rule := android.NewRuleBuilder()
+	rule.Command().
+		Textf(`if (zipinfo %s '*.dex' 2>/dev/null | grep -v ' stor ' >/dev/null) ; then`, inputPath).
+		Tool(ctx.Config().HostToolPath(ctx, "zip2zip")).
+		FlagWithInput("-i ", inputPath).
+		FlagWithOutput("-o ", outputPath).
+		FlagWithArg("-0 ", "'classes*.dex'").
+		Textf(`; else cp -f %s %s; fi`, inputPath, outputPath)
+	rule.Build(pctx, ctx, "uncompress-dex", "Uncompress dex files")
+}
+
+func (a *AndroidAppImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if String(a.properties.Certificate) == "" && !Bool(a.properties.Presigned) {
+		ctx.PropertyErrorf("certificate", "No certificate specified for prebuilt")
+	}
+	if String(a.properties.Certificate) != "" && Bool(a.properties.Presigned) {
+		ctx.PropertyErrorf("certificate", "Certificate can't be specified for presigned modules")
+	}
+
+	_, certificates := collectAppDeps(ctx)
+
+	// TODO: LOCAL_EXTRACT_APK/LOCAL_EXTRACT_DPI_APK
+	// TODO: LOCAL_PACKAGE_SPLITS
+
+	srcApk := android.PathForModuleSrc(ctx, a.getSrcApkPath(ctx))
+
+	// TODO: Install or embed JNI libraries
+
+	// Uncompress JNI libraries in the apk
+	jnisUncompressed := android.PathForModuleOut(ctx, "jnis-uncompressed", ctx.ModuleName()+".apk")
+	a.uncompressEmbeddedJniLibs(ctx, srcApk, jnisUncompressed.OutputPath)
+
+	installDir := android.PathForModuleInstall(ctx, "app", a.BaseModuleName())
+	a.dexpreopter.installPath = installDir.Join(ctx, a.BaseModuleName()+".apk")
+	a.dexpreopter.isInstallable = true
+	a.dexpreopter.isPresignedPrebuilt = Bool(a.properties.Presigned)
+	a.dexpreopter.uncompressedDex = a.shouldUncompressDex(ctx)
+	dexOutput := a.dexpreopter.dexpreopt(ctx, jnisUncompressed)
+	if a.dexpreopter.uncompressedDex {
+		dexUncompressed := android.PathForModuleOut(ctx, "dex-uncompressed", ctx.ModuleName()+".apk")
+		a.uncompressDex(ctx, dexOutput, dexUncompressed.OutputPath)
+		dexOutput = dexUncompressed
+	}
+
+	// Sign or align the package
+	// TODO: Handle EXTERNAL
+	if !Bool(a.properties.Presigned) {
+		certificates = processMainCert(a.ModuleBase, *a.properties.Certificate, certificates, ctx)
+		if len(certificates) != 1 {
+			ctx.ModuleErrorf("Unexpected number of certificates were extracted: %q", certificates)
+		}
+		a.certificate = &certificates[0]
+		signed := android.PathForModuleOut(ctx, "signed", ctx.ModuleName()+".apk")
+		SignAppPackage(ctx, signed, dexOutput, certificates)
+		a.outputFile = signed
+	} else {
+		alignedApk := android.PathForModuleOut(ctx, "zip-aligned", ctx.ModuleName()+".apk")
+		TransformZipAlign(ctx, alignedApk, dexOutput)
+		a.outputFile = alignedApk
+	}
+
+	// TODO: Optionally compress the output apk.
+
+	ctx.InstallFile(installDir, a.BaseModuleName()+".apk", a.outputFile)
+
+	// TODO: androidmk converter jni libs
+}
+
+func (a *AndroidAppImport) Prebuilt() *android.Prebuilt {
+	return &a.prebuilt
+}
+
+func (a *AndroidAppImport) Name() string {
+	return a.prebuilt.Name(a.ModuleBase.Name())
+}
+
+// android_app_import imports a prebuilt apk with additional processing specified in the module.
+func AndroidAppImportFactory() android.Module {
+	module := &AndroidAppImport{}
+	module.properties.Dpi_variants = reflect.New(dpiVariantsStruct).Interface()
+	module.AddProperties(&module.properties)
+	module.AddProperties(&module.dexpreoptProperties)
+
+	InitJavaModule(module, android.DeviceSupported)
+	android.InitSingleSourcePrebuiltModule(module, &module.properties.Apk)
+
+	return module
 }

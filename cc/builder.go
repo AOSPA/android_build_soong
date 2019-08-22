@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/pathtools"
 
 	"android/soong/android"
 	"android/soong/cc/config"
@@ -163,8 +164,8 @@ var (
 
 	clangTidy = pctx.AndroidStaticRule("clangTidy",
 		blueprint.RuleParams{
-			Command:     "rm -f $out && CLANG_TIDY=${config.ClangBin}/clang-tidy ${config.ClangTidyShellPath} $tidyFlags $in -- $cFlags && touch $out",
-			CommandDeps: []string{"${config.ClangBin}/clang-tidy", "${config.ClangTidyShellPath}"},
+			Command:     "rm -f $out && ${config.ClangBin}/clang-tidy $tidyFlags $in -- $cFlags && touch $out",
+			CommandDeps: []string{"${config.ClangBin}/clang-tidy"},
 		},
 		"cFlags", "tidyFlags")
 
@@ -252,7 +253,6 @@ type builderFlags struct {
 	cppFlags        string
 	ldFlags         string
 	libFlags        string
-	yaccFlags       string
 	tidyFlags       string
 	sAbiFlags       string
 	yasmFlags       string
@@ -268,15 +268,18 @@ type builderFlags struct {
 
 	groupStaticLibs bool
 
-	stripKeepSymbols       bool
-	stripKeepSymbolsList   string
-	stripKeepMiniDebugInfo bool
-	stripAddGnuDebuglink   bool
-	stripUseGnuStrip       bool
+	stripKeepSymbols              bool
+	stripKeepSymbolsList          string
+	stripKeepSymbolsAndDebugFrame bool
+	stripKeepMiniDebugInfo        bool
+	stripAddGnuDebuglink          bool
+	stripUseGnuStrip              bool
 
 	proto            android.ProtoFlags
 	protoC           bool
 	protoOptionsFile bool
+
+	yacc *YaccProperties
 }
 
 type Objects struct {
@@ -616,7 +619,7 @@ func transformDarwinObjToStaticLib(ctx android.ModuleContext, objFiles android.P
 // and shared libraries, to a shared library (.so) or dynamic executable
 func TransformObjToDynamicBinary(ctx android.ModuleContext,
 	objFiles, sharedLibs, staticLibs, lateStaticLibs, wholeStaticLibs, deps android.Paths,
-	crtBegin, crtEnd android.OptionalPath, groupLate bool, flags builderFlags, outputFile android.WritablePath) {
+	crtBegin, crtEnd android.OptionalPath, groupLate bool, flags builderFlags, outputFile android.WritablePath, implicitOutputs android.WritablePaths) {
 
 	var ldCmd string
 	var extraFlags string
@@ -660,7 +663,11 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 	}
 
 	for _, lib := range sharedLibs {
-		libFlagsList = append(libFlagsList, lib.String())
+		libFile := lib.String()
+		if ctx.Windows() {
+			libFile = pathtools.ReplaceExtension(libFile, "lib")
+		}
+		libFlagsList = append(libFlagsList, libFile)
 	}
 
 	deps = append(deps, staticLibs...)
@@ -671,11 +678,12 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 	}
 
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        ld,
-		Description: "link " + outputFile.Base(),
-		Output:      outputFile,
-		Inputs:      objFiles,
-		Implicits:   deps,
+		Rule:            ld,
+		Description:     "link " + outputFile.Base(),
+		Output:          outputFile,
+		ImplicitOutputs: implicitOutputs,
+		Inputs:          objFiles,
+		Implicits:       deps,
 		Args: map[string]string{
 			"ldCmd":    ldCmd,
 			"crtBegin": crtBegin.String(),
@@ -737,7 +745,7 @@ func UnzipRefDump(ctx android.ModuleContext, zippedRefDump android.Path, baseNam
 }
 
 func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceDump android.Path,
-	baseName, exportedHeaderFlags string, isLlndk, isVndkExt bool) android.OptionalPath {
+	baseName, exportedHeaderFlags string, isLlndk, isNdk, isVndkExt bool) android.OptionalPath {
 
 	outputFile := android.PathForModuleOut(ctx, baseName+".abidiff")
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
@@ -747,9 +755,14 @@ func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 	if exportedHeaderFlags == "" {
 		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-advice-only")
 	}
-	if isLlndk {
-		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-consider-opaque-types-different")
+	if isLlndk || isNdk {
 		createReferenceDumpFlags = "--llndk"
+		if isLlndk {
+			// TODO(b/130324828): "-consider-opaque-types-different" should apply to
+			// both LLNDK and NDK shared libs. However, a known issue in header-abi-diff
+			// breaks libaaudio. Remove the if-guard after the issue is fixed.
+			localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-consider-opaque-types-different")
+		}
 	}
 	if isVndkExt {
 		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-allow-extensions")
@@ -873,6 +886,9 @@ func TransformStrip(ctx android.ModuleContext, inputFile android.Path,
 	}
 	if flags.stripKeepSymbolsList != "" {
 		args += " -k" + flags.stripKeepSymbolsList
+	}
+	if flags.stripKeepSymbolsAndDebugFrame {
+		args += " --keep-symbols-and-debug-frame"
 	}
 	if flags.stripUseGnuStrip {
 		args += " --use-gnu-strip"

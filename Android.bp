@@ -37,6 +37,7 @@ bootstrap_go_package {
         "blueprint-bootstrap",
         "soong",
         "soong-env",
+        "soong-shared",
     ],
     srcs: [
         "android/androidmk.go",
@@ -70,6 +71,7 @@ bootstrap_go_package {
         "android/testing.go",
         "android/util.go",
         "android/variable.go",
+        "android/visibility.go",
         "android/vts_config.go",
         "android/writedocs.go",
 
@@ -90,6 +92,7 @@ bootstrap_go_package {
         "android/rule_builder_test.go",
         "android/util_test.go",
         "android/variable_test.go",
+        "android/visibility_test.go",
         "android/vts_config_test.go",
     ],
 }
@@ -275,6 +278,7 @@ bootstrap_go_package {
         "java/plugin.go",
         "java/prebuilt_apis.go",
         "java/proto.go",
+        "java/robolectric.go",
         "java/sdk.go",
         "java/sdk_library.go",
         "java/support_libraries.go",
@@ -442,6 +446,7 @@ toolchain_library {
     defaults: ["linux_bionic_supported"],
     vendor_available: true,
     recovery_available: true,
+    native_bridge_supported: true,
 
     arch: {
         arm: {
@@ -464,6 +469,7 @@ toolchain_library {
     defaults: ["linux_bionic_supported"],
     vendor_available: true,
     recovery_available: true,
+    native_bridge_supported: true,
 
     arch: {
         arm: {
@@ -486,6 +492,7 @@ toolchain_library {
     defaults: ["linux_bionic_supported"],
     vendor_available: true,
     recovery_available: true,
+    native_bridge_supported: true,
 
     arch: {
         arm: {

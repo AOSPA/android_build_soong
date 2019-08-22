@@ -123,13 +123,16 @@ func init() {
 			"LOCAL_SYSTEM_SHARED_LIBRARIES":       "system_shared_libs",
 			"LOCAL_ASFLAGS":                       "asflags",
 			"LOCAL_CLANG_ASFLAGS":                 "clang_asflags",
+			"LOCAL_COMPATIBILITY_SUPPORT_FILES":   "data",
 			"LOCAL_CONLYFLAGS":                    "conlyflags",
 			"LOCAL_CPPFLAGS":                      "cppflags",
 			"LOCAL_REQUIRED_MODULES":              "required",
+			"LOCAL_HOST_REQUIRED_MODULES":         "host_required",
+			"LOCAL_TARGET_REQUIRED_MODULES":       "target_required",
 			"LOCAL_OVERRIDES_MODULES":             "overrides",
 			"LOCAL_LDLIBS":                        "host_ldlibs",
 			"LOCAL_CLANG_CFLAGS":                  "clang_cflags",
-			"LOCAL_YACCFLAGS":                     "yaccflags",
+			"LOCAL_YACCFLAGS":                     "yacc.flags",
 			"LOCAL_SANITIZE_RECOVER":              "sanitize.recover",
 			"LOCAL_LOGTAGS_FILES":                 "logtags",
 			"LOCAL_EXPORT_HEADER_LIBRARY_HEADERS": "export_header_lib_headers",
@@ -144,6 +147,7 @@ func init() {
 			"LOCAL_RENDERSCRIPT_FLAGS":    "renderscript.flags",
 
 			"LOCAL_JAVA_RESOURCE_DIRS":    "java_resource_dirs",
+			"LOCAL_JAVA_RESOURCE_FILES":   "java_resources",
 			"LOCAL_JAVACFLAGS":            "javacflags",
 			"LOCAL_ERROR_PRONE_FLAGS":     "errorprone.javacflags",
 			"LOCAL_DX_FLAGS":              "dxflags",
@@ -933,6 +937,7 @@ var prebuiltTypes = map[string]string{
 	"STATIC_LIBRARIES": "cc_prebuilt_library_static",
 	"EXECUTABLES":      "cc_prebuilt_binary",
 	"JAVA_LIBRARIES":   "java_import",
+	"APPS":             "android_app_import",
 	"ETC":              "prebuilt_etc",
 }
 

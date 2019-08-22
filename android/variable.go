@@ -85,10 +85,12 @@ type variableProperties struct {
 		// are used for dogfooding and performance testing, and should be as similar to user builds
 		// as possible.
 		Debuggable struct {
-			Cflags   []string
-			Cppflags []string
-			Init_rc  []string
-			Required []string
+			Cflags          []string
+			Cppflags        []string
+			Init_rc         []string
+			Required        []string
+			Host_required   []string
+			Target_required []string
 		}
 
 		// eng is true for -eng builds, and can be used to turn on additionaly heavyweight debugging
@@ -190,6 +192,16 @@ type productVariables struct {
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
 	DeviceSecondaryCpuVariant  *string  `json:",omitempty"`
 	DeviceSecondaryAbi         []string `json:",omitempty"`
+
+	NativeBridgeArch        *string  `json:",omitempty"`
+	NativeBridgeArchVariant *string  `json:",omitempty"`
+	NativeBridgeCpuVariant  *string  `json:",omitempty"`
+	NativeBridgeAbi         []string `json:",omitempty"`
+
+	NativeBridgeSecondaryArch        *string  `json:",omitempty"`
+	NativeBridgeSecondaryArchVariant *string  `json:",omitempty"`
+	NativeBridgeSecondaryCpuVariant  *string  `json:",omitempty"`
+	NativeBridgeSecondaryAbi         []string `json:",omitempty"`
 
 	HostArch          *string `json:",omitempty"`
 	HostSecondaryArch *string `json:",omitempty"`
@@ -297,6 +309,9 @@ type productVariables struct {
 	BoardOdmSepolicyDirs         []string `json:",omitempty"`
 	BoardPlatPublicSepolicyDirs  []string `json:",omitempty"`
 	BoardPlatPrivateSepolicyDirs []string `json:",omitempty"`
+	BoardSepolicyM4Defs          []string `json:",omitempty"`
+
+	BoardVndkRuntimeDisable *bool `json:",omitempty"`
 
 	VendorVars map[string]map[string]string `json:",omitempty"`
 
@@ -318,6 +333,10 @@ type productVariables struct {
 	ProductHiddenAPIStubsSystem []string `json:",omitempty"`
 	ProductHiddenAPIStubsTest   []string `json:",omitempty"`
 
+	ProductPublicSepolicyDirs  []string `json:",omitempty"`
+	ProductPrivateSepolicyDirs []string `json:",omitempty"`
+	ProductCompatibleProperty  *bool    `json:",omitempty"`
+
 	TargetFSConfigGen []string `json:",omitempty"`
 }
 
@@ -335,9 +354,15 @@ func stringPtr(v string) *string {
 
 func (v *productVariables) SetDefaultConfig() {
 	*v = productVariables{
-		Platform_sdk_version:              intPtr(26),
-		Platform_version_active_codenames: []string{"P"},
-		Platform_version_future_codenames: []string{"P"},
+		BuildNumberFromFile: stringPtr("123456789"),
+
+		Platform_version_name:             stringPtr("Q"),
+		Platform_sdk_version:              intPtr(28),
+		Platform_sdk_codename:             stringPtr("Q"),
+		Platform_sdk_final:                boolPtr(false),
+		Platform_version_active_codenames: []string{"Q"},
+		Platform_version_future_codenames: []string{"Q"},
+		Platform_vndk_version:             stringPtr("Q"),
 
 		HostArch:                   stringPtr("x86_64"),
 		HostSecondaryArch:          stringPtr("x86"),

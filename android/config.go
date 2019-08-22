@@ -198,6 +198,14 @@ func saveToConfigFile(config jsonConfigurable, filename string) error {
 
 // TestConfig returns a Config object suitable for using for tests
 func TestConfig(buildDir string, env map[string]string) Config {
+	envCopy := make(map[string]string)
+	for k, v := range env {
+		envCopy[k] = v
+	}
+
+	// Copy the real PATH value to the test environment, it's needed by HostSystemTool() used in x86_darwin_host.go
+	envCopy["PATH"] = originalEnv["PATH"]
+
 	config := &config{
 		productVariables: productVariables{
 			DeviceName:                  stringPtr("test_device"),
@@ -213,7 +221,7 @@ func TestConfig(buildDir string, env map[string]string) Config {
 
 		buildDir:     buildDir,
 		captureBuild: true,
-		env:          env,
+		env:          envCopy,
 	}
 	config.deviceConfig = &deviceConfig{
 		config: config,
@@ -227,16 +235,30 @@ func TestConfig(buildDir string, env map[string]string) Config {
 	return Config{config}
 }
 
+func TestArchConfigNativeBridge(buildDir string, env map[string]string) Config {
+	testConfig := TestArchConfig(buildDir, env)
+	config := testConfig.config
+
+	config.Targets[Android] = []Target{
+		{Android, Arch{ArchType: X86_64, ArchVariant: "silvermont", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled},
+		{Android, Arch{ArchType: X86, ArchVariant: "silvermont", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeDisabled},
+		{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeEnabled},
+		{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeEnabled},
+	}
+
+	return testConfig
+}
+
 func TestArchConfigFuchsia(buildDir string, env map[string]string) Config {
 	testConfig := TestConfig(buildDir, env)
 	config := testConfig.config
 
 	config.Targets = map[OsType][]Target{
 		Fuchsia: []Target{
-			{Fuchsia, Arch{ArchType: Arm64, ArchVariant: "", Native: true}},
+			{Fuchsia, Arch{ArchType: Arm64, ArchVariant: "", Native: true}, NativeBridgeDisabled},
 		},
 		BuildOs: []Target{
-			{BuildOs, Arch{ArchType: X86_64}},
+			{BuildOs, Arch{ArchType: X86_64}, NativeBridgeDisabled},
 		},
 	}
 
@@ -250,17 +272,25 @@ func TestArchConfig(buildDir string, env map[string]string) Config {
 
 	config.Targets = map[OsType][]Target{
 		Android: []Target{
-			{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Native: true, Abi: []string{"arm64-v8a"}}},
-			{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Native: true, Abi: []string{"armeabi-v7a"}}},
+			{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled},
+			{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeDisabled},
 		},
 		BuildOs: []Target{
-			{BuildOs, Arch{ArchType: X86_64}},
-			{BuildOs, Arch{ArchType: X86}},
+			{BuildOs, Arch{ArchType: X86_64}, NativeBridgeDisabled},
+			{BuildOs, Arch{ArchType: X86}, NativeBridgeDisabled},
 		},
+	}
+
+	if runtime.GOOS == "darwin" {
+		config.Targets[BuildOs] = config.Targets[BuildOs][:1]
 	}
 
 	config.BuildOsVariant = config.Targets[BuildOs][0].String()
 	config.BuildOsCommonVariant = getCommonTargets(config.Targets[BuildOs])[0].String()
+	config.TestProductVariables.DeviceArch = proptools.StringPtr("arm64")
+	config.TestProductVariables.DeviceArchVariant = proptools.StringPtr("armv8-a")
+	config.TestProductVariables.DeviceSecondaryArch = proptools.StringPtr("arm")
+	config.TestProductVariables.DeviceSecondaryArchVariant = proptools.StringPtr("armv7-a-neon")
 
 	return testConfig
 }
@@ -342,14 +372,14 @@ func NewConfig(srcDir, buildDir string) (Config, error) {
 }
 
 func (c *config) fromEnv() error {
-	switch c.Getenv("EXPERIMENTAL_USE_OPENJDK9") {
-	case "", "1.8":
-		// Nothing, we always use OpenJDK9
+	switch c.Getenv("EXPERIMENTAL_JAVA_LANGUAGE_LEVEL_9") {
+	case "":
+		// Nothing, this is the default
 	case "true":
-		// Use OpenJDK9 and target 1.9
+		// Use -source 9 -target 9
 		c.targetOpenJDK9 = true
 	default:
-		return fmt.Errorf(`Invalid value for EXPERIMENTAL_USE_OPENJDK9, should be "", "1.8", or "true"`)
+		return fmt.Errorf(`Invalid value for EXPERIMENTAL_JAVA_LANGUAGE_LEVEL_9, should be "" or "true"`)
 	}
 
 	return nil
@@ -404,6 +434,10 @@ func (c *config) PrebuiltOS() string {
 // GoRoot returns the path to the root directory of the Go toolchain.
 func (c *config) GoRoot() string {
 	return fmt.Sprintf("%s/prebuilts/go/%s", c.srcDir, c.PrebuiltOS())
+}
+
+func (c *config) PrebuiltBuildTool(ctx PathContext, tool string) Path {
+	return PathForSource(ctx, "prebuilts/build-tools", c.PrebuiltOS(), "bin", tool)
 }
 
 func (c *config) CpPreserveSymlinksFlags() string {
@@ -584,7 +618,7 @@ func (c *config) DefaultAppCertificateDir(ctx PathContext) SourcePath {
 	if defaultCert != "" {
 		return PathForSource(ctx, filepath.Dir(defaultCert))
 	} else {
-		return PathForSource(ctx, "build/target/product/security")
+		return PathForSource(ctx, "build/make/target/product/security")
 	}
 }
 
@@ -601,7 +635,7 @@ func (c *config) DefaultAppCertificate(ctx PathContext) (pem, key SourcePath) {
 func (c *config) ApexKeyDir(ctx ModuleContext) SourcePath {
 	// TODO(b/121224311): define another variable such as TARGET_APEX_KEY_OVERRIDE
 	defaultCert := String(c.productVariables.DefaultAppCertificate)
-	if defaultCert == "" || filepath.Dir(defaultCert) == "build/target/product/security" {
+	if defaultCert == "" || filepath.Dir(defaultCert) == "build/make/target/product/security" {
 		// When defaultCert is unset or is set to the testkeys path, use the APEX keys
 		// that is under the module dir
 		return pathForModuleSrc(ctx)
@@ -921,6 +955,10 @@ func (c *deviceConfig) PlatPrivateSepolicyDirs() []string {
 	return c.config.productVariables.BoardPlatPrivateSepolicyDirs
 }
 
+func (c *deviceConfig) SepolicyM4Defs() []string {
+	return c.config.productVariables.BoardSepolicyM4Defs
+}
+
 func (c *deviceConfig) OverrideManifestPackageNameFor(name string) (manifestName string, overridden bool) {
 	return findOverrideValue(c.config.productVariables.ManifestPackageNameOverrides, name,
 		"invalid override rule %q in PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES should be <module_name>:<manifest_name>")
@@ -1052,4 +1090,36 @@ func (c *config) ProductHiddenAPIStubsTest() []string {
 
 func (c *deviceConfig) TargetFSConfigGen() []string {
 	return c.config.productVariables.TargetFSConfigGen
+}
+
+func (c *config) ProductPublicSepolicyDirs() []string {
+	return c.productVariables.ProductPublicSepolicyDirs
+}
+
+func (c *config) ProductPrivateSepolicyDirs() []string {
+	return c.productVariables.ProductPrivateSepolicyDirs
+}
+
+func (c *config) ProductCompatibleProperty() bool {
+	return Bool(c.productVariables.ProductCompatibleProperty)
+}
+
+func (c *deviceConfig) BoardVndkRuntimeDisable() bool {
+	return Bool(c.config.productVariables.BoardVndkRuntimeDisable)
+}
+
+func (c *deviceConfig) DeviceArch() string {
+	return String(c.config.productVariables.DeviceArch)
+}
+
+func (c *deviceConfig) DeviceArchVariant() string {
+	return String(c.config.productVariables.DeviceArchVariant)
+}
+
+func (c *deviceConfig) DeviceSecondaryArch() string {
+	return String(c.config.productVariables.DeviceSecondaryArch)
+}
+
+func (c *deviceConfig) DeviceSecondaryArchVariant() string {
+	return String(c.config.productVariables.DeviceSecondaryArchVariant)
 }

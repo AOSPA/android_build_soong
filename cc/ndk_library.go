@@ -38,9 +38,12 @@ var (
 	ndkLibrarySuffix = ".ndk"
 
 	ndkPrebuiltSharedLibs = []string{
+		"aaudio",
+		"amidi",
 		"android",
 		"binder_ndk",
 		"c",
+		"camera2ndk",
 		"dl",
 		"EGL",
 		"GLESv1_CM",
@@ -49,6 +52,7 @@ var (
 		"jnigraphics",
 		"log",
 		"mediandk",
+		"nativewindow",
 		"m",
 		"OpenMAXAL",
 		"OpenSLES",
@@ -377,8 +381,11 @@ func newStubLibrary() *Module {
 	return module
 }
 
+// ndk_library creates a stub library that exposes dummy implementation
+// of functions and variables for use at build time only.
 func ndkLibraryFactory() android.Module {
 	module := newStubLibrary()
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibBoth)
+	module.ModuleBase.EnableNativeBridgeSupportByDefault()
 	return module
 }

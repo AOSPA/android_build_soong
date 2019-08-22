@@ -38,7 +38,15 @@ func (library *Library) AndroidMkHostDex(w io.Writer, name string, data android.
 		}
 		fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", library.headerJarFile.String())
 		fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", library.implementationAndResourcesJar.String())
-		fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES := "+strings.Join(data.Required, " "))
+		if len(data.Required) > 0 {
+			fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES :=", strings.Join(data.Required, " "))
+		}
+		if len(data.Host_required) > 0 {
+			fmt.Fprintln(w, "LOCAL_HOST_REQUIRED_MODULES :=", strings.Join(data.Host_required, " "))
+		}
+		if len(data.Target_required) > 0 {
+			fmt.Fprintln(w, "LOCAL_TARGET_REQUIRED_MODULES :=", strings.Join(data.Target_required, " "))
+		}
 		if r := library.deviceProperties.Target.Hostdex.Required; len(r) > 0 {
 			fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(r, " "))
 		}
@@ -84,6 +92,10 @@ func (library *Library) AndroidMk() android.AndroidMkData {
 
 				if len(library.additionalCheckedModules) != 0 {
 					fmt.Fprintln(w, "LOCAL_ADDITIONAL_CHECKED_MODULE +=", strings.Join(library.additionalCheckedModules.Strings(), " "))
+				}
+
+				if library.proguardDictionary != nil {
+					fmt.Fprintln(w, "LOCAL_SOONG_PROGUARD_DICT :=", library.proguardDictionary.String())
 				}
 
 				// Temporary hack: export sources used to compile framework.jar to Make
@@ -368,9 +380,6 @@ func (a *AndroidLibrary) AndroidMk() android.AndroidMkData {
 		if a.aarFile != nil {
 			fmt.Fprintln(w, "LOCAL_SOONG_AAR :=", a.aarFile.String())
 		}
-		if a.proguardDictionary != nil {
-			fmt.Fprintln(w, "LOCAL_SOONG_PROGUARD_DICT :=", a.proguardDictionary.String())
-		}
 
 		if a.Name() == "framework-res" {
 			fmt.Fprintln(w, "LOCAL_MODULE_PATH := $(TARGET_OUT_JAVA_LIBRARIES)")
@@ -381,7 +390,7 @@ func (a *AndroidLibrary) AndroidMk() android.AndroidMkData {
 
 		fmt.Fprintln(w, "LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE :=", a.exportPackage.String())
 		fmt.Fprintln(w, "LOCAL_SOONG_STATIC_LIBRARY_EXTRA_PACKAGES :=", a.extraAaptPackagesFile.String())
-		fmt.Fprintln(w, "LOCAL_FULL_MANIFEST_FILE :=", a.manifestPath.String())
+		fmt.Fprintln(w, "LOCAL_FULL_MANIFEST_FILE :=", a.mergedManifestFile.String())
 		fmt.Fprintln(w, "LOCAL_SOONG_EXPORT_PROGUARD_FLAGS :=",
 			strings.Join(a.exportedProguardFlagFiles.Strings(), " "))
 		fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
@@ -575,6 +584,32 @@ func (dstubs *Droidstubs) AndroidMk() android.AndroidMkData {
 				}
 				if dstubs.exactApiFile != nil {
 					fmt.Fprintln(w, apiFilePrefix+"EXACT_API_FILE := ", dstubs.exactApiFile.String())
+				}
+			},
+		},
+	}
+}
+
+func (app *AndroidAppImport) AndroidMk() android.AndroidMkData {
+	return android.AndroidMkData{
+		Class:      "APPS",
+		OutputFile: android.OptionalPathForPath(app.outputFile),
+		Include:    "$(BUILD_SYSTEM)/soong_app_prebuilt.mk",
+		Extra: []android.AndroidMkExtraFunc{
+			func(w io.Writer, outputFile android.Path) {
+				if Bool(app.properties.Privileged) {
+					fmt.Fprintln(w, "LOCAL_PRIVILEGED_MODULE := true")
+				}
+				if app.certificate != nil {
+					fmt.Fprintln(w, "LOCAL_CERTIFICATE :=", app.certificate.Pem.String())
+				} else {
+					fmt.Fprintln(w, "LOCAL_CERTIFICATE := PRESIGNED")
+				}
+				if len(app.properties.Overrides) > 0 {
+					fmt.Fprintln(w, "LOCAL_OVERRIDES_PACKAGES :=", strings.Join(app.properties.Overrides, " "))
+				}
+				if len(app.dexpreopter.builtInstalled) > 0 {
+					fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", app.dexpreopter.builtInstalled)
 				}
 			},
 		},

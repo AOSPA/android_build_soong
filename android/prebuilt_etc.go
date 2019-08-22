@@ -14,11 +14,7 @@
 
 package android
 
-import (
-	"fmt"
-	"io"
-	"strings"
-)
+import "strconv"
 
 // TODO(jungw): Now that it handles more than the ones in etc/, consider renaming this file.
 
@@ -27,6 +23,7 @@ func init() {
 	RegisterModuleType("prebuilt_etc_host", PrebuiltEtcHostFactory)
 	RegisterModuleType("prebuilt_usr_share", PrebuiltUserShareFactory)
 	RegisterModuleType("prebuilt_usr_share_host", PrebuiltUserShareHostFactory)
+	RegisterModuleType("prebuilt_font", PrebuiltFontFactory)
 
 	PreDepsMutators(func(ctx RegisterMutatorsContext) {
 		ctx.BottomUp("prebuilt_etc", prebuiltEtcMutator).Parallel()
@@ -135,38 +132,25 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx ModuleContext) {
 	})
 }
 
-func (p *PrebuiltEtc) AndroidMk() AndroidMkData {
-	return AndroidMkData{
-		Custom: func(w io.Writer, name, prefix, moduleDir string, data AndroidMkData) {
-			nameSuffix := ""
-			if p.inRecovery() && !p.onlyInRecovery() {
-				nameSuffix = ".recovery"
-			}
-			fmt.Fprintln(w, "\ninclude $(CLEAR_VARS)")
-			fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
-			fmt.Fprintln(w, "LOCAL_MODULE :=", name+nameSuffix)
-			fmt.Fprintln(w, "LOCAL_MODULE_CLASS := ETC")
-			if p.commonProperties.Owner != nil {
-				fmt.Fprintln(w, "LOCAL_MODULE_OWNER :=", *p.commonProperties.Owner)
-			}
-			fmt.Fprintln(w, "LOCAL_MODULE_TAGS := optional")
-			if p.Host() {
-				fmt.Fprintln(w, "LOCAL_IS_HOST_MODULE := true")
-			}
-			fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", p.outputFilePath.String())
-			fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", "$(OUT_DIR)/"+p.installDirPath.RelPathString())
-			fmt.Fprintln(w, "LOCAL_INSTALLED_MODULE_STEM :=", p.outputFilePath.Base())
-			fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !p.Installable())
-			fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES :=", strings.Join(data.Required, " "))
-			fmt.Fprintln(w, "LOCAL_MODULE_TARGET_ARCH :=", p.Arch().ArchType.String())
+func (p *PrebuiltEtc) AndroidMkEntries() AndroidMkEntries {
+	nameSuffix := ""
+	if p.inRecovery() && !p.onlyInRecovery() {
+		nameSuffix = ".recovery"
+	}
+	return AndroidMkEntries{
+		Class:      "ETC",
+		SubName:    nameSuffix,
+		OutputFile: OptionalPathForPath(p.outputFilePath),
+		AddCustomEntries: func(name, prefix, moduleDir string, entries *AndroidMkEntries) {
+			entries.SetString("LOCAL_MODULE_TAGS", "optional")
+			entries.SetString("LOCAL_MODULE_PATH", "$(OUT_DIR)/"+p.installDirPath.RelPathString())
+			entries.SetString("LOCAL_INSTALLED_MODULE_STEM", p.outputFilePath.Base())
+			entries.SetString("LOCAL_UNINSTALLABLE_MODULE", strconv.FormatBool(!p.Installable()))
 			if p.additionalDependencies != nil {
-				fmt.Fprint(w, "LOCAL_ADDITIONAL_DEPENDENCIES :=")
 				for _, path := range *p.additionalDependencies {
-					fmt.Fprint(w, " "+path.String())
+					entries.SetString("LOCAL_ADDITIONAL_DEPENDENCIES", path.String())
 				}
-				fmt.Fprintln(w, "")
 			}
-			fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
 		},
 	}
 }
@@ -256,4 +240,13 @@ func prebuiltEtcMutator(mctx BottomUpMutatorContext) {
 			m.properties.InRecovery = true
 		}
 	}
+}
+
+// prebuilt_font installs a font in <partition>/fonts directory.
+func PrebuiltFontFactory() Module {
+	module := &PrebuiltEtc{installDirBase: "fonts"}
+	InitPrebuiltEtcModule(module)
+	// This module is device-only
+	InitAndroidArchModule(module, DeviceSupported, MultilibFirst)
+	return module
 }

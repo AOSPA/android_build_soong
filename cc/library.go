@@ -15,6 +15,7 @@
 package cc
 
 import (
+	"io"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -95,6 +96,9 @@ type LibraryProperties struct {
 
 	// Properties for ABI compatibility checker
 	Header_abi_checker struct {
+		// Enable ABI checks (even if this is not an LLNDK/VNDK lib)
+		Enabled *bool
+
 		// Path to a symbol file that specifies the symbols to be included in the generated
 		// ABI dump file
 		Symbol_file *string `android:"path"`
@@ -356,9 +360,10 @@ func (library *libraryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Fla
 				)
 			}
 		} else {
-			f = append(f,
-				"-shared",
-				"-Wl,-soname,"+libName+flags.Toolchain.ShlibSuffix())
+			f = append(f, "-shared")
+			if !ctx.Windows() {
+				f = append(f, "-Wl,-soname,"+libName+flags.Toolchain.ShlibSuffix())
+			}
 		}
 
 		flags.LdFlags = append(f, flags.LdFlags...)
@@ -419,6 +424,13 @@ func extractExportIncludesFromFlags(flags []string) []string {
 	return exportedIncludes
 }
 
+func (library *libraryDecorator) shouldCreateVndkSourceAbiDump(ctx ModuleContext) bool {
+	if library.Properties.Header_abi_checker.Enabled != nil {
+		return Bool(library.Properties.Header_abi_checker.Enabled)
+	}
+	return ctx.shouldCreateVndkSourceAbiDump(ctx.Config())
+}
+
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	if library.buildStubs() {
 		objs, versionScript := compileStubLibrary(ctx, flags, String(library.Properties.Stubs.Symbol_file), library.MutatedProperties.StubsVersion, "--apex")
@@ -438,7 +450,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		}
 		return Objects{}
 	}
-	if ctx.shouldCreateVndkSourceAbiDump() || library.sabi.Properties.CreateSAbiDumps {
+	if library.shouldCreateVndkSourceAbiDump(ctx) || library.sabi.Properties.CreateSAbiDumps {
 		exportIncludeDirs := library.flagExporter.exportedIncludes(ctx)
 		var SourceAbiFlags []string
 		for _, dir := range exportIncludeDirs.Strings() {
@@ -485,6 +497,9 @@ type libraryInterface interface {
 	// Sets whether a specific variant is static or shared
 	setStatic()
 	setShared()
+
+	// Write LOCAL_ADDITIONAL_DEPENDENCIES for ABI diff
+	androidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Writer)
 }
 
 func (library *libraryDecorator) getLibName(ctx ModuleContext) string {
@@ -682,6 +697,14 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	outputFile := android.PathForModuleOut(ctx, fileName)
 	ret := outputFile
 
+	var implicitOutputs android.WritablePaths
+	if ctx.Windows() {
+		importLibraryPath := android.PathForModuleOut(ctx, pathtools.ReplaceExtension(fileName, "lib"))
+
+		flags.LdFlags = append(flags.LdFlags, "-Wl,--out-implib="+importLibraryPath.String())
+		implicitOutputs = append(implicitOutputs, importLibraryPath)
+	}
+
 	builderFlags := flagsToBuilderFlags(flags)
 
 	// Optimize out relinking against shared libraries whose interface hasn't changed by
@@ -733,7 +756,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 
 	TransformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
 		deps.StaticLibs, deps.LateStaticLibs, deps.WholeStaticLibs,
-		linkerDeps, deps.CrtBegin, deps.CrtEnd, false, builderFlags, outputFile)
+		linkerDeps, deps.CrtBegin, deps.CrtEnd, false, builderFlags, outputFile, implicitOutputs)
 
 	objs.coverageFiles = append(objs.coverageFiles, deps.StaticLibObjs.coverageFiles...)
 	objs.coverageFiles = append(objs.coverageFiles, deps.WholeStaticLibObjs.coverageFiles...)
@@ -759,10 +782,10 @@ func (library *libraryDecorator) nativeCoverage() bool {
 }
 
 func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
-	isLlndk := inList(ctx.baseModuleName(), llndkLibraries) || inList(ctx.baseModuleName(), ndkMigratedLibs)
+	isLlndkOrNdk := inList(ctx.baseModuleName(), *llndkLibraries(ctx.Config())) || inList(ctx.baseModuleName(), ndkMigratedLibs)
 
-	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isLlndk, false)
-	refAbiDumpGzipFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isLlndk, true)
+	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isLlndkOrNdk, ctx.isVndk(), false)
+	refAbiDumpGzipFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isLlndkOrNdk, ctx.isVndk(), true)
 
 	if refAbiDumpTextFile.Valid() {
 		if refAbiDumpGzipFile.Valid() {
@@ -780,7 +803,7 @@ func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.
 }
 
 func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objects, fileName string, soFile android.Path) {
-	if len(objs.sAbiDumpFiles) > 0 && ctx.shouldCreateVndkSourceAbiDump() {
+	if len(objs.sAbiDumpFiles) > 0 && library.shouldCreateVndkSourceAbiDump(ctx) {
 		vndkVersion := ctx.DeviceConfig().PlatformVndkVersion()
 		if ver := ctx.DeviceConfig().VndkVersion(); ver != "" && ver != "current" {
 			vndkVersion = ver
@@ -803,7 +826,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		refAbiDumpFile := getRefAbiDumpFile(ctx, vndkVersion, fileName)
 		if refAbiDumpFile != nil {
 			library.sAbiDiff = SourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
-				refAbiDumpFile, fileName, exportedHeaderFlags, ctx.isLlndk(), ctx.isVndkExt())
+				refAbiDumpFile, fileName, exportedHeaderFlags, ctx.isLlndk(ctx.Config()), ctx.isNdk(), ctx.isVndkExt())
 		}
 	}
 }
@@ -938,8 +961,8 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 			// Bionic libraries (e.g. libc.so) is installed to the bootstrap subdirectory.
 			// The original path becomes a symlink to the corresponding file in the
 			// runtime APEX.
-			if isBionic(ctx.baseModuleName()) && !library.buildStubs() && ctx.Arch().Native && !ctx.inRecovery() {
-				if ctx.Device() {
+			if installToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() && ctx.Arch().Native && !ctx.inRecovery() {
+				if ctx.Device() && isBionic(ctx.baseModuleName()) {
 					library.installSymlinkToRuntimeApex(ctx, file)
 				}
 				library.baseInstaller.subDir = "bootstrap"

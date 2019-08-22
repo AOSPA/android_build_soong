@@ -90,6 +90,8 @@ var (
 		"-Wl,--warn-shared-textrel",
 		"-Wl,--fatal-warnings",
 		"-Wl,--no-undefined-version",
+		"-Wl,--exclude-libs,libgcc.a",
+		"-Wl,--exclude-libs,libgcc_stripped.a",
 	}
 
 	deviceGlobalLldflags = append(ClangFilterUnknownLldflags(deviceGlobalLdflags),
@@ -212,7 +214,6 @@ func init() {
 	})
 	pctx.StaticVariable("ClangPath", "${ClangBase}/${HostPrebuiltTag}/${ClangVersion}")
 	pctx.StaticVariable("ClangBin", "${ClangPath}/bin")
-	pctx.StaticVariable("ClangTidyShellPath", "build/soong/scripts/clang-tidy.sh")
 
 	pctx.VariableFunc("ClangShortVersion", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("LLVM_RELEASE_VERSION"); override != "" {

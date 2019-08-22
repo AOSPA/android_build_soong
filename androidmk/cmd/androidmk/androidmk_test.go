@@ -577,6 +577,10 @@ include $(call all-makefiles-under,$(LOCAL_PATH))
 			include $(CLEAR_VARS)
 			LOCAL_SRC_FILES := $(call all-java-files-under, src gen)
 			include $(BUILD_STATIC_JAVA_LIBRARY)
+
+			include $(CLEAR_VARS)
+			LOCAL_JAVA_RESOURCE_FILES := foo bar
+			include $(BUILD_STATIC_JAVA_LIBRARY)
 		`,
 		expected: `
 			java_library {
@@ -602,6 +606,13 @@ include $(call all-makefiles-under,$(LOCAL_PATH))
 				srcs: [
 					"src/**/*.java",
 					"gen/**/*.java",
+				],
+			}
+
+			java_library {
+				java_resources: [
+					"foo",
+					"bar",
 				],
 			}
 		`,
@@ -798,6 +809,7 @@ include $(CLEAR_VARS)
 LOCAL_PACKAGE_NAME := FooTest
 LOCAL_COMPATIBILITY_SUITE := cts
 LOCAL_CTS_TEST_PACKAGE := foo.bar
+LOCAL_COMPATIBILITY_SUPPORT_FILES := file1
 include $(BUILD_CTS_PACKAGE)
 `,
 		expected: `
@@ -806,6 +818,7 @@ android_test {
     defaults: ["cts_defaults"],
     test_suites: ["cts"],
 
+    data: ["file1"],
 }
 `,
 	},
@@ -868,7 +881,6 @@ prebuilt_etc {
 }
 `,
 	},
-
 	{
 		desc: "prebuilt_etc_PRODUCT_OUT/system/etc",
 		in: `
@@ -1054,6 +1066,119 @@ prebuilt_etc {
 `,
 	},
 	{
+		desc: "prebuilt_usr_share",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(TARGET_OUT)/usr/share
+LOCAL_SRC_FILES := foo.txt
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_usr_share {
+	name: "foo",
+
+	src: "foo.txt",
+}
+`,
+	},
+	{
+		desc: "prebuilt_usr_share subdir_bar",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(TARGET_OUT)/usr/share/bar
+LOCAL_SRC_FILES := foo.txt
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_usr_share {
+	name: "foo",
+
+	src: "foo.txt",
+	sub_dir: "bar",
+}
+`,
+	},
+	{
+		desc: "prebuilt_usr_share_host",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(HOST_OUT)/usr/share
+LOCAL_SRC_FILES := foo.txt
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_usr_share_host {
+	name: "foo",
+
+	src: "foo.txt",
+}
+`,
+	},
+	{
+		desc: "prebuilt_font",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := font.ttf
+LOCAL_SRC_FILES := $(LOCAL_MODULE)
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_TAGS := optional
+LOCAL_MODULE_PATH := $(TARGET_OUT)/fonts
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_font {
+	name: "font.ttf",
+	src: "font.ttf",
+
+}
+`,
+	},
+	{
+		desc: "prebuilt_font",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := font.ttf
+LOCAL_SRC_FILES := $(LOCAL_MODULE)
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_TAGS := optional
+LOCAL_MODULE_PATH := $(TARGET_OUT_PRODUCT)/fonts
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_font {
+	name: "font.ttf",
+	src: "font.ttf",
+	product_specific: true,
+
+}
+`,
+	},
+	{
+		desc: "prebuilt_usr_share_host subdir_bar",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(HOST_OUT)/usr/share/bar
+LOCAL_SRC_FILES := foo.txt
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_usr_share_host {
+	name: "foo",
+
+	src: "foo.txt",
+	sub_dir: "bar",
+}
+`,
+	},
+	{
 		desc: "vts_config",
 		in: `
 include $(CLEAR_VARS)
@@ -1111,6 +1236,32 @@ android_app {
 
 }
 		`,
+	},
+	{
+		desc: "android_app_import",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_SRC_FILES := foo.apk
+LOCAL_PRIVILEGED_MODULE := true
+LOCAL_MODULE_CLASS := APPS
+LOCAL_MODULE_TAGS := optional
+LOCAL_DEX_PREOPT := false
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+android_app_import {
+	name: "foo",
+
+	privileged: true,
+
+	dex_preopt: {
+		enabled: false,
+	},
+	apk: "foo.apk",
+
+}
+`,
 	},
 }
 

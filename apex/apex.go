@@ -511,6 +511,17 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 					a.properties.Multilib.Prefer32.Binaries, target.String(),
 					a.getImageVariation(config))
 			}
+
+			if strings.HasPrefix(ctx.ModuleName(), "com.android.runtime") && target.Os.Class == android.Device {
+				for _, sanitizer := range ctx.Config().SanitizeDevice() {
+					if sanitizer == "hwaddress" {
+						addDependenciesForNativeModules(ctx,
+							[]string{"libclang_rt.hwasan-aarch64-android"},
+							nil, target.String(), a.getImageVariation(config))
+						break
+					}
+				}
+			}
 		}
 
 	}
@@ -1171,8 +1182,11 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string, apex
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
 		} else if fi.class == nativeSharedLib || fi.class == nativeExecutable {
 			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
-			if cc, ok := fi.module.(*cc.Module); ok && cc.UnstrippedOutputFile() != nil {
-				fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", cc.UnstrippedOutputFile().String())
+			if cc, ok := fi.module.(*cc.Module); ok {
+				if cc.UnstrippedOutputFile() != nil {
+					fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", cc.UnstrippedOutputFile().String())
+				}
+				cc.AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w)
 			}
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_prebuilt.mk")
 		} else {
@@ -1327,10 +1341,13 @@ func (p *Prebuilt) installable() bool {
 }
 
 func (p *Prebuilt) DepsMutator(ctx android.BottomUpMutatorContext) {
-	// If the device is configured to use flattened APEX, don't set
-	// p.properties.Source so that the prebuilt module (which is
-	// a non-flattened APEX) is not used.
-	forceDisable := ctx.Config().FlattenApex() && !ctx.Config().UnbundledBuild()
+	// If the device is configured to use flattened APEX, force disable the prebuilt because
+	// the prebuilt is a non-flattened one.
+	forceDisable := ctx.Config().FlattenApex()
+
+	// Force disable the prebuilts when we are doing unbundled build. We do unbundled build
+	// to build the prebuilts themselves.
+	forceDisable = forceDisable || ctx.Config().UnbundledBuild()
 
 	// b/137216042 don't use prebuilts when address sanitizer is on
 	forceDisable = forceDisable || android.InList("address", ctx.Config().SanitizeDevice()) ||
