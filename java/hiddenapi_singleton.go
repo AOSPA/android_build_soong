@@ -15,11 +15,14 @@
 package java
 
 import (
+	"fmt"
+
 	"android/soong/android"
 )
 
 func init() {
 	android.RegisterSingletonType("hiddenapi", hiddenAPISingletonFactory)
+	android.RegisterModuleType("hiddenapi_flags", hiddenAPIFlagsFactory)
 }
 
 type hiddenAPISingletonPathsStruct struct {
@@ -149,6 +152,14 @@ func stubFlagsRule(ctx android.SingletonContext) {
 		// Collect dex jar paths for modules that had hiddenapi encode called on them.
 		if h, ok := module.(hiddenAPIIntf); ok {
 			if jar := h.bootDexJar(); jar != nil {
+				// For a java lib included in an APEX, only take the one built for
+				// the platform variant, and skip the variants for APEXes.
+				// Otherwise, the hiddenapi tool will complain about duplicated classes
+				if a, ok := module.(android.ApexModule); ok {
+					if android.InAnyApex(module.Name()) && !a.IsForPlatform() {
+						return
+					}
+				}
 				bootDexJars = append(bootDexJars, jar)
 			}
 		}
@@ -306,4 +317,49 @@ func commitChangeForRestat(rule *android.RuleBuilder, tempPath, outputPath andro
 		Text("mv").Input(tempPath).Output(outputPath).Text(";").
 		Text("fi").
 		Text(")")
+}
+
+type hiddenAPIFlagsProperties struct {
+	// name of the file into which the flags will be copied.
+	Filename *string
+}
+
+type hiddenAPIFlags struct {
+	android.ModuleBase
+
+	properties hiddenAPIFlagsProperties
+
+	outputFilePath android.OutputPath
+}
+
+func (h *hiddenAPIFlags) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	filename := String(h.properties.Filename)
+
+	inputPath := hiddenAPISingletonPaths(ctx).flags
+	h.outputFilePath = android.PathForModuleOut(ctx, filename).OutputPath
+
+	// This ensures that outputFilePath has the correct name for others to
+	// use, as the source file may have a different name.
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   android.Cp,
+		Output: h.outputFilePath,
+		Input:  inputPath,
+	})
+}
+
+func (h *hiddenAPIFlags) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case "":
+		return android.Paths{h.outputFilePath}, nil
+	default:
+		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+	}
+}
+
+// hiddenapi-flags provides access to the hiddenapi-flags.csv file generated during the build.
+func hiddenAPIFlagsFactory() android.Module {
+	module := &hiddenAPIFlags{}
+	module.AddProperties(&module.properties)
+	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
+	return module
 }

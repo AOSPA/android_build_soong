@@ -28,8 +28,8 @@ var (
 )
 
 type SAbiProperties struct {
-	CreateSAbiDumps        bool `blueprint:"mutated"`
-	ReexportedIncludeFlags []string
+	CreateSAbiDumps    bool     `blueprint:"mutated"`
+	ReexportedIncludes []string `blueprint:"mutated"`
 }
 
 type sabi struct {
@@ -93,4 +93,10 @@ func sabiDepsMutator(mctx android.TopDownMutatorContext) {
 			}
 		})
 	}
+}
+
+func addLsdumpPath(lsdumpPath string) {
+	sabiLock.Lock()
+	lsdumpPaths = append(lsdumpPaths, lsdumpPath)
+	sabiLock.Unlock()
 }

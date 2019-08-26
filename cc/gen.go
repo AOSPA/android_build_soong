@@ -16,6 +16,7 @@ package cc
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/google/blueprint"
 
@@ -24,6 +25,7 @@ import (
 
 func init() {
 	pctx.SourcePathVariable("lexCmd", "prebuilts/build-tools/${config.HostPrebuiltTag}/bin/flex")
+	pctx.SourcePathVariable("m4Cmd", "prebuilts/build-tools/${config.HostPrebuiltTag}/bin/m4")
 
 	pctx.HostBinToolVariable("aidlCmd", "aidl-cpp")
 	pctx.HostBinToolVariable("syspropCmd", "sysprop_cpp")
@@ -32,26 +34,17 @@ func init() {
 var (
 	lex = pctx.AndroidStaticRule("lex",
 		blueprint.RuleParams{
-			Command:     "$lexCmd -o$out $in",
-			CommandDeps: []string{"$lexCmd"},
+			Command:     "M4=$m4Cmd $lexCmd -o$out $in",
+			CommandDeps: []string{"$lexCmd", "$m4Cmd"},
 		})
-
-	aidl = pctx.AndroidStaticRule("aidl",
-		blueprint.RuleParams{
-			Command:     "$aidlCmd -d${out}.d --ninja $aidlFlags $in $outDir $out",
-			CommandDeps: []string{"$aidlCmd"},
-			Depfile:     "${out}.d",
-			Deps:        blueprint.DepsGCC,
-		},
-		"aidlFlags", "outDir")
 
 	sysprop = pctx.AndroidStaticRule("sysprop",
 		blueprint.RuleParams{
-			Command: "$syspropCmd --header-dir=$headerOutDir --system-header-dir=$systemOutDir " +
+			Command: "$syspropCmd --header-dir=$headerOutDir --public-header-dir=$publicOutDir " +
 				"--source-dir=$srcOutDir --include-name=$includeName $in",
 			CommandDeps: []string{"$syspropCmd"},
 		},
-		"headerOutDir", "systemOutDir", "srcOutDir", "includeName")
+		"headerOutDir", "publicOutDir", "srcOutDir", "includeName")
 
 	windmc = pctx.AndroidStaticRule("windmc",
 		blueprint.RuleParams{
@@ -105,7 +98,8 @@ func genYacc(ctx android.ModuleContext, rule *android.RuleBuilder, yaccFile andr
 	}
 
 	cmd.Text("BISON_PKGDATADIR=prebuilts/build-tools/common/bison").
-		Tool(ctx.Config().PrebuiltBuildTool(ctx, "bison")).
+		FlagWithInput("M4=", ctx.Config().PrebuiltBuildTool(ctx, "m4")).
+		PrebuiltBuildTool(ctx, "bison").
 		Flag("-d").
 		Flags(flags).
 		FlagWithOutput("--defines=", headerFile).
@@ -114,20 +108,42 @@ func genYacc(ctx android.ModuleContext, rule *android.RuleBuilder, yaccFile andr
 	return ret
 }
 
-func genAidl(ctx android.ModuleContext, aidlFile android.Path, outFile android.ModuleGenPath, aidlFlags string) android.Paths {
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        aidl,
-		Description: "aidl " + aidlFile.Rel(),
-		Output:      outFile,
-		Input:       aidlFile,
-		Args: map[string]string{
-			"aidlFlags": aidlFlags,
-			"outDir":    android.PathForModuleGen(ctx, "aidl").String(),
-		},
-	})
+func genAidl(ctx android.ModuleContext, rule *android.RuleBuilder, aidlFile android.Path,
+	outFile, depFile android.ModuleGenPath, aidlFlags string) android.Paths {
 
-	// TODO: This should return the generated headers, not the source file.
-	return android.Paths{outFile}
+	aidlPackage := strings.TrimSuffix(aidlFile.Rel(), aidlFile.Base())
+	baseName := strings.TrimSuffix(aidlFile.Base(), aidlFile.Ext())
+	shortName := strings.TrimPrefix(baseName, "I")
+
+	outDir := android.PathForModuleGen(ctx, "aidl")
+	headerI := outDir.Join(ctx, aidlPackage, baseName+".h")
+	headerBn := outDir.Join(ctx, aidlPackage, "Bn"+shortName+".h")
+	headerBp := outDir.Join(ctx, aidlPackage, "Bp"+shortName+".h")
+
+	baseDir := strings.TrimSuffix(aidlFile.String(), aidlFile.Rel())
+	if baseDir != "" {
+		aidlFlags += " -I" + baseDir
+	}
+
+	cmd := rule.Command()
+	cmd.BuiltTool(ctx, "aidl-cpp").
+		FlagWithDepFile("-d", depFile).
+		Flag("--ninja").
+		Flag(aidlFlags).
+		Input(aidlFile).
+		OutputDir().
+		Output(outFile).
+		ImplicitOutputs(android.WritablePaths{
+			headerI,
+			headerBn,
+			headerBp,
+		})
+
+	return android.Paths{
+		headerI,
+		headerBn,
+		headerBp,
+	}
 }
 
 func genLex(ctx android.ModuleContext, lexFile android.Path, outFile android.ModuleGenPath) {
@@ -141,7 +157,7 @@ func genLex(ctx android.ModuleContext, lexFile android.Path, outFile android.Mod
 
 func genSysprop(ctx android.ModuleContext, syspropFile android.Path) (android.Path, android.Path) {
 	headerFile := android.PathForModuleGen(ctx, "sysprop", "include", syspropFile.Rel()+".h")
-	systemHeaderFile := android.PathForModuleGen(ctx, "sysprop/system", "include", syspropFile.Rel()+".h")
+	publicHeaderFile := android.PathForModuleGen(ctx, "sysprop/public", "include", syspropFile.Rel()+".h")
 	cppFile := android.PathForModuleGen(ctx, "sysprop", syspropFile.Rel()+".cpp")
 
 	ctx.Build(pctx, android.BuildParams{
@@ -152,7 +168,7 @@ func genSysprop(ctx android.ModuleContext, syspropFile android.Path) (android.Pa
 		Input:          syspropFile,
 		Args: map[string]string{
 			"headerOutDir": filepath.Dir(headerFile.String()),
-			"systemOutDir": filepath.Dir(systemHeaderFile.String()),
+			"publicOutDir": filepath.Dir(publicHeaderFile.String()),
 			"srcOutDir":    filepath.Dir(cppFile.String()),
 			"includeName":  syspropFile.Rel() + ".h",
 		},
@@ -187,6 +203,8 @@ func genSources(ctx android.ModuleContext, srcFiles android.Paths,
 	var deps android.Paths
 	var rsFiles android.Paths
 
+	var aidlRule *android.RuleBuilder
+
 	var yaccRule_ *android.RuleBuilder
 	yaccRule := func() *android.RuleBuilder {
 		if yaccRule_ == nil {
@@ -218,10 +236,14 @@ func genSources(ctx android.ModuleContext, srcFiles android.Paths,
 			srcFiles[i] = ccFile
 			deps = append(deps, headerFile)
 		case ".aidl":
+			if aidlRule == nil {
+				aidlRule = android.NewRuleBuilder().Sbox(android.PathForModuleGen(ctx, "aidl"))
+			}
 			cppFile := android.GenPathWithExt(ctx, "aidl", srcFile, "cpp")
+			depFile := android.GenPathWithExt(ctx, "aidl", srcFile, "cpp.d")
 			srcFiles[i] = cppFile
-			deps = append(deps, genAidl(ctx, srcFile, cppFile, buildFlags.aidlFlags)...)
-		case ".rs", ".fs":
+			deps = append(deps, genAidl(ctx, aidlRule, srcFile, cppFile, depFile, buildFlags.aidlFlags)...)
+		case ".rscript", ".fs":
 			cppFile := rsGeneratedCppFile(ctx, srcFile)
 			rsFiles = append(rsFiles, srcFiles[i])
 			srcFiles[i] = cppFile
@@ -234,6 +256,10 @@ func genSources(ctx android.ModuleContext, srcFiles android.Paths,
 			srcFiles[i] = cppFile
 			deps = append(deps, headerFile)
 		}
+	}
+
+	if aidlRule != nil {
+		aidlRule.Build(pctx, ctx, "aidl", "gen aidl")
 	}
 
 	if yaccRule_ != nil {

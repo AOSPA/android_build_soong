@@ -559,6 +559,10 @@ func newArch(name, multilib string) ArchType {
 	return archType
 }
 
+func ArchTypeList() []ArchType {
+	return append([]ArchType(nil), archTypeList...)
+}
+
 func (a ArchType) String() string {
 	return a.Name
 }
@@ -693,9 +697,11 @@ const (
 )
 
 type Target struct {
-	Os           OsType
-	Arch         Arch
-	NativeBridge NativeBridgeSupport
+	Os                       OsType
+	Arch                     Arch
+	NativeBridge             NativeBridgeSupport
+	NativeBridgeHostArchName string
+	NativeBridgeRelativePath string
 }
 
 func (target Target) String() string {
@@ -712,10 +718,10 @@ func (target Target) String() string {
 //    - The HostOrDeviceSupported value passed in to InitAndroidArchModule by the module type factory, which selects
 //      whether the module type can compile for host, device or both.
 //    - The host_supported and device_supported properties on the module.
-// If host is supported for the module, the Host and HostCross OsClasses are  are selected.  If device is supported
+// If host is supported for the module, the Host and HostCross OsClasses are selected.  If device is supported
 // for the module, the Device OsClass is selected.
 // Within each selected OsClass, the multilib selection is determined by:
-//    - The compile_multilib property if it set (which may be overriden by target.android.compile_multlib or
+//    - The compile_multilib property if it set (which may be overridden by target.android.compile_multilib or
 //      target.host.compile_multilib).
 //    - The default multilib passed to InitAndroidArchModule if compile_multilib was not set.
 // Valid multilib values include:
@@ -1131,7 +1137,7 @@ func InitArchModule(m Module) {
 
 var variantReplacer = strings.NewReplacer("-", "_", ".", "_")
 
-func (a *ModuleBase) appendProperties(ctx BottomUpMutatorContext,
+func (m *ModuleBase) appendProperties(ctx BottomUpMutatorContext,
 	dst interface{}, src reflect.Value, field, srcPrefix string) reflect.Value {
 
 	src = src.FieldByName(field)
@@ -1169,16 +1175,16 @@ func (a *ModuleBase) appendProperties(ctx BottomUpMutatorContext,
 }
 
 // Rewrite the module's properties structs to contain arch-specific values.
-func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
-	arch := a.Arch()
-	os := a.Os()
+func (m *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
+	arch := m.Arch()
+	os := m.Os()
 
-	for i := range a.generalProperties {
-		genProps := a.generalProperties[i]
-		if a.archProperties[i] == nil {
+	for i := range m.generalProperties {
+		genProps := m.generalProperties[i]
+		if m.archProperties[i] == nil {
 			continue
 		}
-		for _, archProperties := range a.archProperties[i] {
+		for _, archProperties := range m.archProperties[i] {
 			archPropValues := reflect.ValueOf(archProperties).Elem()
 
 			archProp := archPropValues.FieldByName("Arch")
@@ -1199,7 +1205,7 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 			if arch.ArchType != Common {
 				field := proptools.FieldNameForProperty(t.Name)
 				prefix := "arch." + t.Name
-				archStruct := a.appendProperties(ctx, genProps, archProp, field, prefix)
+				archStruct := m.appendProperties(ctx, genProps, archProp, field, prefix)
 
 				// Handle arch-variant-specific properties in the form:
 				// arch: {
@@ -1211,7 +1217,7 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 				if v != "" {
 					field := proptools.FieldNameForProperty(v)
 					prefix := "arch." + t.Name + "." + v
-					a.appendProperties(ctx, genProps, archStruct, field, prefix)
+					m.appendProperties(ctx, genProps, archStruct, field, prefix)
 				}
 
 				// Handle cpu-variant-specific properties in the form:
@@ -1225,7 +1231,7 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 					if c != "" {
 						field := proptools.FieldNameForProperty(c)
 						prefix := "arch." + t.Name + "." + c
-						a.appendProperties(ctx, genProps, archStruct, field, prefix)
+						m.appendProperties(ctx, genProps, archStruct, field, prefix)
 					}
 				}
 
@@ -1238,7 +1244,7 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 				for _, feature := range arch.ArchFeatures {
 					field := proptools.FieldNameForProperty(feature)
 					prefix := "arch." + t.Name + "." + feature
-					a.appendProperties(ctx, genProps, archStruct, field, prefix)
+					m.appendProperties(ctx, genProps, archStruct, field, prefix)
 				}
 
 				// Handle multilib-specific properties in the form:
@@ -1249,7 +1255,7 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 				// },
 				field = proptools.FieldNameForProperty(t.Multilib)
 				prefix = "multilib." + t.Multilib
-				a.appendProperties(ctx, genProps, multilibProp, field, prefix)
+				m.appendProperties(ctx, genProps, multilibProp, field, prefix)
 			}
 
 			// Handle host-specific properties in the form:
@@ -1261,7 +1267,7 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 			if os.Class == Host || os.Class == HostCross {
 				field = "Host"
 				prefix = "target.host"
-				a.appendProperties(ctx, genProps, targetProp, field, prefix)
+				m.appendProperties(ctx, genProps, targetProp, field, prefix)
 			}
 
 			// Handle target OS generalities of the form:
@@ -1276,24 +1282,24 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 			if os.Linux() {
 				field = "Linux"
 				prefix = "target.linux"
-				a.appendProperties(ctx, genProps, targetProp, field, prefix)
+				m.appendProperties(ctx, genProps, targetProp, field, prefix)
 
 				if arch.ArchType != Common {
 					field = "Linux_" + arch.ArchType.Name
 					prefix = "target.linux_" + arch.ArchType.Name
-					a.appendProperties(ctx, genProps, targetProp, field, prefix)
+					m.appendProperties(ctx, genProps, targetProp, field, prefix)
 				}
 			}
 
 			if os.Bionic() {
 				field = "Bionic"
 				prefix = "target.bionic"
-				a.appendProperties(ctx, genProps, targetProp, field, prefix)
+				m.appendProperties(ctx, genProps, targetProp, field, prefix)
 
 				if arch.ArchType != Common {
 					field = "Bionic_" + t.Name
 					prefix = "target.bionic_" + t.Name
-					a.appendProperties(ctx, genProps, targetProp, field, prefix)
+					m.appendProperties(ctx, genProps, targetProp, field, prefix)
 				}
 			}
 
@@ -1323,18 +1329,18 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 			// },
 			field = os.Field
 			prefix = "target." + os.Name
-			a.appendProperties(ctx, genProps, targetProp, field, prefix)
+			m.appendProperties(ctx, genProps, targetProp, field, prefix)
 
 			if arch.ArchType != Common {
 				field = os.Field + "_" + t.Name
 				prefix = "target." + os.Name + "_" + t.Name
-				a.appendProperties(ctx, genProps, targetProp, field, prefix)
+				m.appendProperties(ctx, genProps, targetProp, field, prefix)
 			}
 
 			if (os.Class == Host || os.Class == HostCross) && os != Windows {
 				field := "Not_windows"
 				prefix := "target.not_windows"
-				a.appendProperties(ctx, genProps, targetProp, field, prefix)
+				m.appendProperties(ctx, genProps, targetProp, field, prefix)
 			}
 
 			// Handle 64-bit device properties in the form:
@@ -1354,11 +1360,11 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 				if ctx.Config().Android64() {
 					field := "Android64"
 					prefix := "target.android64"
-					a.appendProperties(ctx, genProps, targetProp, field, prefix)
+					m.appendProperties(ctx, genProps, targetProp, field, prefix)
 				} else {
 					field := "Android32"
 					prefix := "target.android32"
-					a.appendProperties(ctx, genProps, targetProp, field, prefix)
+					m.appendProperties(ctx, genProps, targetProp, field, prefix)
 				}
 
 				if (arch.ArchType == X86 && (hasArmAbi(arch) ||
@@ -1367,7 +1373,7 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 						hasX86AndroidArch(ctx.Config().Targets[Android])) {
 					field := "Arm_on_x86"
 					prefix := "target.arm_on_x86"
-					a.appendProperties(ctx, genProps, targetProp, field, prefix)
+					m.appendProperties(ctx, genProps, targetProp, field, prefix)
 				}
 				if (arch.ArchType == X86_64 && (hasArmAbi(arch) ||
 					hasArmAndroidArch(ctx.Config().Targets[Android]))) ||
@@ -1375,7 +1381,7 @@ func (a *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 						hasX8664AndroidArch(ctx.Config().Targets[Android])) {
 					field := "Arm_on_x86_64"
 					prefix := "target.arm_on_x86_64"
-					a.appendProperties(ctx, genProps, targetProp, field, prefix)
+					m.appendProperties(ctx, genProps, targetProp, field, prefix)
 				}
 			}
 		}
@@ -1405,7 +1411,8 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 	var targetErr error
 
 	addTarget := func(os OsType, archName string, archVariant, cpuVariant *string, abi []string,
-		nativeBridgeEnabled NativeBridgeSupport) {
+		nativeBridgeEnabled NativeBridgeSupport, nativeBridgeHostArchName *string,
+		nativeBridgeRelativePath *string) {
 		if targetErr != nil {
 			return
 		}
@@ -1415,12 +1422,21 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 			targetErr = err
 			return
 		}
+		nativeBridgeRelativePathStr := String(nativeBridgeRelativePath)
+		nativeBridgeHostArchNameStr := String(nativeBridgeHostArchName)
+
+		// Use guest arch as relative install path by default
+		if nativeBridgeEnabled && nativeBridgeRelativePathStr == "" {
+			nativeBridgeRelativePathStr = arch.ArchType.String()
+		}
 
 		targets[os] = append(targets[os],
 			Target{
-				Os:           os,
-				Arch:         arch,
-				NativeBridge: nativeBridgeEnabled,
+				Os:                       os,
+				Arch:                     arch,
+				NativeBridge:             nativeBridgeEnabled,
+				NativeBridgeHostArchName: nativeBridgeHostArchNameStr,
+				NativeBridgeRelativePath: nativeBridgeRelativePathStr,
 			})
 	}
 
@@ -1428,14 +1444,14 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 		return nil, fmt.Errorf("No host primary architecture set")
 	}
 
-	addTarget(BuildOs, *variables.HostArch, nil, nil, nil, NativeBridgeDisabled)
+	addTarget(BuildOs, *variables.HostArch, nil, nil, nil, NativeBridgeDisabled, nil, nil)
 
 	if variables.HostSecondaryArch != nil && *variables.HostSecondaryArch != "" {
-		addTarget(BuildOs, *variables.HostSecondaryArch, nil, nil, nil, NativeBridgeDisabled)
+		addTarget(BuildOs, *variables.HostSecondaryArch, nil, nil, nil, NativeBridgeDisabled, nil, nil)
 	}
 
 	if Bool(config.Host_bionic) {
-		addTarget(LinuxBionic, "x86_64", nil, nil, nil, NativeBridgeDisabled)
+		addTarget(LinuxBionic, "x86_64", nil, nil, nil, NativeBridgeDisabled, nil, nil)
 	}
 
 	if String(variables.CrossHost) != "" {
@@ -1448,10 +1464,10 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 			return nil, fmt.Errorf("No cross-host primary architecture set")
 		}
 
-		addTarget(crossHostOs, *variables.CrossHostArch, nil, nil, nil, NativeBridgeDisabled)
+		addTarget(crossHostOs, *variables.CrossHostArch, nil, nil, nil, NativeBridgeDisabled, nil, nil)
 
 		if variables.CrossHostSecondaryArch != nil && *variables.CrossHostSecondaryArch != "" {
-			addTarget(crossHostOs, *variables.CrossHostSecondaryArch, nil, nil, nil, NativeBridgeDisabled)
+			addTarget(crossHostOs, *variables.CrossHostSecondaryArch, nil, nil, nil, NativeBridgeDisabled, nil, nil)
 		}
 	}
 
@@ -1462,12 +1478,12 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 		}
 
 		addTarget(target, *variables.DeviceArch, variables.DeviceArchVariant,
-			variables.DeviceCpuVariant, variables.DeviceAbi, NativeBridgeDisabled)
+			variables.DeviceCpuVariant, variables.DeviceAbi, NativeBridgeDisabled, nil, nil)
 
 		if variables.DeviceSecondaryArch != nil && *variables.DeviceSecondaryArch != "" {
 			addTarget(Android, *variables.DeviceSecondaryArch,
 				variables.DeviceSecondaryArchVariant, variables.DeviceSecondaryCpuVariant,
-				variables.DeviceSecondaryAbi, NativeBridgeDisabled)
+				variables.DeviceSecondaryAbi, NativeBridgeDisabled, nil, nil)
 
 			deviceArches := targets[Android]
 			if deviceArches[0].Arch.ArchType.Multilib == deviceArches[1].Arch.ArchType.Multilib {
@@ -1478,7 +1494,8 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 		if variables.NativeBridgeArch != nil && *variables.NativeBridgeArch != "" {
 			addTarget(Android, *variables.NativeBridgeArch,
 				variables.NativeBridgeArchVariant, variables.NativeBridgeCpuVariant,
-				variables.NativeBridgeAbi, NativeBridgeEnabled)
+				variables.NativeBridgeAbi, NativeBridgeEnabled, variables.DeviceArch,
+				variables.NativeBridgeRelativePath)
 		}
 
 		if variables.DeviceSecondaryArch != nil && *variables.DeviceSecondaryArch != "" &&
@@ -1486,7 +1503,10 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 			addTarget(Android, *variables.NativeBridgeSecondaryArch,
 				variables.NativeBridgeSecondaryArchVariant,
 				variables.NativeBridgeSecondaryCpuVariant,
-				variables.NativeBridgeSecondaryAbi, NativeBridgeEnabled)
+				variables.NativeBridgeSecondaryAbi,
+				NativeBridgeEnabled,
+				variables.DeviceSecondaryArch,
+				variables.NativeBridgeSecondaryRelativePath)
 		}
 	}
 

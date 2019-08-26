@@ -15,22 +15,20 @@
 package android
 
 import (
-	"io/ioutil"
-	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
 
 func testPrebuiltEtc(t *testing.T, bp string) (*TestContext, Config) {
-	config, buildDir := setUp(t)
-	defer tearDown(buildDir)
+	config := TestArchConfig(buildDir, nil)
 	ctx := NewTestArchContext()
 	ctx.RegisterModuleType("prebuilt_etc", ModuleFactoryAdaptor(PrebuiltEtcFactory))
 	ctx.RegisterModuleType("prebuilt_etc_host", ModuleFactoryAdaptor(PrebuiltEtcHostFactory))
 	ctx.RegisterModuleType("prebuilt_usr_share", ModuleFactoryAdaptor(PrebuiltUserShareFactory))
 	ctx.RegisterModuleType("prebuilt_usr_share_host", ModuleFactoryAdaptor(PrebuiltUserShareHostFactory))
 	ctx.RegisterModuleType("prebuilt_font", ModuleFactoryAdaptor(PrebuiltFontFactory))
+	ctx.RegisterModuleType("prebuilt_firmware", ModuleFactoryAdaptor(PrebuiltFirmwareFactory))
 	ctx.PreDepsMutators(func(ctx RegisterMutatorsContext) {
 		ctx.BottomUp("prebuilt_etc", prebuiltEtcMutator).Parallel()
 	})
@@ -48,20 +46,6 @@ func testPrebuiltEtc(t *testing.T, bp string) (*TestContext, Config) {
 	FailIfErrored(t, errs)
 
 	return ctx, config
-}
-
-func setUp(t *testing.T) (config Config, buildDir string) {
-	buildDir, err := ioutil.TempDir("", "soong_prebuilt_etc_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	config = TestArchConfig(buildDir, nil)
-	return
-}
-
-func tearDown(buildDir string) {
-	os.RemoveAll(buildDir)
 }
 
 func TestPrebuiltEtcVariants(t *testing.T) {
@@ -233,5 +217,41 @@ func TestPrebuiltFontInstallDirPath(t *testing.T) {
 	expected := "target/product/test_device/system/fonts"
 	if p.installDirPath.RelPathString() != expected {
 		t.Errorf("expected %q, got %q", expected, p.installDirPath.RelPathString())
+	}
+}
+
+func TestPrebuiltFirmwareDirPath(t *testing.T) {
+	targetPath := "target/product/test_device"
+	tests := []struct {
+		description  string
+		config       string
+		expectedPath string
+	}{{
+		description: "prebuilt: system firmware",
+		config: `
+			prebuilt_firmware {
+				name: "foo.conf",
+				src: "foo.conf",
+			}`,
+		expectedPath: filepath.Join(targetPath, "system/etc/firmware"),
+	}, {
+		description: "prebuilt: vendor firmware",
+		config: `
+			prebuilt_firmware {
+				name: "foo.conf",
+				src: "foo.conf",
+				soc_specific: true,
+				sub_dir: "sub_dir",
+			}`,
+		expectedPath: filepath.Join(targetPath, "vendor/firmware/sub_dir"),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			ctx, _ := testPrebuiltEtc(t, tt.config)
+			p := ctx.ModuleForTests("foo.conf", "android_arm64_armv8-a_core").Module().(*PrebuiltEtc)
+			if p.installDirPath.RelPathString() != tt.expectedPath {
+				t.Errorf("expected %q, got %q", tt.expectedPath, p.installDirPath)
+			}
+		})
 	}
 }

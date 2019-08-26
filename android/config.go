@@ -240,10 +240,10 @@ func TestArchConfigNativeBridge(buildDir string, env map[string]string) Config {
 	config := testConfig.config
 
 	config.Targets[Android] = []Target{
-		{Android, Arch{ArchType: X86_64, ArchVariant: "silvermont", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled},
-		{Android, Arch{ArchType: X86, ArchVariant: "silvermont", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeDisabled},
-		{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeEnabled},
-		{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeEnabled},
+		{Android, Arch{ArchType: X86_64, ArchVariant: "silvermont", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled, "", ""},
+		{Android, Arch{ArchType: X86, ArchVariant: "silvermont", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeDisabled, "", ""},
+		{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeEnabled, "x86_64", "arm64"},
+		{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeEnabled, "x86", "arm"},
 	}
 
 	return testConfig
@@ -255,10 +255,10 @@ func TestArchConfigFuchsia(buildDir string, env map[string]string) Config {
 
 	config.Targets = map[OsType][]Target{
 		Fuchsia: []Target{
-			{Fuchsia, Arch{ArchType: Arm64, ArchVariant: "", Native: true}, NativeBridgeDisabled},
+			{Fuchsia, Arch{ArchType: Arm64, ArchVariant: "", Native: true}, NativeBridgeDisabled, "", ""},
 		},
 		BuildOs: []Target{
-			{BuildOs, Arch{ArchType: X86_64}, NativeBridgeDisabled},
+			{BuildOs, Arch{ArchType: X86_64}, NativeBridgeDisabled, "", ""},
 		},
 	}
 
@@ -272,12 +272,12 @@ func TestArchConfig(buildDir string, env map[string]string) Config {
 
 	config.Targets = map[OsType][]Target{
 		Android: []Target{
-			{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled},
-			{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeDisabled},
+			{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Native: true, Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled, "", ""},
+			{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Native: true, Abi: []string{"armeabi-v7a"}}, NativeBridgeDisabled, "", ""},
 		},
 		BuildOs: []Target{
-			{BuildOs, Arch{ArchType: X86_64}, NativeBridgeDisabled},
-			{BuildOs, Arch{ArchType: X86}, NativeBridgeDisabled},
+			{BuildOs, Arch{ArchType: X86_64}, NativeBridgeDisabled, "", ""},
+			{BuildOs, Arch{ArchType: X86}, NativeBridgeDisabled, "", ""},
 		},
 	}
 
@@ -689,10 +689,6 @@ func (c *config) DevicePrimaryArchType() ArchType {
 	return c.Targets[Android][0].Arch.ArchType
 }
 
-func (c *config) SkipDeviceInstall() bool {
-	return c.EmbeddedInMake()
-}
-
 func (c *config) SkipMegaDeviceInstall(path string) bool {
 	return Bool(c.Mega_device) &&
 		strings.HasPrefix(path, filepath.Join(c.buildDir, "target", "product"))
@@ -748,8 +744,20 @@ func (c *config) UseGoma() bool {
 	return Bool(c.productVariables.UseGoma)
 }
 
+func (c *config) UseRBE() bool {
+	return Bool(c.productVariables.UseRBE)
+}
+
 func (c *config) RunErrorProne() bool {
 	return c.IsEnvTrue("RUN_ERROR_PRONE")
+}
+
+func (c *config) XrefCorpusName() string {
+	return c.Getenv("XREF_CORPUS")
+}
+
+func (c *config) EmitXrefRules() bool {
+	return c.XrefCorpusName() != ""
 }
 
 // Returns true if -source 1.9 -target 1.9 is being passed to javac
@@ -840,6 +848,10 @@ func (c *config) FrameworksBaseDirExists(ctx PathContext) bool {
 	return ExistentPathForSource(ctx, "frameworks", "base").Valid()
 }
 
+func (c *config) VndkSnapshotBuildArtifacts() bool {
+	return Bool(c.productVariables.VndkSnapshotBuildArtifacts)
+}
+
 func (c *deviceConfig) Arches() []Arch {
 	var arches []Arch
 	for _, target := range c.config.Targets[Android] {
@@ -901,11 +913,11 @@ func (c *deviceConfig) ProductPath() string {
 	return "product"
 }
 
-func (c *deviceConfig) ProductServicesPath() string {
-	if c.config.productVariables.ProductServicesPath != nil {
-		return *c.config.productVariables.ProductServicesPath
+func (c *deviceConfig) SystemExtPath() string {
+	if c.config.productVariables.SystemExtPath != nil {
+		return *c.config.productVariables.SystemExtPath
 	}
-	return "product_services"
+	return "system_ext"
 }
 
 func (c *deviceConfig) BtConfigIncludeDir() string {
@@ -1065,7 +1077,7 @@ func (c *config) ExcludeDraftNdkApis() bool {
 }
 
 func (c *config) FlattenApex() bool {
-	return Bool(c.productVariables.FlattenApex)
+	return Bool(c.productVariables.Flatten_apex)
 }
 
 func (c *config) EnforceSystemCertificate() bool {
@@ -1102,6 +1114,10 @@ func (c *config) ProductPrivateSepolicyDirs() []string {
 
 func (c *config) ProductCompatibleProperty() bool {
 	return Bool(c.productVariables.ProductCompatibleProperty)
+}
+
+func (c *config) MissingUsesLibraries() []string {
+	return c.productVariables.MissingUsesLibraries
 }
 
 func (c *deviceConfig) BoardVndkRuntimeDisable() bool {

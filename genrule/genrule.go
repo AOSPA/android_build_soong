@@ -40,6 +40,7 @@ var (
 )
 
 func init() {
+	pctx.Import("android/soong/android")
 	pctx.HostBinToolVariable("sboxCmd", "sbox")
 }
 
@@ -101,6 +102,7 @@ type generatorProperties struct {
 type Module struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	android.ApexModuleBase
 
 	// For other packages to make their own genrules with extra
 	// properties
@@ -283,12 +285,12 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	referencedDepfile := false
 
-	rawCommand, err := android.Expand(task.cmd, func(name string) (string, error) {
+	rawCommand, err := android.ExpandNinjaEscaped(task.cmd, func(name string) (string, bool, error) {
 		// report the error directly without returning an error to android.Expand to catch multiple errors in a
 		// single run
-		reportError := func(fmt string, args ...interface{}) (string, error) {
+		reportError := func(fmt string, args ...interface{}) (string, bool, error) {
 			ctx.PropertyErrorf("cmd", fmt, args...)
-			return "SOONG_ERROR", nil
+			return "SOONG_ERROR", false, nil
 		}
 
 		switch name {
@@ -303,19 +305,19 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				return reportError("default label %q has multiple files, use $(locations %s) to reference it",
 					firstLabel, firstLabel)
 			}
-			return locationLabels[firstLabel][0], nil
+			return locationLabels[firstLabel][0], false, nil
 		case "in":
-			return "${in}", nil
+			return "${in}", true, nil
 		case "out":
-			return "__SBOX_OUT_FILES__", nil
+			return "__SBOX_OUT_FILES__", false, nil
 		case "depfile":
 			referencedDepfile = true
 			if !Bool(g.properties.Depfile) {
 				return reportError("$(depfile) used without depfile property")
 			}
-			return "__SBOX_DEPFILE__", nil
+			return "__SBOX_DEPFILE__", false, nil
 		case "genDir":
-			return "__SBOX_OUT_DIR__", nil
+			return "__SBOX_OUT_DIR__", false, nil
 		default:
 			if strings.HasPrefix(name, "location ") {
 				label := strings.TrimSpace(strings.TrimPrefix(name, "location "))
@@ -326,7 +328,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						return reportError("label %q has multiple files, use $(locations %s) to reference it",
 							label, label)
 					}
-					return paths[0], nil
+					return paths[0], false, nil
 				} else {
 					return reportError("unknown location label %q", label)
 				}
@@ -336,7 +338,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					if len(paths) == 0 {
 						return reportError("label %q has no files", label)
 					}
-					return strings.Join(paths, " "), nil
+					return strings.Join(paths, " "), false, nil
 				} else {
 					return reportError("unknown locations label %q", label)
 				}
@@ -424,7 +426,24 @@ func (g *Module) generateSourceFile(ctx android.ModuleContext, task generateTask
 	for _, outputFile := range task.out {
 		g.outputFiles = append(g.outputFiles, outputFile)
 	}
-	g.outputDeps = append(g.outputDeps, task.out[0])
+
+	// For <= 6 outputs, just embed those directly in the users. Right now, that covers >90% of
+	// the genrules on AOSP. That will make things simpler to look at the graph in the common
+	// case. For larger sets of outputs, inject a phony target in between to limit ninja file
+	// growth.
+	if len(task.out) <= 6 {
+		g.outputDeps = g.outputFiles
+	} else {
+		phonyFile := android.PathForModuleGen(ctx, "genrule-phony")
+
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.Phony,
+			Output: phonyFile,
+			Inputs: g.outputFiles,
+		})
+
+		g.outputDeps = android.Paths{phonyFile}
+	}
 }
 
 // Collect information for opening IDE project files in java/jdeps.go.
@@ -580,9 +599,6 @@ var String = proptools.String
 type Defaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
-}
-
-func (*Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 
 func defaultsFactory() android.Module {

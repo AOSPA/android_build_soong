@@ -132,8 +132,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r353983c"
-	ClangDefaultShortVersion = "9.0.3"
+	ClangDefaultVersion      = "clang-r353983d"
+	ClangDefaultShortVersion = "9.0.4"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -160,8 +160,22 @@ func init() {
 	pctx.StaticVariable("HostGlobalLdflags", strings.Join(hostGlobalLdflags, " "))
 	pctx.StaticVariable("HostGlobalLldflags", strings.Join(hostGlobalLldflags, " "))
 
-	pctx.StaticVariable("CommonClangGlobalCflags",
-		strings.Join(append(ClangFilterUnknownCflags(commonGlobalCflags), "${ClangExtraCflags}"), " "))
+	pctx.VariableFunc("CommonClangGlobalCflags", func(ctx android.PackageVarContext) string {
+		flags := ClangFilterUnknownCflags(commonGlobalCflags)
+		flags = append(flags, "${ClangExtraCflags}")
+
+		// http://b/131390872
+		// Automatically initialize any uninitialized stack variables.
+		// Prefer zero-init if both options are set.
+		if ctx.Config().IsEnvTrue("AUTO_ZERO_INITIALIZE") {
+			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
+		} else if ctx.Config().IsEnvTrue("AUTO_PATTERN_INITIALIZE") {
+			flags = append(flags, "-ftrivial-auto-var-init=pattern")
+		}
+
+		return strings.Join(flags, " ")
+	})
+
 	pctx.VariableFunc("DeviceClangGlobalCflags", func(ctx android.PackageVarContext) string {
 		if ctx.Config().Fuchsia() {
 			return strings.Join(ClangFilterUnknownCflags(deviceGlobalCflags), " ")

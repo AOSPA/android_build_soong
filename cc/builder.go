@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -79,7 +78,7 @@ var (
 		blueprint.RuleParams{
 			// Without -no-pie, clang 7.0 adds -pie to link Android files,
 			// but -r and -pie cannot be used together.
-			Command:     "$ldCmd -nostdlib -no-pie -Wl,-r ${in} -o ${out} ${ldFlags}",
+			Command:     "$ldCmd -fuse-ld=lld -nostdlib -no-pie -Wl,-r ${in} -o ${out} ${ldFlags}",
 			CommandDeps: []string{"$ldCmd"},
 		},
 		"ldCmd", "ldFlags")
@@ -92,20 +91,6 @@ var (
 			RspfileContent: "${in}",
 		},
 		"arCmd", "arFlags")
-
-	darwinAr = pctx.AndroidStaticRule("darwinAr",
-		blueprint.RuleParams{
-			Command:     "rm -f ${out} && ${config.MacArPath} $arFlags $out $in",
-			CommandDeps: []string{"${config.MacArPath}"},
-		},
-		"arFlags")
-
-	darwinAppendAr = pctx.AndroidStaticRule("darwinAppendAr",
-		blueprint.RuleParams{
-			Command:     "cp -f ${inAr} ${out}.tmp && ${config.MacArPath} $arFlags ${out}.tmp $in && mv ${out}.tmp ${out}",
-			CommandDeps: []string{"${config.MacArPath}", "${inAr}"},
-		},
-		"arFlags", "inAr")
 
 	darwinStrip = pctx.AndroidStaticRule("darwinStrip",
 		blueprint.RuleParams{
@@ -228,6 +213,25 @@ var (
 		blueprint.RuleParams{
 			Command: "gunzip -c $in > $out",
 		})
+
+	zip = pctx.AndroidStaticRule("zip",
+		blueprint.RuleParams{
+			Command:        "cat $out.rsp | tr ' ' '\\n' | tr -d \\' | sort -u > ${out}.tmp && ${SoongZipCmd} -o ${out} -C $$OUT_DIR -l ${out}.tmp",
+			CommandDeps:    []string{"${SoongZipCmd}"},
+			Rspfile:        "$out.rsp",
+			RspfileContent: "$in",
+		})
+
+	_ = pctx.SourcePathVariable("cxxExtractor",
+		"prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/cxx_extractor")
+	_ = pctx.VariableFunc("kytheCorpus",
+		func(ctx android.PackageVarContext) string { return ctx.Config().XrefCorpusName() })
+	kytheExtract = pctx.StaticRule("kythe",
+		blueprint.RuleParams{
+			Command:     "rm -f $out && KYTHE_CORPUS=${kytheCorpus} KYTHE_OUTPUT_FILE=$out $cxxExtractor $cFlags $in ",
+			CommandDeps: []string{"$cxxExtractor"},
+		},
+		"cFlags")
 )
 
 func init() {
@@ -240,6 +244,8 @@ func init() {
 		// Darwin doesn't have /proc
 		pctx.StaticVariable("relPwd", "")
 	}
+
+	pctx.HostBinToolVariable("SoongZipCmd", "soong_zip")
 }
 
 type builderFlags struct {
@@ -263,6 +269,7 @@ type builderFlags struct {
 	tidy            bool
 	coverage        bool
 	sAbiDump        bool
+	emitXrefs       bool
 
 	systemIncludeFlags string
 
@@ -287,6 +294,7 @@ type Objects struct {
 	tidyFiles     android.Paths
 	coverageFiles android.Paths
 	sAbiDumpFiles android.Paths
+	kytheFiles    android.Paths
 }
 
 func (a Objects) Copy() Objects {
@@ -295,6 +303,7 @@ func (a Objects) Copy() Objects {
 		tidyFiles:     append(android.Paths{}, a.tidyFiles...),
 		coverageFiles: append(android.Paths{}, a.coverageFiles...),
 		sAbiDumpFiles: append(android.Paths{}, a.sAbiDumpFiles...),
+		kytheFiles:    append(android.Paths{}, a.kytheFiles...),
 	}
 }
 
@@ -304,6 +313,7 @@ func (a Objects) Append(b Objects) Objects {
 		tidyFiles:     append(a.tidyFiles, b.tidyFiles...),
 		coverageFiles: append(a.coverageFiles, b.coverageFiles...),
 		sAbiDumpFiles: append(a.sAbiDumpFiles, b.sAbiDumpFiles...),
+		kytheFiles:    append(a.kytheFiles, b.kytheFiles...),
 	}
 }
 
@@ -319,6 +329,10 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 	var coverageFiles android.Paths
 	if flags.coverage {
 		coverageFiles = make(android.Paths, 0, len(srcFiles))
+	}
+	var kytheFiles android.Paths
+	if flags.emitXrefs {
+		kytheFiles = make(android.Paths, 0, len(srcFiles))
 	}
 
 	commonFlags := strings.Join([]string{
@@ -407,6 +421,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 		coverage := flags.coverage
 		dump := flags.sAbiDump
 		rule := cc
+		emitXref := flags.emitXrefs
 
 		switch srcFile.Ext() {
 		case ".s":
@@ -418,11 +433,12 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			tidy = false
 			coverage = false
 			dump = false
+			emitXref = false
 		case ".c":
 			ccCmd = "clang"
 			moduleCflags = cflags
 			moduleToolingCflags = toolingCflags
-		case ".cpp", ".cc", ".mm":
+		case ".cpp", ".cc", ".cxx", ".mm":
 			ccCmd = "clang++"
 			moduleCflags = cppflags
 			moduleToolingCflags = toolingCppflags
@@ -462,6 +478,22 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			},
 		})
 
+		if emitXref {
+			kytheFile := android.ObjPathWithExt(ctx, subdir, srcFile, "kzip")
+			ctx.Build(pctx, android.BuildParams{
+				Rule:        kytheExtract,
+				Description: "Xref C++ extractor " + srcFile.Rel(),
+				Output:      kytheFile,
+				Input:       srcFile,
+				Implicits:   cFlagsDeps,
+				OrderOnly:   pathDeps,
+				Args: map[string]string{
+					"cFlags": moduleCflags,
+				},
+			})
+			kytheFiles = append(kytheFiles, kytheFile)
+		}
+
 		if tidy {
 			tidyFile := android.ObjPathWithExt(ctx, subdir, srcFile, "tidy")
 			tidyFiles = append(tidyFiles, tidyFile)
@@ -473,7 +505,9 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				Input:       srcFile,
 				// We must depend on objFile, since clang-tidy doesn't
 				// support exporting dependencies.
-				Implicit: objFile,
+				Implicit:  objFile,
+				Implicits: cFlagsDeps,
+				OrderOnly: pathDeps,
 				Args: map[string]string{
 					"cFlags":    moduleToolingCflags,
 					"tidyFlags": flags.tidyFlags,
@@ -491,6 +525,8 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				Output:      sAbiDumpFile,
 				Input:       srcFile,
 				Implicit:    objFile,
+				Implicits:   cFlagsDeps,
+				OrderOnly:   pathDeps,
 				Args: map[string]string{
 					"cFlags":     moduleToolingCflags,
 					"exportDirs": flags.sAbiFlags,
@@ -505,17 +541,13 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 		tidyFiles:     tidyFiles,
 		coverageFiles: coverageFiles,
 		sAbiDumpFiles: sAbiDumpFiles,
+		kytheFiles:    kytheFiles,
 	}
 }
 
 // Generate a rule for compiling multiple .o files to a static library (.a)
 func TransformObjToStaticLib(ctx android.ModuleContext, objFiles android.Paths,
 	flags builderFlags, outputFile android.ModuleOutPath, deps android.Paths) {
-
-	if ctx.Darwin() {
-		transformDarwinObjToStaticLib(ctx, objFiles, flags, outputFile, deps)
-		return
-	}
 
 	arCmd := "${config.ClangBin}/llvm-ar"
 	arFlags := "crsD"
@@ -537,82 +569,6 @@ func TransformObjToStaticLib(ctx android.ModuleContext, objFiles android.Paths,
 			"arCmd":   arCmd,
 		},
 	})
-}
-
-// Generate a rule for compiling multiple .o files to a static library (.a) on
-// darwin.  The darwin ar tool doesn't support @file for list files, and has a
-// very small command line length limit, so we have to split the ar into multiple
-// steps, each appending to the previous one.
-func transformDarwinObjToStaticLib(ctx android.ModuleContext, objFiles android.Paths,
-	flags builderFlags, outputFile android.ModuleOutPath, deps android.Paths) {
-
-	arFlags := "cqs"
-
-	if len(objFiles) == 0 {
-		dummy := android.PathForModuleOut(ctx, "dummy"+objectExtension)
-		dummyAr := android.PathForModuleOut(ctx, "dummy"+staticLibraryExtension)
-
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        emptyFile,
-			Description: "empty object file",
-			Output:      dummy,
-			Implicits:   deps,
-		})
-
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        darwinAr,
-			Description: "empty static archive",
-			Output:      dummyAr,
-			Input:       dummy,
-			Args: map[string]string{
-				"arFlags": arFlags,
-			},
-		})
-
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        darwinAppendAr,
-			Description: "static link " + outputFile.Base(),
-			Output:      outputFile,
-			Input:       dummy,
-			Args: map[string]string{
-				"arFlags": "d",
-				"inAr":    dummyAr.String(),
-			},
-		})
-
-		return
-	}
-
-	// ARG_MAX on darwin is 262144, use half that to be safe
-	objFilesLists, err := splitListForSize(objFiles, 131072)
-	if err != nil {
-		ctx.ModuleErrorf("%s", err.Error())
-	}
-
-	var in, out android.WritablePath
-	for i, l := range objFilesLists {
-		in = out
-		out = outputFile
-		if i != len(objFilesLists)-1 {
-			out = android.PathForModuleOut(ctx, outputFile.Base()+strconv.Itoa(i))
-		}
-
-		build := android.BuildParams{
-			Rule:        darwinAr,
-			Description: "static link " + out.Base(),
-			Output:      out,
-			Inputs:      l,
-			Implicits:   deps,
-			Args: map[string]string{
-				"arFlags": arFlags,
-			},
-		}
-		if i != 0 {
-			build.Rule = darwinAppendAr
-			build.Args["inAr"] = in.String()
-		}
-		ctx.Build(pctx, build)
-	}
 }
 
 // Generate a rule for compiling multiple .o files, plus static libraries, whole static libraries,
@@ -701,9 +657,6 @@ func TransformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Path
 	excludedSymbolVersions, excludedSymbolTags []string) android.OptionalPath {
 
 	outputFile := android.PathForModuleOut(ctx, baseName+".lsdump")
-	sabiLock.Lock()
-	lsdumpPaths = append(lsdumpPaths, outputFile.String())
-	sabiLock.Unlock()
 
 	implicits := android.Paths{soFile}
 	symbolFilterStr := "-so " + soFile.String()
@@ -917,13 +870,18 @@ func TransformDarwinStrip(ctx android.ModuleContext, inputFile android.Path,
 	})
 }
 
-func TransformCoverageFilesToLib(ctx android.ModuleContext,
-	inputs Objects, flags builderFlags, baseName string) android.OptionalPath {
+func TransformCoverageFilesToZip(ctx android.ModuleContext,
+	inputs Objects, baseName string) android.OptionalPath {
 
 	if len(inputs.coverageFiles) > 0 {
-		outputFile := android.PathForModuleOut(ctx, baseName+".gcnodir")
+		outputFile := android.PathForModuleOut(ctx, baseName+".zip")
 
-		TransformObjToStaticLib(ctx, inputs.coverageFiles, flags, outputFile, nil)
+		ctx.Build(pctx, android.BuildParams{
+			Rule:        zip,
+			Description: "zip " + outputFile.Base(),
+			Inputs:      inputs.coverageFiles,
+			Output:      outputFile,
+		})
 
 		return android.OptionalPathForPath(outputFile)
 	}

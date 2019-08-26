@@ -55,6 +55,11 @@ func (library *Library) AndroidMkHostDex(w io.Writer, name string, data android.
 }
 
 func (library *Library) AndroidMk() android.AndroidMkData {
+	if !library.IsForPlatform() {
+		return android.AndroidMkData{
+			Disabled: true,
+		}
+	}
 	return android.AndroidMkData{
 		Class:      "JAVA_LIBRARIES",
 		OutputFile: android.OptionalPathForPath(library.outputFile),
@@ -96,14 +101,6 @@ func (library *Library) AndroidMk() android.AndroidMkData {
 
 				if library.proguardDictionary != nil {
 					fmt.Fprintln(w, "LOCAL_SOONG_PROGUARD_DICT :=", library.proguardDictionary.String())
-				}
-
-				// Temporary hack: export sources used to compile framework.jar to Make
-				// to be used for droiddoc
-				// TODO(ccross): remove this once droiddoc is in soong
-				if (library.Name() == "framework") || (library.Name() == "framework-annotation-proc") {
-					fmt.Fprintln(w, "SOONG_FRAMEWORK_SRCS :=", strings.Join(library.compiledJavaSrcs.Strings(), " "))
-					fmt.Fprintln(w, "SOONG_FRAMEWORK_SRCJARS :=", strings.Join(library.compiledSrcJars.Strings(), " "))
 				}
 			},
 		},
@@ -149,6 +146,11 @@ func (j *TestHelperLibrary) AndroidMk() android.AndroidMkData {
 }
 
 func (prebuilt *Import) AndroidMk() android.AndroidMkData {
+	if !prebuilt.IsForPlatform() {
+		return android.AndroidMkData{
+			Disabled: true,
+		}
+	}
 	return android.AndroidMkData{
 		Class:      "JAVA_LIBRARIES",
 		OutputFile: android.OptionalPathForPath(prebuilt.combinedClasspathFile),
@@ -165,6 +167,11 @@ func (prebuilt *Import) AndroidMk() android.AndroidMkData {
 }
 
 func (prebuilt *DexImport) AndroidMk() android.AndroidMkData {
+	if !prebuilt.IsForPlatform() {
+		return android.AndroidMkData{
+			Disabled: true,
+		}
+	}
 	return android.AndroidMkData{
 		Class:      "JAVA_LIBRARIES",
 		OutputFile: android.OptionalPathForPath(prebuilt.maybeStrippedDexJarFile),
@@ -334,6 +341,18 @@ func (app *AndroidApp) AndroidMk() android.AndroidMkData {
 				for _, split := range app.aapt.splits {
 					install := "$(LOCAL_MODULE_PATH)/" + strings.TrimSuffix(app.installApkName, ".apk") + split.suffix + ".apk"
 					fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED +=", split.path.String()+":"+install)
+				}
+				if app.noticeOutputs.Merged.Valid() {
+					fmt.Fprintf(w, "$(call dist-for-goals,%s,%s:%s)\n",
+						app.installApkName, app.noticeOutputs.Merged.String(), app.installApkName+"_NOTICE")
+				}
+				if app.noticeOutputs.TxtOutput.Valid() {
+					fmt.Fprintf(w, "$(call dist-for-goals,%s,%s:%s)\n",
+						app.installApkName, app.noticeOutputs.TxtOutput.String(), app.installApkName+"_NOTICE.txt")
+				}
+				if app.noticeOutputs.HtmlOutput.Valid() {
+					fmt.Fprintf(w, "$(call dist-for-goals,%s,%s:%s)\n",
+						app.installApkName, app.noticeOutputs.HtmlOutput.String(), app.installApkName+"_NOTICE.html")
 				}
 			},
 		},
@@ -590,28 +609,23 @@ func (dstubs *Droidstubs) AndroidMk() android.AndroidMkData {
 	}
 }
 
-func (app *AndroidAppImport) AndroidMk() android.AndroidMkData {
-	return android.AndroidMkData{
+func (a *AndroidAppImport) AndroidMkEntries() android.AndroidMkEntries {
+	return android.AndroidMkEntries{
 		Class:      "APPS",
-		OutputFile: android.OptionalPathForPath(app.outputFile),
+		OutputFile: android.OptionalPathForPath(a.outputFile),
 		Include:    "$(BUILD_SYSTEM)/soong_app_prebuilt.mk",
-		Extra: []android.AndroidMkExtraFunc{
-			func(w io.Writer, outputFile android.Path) {
-				if Bool(app.properties.Privileged) {
-					fmt.Fprintln(w, "LOCAL_PRIVILEGED_MODULE := true")
-				}
-				if app.certificate != nil {
-					fmt.Fprintln(w, "LOCAL_CERTIFICATE :=", app.certificate.Pem.String())
-				} else {
-					fmt.Fprintln(w, "LOCAL_CERTIFICATE := PRESIGNED")
-				}
-				if len(app.properties.Overrides) > 0 {
-					fmt.Fprintln(w, "LOCAL_OVERRIDES_PACKAGES :=", strings.Join(app.properties.Overrides, " "))
-				}
-				if len(app.dexpreopter.builtInstalled) > 0 {
-					fmt.Fprintln(w, "LOCAL_SOONG_BUILT_INSTALLED :=", app.dexpreopter.builtInstalled)
-				}
-			},
+		AddCustomEntries: func(name, prefix, moduleDir string, entries *android.AndroidMkEntries) {
+			entries.SetBoolIfTrue("LOCAL_PRIVILEGED_MODULE", Bool(a.properties.Privileged))
+			if a.certificate != nil {
+				entries.SetString("LOCAL_CERTIFICATE", a.certificate.Pem.String())
+			} else {
+				entries.SetString("LOCAL_CERTIFICATE", "PRESIGNED")
+			}
+			entries.AddStrings("LOCAL_OVERRIDES_PACKAGES", a.properties.Overrides...)
+			if len(a.dexpreopter.builtInstalled) > 0 {
+				entries.SetString("LOCAL_SOONG_BUILT_INSTALLED", a.dexpreopter.builtInstalled)
+			}
+			entries.AddStrings("LOCAL_INSTALLED_MODULE_STEM", a.installPath.Rel())
 		},
 	}
 }

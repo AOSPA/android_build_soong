@@ -106,13 +106,17 @@ func (binary *binaryDecorator) linkerProps() []interface{} {
 
 }
 
-func (binary *binaryDecorator) getStem(ctx BaseModuleContext) string {
+func (binary *binaryDecorator) getStemWithoutSuffix(ctx BaseModuleContext) string {
 	stem := ctx.baseModuleName()
 	if String(binary.Properties.Stem) != "" {
 		stem = String(binary.Properties.Stem)
 	}
 
-	return stem + String(binary.Properties.Suffix)
+	return stem
+}
+
+func (binary *binaryDecorator) getStem(ctx BaseModuleContext) string {
+	return binary.getStemWithoutSuffix(ctx) + String(binary.Properties.Suffix)
 }
 
 func (binary *binaryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
@@ -326,7 +330,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		}
 		strippedOutputFile := outputFile
 		outputFile = android.PathForModuleOut(ctx, "unstripped", fileName)
-		binary.stripper.strip(ctx, outputFile, strippedOutputFile, builderFlags)
+		binary.stripper.stripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile, builderFlags)
 	}
 
 	binary.unstrippedOutputFile = outputFile
@@ -350,7 +354,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 			if binary.stripper.needsStrip(ctx) {
 				out := android.PathForModuleOut(ctx, "versioned-stripped", fileName)
 				binary.distFile = android.OptionalPathForPath(out)
-				binary.stripper.strip(ctx, versionedOutputFile, out, builderFlags)
+				binary.stripper.stripExecutableOrSharedLib(ctx, versionedOutputFile, out, builderFlags)
 			}
 
 			binary.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
@@ -388,7 +392,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 
 	objs.coverageFiles = append(objs.coverageFiles, deps.StaticLibObjs.coverageFiles...)
 	objs.coverageFiles = append(objs.coverageFiles, deps.WholeStaticLibObjs.coverageFiles...)
-	binary.coverageOutputFile = TransformCoverageFilesToLib(ctx, objs, builderFlags, binary.getStem(ctx))
+	binary.coverageOutputFile = TransformCoverageFilesToZip(ctx, objs, binary.getStem(ctx))
 
 	// Need to determine symlinks early since some targets (ie APEX) need this
 	// information but will not call 'install'
@@ -398,11 +402,11 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 	}
 
 	if Bool(binary.Properties.Symlink_preferred_arch) {
-		if String(binary.Properties.Stem) == "" && String(binary.Properties.Suffix) == "" {
-			ctx.PropertyErrorf("symlink_preferred_arch", "must also specify stem or suffix")
+		if String(binary.Properties.Suffix) == "" {
+			ctx.PropertyErrorf("symlink_preferred_arch", "must also specify suffix")
 		}
 		if ctx.TargetPrimary() {
-			binary.symlinks = append(binary.symlinks, ctx.baseModuleName())
+			binary.symlinks = append(binary.symlinks, binary.getStemWithoutSuffix(ctx))
 		}
 	}
 
@@ -419,6 +423,10 @@ func (binary *binaryDecorator) symlinkList() []string {
 
 func (binary *binaryDecorator) nativeCoverage() bool {
 	return true
+}
+
+func (binary *binaryDecorator) coverageOutputFilePath() android.OptionalPath {
+	return binary.coverageOutputFile
 }
 
 // /system/bin/linker -> /apex/com.android.runtime/bin/linker
@@ -440,7 +448,8 @@ func (binary *binaryDecorator) install(ctx ModuleContext, file android.Path) {
 	// Bionic binaries (e.g. linker) is installed to the bootstrap subdirectory.
 	// The original path becomes a symlink to the corresponding file in the
 	// runtime APEX.
-	if installToBootstrap(ctx.baseModuleName(), ctx.Config()) && ctx.Arch().Native && ctx.apexName() == "" && !ctx.inRecovery() {
+	translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled || !ctx.Arch().Native
+	if installToBootstrap(ctx.baseModuleName(), ctx.Config()) && !translatedArch && ctx.apexName() == "" && !ctx.inRecovery() {
 		if ctx.Device() && isBionic(ctx.baseModuleName()) {
 			binary.installSymlinkToRuntimeApex(ctx, file)
 		}

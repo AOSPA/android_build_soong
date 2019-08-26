@@ -64,6 +64,10 @@ type TestBinaryProperties struct {
 
 	// Test options.
 	Test_options TestOptions
+
+	// Add RootTargetPreparer to auto generated test config. This guarantees the test to run
+	// with root permission.
+	Require_root *bool
 }
 
 func init() {
@@ -117,7 +121,9 @@ func BenchmarkHostFactory() android.Module {
 type testPerSrc interface {
 	testPerSrc() bool
 	srcs() []string
+	isAllTestsVariation() bool
 	setSrc(string, string)
+	unsetSrc()
 }
 
 func (test *testBinary) testPerSrc() bool {
@@ -128,28 +134,55 @@ func (test *testBinary) srcs() []string {
 	return test.baseCompiler.Properties.Srcs
 }
 
+func (test *testBinary) isAllTestsVariation() bool {
+	stem := test.binaryDecorator.Properties.Stem
+	return stem != nil && *stem == ""
+}
+
 func (test *testBinary) setSrc(name, src string) {
 	test.baseCompiler.Properties.Srcs = []string{src}
 	test.binaryDecorator.Properties.Stem = StringPtr(name)
 }
 
+func (test *testBinary) unsetSrc() {
+	test.baseCompiler.Properties.Srcs = nil
+	test.binaryDecorator.Properties.Stem = StringPtr("")
+}
+
 var _ testPerSrc = (*testBinary)(nil)
 
-func testPerSrcMutator(mctx android.BottomUpMutatorContext) {
+func TestPerSrcMutator(mctx android.BottomUpMutatorContext) {
 	if m, ok := mctx.Module().(*Module); ok {
 		if test, ok := m.linker.(testPerSrc); ok {
-			if test.testPerSrc() && len(test.srcs()) > 0 {
+			numTests := len(test.srcs())
+			if test.testPerSrc() && numTests > 0 {
 				if duplicate, found := checkDuplicate(test.srcs()); found {
 					mctx.PropertyErrorf("srcs", "found a duplicate entry %q", duplicate)
 					return
 				}
-				testNames := make([]string, len(test.srcs()))
+				testNames := make([]string, numTests)
 				for i, src := range test.srcs() {
 					testNames[i] = strings.TrimSuffix(filepath.Base(src), filepath.Ext(src))
 				}
+				// In addition to creating one variation per test source file,
+				// create an additional "all tests" variation named "", and have it
+				// depends on all other test_per_src variations. This is useful to
+				// create subsequent dependencies of a given module on all
+				// test_per_src variations created above: by depending on
+				// variation "", that module will transitively depend on all the
+				// other test_per_src variations without the need to know their
+				// name or even their number.
+				testNames = append(testNames, "")
 				tests := mctx.CreateLocalVariations(testNames...)
+				all_tests := tests[numTests]
+				all_tests.(*Module).linker.(testPerSrc).unsetSrc()
+				// Prevent the "all tests" variation from being installable nor
+				// exporting to Make, as it won't create any output file.
+				all_tests.(*Module).Properties.PreventInstall = true
+				all_tests.(*Module).Properties.HideFromMake = true
 				for i, src := range test.srcs() {
 					tests[i].(*Module).linker.(testPerSrc).setSrc(testNames[i], src)
+					mctx.AddInterVariantDependency(testPerSrcDepTag, all_tests, tests[i])
 				}
 			}
 		}
@@ -206,6 +239,11 @@ func (test *testDecorator) linkerDeps(ctx BaseModuleContext, deps Deps) Deps {
 			deps.StaticLibs = append(deps.StaticLibs, "libgtest_main_ndk_c++", "libgtest_ndk_c++")
 		} else if BoolDefault(test.Properties.Isolated, false) {
 			deps.StaticLibs = append(deps.StaticLibs, "libgtest_isolated_main")
+			// The isolated library requires liblog, but adding it
+			// as a static library means unit tests cannot override
+			// liblog functions. Instead make it a shared library
+			// dependency.
+			deps.SharedLibs = append(deps.SharedLibs, "liblog")
 		} else {
 			deps.StaticLibs = append(deps.StaticLibs, "libgtest_main", "libgtest")
 		}
@@ -273,18 +311,19 @@ func (test *testBinary) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 
 func (test *testBinary) install(ctx ModuleContext, file android.Path) {
 	test.data = android.PathsForModuleSrc(ctx, test.Properties.Data)
-	optionsMap := map[string]string{}
-	if Bool(test.testDecorator.Properties.Isolated) {
-		optionsMap["not-shardable"] = "true"
+	var configs []tradefed.Config
+	if Bool(test.Properties.Require_root) {
+		configs = append(configs, tradefed.Preparer{"com.android.tradefed.targetprep.RootTargetPreparer"})
 	}
-
+	if Bool(test.testDecorator.Properties.Isolated) {
+		configs = append(configs, tradefed.Option{"not-shardable", "true"})
+	}
 	if test.Properties.Test_options.Run_test_as != nil {
-		optionsMap["run-test-as"] = String(test.Properties.Test_options.Run_test_as)
+		configs = append(configs, tradefed.Option{"run-test-as", String(test.Properties.Test_options.Run_test_as)})
 	}
 
 	test.testConfig = tradefed.AutoGenNativeTestConfig(ctx, test.Properties.Test_config,
-		test.Properties.Test_config_template,
-		test.Properties.Test_suites, optionsMap)
+		test.Properties.Test_config_template, test.Properties.Test_suites, configs)
 
 	test.binaryDecorator.baseInstaller.dir = "nativetest"
 	test.binaryDecorator.baseInstaller.dir64 = "nativetest64"
@@ -371,6 +410,10 @@ type BenchmarkProperties struct {
 	// the name of the test configuration template (for example "AndroidTestTemplate.xml") that
 	// should be installed with the module.
 	Test_config_template *string `android:"path,arch_variant"`
+
+	// Add RootTargetPreparer to auto generated test config. This guarantees the test to run
+	// with root permission.
+	Require_root *bool
 }
 
 type benchmarkDecorator struct {
@@ -403,8 +446,12 @@ func (benchmark *benchmarkDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps
 
 func (benchmark *benchmarkDecorator) install(ctx ModuleContext, file android.Path) {
 	benchmark.data = android.PathsForModuleSrc(ctx, benchmark.Properties.Data)
+	var configs []tradefed.Config
+	if Bool(benchmark.Properties.Require_root) {
+		configs = append(configs, tradefed.Preparer{"com.android.tradefed.targetprep.RootTargetPreparer"})
+	}
 	benchmark.testConfig = tradefed.AutoGenNativeBenchmarkTestConfig(ctx, benchmark.Properties.Test_config,
-		benchmark.Properties.Test_config_template, benchmark.Properties.Test_suites)
+		benchmark.Properties.Test_config_template, benchmark.Properties.Test_suites, configs)
 
 	benchmark.binaryDecorator.baseInstaller.dir = filepath.Join("benchmarktest", ctx.ModuleName())
 	benchmark.binaryDecorator.baseInstaller.dir64 = filepath.Join("benchmarktest64", ctx.ModuleName())

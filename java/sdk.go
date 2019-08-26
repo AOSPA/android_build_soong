@@ -38,7 +38,7 @@ var sdkFrameworkAidlPathKey = android.NewOnceKey("sdkFrameworkAidlPathKey")
 var apiFingerprintPathKey = android.NewOnceKey("apiFingerprintPathKey")
 
 type sdkContext interface {
-	// sdkVersion eturns the sdk_version property of the current module, or an empty string if it is not set.
+	// sdkVersion returns the sdk_version property of the current module, or an empty string if it is not set.
 	sdkVersion() string
 	// minSdkVersion returns the min_sdk_version property of the current module, or sdkVersion() if it is not set.
 	minSdkVersion() string
@@ -46,9 +46,9 @@ type sdkContext interface {
 	targetSdkVersion() string
 }
 
-func sdkVersionOrDefault(ctx android.BaseContext, v string) string {
+func sdkVersionOrDefault(ctx android.BaseModuleContext, v string) string {
 	switch v {
-	case "", "current", "system_current", "test_current", "core_current":
+	case "", "none", "current", "test_current", "system_current", "core_current", "core_platform":
 		return ctx.Config().DefaultAppTargetSdk()
 	default:
 		return v
@@ -57,9 +57,9 @@ func sdkVersionOrDefault(ctx android.BaseContext, v string) string {
 
 // Returns a sdk version as a number.  For modules targeting an unreleased SDK (meaning it does not yet have a number)
 // it returns android.FutureApiLevel (10000).
-func sdkVersionToNumber(ctx android.BaseContext, v string) (int, error) {
+func sdkVersionToNumber(ctx android.BaseModuleContext, v string) (int, error) {
 	switch v {
-	case "", "current", "test_current", "system_current", "core_current":
+	case "", "none", "current", "test_current", "system_current", "core_current", "core_platform":
 		return ctx.Config().DefaultAppTargetSdkInt(), nil
 	default:
 		n := android.GetNumericSdkVersion(v)
@@ -71,7 +71,7 @@ func sdkVersionToNumber(ctx android.BaseContext, v string) (int, error) {
 	}
 }
 
-func sdkVersionToNumberAsString(ctx android.BaseContext, v string) (string, error) {
+func sdkVersionToNumberAsString(ctx android.BaseModuleContext, v string) (string, error) {
 	n, err := sdkVersionToNumber(ctx, v)
 	if err != nil {
 		return "", err
@@ -79,8 +79,9 @@ func sdkVersionToNumberAsString(ctx android.BaseContext, v string) (string, erro
 	return strconv.Itoa(n), nil
 }
 
-func decodeSdkDep(ctx android.BaseContext, sdkContext sdkContext) sdkDep {
+func decodeSdkDep(ctx android.BaseModuleContext, sdkContext sdkContext) sdkDep {
 	v := sdkContext.sdkVersion()
+
 	// For PDK builds, use the latest SDK version instead of "current"
 	if ctx.Config().IsPdkBuild() && (v == "" || v == "current") {
 		sdkVersions := ctx.Config().Get(sdkVersionsKey).([]int)
@@ -151,9 +152,9 @@ func decodeSdkDep(ctx android.BaseContext, sdkContext sdkContext) sdkDep {
 		}
 
 		if m == "core.current.stubs" {
-			ret.systemModules = "core-system-modules"
-		} else if m == "core.platform.api.stubs" {
-			ret.systemModules = "core-platform-api-stubs-system-modules"
+			ret.systemModules = "core-current-stubs-system-modules"
+			// core_current does not include framework classes.
+			ret.noFrameworksLibs = true
 		}
 		return ret
 	}
@@ -173,7 +174,8 @@ func decodeSdkDep(ctx android.BaseContext, sdkContext sdkContext) sdkDep {
 		}
 	}
 
-	if ctx.Config().UnbundledBuildUsePrebuiltSdks() && v != "" {
+	if ctx.Config().UnbundledBuildUsePrebuiltSdks() &&
+		v != "" && v != "none" && v != "core_platform" {
 		return toPrebuilt(v)
 	}
 
@@ -182,6 +184,16 @@ func decodeSdkDep(ctx android.BaseContext, sdkContext sdkContext) sdkDep {
 		return sdkDep{
 			useDefaultLibs:     true,
 			frameworkResModule: "framework-res",
+		}
+	case "none":
+		return sdkDep{
+			noStandardLibs: true,
+		}
+	case "core_platform":
+		return sdkDep{
+			useDefaultLibs:     true,
+			frameworkResModule: "framework-res",
+			noFrameworksLibs:   true,
 		}
 	case "current":
 		return toModule("android_stubs_current", "framework-res", sdkFrameworkAidlPath(ctx))
@@ -284,7 +296,7 @@ func createSdkFrameworkAidl(ctx android.SingletonContext) {
 			rule.Command().
 				Text("rm -f").Output(aidl)
 			rule.Command().
-				Tool(ctx.Config().HostToolPath(ctx, "sdkparcelables")).
+				BuiltTool(ctx, "sdkparcelables").
 				Input(jar).
 				Output(aidl)
 

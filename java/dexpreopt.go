@@ -29,6 +29,12 @@ type dexpreopter struct {
 	isInstallable       bool
 	isPresignedPrebuilt bool
 
+	manifestFile     android.Path
+	usesLibs         []string
+	optionalUsesLibs []string
+	enforceUsesLibs  bool
+	libraryPaths     map[string]android.Path
+
 	builtInstalled string
 }
 
@@ -126,8 +132,10 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 	}
 
 	var images android.Paths
+	var imagesDeps []android.Paths
 	for _, arch := range archs {
 		images = append(images, bootImage.images[arch])
+		imagesDeps = append(imagesDeps, bootImage.imagesDeps[arch])
 	}
 
 	dexLocation := android.InstallPathToOnDevicePath(ctx, d.installPath)
@@ -135,6 +143,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 	strippedDexJarFile := android.PathForModuleOut(ctx, "dexpreopt", dexJarFile.Base())
 
 	var profileClassListing android.OptionalPath
+	var profileBootListing android.OptionalPath
 	profileIsTextListing := false
 	if BoolDefault(d.dexpreoptProperties.Dex_preopt.Profile_guided, true) {
 		// If dex_preopt.profile_guided is not set, default it based on the existence of the
@@ -142,6 +151,8 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		if String(d.dexpreoptProperties.Dex_preopt.Profile) != "" {
 			profileClassListing = android.OptionalPathForPath(
 				android.PathForModuleSrc(ctx, String(d.dexpreoptProperties.Dex_preopt.Profile)))
+			profileBootListing = android.ExistentPathForSource(ctx,
+				ctx.ModuleDir(), String(d.dexpreoptProperties.Dex_preopt.Profile)+"-boot")
 			profileIsTextListing = true
 		} else {
 			profileClassListing = android.ExistentPathForSource(ctx,
@@ -154,20 +165,23 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		DexLocation:     dexLocation,
 		BuildPath:       android.PathForModuleOut(ctx, "dexpreopt", ctx.ModuleName()+".jar").OutputPath,
 		DexPath:         dexJarFile,
+		ManifestPath:    d.manifestFile,
 		UncompressedDex: d.uncompressedDex,
 		HasApkLibraries: false,
 		PreoptFlags:     nil,
 
 		ProfileClassListing:  profileClassListing,
 		ProfileIsTextListing: profileIsTextListing,
+		ProfileBootListing:   profileBootListing,
 
-		EnforceUsesLibraries:  false,
-		OptionalUsesLibraries: nil,
-		UsesLibraries:         nil,
-		LibraryPaths:          nil,
+		EnforceUsesLibraries:         d.enforceUsesLibs,
+		PresentOptionalUsesLibraries: d.optionalUsesLibs,
+		UsesLibraries:                d.usesLibs,
+		LibraryPaths:                 d.libraryPaths,
 
-		Archs:           archs,
-		DexPreoptImages: images,
+		Archs:               archs,
+		DexPreoptImages:     images,
+		DexPreoptImagesDeps: imagesDeps,
 
 		// We use the dex paths and dex locations of the default boot image, as it
 		// contains the full dexpreopt boot classpath. Other images may just contain a subset of

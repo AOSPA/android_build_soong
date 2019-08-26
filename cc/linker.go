@@ -57,9 +57,6 @@ type BaseLinkerProperties struct {
 	// This flag should only be necessary for compiling low-level libraries like libc.
 	Allow_undefined_symbols *bool `android:"arch_variant"`
 
-	// don't link in libgcc.a
-	No_libgcc *bool
-
 	// don't link in libclang_rt.builtins-*.a
 	No_libcrt *bool `android:"arch_variant"`
 
@@ -128,6 +125,10 @@ type BaseLinkerProperties struct {
 			// variant of the C/C++ module.
 			Shared_libs []string
 
+			// list of static libs that only should be used to build the recovery
+			// variant of the C/C++ module.
+			Static_libs []string
+
 			// list of shared libs that should not be used to build
 			// the recovery variant of the C/C++ module.
 			Exclude_shared_libs []string
@@ -150,9 +151,6 @@ type BaseLinkerProperties struct {
 
 	// local file name to pass to the linker as --version_script
 	Version_script *string `android:"path,arch_variant"`
-
-	// Local file name to pass to the linker as --symbol-ordering-file
-	Symbol_ordering_file *string `android:"arch_variant"`
 }
 
 func NewBaseLinker(sanitize *sanitize) *baseLinker {
@@ -217,6 +215,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.SharedLibs = append(deps.SharedLibs, linker.Properties.Target.Recovery.Shared_libs...)
 		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Recovery.Exclude_shared_libs)
 		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, linker.Properties.Target.Recovery.Exclude_shared_libs)
+		deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Target.Recovery.Static_libs...)
 		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Recovery.Exclude_static_libs)
 		deps.HeaderLibs = removeListFromList(deps.HeaderLibs, linker.Properties.Target.Recovery.Exclude_header_libs)
 		deps.ReexportHeaderLibHeaders = removeListFromList(deps.ReexportHeaderLibHeaders, linker.Properties.Target.Recovery.Exclude_header_libs)
@@ -230,9 +229,6 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 			deps.LateStaticLibs = append(deps.LateStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
 			deps.LateStaticLibs = append(deps.LateStaticLibs, "libatomic")
 			deps.LateStaticLibs = append(deps.LateStaticLibs, "libgcc_stripped")
-		} else if !Bool(linker.Properties.No_libgcc) {
-			deps.LateStaticLibs = append(deps.LateStaticLibs, "libatomic")
-			deps.LateStaticLibs = append(deps.LateStaticLibs, "libgcc")
 		}
 
 		systemSharedLibs := linker.Properties.System_shared_libs
@@ -387,6 +383,10 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 		flags.LdFlags = append(flags.LdFlags, "-lfdio", "-lzircon")
 	}
 
+	if ctx.toolchain().LibclangRuntimeLibraryArch() != "" {
+		flags.LdFlags = append(flags.LdFlags, "-Wl,--exclude-libs="+config.BuiltinsRuntimeLibrary(ctx.toolchain())+".a")
+	}
+
 	CheckBadLinkerFlags(ctx, "ldflags", linker.Properties.Ldflags)
 
 	flags.LdFlags = append(flags.LdFlags, proptools.NinjaAndShellEscapeList(linker.Properties.Ldflags)...)
@@ -448,16 +448,6 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 		}
 	}
 
-	if !linker.dynamicProperties.BuildStubs {
-		symbolOrderingFile := ctx.ExpandOptionalSource(
-			linker.Properties.Symbol_ordering_file, "Symbol_ordering_file")
-		if symbolOrderingFile.Valid() {
-			flags.LdFlags = append(flags.LdFlags,
-				"-Wl,--symbol-ordering-file,"+symbolOrderingFile.String())
-			flags.LdFlagsDeps = append(flags.LdFlagsDeps, symbolOrderingFile.Path())
-		}
-	}
-
 	return flags
 }
 
@@ -489,7 +479,33 @@ func (linker *baseLinker) injectVersionSymbol(ctx ModuleContext, in android.Path
 		Input:       in,
 		Output:      out,
 		Args: map[string]string{
-			"buildNumberFromFile": ctx.Config().BuildNumberFromFile(),
+			"buildNumberFromFile": proptools.NinjaEscape(ctx.Config().BuildNumberFromFile()),
 		},
 	})
+}
+
+// Rule to generate .bss symbol ordering file.
+
+var (
+	_                      = pctx.SourcePathVariable("genSortedBssSymbolsPath", "build/soong/scripts/gen_sorted_bss_symbols.sh")
+	gen_sorted_bss_symbols = pctx.AndroidStaticRule("gen_sorted_bss_symbols",
+		blueprint.RuleParams{
+			Command:     "CROSS_COMPILE=$crossCompile $genSortedBssSymbolsPath ${in} ${out}",
+			CommandDeps: []string{"$genSortedBssSymbolsPath"},
+		},
+		"crossCompile")
+)
+
+func (linker *baseLinker) sortBssSymbolsBySize(ctx ModuleContext, in android.Path, symbolOrderingFile android.ModuleOutPath, flags builderFlags) string {
+	crossCompile := gccCmd(flags.toolchain, "")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        gen_sorted_bss_symbols,
+		Description: "generate bss symbol order " + symbolOrderingFile.Base(),
+		Output:      symbolOrderingFile,
+		Input:       in,
+		Args: map[string]string{
+			"crossCompile": crossCompile,
+		},
+	})
+	return "-Wl,--symbol-ordering-file," + symbolOrderingFile.String()
 }

@@ -47,6 +47,14 @@ func TestClasspath(t *testing.T) {
 			aidl:          "-Iframework/aidl",
 		},
 		{
+			name:          `sdk_version:"core_platform"`,
+			properties:    `sdk_version:"core_platform"`,
+			bootclasspath: config.DefaultBootclasspathLibraries,
+			system:        config.DefaultSystemModules,
+			classpath:     []string{},
+			aidl:          "",
+		},
+		{
 			name:          "blank sdk version",
 			properties:    `sdk_version: "",`,
 			bootclasspath: config.DefaultBootclasspathLibraries,
@@ -106,7 +114,7 @@ func TestClasspath(t *testing.T) {
 		{
 
 			name:          "nostdlib",
-			properties:    `no_standard_libs: true, system_modules: "none"`,
+			properties:    `sdk_version: "none", system_modules: "none"`,
 			system:        "none",
 			bootclasspath: []string{`""`},
 			classpath:     []string{},
@@ -114,7 +122,7 @@ func TestClasspath(t *testing.T) {
 		{
 
 			name:          "nostdlib system_modules",
-			properties:    `no_standard_libs: true, system_modules: "core-platform-api-stubs-system-modules"`,
+			properties:    `sdk_version: "none", system_modules: "core-platform-api-stubs-system-modules"`,
 			system:        "core-platform-api-stubs-system-modules",
 			bootclasspath: []string{`""`},
 			classpath:     []string{},
@@ -129,13 +137,6 @@ func TestClasspath(t *testing.T) {
 			classpath:     []string{},
 		},
 		{
-			name:       "host nostdlib",
-			moduleType: "java_library_host",
-			host:       android.Host,
-			properties: `no_standard_libs: true`,
-			classpath:  []string{},
-		},
-		{
 
 			name:          "host supported default",
 			host:          android.Host,
@@ -146,7 +147,7 @@ func TestClasspath(t *testing.T) {
 		{
 			name:       "host supported nostdlib",
 			host:       android.Host,
-			properties: `host_supported: true, no_standard_libs: true, system_modules: "none"`,
+			properties: `host_supported: true, sdk_version: "none", system_modules: "none"`,
 			classpath:  []string{},
 		},
 		{
@@ -245,7 +246,7 @@ func TestClasspath(t *testing.T) {
 			if testcase.system == "none" {
 				system = "--system=none"
 			} else if testcase.system != "" {
-				system = "--system=" + filepath.Join(buildDir, ".intermediates", testcase.system, "android_common", "system") + "/"
+				system = "--system=" + filepath.Join(buildDir, ".intermediates", testcase.system, "android_common", "system")
 			}
 
 			checkClasspath := func(t *testing.T, ctx *android.TestContext) {
@@ -281,7 +282,7 @@ func TestClasspath(t *testing.T) {
 				if testcase.pdk {
 					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
 				}
-				ctx := testContext(config, bp, nil)
+				ctx := testContext(bp, nil)
 				run(t, ctx, config)
 
 				checkClasspath(t, ctx)
@@ -308,7 +309,7 @@ func TestClasspath(t *testing.T) {
 				if testcase.pdk {
 					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
 				}
-				ctx := testContext(config, bp, nil)
+				ctx := testContext(bp, nil)
 				run(t, ctx, config)
 
 				javac := ctx.ModuleForTests("foo", variant).Rule("javac")
@@ -334,7 +335,7 @@ func TestClasspath(t *testing.T) {
 				if testcase.pdk {
 					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
 				}
-				ctx := testContext(config, bp, nil)
+				ctx := testContext(bp, nil)
 				run(t, ctx, config)
 
 				checkClasspath(t, ctx)

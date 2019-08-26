@@ -64,6 +64,13 @@ func makeStringOfWarningAllowedProjects() string {
 	}
 }
 
+type notOnHostContext struct {
+}
+
+func (c *notOnHostContext) Host() bool {
+	return false
+}
+
 func makeVarsProvider(ctx android.MakeVarsContext) {
 	sdclangMakeVars(ctx)
 	vendorPublicLibraries := vendorPublicLibraries(ctx.Config())
@@ -104,13 +111,23 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	// Therefore, by removing the library here, we cause it to only be installed if libc
 	// depends on it.
 	installedLlndkLibraries := []string{}
+
+	// Make uses LLNDK_MOVED_TO_APEX_LIBRARIES to avoid installing libraries on /system if
+	// they been moved to an apex.
+	movedToApexLlndkLibraries := []string{}
 	for _, lib := range *llndkLibraries(ctx.Config()) {
 		if strings.HasPrefix(lib, "libclang_rt.hwasan-") {
 			continue
 		}
 		installedLlndkLibraries = append(installedLlndkLibraries, lib)
+
+		// Skip bionic libs, they are handled in different manner
+		if android.DirectlyInAnyApex(&notOnHostContext{}, lib) && !isBionic(lib) {
+			movedToApexLlndkLibraries = append(movedToApexLlndkLibraries, lib)
+		}
 	}
 	ctx.Strict("LLNDK_LIBRARIES", strings.Join(installedLlndkLibraries, " "))
+	ctx.Strict("LLNDK_MOVED_TO_APEX_LIBRARIES", strings.Join(movedToApexLlndkLibraries, " "))
 
 	ctx.Strict("VNDK_PRIVATE_LIBRARIES", strings.Join(*vndkPrivateLibraries(ctx.Config()), " "))
 	ctx.Strict("VNDK_USING_CORE_VARIANT_LIBRARIES", strings.Join(*vndkUsingCoreVariantLibraries(ctx.Config()), " "))
@@ -140,7 +157,6 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_CFLAGS", strings.Join(asanCflags, " "))
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_LDFLAGS", strings.Join(asanLdflags, " "))
-	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_STATIC_LIBRARIES", strings.Join(asanLibs, " "))
 
 	ctx.Strict("HWADDRESS_SANITIZER_CONFIG_EXTRA_CFLAGS", strings.Join(hwasanCflags, " "))
 	ctx.Strict("HWADDRESS_SANITIZER_GLOBAL_OPTIONS", strings.Join(hwasanGlobalOptions, ","))
@@ -162,6 +178,8 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("WITH_TIDY_FLAGS", "${config.TidyWithTidyFlags}")
 
 	ctx.Strict("AIDL_CPP", "${aidlCmd}")
+
+	ctx.Strict("M4", "${m4Cmd}")
 
 	ctx.Strict("RS_GLOBAL_INCLUDES", "${config.RsGlobalIncludes}")
 
@@ -260,9 +278,9 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 	}
 
 	clangPrefix := secondPrefix + "CLANG_" + typePrefix
-	clangExtras := "-target " + toolchain.ClangTriple()
-	clangExtras += " -B" + config.ToolPath(toolchain)
+	clangExtras := "-B" + config.ToolPath(toolchain)
 
+	ctx.Strict(clangPrefix+"TRIPLE", toolchain.ClangTriple())
 	ctx.Strict(clangPrefix+"GLOBAL_CFLAGS", strings.Join([]string{
 		toolchain.ClangCflags(),
 		"${config.CommonClangGlobalCflags}",

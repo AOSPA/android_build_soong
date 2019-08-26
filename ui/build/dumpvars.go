@@ -169,7 +169,7 @@ func runMakeProductConfig(ctx Context, config Config) {
 	// Variables to export into the environment of Kati/Ninja
 	exportEnvVars := []string{
 		// So that we can use the correct TARGET_PRODUCT if it's been
-		// modified by PRODUCT-*/APP-* arguments
+		// modified by a buildspec.mk
 		"TARGET_PRODUCT",
 		"TARGET_BUILD_VARIANT",
 		"TARGET_BUILD_APPS",
@@ -205,7 +205,6 @@ func runMakeProductConfig(ctx Context, config Config) {
 
 		// Not used, but useful to be in the soong.log
 		"BOARD_VNDK_VERSION",
-		"BUILD_BROKEN_ANDROIDMK_EXPORTS",
 
 		"DEFAULT_WARNING_BUILD_MODULE_TYPES",
 		"DEFAULT_ERROR_BUILD_MODULE_TYPES",
@@ -250,7 +249,7 @@ func runMakeProductConfig(ctx Context, config Config) {
 	env := config.Environment()
 	// Print the banner like make does
 	if !env.IsEnvTrue("ANDROID_QUIET_BUILD") {
-		ctx.Writer.Print(Banner(make_vars))
+		fmt.Fprintln(ctx.Writer, Banner(make_vars))
 	}
 
 	// Populate the environment
