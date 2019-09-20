@@ -104,6 +104,7 @@ func runSoong(ctx Context, config Config) {
 		}
 	}()
 
+/*
 	func() {
 		ctx.BeginTrace(metrics.RunSoong, "QSSI_violators")
 		defer ctx.EndTrace()
@@ -117,6 +118,7 @@ func runSoong(ctx Context, config Config) {
 			ctx.Verboseln("QSSI_violators returned error...")
 		}
 	}()
+*/
 
 	ninja := func(name, file string) {
 		ctx.BeginTrace(metrics.RunSoong, name)
