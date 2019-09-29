@@ -39,6 +39,7 @@ func init() {
 	android.RegisterModuleType("android_app_certificate", AndroidAppCertificateFactory)
 	android.RegisterModuleType("override_android_app", OverrideAndroidAppModuleFactory)
 	android.RegisterModuleType("android_app_import", AndroidAppImportFactory)
+	android.RegisterModuleType("android_test_import", AndroidTestImportFactory)
 
 	initAndroidAppImportVariantGroupTypes()
 }
@@ -136,6 +137,10 @@ func (a *AndroidApp) ExportedProguardFlagFiles() android.Paths {
 
 func (a *AndroidApp) ExportedStaticPackages() android.Paths {
 	return nil
+}
+
+func (a *AndroidApp) OutputFile() android.Path {
+	return a.outputFile
 }
 
 var _ AndroidLibraryDependency = (*AndroidApp)(nil)
@@ -538,6 +543,15 @@ func (a *AndroidApp) getCertString(ctx android.BaseModuleContext) string {
 	return String(a.overridableAppProperties.Certificate)
 }
 
+// For OutputFileProducer interface
+func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case ".aapt.srcjar":
+		return []android.Path{a.aaptSrcJar}, nil
+	}
+	return a.Library.OutputFiles(tag)
+}
+
 // android_app compiles sources and Android resources into an Android application package `.apk` file.
 func AndroidAppFactory() android.Module {
 	module := &AndroidApp{}
@@ -751,13 +765,17 @@ type AndroidAppImportProperties struct {
 	// A prebuilt apk to import
 	Apk *string
 
-	// The name of a certificate in the default certificate directory, blank to use the default
-	// product certificate, or an android_app_certificate module name in the form ":module".
+	// The name of a certificate in the default certificate directory or an android_app_certificate
+	// module name in the form ":module". Should be empty if presigned or default_dev_cert is set.
 	Certificate *string
 
 	// Set this flag to true if the prebuilt apk is already signed. The certificate property must not
 	// be set for presigned modules.
 	Presigned *bool
+
+	// Sign with the default system dev certificate. Must be used judiciously. Most imported apps
+	// need to either specify a specific certificate or be presigned.
+	Default_dev_cert *bool
 
 	// Specifies that this app should be installed to the priv-app directory,
 	// where the system will grant it additional privileges not available to
@@ -862,11 +880,22 @@ func (a *AndroidAppImport) uncompressDex(
 }
 
 func (a *AndroidAppImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	if String(a.properties.Certificate) == "" && !Bool(a.properties.Presigned) {
-		ctx.PropertyErrorf("certificate", "No certificate specified for prebuilt")
+	a.generateAndroidBuildActions(ctx)
+}
+
+func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext) {
+	numCertPropsSet := 0
+	if String(a.properties.Certificate) != "" {
+		numCertPropsSet++
 	}
-	if String(a.properties.Certificate) != "" && Bool(a.properties.Presigned) {
-		ctx.PropertyErrorf("certificate", "Certificate can't be specified for presigned modules")
+	if Bool(a.properties.Presigned) {
+		numCertPropsSet++
+	}
+	if Bool(a.properties.Default_dev_cert) {
+		numCertPropsSet++
+	}
+	if numCertPropsSet != 1 {
+		ctx.ModuleErrorf("One and only one of certficate, presigned, and default_dev_cert properties must be set")
 	}
 
 	_, certificates := collectAppDeps(ctx)
@@ -907,7 +936,9 @@ func (a *AndroidAppImport) GenerateAndroidBuildActions(ctx android.ModuleContext
 	// Sign or align the package
 	// TODO: Handle EXTERNAL
 	if !Bool(a.properties.Presigned) {
-		certificates = processMainCert(a.ModuleBase, *a.properties.Certificate, certificates, ctx)
+		// If the certificate property is empty at this point, default_dev_cert must be set to true.
+		// Which makes processMainCert's behavior for the empty cert string WAI.
+		certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
 		if len(certificates) != 1 {
 			ctx.ModuleErrorf("Unexpected number of certificates were extracted: %q", certificates)
 		}
@@ -1011,6 +1042,39 @@ func AndroidAppImportFactory() android.Module {
 	return module
 }
 
+type AndroidTestImport struct {
+	AndroidAppImport
+
+	testProperties testProperties
+
+	data android.Paths
+}
+
+func (a *AndroidTestImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	a.generateAndroidBuildActions(ctx)
+
+	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
+}
+
+// android_test_import imports a prebuilt test apk with additional processing specified in the
+// module. DPI or arch variant configurations can be made as with android_app_import.
+func AndroidTestImportFactory() android.Module {
+	module := &AndroidTestImport{}
+	module.AddProperties(&module.properties)
+	module.AddProperties(&module.dexpreoptProperties)
+	module.AddProperties(&module.usesLibrary.usesLibraryProperties)
+	module.AddProperties(&module.testProperties)
+	module.populateAllVariantStructs()
+	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+		module.processVariants(ctx)
+	})
+
+	InitJavaModule(module, android.DeviceSupported)
+	android.InitSingleSourcePrebuiltModule(module, &module.properties, "Apk")
+
+	return module
+}
+
 type UsesLibraryProperties struct {
 	// A list of shared library modules that will be listed in uses-library tags in the AndroidManifest.xml file.
 	Uses_libs []string
@@ -1046,7 +1110,8 @@ func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, hasFrameworkLibs 
 			ctx.AddVariationDependencies(nil, usesLibTag,
 				"org.apache.http.legacy",
 				"android.hidl.base-V1.0-java",
-				"android.hidl.manager-V1.0-java")
+				"android.hidl.manager-V1.0-java",
+				"telephony-common",)
 		}
 	}
 }

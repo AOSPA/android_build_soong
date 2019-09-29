@@ -1038,6 +1038,13 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 
 	if m.Enabled() {
+		// ensure all direct android.Module deps are enabled
+		ctx.VisitDirectDepsBlueprint(func(bm blueprint.Module) {
+			if _, ok := bm.(Module); ok {
+				ctx.validateAndroidModule(bm, ctx.baseModuleContext.strictVisitDeps)
+			}
+		})
+
 		notice := proptools.StringDefault(m.commonProperties.Notice, "NOTICE")
 		if module := SrcIsModule(notice); module != "" {
 			m.noticeFile = ctx.ExpandOptionalSource(&notice, "notice")
@@ -1486,6 +1493,11 @@ func (m *ModuleBase) MakeAsPlatform() {
 
 func (m *ModuleBase) EnableNativeBridgeSupportByDefault() {
 	m.commonProperties.Native_bridge_supported = boolPtr(true)
+}
+
+// IsNativeBridgeSupported returns true if "native_bridge_supported" is explicitly set as "true"
+func (m *ModuleBase) IsNativeBridgeSupported() bool {
+	return proptools.Bool(m.commonProperties.Native_bridge_supported)
 }
 
 func (m *moduleContext) InstallInData() bool {

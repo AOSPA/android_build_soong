@@ -167,6 +167,16 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			},
 		}
 		cc_library {
+			name: "libc++demangle",
+			no_libcrt: true,
+			nocrt: true,
+			system_shared_libs: [],
+			stl: "none",
+			host_supported: false,
+			vendor_available: true,
+			recovery_available: true,
+		}
+		cc_library {
 			name: "libunwind_llvm",
 			no_libcrt: true,
 			nocrt: true,
@@ -243,7 +253,7 @@ func CreateTestContext(bp string, fs map[string][]byte,
 	ctx.RegisterModuleType("vendor_public_library", android.ModuleFactoryAdaptor(vendorPublicLibraryFactory))
 	ctx.RegisterModuleType("cc_object", android.ModuleFactoryAdaptor(ObjectFactory))
 	ctx.RegisterModuleType("filegroup", android.ModuleFactoryAdaptor(android.FileGroupFactory))
-	ctx.RegisterModuleType("vndk_prebuilt_shared", android.ModuleFactoryAdaptor(vndkPrebuiltSharedFactory))
+	ctx.RegisterModuleType("vndk_prebuilt_shared", android.ModuleFactoryAdaptor(VndkPrebuiltSharedFactory))
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("image", ImageMutator).Parallel()
 		ctx.BottomUp("link", LinkageMutator).Parallel()
@@ -262,7 +272,9 @@ func CreateTestContext(bp string, fs map[string][]byte,
 	mockFS := map[string][]byte{
 		"Android.bp":  []byte(bp),
 		"foo.c":       nil,
+		"foo.lds":     nil,
 		"bar.c":       nil,
+		"baz.o":       nil,
 		"a.proto":     nil,
 		"b.aidl":      nil,
 		"sub/c.aidl":  nil,

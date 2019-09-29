@@ -112,7 +112,7 @@ func testCcError(t *testing.T, pattern string, bp string) {
 
 const (
 	coreVariant     = "android_arm64_armv8-a_core_shared"
-	vendorVariant   = "android_arm64_armv8-a_vendor_shared"
+	vendorVariant   = "android_arm64_armv8-a_vendor.VER_shared"
 	recoveryVariant = "android_arm64_armv8-a_recovery_shared"
 )
 
@@ -328,8 +328,8 @@ func TestVndk(t *testing.T) {
 	vndkCoreLib2ndPath := filepath.Join(vndkLib2ndPath, "shared", "vndk-core")
 	vndkSpLib2ndPath := filepath.Join(vndkLib2ndPath, "shared", "vndk-sp")
 
-	variant := "android_arm64_armv8-a_vendor_shared"
-	variant2nd := "android_arm_armv7-a-neon_vendor_shared"
+	variant := "android_arm64_armv8-a_vendor.VER_shared"
+	variant2nd := "android_arm_armv7-a-neon_vendor.VER_shared"
 
 	checkVndkSnapshot(t, ctx, "libvndk", vndkCoreLibPath, variant)
 	checkVndkSnapshot(t, ctx, "libvndk", vndkCoreLib2ndPath, variant2nd)
@@ -1343,6 +1343,8 @@ func TestMakeLinkType(t *testing.T) {
 	assertArrayString(t, *vndkPrivateLibraries(config),
 		[]string{"libllndkprivate", "libvndkprivate"})
 
+	vendorVariant27 := "android_arm64_armv8-a_vendor.27_shared"
+
 	tests := []struct {
 		variant  string
 		name     string
@@ -1353,8 +1355,8 @@ func TestMakeLinkType(t *testing.T) {
 		{vendorVariant, "libvndkprivate", "native:vndk_private"},
 		{vendorVariant, "libvendor", "native:vendor"},
 		{vendorVariant, "libvndkext", "native:vendor"},
-		{vendorVariant, "prevndk.vndk.27.arm.binder32", "native:vndk"},
 		{vendorVariant, "libllndk.llndk", "native:vndk"},
+		{vendorVariant27, "prevndk.vndk.27.arm.binder32", "native:vndk"},
 		{coreVariant, "libvndk", "native:platform"},
 		{coreVariant, "libvndkprivate", "native:platform"},
 		{coreVariant, "libllndk", "native:platform"},
@@ -1792,7 +1794,7 @@ func TestLlndkHeaders(t *testing.T) {
 	`)
 
 	// _static variant is used since _shared reuses *.o from the static variant
-	cc := ctx.ModuleForTests("libvendor", "android_arm_armv7-a-neon_vendor_static").Rule("cc")
+	cc := ctx.ModuleForTests("libvendor", "android_arm_armv7-a-neon_vendor.VER_static").Rule("cc")
 	cflags := cc.Args["cFlags"]
 	if !strings.Contains(cflags, "-Imy_include") {
 		t.Errorf("cflags for libvendor must contain -Imy_include, but was %#v.", cflags)
@@ -1878,7 +1880,7 @@ func TestRuntimeLibs(t *testing.T) {
 
 	// runtime_libs for vendor variants have '.vendor' suffixes if the modules have both core
 	// and vendor variants.
-	variant = "android_arm64_armv8-a_vendor_shared"
+	variant = "android_arm64_armv8-a_vendor.VER_shared"
 
 	module = ctx.ModuleForTests("libvendor_available2", variant).Module().(*Module)
 	checkRuntimeLibs(t, []string{"libvendor_available1.vendor"}, module)
@@ -1894,7 +1896,7 @@ func TestExcludeRuntimeLibs(t *testing.T) {
 	module := ctx.ModuleForTests("libvendor_available3", variant).Module().(*Module)
 	checkRuntimeLibs(t, []string{"libvendor_available1"}, module)
 
-	variant = "android_arm64_armv8-a_vendor_shared"
+	variant = "android_arm64_armv8-a_vendor.VER_shared"
 	module = ctx.ModuleForTests("libvendor_available3", variant).Module().(*Module)
 	checkRuntimeLibs(t, nil, module)
 }
@@ -1941,13 +1943,13 @@ func TestStaticLibDepExport(t *testing.T) {
 	// Check the shared version of lib2.
 	variant := "android_arm64_armv8-a_core_shared"
 	module := ctx.ModuleForTests("lib2", variant).Module().(*Module)
-	checkStaticLibs(t, []string{"lib1", "libclang_rt.builtins-aarch64-android", "libatomic", "libgcc_stripped"}, module)
+	checkStaticLibs(t, []string{"lib1", "libc++demangle", "libclang_rt.builtins-aarch64-android", "libatomic", "libgcc_stripped"}, module)
 
 	// Check the static version of lib2.
 	variant = "android_arm64_armv8-a_core_static"
 	module = ctx.ModuleForTests("lib2", variant).Module().(*Module)
 	// libc++_static is linked additionally.
-	checkStaticLibs(t, []string{"lib1", "libc++_static", "libclang_rt.builtins-aarch64-android", "libatomic", "libgcc_stripped"}, module)
+	checkStaticLibs(t, []string{"lib1", "libc++_static", "libc++demangle", "libclang_rt.builtins-aarch64-android", "libatomic", "libgcc_stripped"}, module)
 }
 
 var compilerFlagsTestCases = []struct {
@@ -2091,9 +2093,9 @@ func TestVendorPublicLibraries(t *testing.T) {
 	}
 
 	// test if libvendor is linked to the real shared lib
-	ld = ctx.ModuleForTests("libvendor", strings.Replace(variant, "_core", "_vendor", 1)).Rule("ld")
+	ld = ctx.ModuleForTests("libvendor", strings.Replace(variant, "_core", "_vendor.VER", 1)).Rule("ld")
 	libflags = ld.Args["libFlags"]
-	stubPaths = getOutputPaths(ctx, strings.Replace(variant, "_core", "_vendor", 1), []string{"libvendorpublic"})
+	stubPaths = getOutputPaths(ctx, strings.Replace(variant, "_core", "_vendor.VER", 1), []string{"libvendorpublic"})
 	if !strings.Contains(libflags, stubPaths[0].String()) {
 		t.Errorf("libflags for libvendor must contain %#v, but was %#v", stubPaths[0], libflags)
 	}
@@ -2203,7 +2205,7 @@ func TestStaticExecutable(t *testing.T) {
 	ctx := testCc(t, `
 		cc_binary {
 			name: "static_test",
-			srcs: ["foo.c"],
+			srcs: ["foo.c", "baz.o"],
 			static_executable: true,
 		}`)
 
@@ -2262,6 +2264,24 @@ func TestStaticDepsOrderWithStubs(t *testing.T) {
 			expected,
 		)
 	}
+}
+
+func TestErrorsIfAModuleDependsOnDisabled(t *testing.T) {
+	testCcError(t, `module "libA" .* depends on disabled module "libB"`, `
+		cc_library {
+			name: "libA",
+			srcs: ["foo.c"],
+			shared_libs: ["libB"],
+			stl: "none",
+		}
+
+		cc_library {
+			name: "libB",
+			srcs: ["foo.c"],
+			enabled: false,
+			stl: "none",
+		}
+	`)
 }
 
 // Simple smoke test for the cc_fuzz target that ensures the rule compiles

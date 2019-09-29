@@ -100,16 +100,6 @@ type sdkLibraryProperties struct {
 	//  $(location <label>): the path to the droiddoc_option_files with name <label>
 	Droiddoc_options []string
 
-	// the java library (in classpath) for documentation that provides java srcs and srcjars.
-	Srcs_lib *string
-
-	// the base dirs under srcs_lib will be scanned for java srcs.
-	Srcs_lib_whitelist_dirs []string
-
-	// the sub dirs under srcs_lib_whitelist_dirs will be scanned for java srcs.
-	// Defaults to "android.annotation".
-	Srcs_lib_whitelist_pkgs []string
-
 	// a list of top-level directories containing files to merge qualifier annotations
 	// (i.e. those intended to be included in the stubs written) from.
 	Merge_annotations_dirs []string
@@ -442,9 +432,6 @@ func (module *SdkLibrary) createDocs(mctx android.LoadHookContext, apiScope apiS
 		Name                             *string
 		Srcs                             []string
 		Installable                      *bool
-		Srcs_lib                         *string
-		Srcs_lib_whitelist_dirs          []string
-		Srcs_lib_whitelist_pkgs          []string
 		Sdk_version                      *string
 		Libs                             []string
 		Arg_files                        []string
@@ -534,9 +521,6 @@ func (module *SdkLibrary) createDocs(mctx android.LoadHookContext, apiScope apiS
 	props.Check_api.Last_released.Removed_api_file = proptools.StringPtr(
 		module.latestRemovedApiFilegroupName(apiScope))
 	props.Check_api.Ignore_missing_latest_api = proptools.BoolPtr(true)
-	props.Srcs_lib = module.sdkLibraryProperties.Srcs_lib
-	props.Srcs_lib_whitelist_dirs = module.sdkLibraryProperties.Srcs_lib_whitelist_dirs
-	props.Srcs_lib_whitelist_pkgs = module.sdkLibraryProperties.Srcs_lib_whitelist_pkgs
 
 	mctx.CreateModule(android.ModuleFactoryAdaptor(DroidstubsFactory), &props)
 }
@@ -550,9 +534,9 @@ func (module *SdkLibrary) createXmlFile(mctx android.LoadHookContext) {
      Licensed under the Apache License, Version 2.0 (the "License");
      you may not use this file except in compliance with the License.
      You may obtain a copy of the License at
-  
+
           http://www.apache.org/licenses/LICENSE-2.0
-  
+
      Unless required by applicable law or agreed to in writing, software
      distributed under the License is distributed on an "AS IS" BASIS,
      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.

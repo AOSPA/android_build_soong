@@ -220,14 +220,13 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext sdkContext, ex
 	manifestPath := manifestFixer(ctx, manifestSrcPath, sdkContext, sdkLibraries,
 		a.isLibrary, a.useEmbeddedNativeLibs, a.usesNonSdkApis, a.useEmbeddedDex, a.hasNoCode)
 
-	a.transitiveManifestPaths = append(android.Paths{manifestPath}, transitiveStaticLibManifests...)
+	// Add additional manifest files to transitive manifests.
+	additionalManifests := android.PathsForModuleSrc(ctx, a.aaptProperties.Additional_manifests)
+	a.transitiveManifestPaths = append(android.Paths{manifestPath}, additionalManifests...)
+	a.transitiveManifestPaths = append(a.transitiveManifestPaths, transitiveStaticLibManifests...)
 
-	if len(transitiveStaticLibManifests) > 0 {
-		// Merge additional manifest files with app manifest.
-		additionalManifests := android.PathsForModuleSrc(ctx, a.aaptProperties.Additional_manifests)
-		additionalManifests = append(additionalManifests, transitiveStaticLibManifests...)
-
-		a.mergedManifestFile = manifestMerger(ctx, manifestPath, additionalManifests, a.isLibrary)
+	if len(a.transitiveManifestPaths) > 1 {
+		a.mergedManifestFile = manifestMerger(ctx, a.transitiveManifestPaths[0], a.transitiveManifestPaths[1:], a.isLibrary)
 		if !a.isLibrary {
 			// Only use the merged manifest for applications.  For libraries, the transitive closure of manifests
 			// will be propagated to the final application and merged there.  The merged manifest for libraries is
@@ -249,7 +248,8 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext sdkContext, ex
 	}
 
 	packageRes := android.PathForModuleOut(ctx, "package-res.apk")
-	srcJar := android.PathForModuleGen(ctx, "R.jar")
+	// the subdir "android" is required to be filtered by package names
+	srcJar := android.PathForModuleGen(ctx, "android", "R.srcjar")
 	proguardOptionsFile := android.PathForModuleGen(ctx, "proguard.options")
 	rTxt := android.PathForModuleOut(ctx, "R.txt")
 	// This file isn't used by Soong, but is generated for exporting
@@ -620,7 +620,8 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	aapt2CompileZip(ctx, flata, aar, "res", compileFlags)
 
 	a.exportPackage = android.PathForModuleOut(ctx, "package-res.apk")
-	srcJar := android.PathForModuleGen(ctx, "R.jar")
+	// the subdir "android" is required to be filtered by package names
+	srcJar := android.PathForModuleGen(ctx, "android", "R.srcjar")
 	proguardOptionsFile := android.PathForModuleGen(ctx, "proguard.options")
 	rTxt := android.PathForModuleOut(ctx, "R.txt")
 	a.extraAaptPackagesFile = android.PathForModuleOut(ctx, "extra_packages")

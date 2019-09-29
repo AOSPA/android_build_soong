@@ -204,10 +204,10 @@ bootstrap_go_package {
         "cc/gen_test.go",
         "cc/genrule_test.go",
         "cc/library_test.go",
+        "cc/object_test.go",
         "cc/prebuilt_test.go",
         "cc/proto_test.go",
         "cc/test_data_test.go",
-        "cc/util_test.go",
     ],
     pluginFor: ["soong_build"],
 }
@@ -322,6 +322,51 @@ bootstrap_go_package {
         "java/config/kotlin.go",
         "java/config/makevars.go",
     ],
+}
+
+bootstrap_go_package {
+    name: "soong-rust-config",
+    pkgPath: "android/soong/rust/config",
+    deps: [
+        "soong-android",
+        "soong-cc-config",
+    ],
+    srcs: [
+        "rust/config/global.go",
+        "rust/config/toolchain.go",
+        "rust/config/whitelist.go",
+        "rust/config/x86_linux_host.go",
+        "rust/config/x86_64_device.go",
+    ],
+}
+
+bootstrap_go_package {
+    name: "soong-rust",
+    pkgPath: "android/soong/rust",
+    deps: [
+        "soong",
+        "soong-android",
+        "soong-cc",
+        "soong-rust-config",
+    ],
+    srcs: [
+        "rust/androidmk.go",
+        "rust/compiler.go",
+        "rust/binary.go",
+        "rust/builder.go",
+        "rust/library.go",
+        "rust/prebuilt.go",
+        "rust/proc_macro.go",
+        "rust/rust.go",
+        "rust/testing.go",
+    ],
+    testSrcs: [
+        "rust/binary_test.go",
+        "rust/compiler_test.go",
+        "rust/library_test.go",
+        "rust/rust_test.go",
+    ],
+    pluginFor: ["soong_build"],
 }
 
 bootstrap_go_package {
@@ -557,7 +602,6 @@ toolchain_library {
                     "__gnu_unwind_execute",
                     "__gnu_unwind_frame",
                 ],
-                use_gnu_strip: true,
             },
         },
         arm64: {
@@ -605,7 +649,6 @@ toolchain_library {
             "__register_frame_info_table_bases",
             "__register_frame_table",
         ],
-        use_gnu_strip: true,
     },
 }
 

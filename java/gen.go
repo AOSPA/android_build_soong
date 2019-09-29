@@ -23,7 +23,6 @@ import (
 )
 
 func init() {
-	pctx.HostBinToolVariable("aidlCmd", "aidl")
 	pctx.HostBinToolVariable("syspropCmd", "sysprop_java")
 	pctx.SourcePathVariable("logtagsCmd", "build/make/tools/java-event-log-tags.py")
 	pctx.SourcePathVariable("mergeLogtagsCmd", "build/make/tools/merge-event-log-tags.py")
@@ -33,8 +32,8 @@ func init() {
 var (
 	aidl = pctx.AndroidStaticRule("aidl",
 		blueprint.RuleParams{
-			Command:     "$aidlCmd -d$depFile $aidlFlags $in $out",
-			CommandDeps: []string{"$aidlCmd"},
+			Command:     "${config.AidlCmd} -d$depFile $aidlFlags $in $out",
+			CommandDeps: []string{"${config.AidlCmd}"},
 		},
 		"depFile", "aidlFlags")
 
@@ -65,10 +64,6 @@ var (
 func genAidl(ctx android.ModuleContext, aidlFile android.Path, aidlFlags string, deps android.Paths) android.Path {
 	javaFile := android.GenPathWithExt(ctx, "aidl", aidlFile, "java")
 	depFile := javaFile.String() + ".d"
-	baseDir := strings.TrimSuffix(aidlFile.String(), aidlFile.Rel())
-	if baseDir != "" {
-		aidlFlags += " -I" + baseDir
-	}
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        aidl,
@@ -114,15 +109,30 @@ func genSysprop(ctx android.ModuleContext, syspropFile android.Path, scope strin
 	return srcJarFile
 }
 
+func genAidlIncludeFlags(srcFiles android.Paths) string {
+	var baseDirs []string
+	for _, srcFile := range srcFiles {
+		if srcFile.Ext() == ".aidl" {
+			baseDir := strings.TrimSuffix(srcFile.String(), srcFile.Rel())
+			if baseDir != "" && !android.InList(baseDir, baseDirs) {
+				baseDirs = append(baseDirs, baseDir)
+			}
+		}
+	}
+	return android.JoinWithPrefix(baseDirs, " -I")
+}
+
 func (j *Module) genSources(ctx android.ModuleContext, srcFiles android.Paths,
 	flags javaBuilderFlags) android.Paths {
 
 	outSrcFiles := make(android.Paths, 0, len(srcFiles))
 
+	aidlIncludeFlags := genAidlIncludeFlags(srcFiles)
+
 	for _, srcFile := range srcFiles {
 		switch srcFile.Ext() {
 		case ".aidl":
-			javaFile := genAidl(ctx, srcFile, flags.aidlFlags, flags.aidlDeps)
+			javaFile := genAidl(ctx, srcFile, flags.aidlFlags+aidlIncludeFlags, flags.aidlDeps)
 			outSrcFiles = append(outSrcFiles, javaFile)
 		case ".logtags":
 			j.logtagsSrcs = append(j.logtagsSrcs, srcFile)
