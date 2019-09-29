@@ -179,7 +179,7 @@ func buildParamsFromRule(provider testBuildProvider, rule string) TestingBuildPa
 
 func maybeBuildParamsFromDescription(provider testBuildProvider, desc string) TestingBuildParams {
 	for _, p := range provider.BuildParamsForTests() {
-		if p.Description == desc {
+		if strings.Contains(p.Description, desc) {
 			return newTestingBuildParams(provider, p)
 		}
 	}
@@ -372,13 +372,47 @@ func FailIfNoMatchingErrors(t *testing.T, pattern string, errs []error) {
 	}
 }
 
+func CheckErrorsAgainstExpectations(t *testing.T, errs []error, expectedErrorPatterns []string) {
+	t.Helper()
+
+	if expectedErrorPatterns == nil {
+		FailIfErrored(t, errs)
+	} else {
+		for _, expectedError := range expectedErrorPatterns {
+			FailIfNoMatchingErrors(t, expectedError, errs)
+		}
+		if len(errs) > len(expectedErrorPatterns) {
+			t.Errorf("additional errors found, expected %d, found %d",
+				len(expectedErrorPatterns), len(errs))
+			for i, expectedError := range expectedErrorPatterns {
+				t.Errorf("expectedErrors[%d] = %s", i, expectedError)
+			}
+			for i, err := range errs {
+				t.Errorf("errs[%d] = %s", i, err)
+			}
+		}
+	}
+
+}
+
 func AndroidMkEntriesForTest(t *testing.T, config Config, bpPath string, mod blueprint.Module) AndroidMkEntries {
 	var p AndroidMkEntriesProvider
 	var ok bool
 	if p, ok = mod.(AndroidMkEntriesProvider); !ok {
-		t.Errorf("module does not implmement AndroidMkEntriesProvider: " + mod.Name())
+		t.Errorf("module does not implement AndroidMkEntriesProvider: " + mod.Name())
 	}
 	entries := p.AndroidMkEntries()
 	entries.fillInEntries(config, bpPath, mod)
 	return entries
+}
+
+func AndroidMkDataForTest(t *testing.T, config Config, bpPath string, mod blueprint.Module) AndroidMkData {
+	var p AndroidMkDataProvider
+	var ok bool
+	if p, ok = mod.(AndroidMkDataProvider); !ok {
+		t.Errorf("module does not implement AndroidMkDataProvider: " + mod.Name())
+	}
+	data := p.AndroidMk()
+	data.fillInData(config, bpPath, mod)
+	return data
 }

@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"runtime"
 	"sort"
@@ -77,10 +78,15 @@ func JoinWithSuffix(strs []string, suffix string, separator string) string {
 	return string(ret)
 }
 
-func sortedKeys(m map[string][]string) []string {
-	s := make([]string, 0, len(m))
-	for k := range m {
-		s = append(s, k)
+func SortedStringKeys(m interface{}) []string {
+	v := reflect.ValueOf(m)
+	if v.Kind() != reflect.Map {
+		panic(fmt.Sprintf("%#v is not a map", m))
+	}
+	keys := v.MapKeys()
+	s := make([]string, 0, len(keys))
+	for _, key := range keys {
+		s = append(s, key.String())
 	}
 	sort.Strings(s)
 	return s
@@ -107,6 +113,17 @@ func PrefixInList(s string, list []string) bool {
 		}
 	}
 	return false
+}
+
+// IndexListPred returns the index of the element which in the given `list` satisfying the predicate, or -1 if there is no such element.
+func IndexListPred(pred func(s string) bool, list []string) int {
+	for i, l := range list {
+		if pred(l) {
+			return i
+		}
+	}
+
+	return -1
 }
 
 func FilterList(list []string, filter []string) (remainder []string, filtered []string) {
@@ -180,6 +197,13 @@ func LastUniqueStrings(list []string) []string {
 		totalSkip += skip
 	}
 	return list[totalSkip:]
+}
+
+// SortedUniqueStrings returns what the name says
+func SortedUniqueStrings(list []string) []string {
+	unique := FirstUniqueStrings(list)
+	sort.Strings(unique)
+	return unique
 }
 
 // checkCalledFromInit panics if a Go package's init function is not on the

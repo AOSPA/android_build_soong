@@ -61,10 +61,8 @@ var commands []command = []command{
 		config: func(ctx build.Context, args ...string) build.Config {
 			return build.NewConfig(ctx, args...)
 		},
-		stdio: func() terminal.StdioInterface {
-			return terminal.StdioImpl{}
-		},
-		run: make,
+		stdio: stdio,
+		run:   make,
 	}, {
 		flag:        "--dumpvar-mode",
 		description: "print the value of the legacy make variable VAR to stdout",
@@ -77,6 +75,12 @@ var commands []command = []command{
 		config:      dumpVarConfig,
 		stdio:       customStdio,
 		run:         dumpVars,
+	}, {
+		flag:        "--build-mode",
+		description: "build modules based on the specified build action",
+		config:      buildActionConfig,
+		stdio:       stdio,
+		run:         make,
 	},
 }
 
@@ -109,10 +113,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	writer := terminal.NewWriter(c.stdio())
-	defer writer.Finish()
+	output := terminal.NewStatusOutput(c.stdio().Stdout(), os.Getenv("NINJA_STATUS"),
+		build.OsEnvironment().IsEnvTrue("ANDROID_QUIET_BUILD"))
 
-	log := logger.New(writer)
+	log := logger.New(output)
 	defer log.Cleanup()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -125,8 +129,7 @@ func main() {
 
 	stat := &status.Status{}
 	defer stat.Finish()
-	stat.AddOutput(terminal.NewStatusOutput(writer, os.Getenv("NINJA_STATUS"),
-		build.OsEnvironment().IsEnvTrue("ANDROID_QUIET_BUILD")))
+	stat.AddOutput(output)
 	stat.AddOutput(trace.StatusTracer())
 
 	build.SetupSignals(log, cancel, func() {
@@ -140,7 +143,7 @@ func main() {
 		Logger:  log,
 		Metrics: met,
 		Tracer:  trace,
-		Writer:  writer,
+		Writer:  output,
 		Status:  stat,
 	}}
 
@@ -158,8 +161,10 @@ func main() {
 	trace.SetOutput(filepath.Join(logsDir, "build.trace"))
 	stat.AddOutput(status.NewVerboseLog(log, filepath.Join(logsDir, "verbose.log")))
 	stat.AddOutput(status.NewErrorLog(log, filepath.Join(logsDir, "error.log")))
+	stat.AddOutput(status.NewProtoErrorLog(log, filepath.Join(logsDir, "build_error")))
+	stat.AddOutput(status.NewCriticalPath(log))
 
-	defer met.Dump(filepath.Join(logsDir, "build_metrics"))
+	defer met.Dump(filepath.Join(logsDir, "soong_metrics"))
 
 	if start, ok := os.LookupEnv("TRACE_BEGIN_SOONG"); ok {
 		if !strings.HasSuffix(start, "N") {
@@ -204,13 +209,13 @@ func fixBadDanglingLink(ctx build.Context, name string) {
 func dumpVar(ctx build.Context, config build.Config, args []string, _ string) {
 	flags := flag.NewFlagSet("dumpvar", flag.ExitOnError)
 	flags.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: %s --dumpvar-mode [--abs] <VAR>\n\n", os.Args[0])
-		fmt.Fprintln(os.Stderr, "In dumpvar mode, print the value of the legacy make variable VAR to stdout")
-		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintf(ctx.Writer, "usage: %s --dumpvar-mode [--abs] <VAR>\n\n", os.Args[0])
+		fmt.Fprintln(ctx.Writer, "In dumpvar mode, print the value of the legacy make variable VAR to stdout")
+		fmt.Fprintln(ctx.Writer, "")
 
-		fmt.Fprintln(os.Stderr, "'report_config' is a special case that prints the human-readable config banner")
-		fmt.Fprintln(os.Stderr, "from the beginning of the build.")
-		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(ctx.Writer, "'report_config' is a special case that prints the human-readable config banner")
+		fmt.Fprintln(ctx.Writer, "from the beginning of the build.")
+		fmt.Fprintln(ctx.Writer, "")
 		flags.PrintDefaults()
 	}
 	abs := flags.Bool("abs", false, "Print the absolute path of the value")
@@ -254,15 +259,15 @@ func dumpVar(ctx build.Context, config build.Config, args []string, _ string) {
 func dumpVars(ctx build.Context, config build.Config, args []string, _ string) {
 	flags := flag.NewFlagSet("dumpvars", flag.ExitOnError)
 	flags.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: %s --dumpvars-mode [--vars=\"VAR VAR ...\"]\n\n", os.Args[0])
-		fmt.Fprintln(os.Stderr, "In dumpvars mode, dump the values of one or more legacy make variables, in")
-		fmt.Fprintln(os.Stderr, "shell syntax. The resulting output may be sourced directly into a shell to")
-		fmt.Fprintln(os.Stderr, "set corresponding shell variables.")
-		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintf(ctx.Writer, "usage: %s --dumpvars-mode [--vars=\"VAR VAR ...\"]\n\n", os.Args[0])
+		fmt.Fprintln(ctx.Writer, "In dumpvars mode, dump the values of one or more legacy make variables, in")
+		fmt.Fprintln(ctx.Writer, "shell syntax. The resulting output may be sourced directly into a shell to")
+		fmt.Fprintln(ctx.Writer, "set corresponding shell variables.")
+		fmt.Fprintln(ctx.Writer, "")
 
-		fmt.Fprintln(os.Stderr, "'report_config' is a special case that dumps a variable containing the")
-		fmt.Fprintln(os.Stderr, "human-readable config banner from the beginning of the build.")
-		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(ctx.Writer, "'report_config' is a special case that dumps a variable containing the")
+		fmt.Fprintln(ctx.Writer, "human-readable config banner from the beginning of the build.")
+		fmt.Fprintln(ctx.Writer, "")
 		flags.PrintDefaults()
 	}
 
@@ -319,6 +324,10 @@ func dumpVars(ctx build.Context, config build.Config, args []string, _ string) {
 	}
 }
 
+func stdio() terminal.StdioInterface {
+	return terminal.StdioImpl{}
+}
+
 func customStdio() terminal.StdioInterface {
 	return terminal.NewCustomStdio(os.Stdin, os.Stderr, os.Stderr)
 }
@@ -328,17 +337,112 @@ func dumpVarConfig(ctx build.Context, args ...string) build.Config {
 	return build.NewConfig(ctx)
 }
 
+func buildActionConfig(ctx build.Context, args ...string) build.Config {
+	flags := flag.NewFlagSet("build-mode", flag.ContinueOnError)
+	flags.Usage = func() {
+		fmt.Fprintf(ctx.Writer, "usage: %s --build-mode --dir=<path> <build action> [<build arg 1> <build arg 2> ...]\n\n", os.Args[0])
+		fmt.Fprintln(ctx.Writer, "In build mode, build the set of modules based on the specified build")
+		fmt.Fprintln(ctx.Writer, "action. The --dir flag is required to determine what is needed to")
+		fmt.Fprintln(ctx.Writer, "build in the source tree based on the build action. See below for")
+		fmt.Fprintln(ctx.Writer, "the list of acceptable build action flags.")
+		fmt.Fprintln(ctx.Writer, "")
+		flags.PrintDefaults()
+	}
+
+	buildActionFlags := []struct {
+		name        string
+		description string
+		action      build.BuildAction
+		set         bool
+	}{{
+		name:        "all-modules",
+		description: "Build action: build from the top of the source tree.",
+		action:      build.BUILD_MODULES,
+	}, {
+		// This is redirecting to mma build command behaviour. Once it has soaked for a
+		// while, the build command is deleted from here once it has been removed from the
+		// envsetup.sh.
+		name:        "modules-in-a-dir-no-deps",
+		description: "Build action: builds all of the modules in the current directory without their dependencies.",
+		action:      build.BUILD_MODULES_IN_A_DIRECTORY,
+	}, {
+		// This is redirecting to mmma build command behaviour. Once it has soaked for a
+		// while, the build command is deleted from here once it has been removed from the
+		// envsetup.sh.
+		name:        "modules-in-dirs-no-deps",
+		description: "Build action: builds all of the modules in the supplied directories without their dependencies.",
+		action:      build.BUILD_MODULES_IN_DIRECTORIES,
+	}, {
+		name:        "modules-in-a-dir",
+		description: "Build action: builds all of the modules in the current directory and their dependencies.",
+		action:      build.BUILD_MODULES_IN_A_DIRECTORY,
+	}, {
+		name:        "modules-in-dirs",
+		description: "Build action: builds all of the modules in the supplied directories and their dependencies.",
+		action:      build.BUILD_MODULES_IN_DIRECTORIES,
+	}}
+	for i, flag := range buildActionFlags {
+		flags.BoolVar(&buildActionFlags[i].set, flag.name, false, flag.description)
+	}
+	dir := flags.String("dir", "", "Directory of the executed build command.")
+
+	// Only interested in the first two args which defines the build action and the directory.
+	// The remaining arguments are passed down to the config.
+	const numBuildActionFlags = 2
+	if len(args) < numBuildActionFlags {
+		flags.Usage()
+		ctx.Fatalln("Improper build action arguments.")
+	}
+	flags.Parse(args[0:numBuildActionFlags])
+
+	// The next block of code is to validate that exactly one build action is set and the dir flag
+	// is specified.
+	buildActionCount := 0
+	var buildAction build.BuildAction
+	for _, flag := range buildActionFlags {
+		if flag.set {
+			buildActionCount++
+			buildAction = flag.action
+		}
+	}
+	if buildActionCount != 1 {
+		ctx.Fatalln("Build action not defined.")
+	}
+	if *dir == "" {
+		ctx.Fatalln("-dir not specified.")
+	}
+
+	// Remove the build action flags from the args as they are not recognized by the config.
+	args = args[numBuildActionFlags:]
+	return build.NewBuildActionConfig(buildAction, *dir, ctx, args...)
+}
+
 func make(ctx build.Context, config build.Config, _ []string, logsDir string) {
 	if config.IsVerbose() {
 		writer := ctx.Writer
-		writer.Print("! The argument `showcommands` is no longer supported.")
-		writer.Print("! Instead, the verbose log is always written to a compressed file in the output dir:")
-		writer.Print("!")
-		writer.Print(fmt.Sprintf("!   gzip -cd %s/verbose.log.gz | less -R", logsDir))
-		writer.Print("!")
-		writer.Print("! Older versions are saved in verbose.log.#.gz files")
-		writer.Print("")
-		time.Sleep(5 * time.Second)
+		fmt.Fprintln(writer, "! The argument `showcommands` is no longer supported.")
+		fmt.Fprintln(writer, "! Instead, the verbose log is always written to a compressed file in the output dir:")
+		fmt.Fprintln(writer, "!")
+		fmt.Fprintf(writer, "!   gzip -cd %s/verbose.log.gz | less -R\n", logsDir)
+		fmt.Fprintln(writer, "!")
+		fmt.Fprintln(writer, "! Older versions are saved in verbose.log.#.gz files")
+		fmt.Fprintln(writer, "")
+		select {
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	if _, ok := config.Environment().Get("ONE_SHOT_MAKEFILE"); ok {
+		writer := ctx.Writer
+		fmt.Fprintln(writer, "! The variable `ONE_SHOT_MAKEFILE` is obsolete.")
+		fmt.Fprintln(writer, "!")
+		fmt.Fprintln(writer, "! If you're using `mm`, you'll need to run `source build/envsetup.sh` to update.")
+		fmt.Fprintln(writer, "!")
+		fmt.Fprintln(writer, "! Otherwise, either specify a module name with m, or use mma / MODULES-IN-...")
+		fmt.Fprintln(writer, "")
+		ctx.Fatal("done")
 	}
 
 	toBuild := build.BuildAll

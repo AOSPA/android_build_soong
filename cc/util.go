@@ -29,10 +29,6 @@ func includeDirsToFlags(dirs android.Paths) string {
 	return android.JoinWithPrefix(dirs.Strings(), "-I")
 }
 
-func includeFilesToFlags(files android.Paths) string {
-	return android.JoinWithPrefix(files.Strings(), "-include ")
-}
-
 func ldDirsToFlags(dirs []string) string {
 	return android.JoinWithPrefix(dirs, "-L")
 }
@@ -79,6 +75,7 @@ func flagsToBuilderFlags(in Flags) builderFlags {
 		coverage:        in.Coverage,
 		tidy:            in.Tidy,
 		sAbiDump:        in.SAbiDump,
+		emitXrefs:       in.EmitXrefs,
 
 		systemIncludeFlags: strings.Join(in.SystemIncludeFlags, " "),
 

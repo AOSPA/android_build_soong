@@ -81,6 +81,8 @@ types are:
 Maps may values of any type, including nested maps.  Lists and maps may have
 trailing commas after the last value.
 
+Strings can contain double quotes using `\"`, for example `"cat \"a b\""`.
+
 ### Operators
 
 Strings, lists of strings, and maps can be appended using the `+` operator.
@@ -130,6 +132,25 @@ directory) there are two packages, `my/app`, and the subpackage `my/app/tests`. 
     .../android/my/app/tests/test.cc
 
 This is based on the Bazel package concept.
+
+The `package` module type allows information to be specified about a package. Only a single
+`package` module can be specified per package and in the case where there are multiple `.bp` files
+in the same package directory it is highly recommended that the `package` module (if required) is
+specified in the `Android.bp` file.
+
+Unlike most module type `package` does not have a `name` property. Instead the name is set to the
+name of the package, e.g. if the package is in `top/intermediate/package` then the package name is
+`//top/intermediate/package`.
+
+E.g. The following will set the default visibility for all the modules defined in the package and
+any subpackages that do not set their own default visibility (irrespective of whether they are in
+the same `.bp` file as the `package` module) to be visible to all the subpackages by default.
+
+```
+package {
+    default_visibility: [":__subpackages"]
+}
+```
 
 ### Name resolution
 
@@ -189,27 +210,43 @@ this module. For example, `//project:rule`, `//project/library:lib` or
 `//independent:evil`)
 * `["//project"]`: This is shorthand for `["//project:__pkg__"]`
 * `[":__subpackages__"]`: This is shorthand for `["//project:__subpackages__"]`
-where `//project` is the module's package. e.g. using `[":__subpackages__"]` in
+where `//project` is the module's package, e.g. using `[":__subpackages__"]` in
 `packages/apps/Settings/Android.bp` is equivalent to
 `//packages/apps/Settings:__subpackages__`.
 * `["//visibility:legacy_public"]`: The default visibility, behaves as
 `//visibility:public` for now. It is an error if it is used in a module.
 
-The visibility rules of `//visibility:public` and `//visibility:private` can
-not be combined with any other visibility specifications.
+The visibility rules of `//visibility:public` and `//visibility:private` cannot
+be combined with any other visibility specifications, except
+`//visibility:public` is allowed to override visibility specifications imported
+through the `defaults` property.
 
 Packages outside `vendor/` cannot make themselves visible to specific packages
 in `vendor/`, e.g. a module in `libcore` cannot declare that it is visible to
 say `vendor/google`, instead it must make itself visible to all packages within
 `vendor/` using `//vendor:__subpackages__`.
 
-If a module does not specify the `visibility` property the module is
-`//visibility:legacy_public`. Once the build has been completely switched over to
-soong it is possible that a global refactoring will be done to change this to
-`//visibility:private` at which point all modules that do not currently specify
-a `visibility` property will be updated to have
-`visibility = [//visibility:legacy_public]` added. It will then be the owner's
-responsibility to replace that with a more appropriate visibility.
+If a module does not specify the `visibility` property then it uses the
+`default_visibility` property of the `package` module in the module's package.
+
+If the `default_visibility` property is not set for the module's package then
+it will use the `default_visibility` of its closest ancestor package for which
+a `default_visibility` property is specified.
+
+If no `default_visibility` property can be found then the module uses the
+global default of `//visibility:legacy_public`.
+
+The `visibility` property has no effect on a defaults module although it does
+apply to any non-defaults module that uses it. To set the visibility of a
+defaults module, use the `defaults_visibility` property on the defaults module;
+not to be confused with the `default_visibility` property on the package module.
+
+Once the build has been completely switched over to soong it is possible that a
+global refactoring will be done to change this to `//visibility:private` at
+which point all packages that do not currently specify a `default_visibility`
+property will be updated to have
+`default_visibility = [//visibility:legacy_public]` added. It will then be the
+owner's responsibility to replace that with a more appropriate visibility.
 
 ### Formatter
 
@@ -304,6 +341,31 @@ build/soong/scripts/setup_go_workspace_for_soong.sh
 
 This will bind mount the Soong source directories into the directory in the layout expected by
 the IDE.
+
+### Running Soong in a debugger
+
+To run the soong_build process in a debugger, install `dlv` and then start the build with
+`SOONG_DELVE=<listen addr>` in the environment.
+For examle:
+```bash
+SOONG_DELVE=:1234 m nothing
+```
+and then in another terminal:
+```
+dlv connect :1234
+```
+
+If you see an error:
+```
+Could not attach to pid 593: this could be caused by a kernel
+security setting, try writing "0" to /proc/sys/kernel/yama/ptrace_scope
+```
+you can temporarily disable
+[Yama's ptrace protection](https://www.kernel.org/doc/Documentation/security/Yama.txt)
+using:
+```bash
+sudo sysctl -w kernel.yama.ptrace_scope=0
+```
 
 ## Contact
 

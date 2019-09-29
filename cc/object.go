@@ -66,6 +66,7 @@ func (object *objectLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.LateSharedLibs = append(deps.LateSharedLibs, "libc")
 	}
 
+	deps.HeaderLibs = append(deps.HeaderLibs, object.Properties.Header_libs...)
 	deps.ObjFiles = append(deps.ObjFiles, object.Properties.Objs...)
 	return deps
 }
@@ -117,4 +118,8 @@ func (object *objectLinker) unstrippedOutputFilePath() android.Path {
 
 func (object *objectLinker) nativeCoverage() bool {
 	return true
+}
+
+func (object *objectLinker) coverageOutputFilePath() android.OptionalPath {
+	return android.OptionalPath{}
 }

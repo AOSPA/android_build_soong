@@ -43,7 +43,8 @@ var (
 			Command: `rm -rf "$outDir" "$annoDir" "$srcJarDir" && mkdir -p "$outDir" "$annoDir" "$srcJarDir" && ` +
 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
 				`(if [ -s $srcJarDir/list ] || [ -s $out.rsp ] ; then ` +
-				`${config.SoongJavacWrapper} ${config.JavacWrapper}${config.JavacCmd} ${config.JavacHeapFlags} ${config.CommonJdkFlags} ` +
+				`${config.SoongJavacWrapper} ${config.JavacWrapper}${config.JavacCmd} ` +
+				`${config.JavacHeapFlags} ${config.JavacVmFlags} ${config.CommonJdkFlags} ` +
 				`$processorpath $processor $javacFlags $bootClasspath $classpath ` +
 				`-source $javaVersion -target $javaVersion ` +
 				`-d $outDir -s $annoDir @$out.rsp @$srcJarDir/list ; fi ) && ` +
@@ -61,10 +62,41 @@ var (
 		"javacFlags", "bootClasspath", "classpath", "processorpath", "processor", "srcJars", "srcJarDir",
 		"outDir", "annoDir", "javaVersion")
 
+	_ = pctx.VariableFunc("kytheCorpus",
+		func(ctx android.PackageVarContext) string { return ctx.Config().XrefCorpusName() })
+	// Run it with -add-opens=java.base/java.nio=ALL-UNNAMED to avoid JDK9's warning about
+	// "Illegal reflective access by com.google.protobuf.Utf8$UnsafeProcessor ...
+	// to field java.nio.Buffer.address"
+	kytheExtract = pctx.AndroidStaticRule("kythe",
+		blueprint.RuleParams{
+			Command: `${config.ZipSyncCmd} -d $srcJarDir ` +
+				`-l $srcJarDir/list -f "*.java" $srcJars && ` +
+				`( [ ! -s $srcJarDir/list -a ! -s $out.rsp ] || ` +
+				`KYTHE_ROOT_DIRECTORY=. KYTHE_OUTPUT_FILE=$out ` +
+				`KYTHE_CORPUS=${kytheCorpus} ` +
+				`${config.SoongJavacWrapper} ${config.JavaCmd} ` +
+				`--add-opens=java.base/java.nio=ALL-UNNAMED ` +
+				`-jar ${config.JavaKytheExtractorJar} ` +
+				`${config.JavacHeapFlags} ${config.CommonJdkFlags} ` +
+				`$processorpath $processor $javacFlags $bootClasspath $classpath ` +
+				`-source $javaVersion -target $javaVersion ` +
+				`-d $outDir -s $annoDir @$out.rsp @$srcJarDir/list)`,
+			CommandDeps: []string{
+				"${config.JavaCmd}",
+				"${config.JavaKytheExtractorJar}",
+				"${config.ZipSyncCmd}",
+			},
+			CommandOrderOnly: []string{"${config.SoongJavacWrapper}"},
+			Rspfile:          "$out.rsp",
+			RspfileContent:   "$in",
+		},
+		"javacFlags", "bootClasspath", "classpath", "processorpath", "processor", "srcJars", "srcJarDir",
+		"outDir", "annoDir", "javaVersion")
+
 	turbine = pctx.AndroidStaticRule("turbine",
 		blueprint.RuleParams{
 			Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
-				`${config.JavaCmd} -jar ${config.TurbineJar} --output $out.tmp ` +
+				`${config.JavaCmd} ${config.JavaVmFlags} -jar ${config.TurbineJar} --output $out.tmp ` +
 				`--temp_dir "$outDir" --sources @$out.rsp  --source_jars $srcJars ` +
 				`--javacopts ${config.CommonJdkFlags} ` +
 				`$javacFlags -source $javaVersion -target $javaVersion -- $bootClasspath $classpath && ` +
@@ -108,7 +140,7 @@ var (
 
 	jarjar = pctx.AndroidStaticRule("jarjar",
 		blueprint.RuleParams{
-			Command:     "${config.JavaCmd} -jar ${config.JarjarCmd} process $rulesFile $in $out",
+			Command:     "${config.JavaCmd} ${config.JavaVmFlags} -jar ${config.JarjarCmd} process $rulesFile $in $out",
 			CommandDeps: []string{"${config.JavaCmd}", "${config.JarjarCmd}", "$rulesFile"},
 		},
 		"rulesFile")
@@ -124,7 +156,7 @@ var (
 
 	jetifier = pctx.AndroidStaticRule("jetifier",
 		blueprint.RuleParams{
-			Command:     "${config.JavaCmd} -jar ${config.JetifierJar} -l error -o $out -i $in",
+			Command:     "${config.JavaCmd}  ${config.JavaVmFlags} -jar ${config.JetifierJar} -l error -o $out -i $in",
 			CommandDeps: []string{"${config.JavaCmd}", "${config.JetifierJar}"},
 		},
 	)
@@ -152,7 +184,7 @@ type javaBuilderFlags struct {
 	classpath     classpath
 	processorPath classpath
 	processor     string
-	systemModules classpath
+	systemModules *systemModules
 	aidlFlags     string
 	aidlDeps      android.Paths
 	javaVersion   string
@@ -193,6 +225,61 @@ func RunErrorProne(ctx android.ModuleContext, outputFile android.WritablePath,
 
 	transformJavaToClasses(ctx, outputFile, -1, srcFiles, srcJars, flags, nil,
 		"errorprone", "errorprone")
+}
+
+// Emits the rule to generate Xref input file (.kzip file) for the given set of source files and source jars
+// to compile with given set of builder flags, etc.
+func emitXrefRule(ctx android.ModuleContext, xrefFile android.WritablePath,
+	srcFiles, srcJars android.Paths,
+	flags javaBuilderFlags, deps android.Paths,
+	intermediatesDir string) {
+
+	deps = append(deps, srcJars...)
+
+	var bootClasspath string
+	if flags.javaVersion == "1.9" {
+		var systemModuleDeps android.Paths
+		bootClasspath, systemModuleDeps = flags.systemModules.FormJavaSystemModulesPath(ctx.Device())
+		deps = append(deps, systemModuleDeps...)
+	} else {
+		deps = append(deps, flags.bootClasspath...)
+		if len(flags.bootClasspath) == 0 && ctx.Device() {
+			// explicitly specify -bootclasspath "" if the bootclasspath is empty to
+			// ensure java does not fall back to the default bootclasspath.
+			bootClasspath = `-bootclasspath ""`
+		} else {
+			bootClasspath = flags.bootClasspath.FormJavaClassPath("-bootclasspath")
+		}
+	}
+
+	deps = append(deps, flags.classpath...)
+	deps = append(deps, flags.processorPath...)
+
+	processor := "-proc:none"
+	if flags.processor != "" {
+		processor = "-processor " + flags.processor
+	}
+
+	ctx.Build(pctx,
+		android.BuildParams{
+			Rule:        kytheExtract,
+			Description: "Xref Java extractor",
+			Output:      xrefFile,
+			Inputs:      srcFiles,
+			Implicits:   deps,
+			Args: map[string]string{
+				"annoDir":       android.PathForModuleOut(ctx, intermediatesDir, "anno").String(),
+				"bootClasspath": bootClasspath,
+				"classpath":     flags.classpath.FormJavaClassPath("-classpath"),
+				"javacFlags":    flags.javacFlags,
+				"javaVersion":   flags.javaVersion,
+				"outDir":        android.PathForModuleOut(ctx, "javac", "classes.xref").String(),
+				"processorpath": flags.processorPath.FormJavaClassPath("-processorpath"),
+				"processor":     processor,
+				"srcJarDir":     android.PathForModuleOut(ctx, intermediatesDir, "srcjars.xref").String(),
+				"srcJars":       strings.Join(srcJars.Strings(), " "),
+			},
+		})
 }
 
 func TransformJavaToHeaderClasses(ctx android.ModuleContext, outputFile android.WritablePath,
@@ -247,8 +334,9 @@ func transformJavaToClasses(ctx android.ModuleContext, outputFile android.Writab
 
 	var bootClasspath string
 	if flags.javaVersion == "1.9" {
-		deps = append(deps, flags.systemModules...)
-		bootClasspath = flags.systemModules.FormJavaSystemModulesPath("--system=", ctx.Device())
+		var systemModuleDeps android.Paths
+		bootClasspath, systemModuleDeps = flags.systemModules.FormJavaSystemModulesPath(ctx.Device())
+		deps = append(deps, systemModuleDeps...)
 	} else {
 		deps = append(deps, flags.bootClasspath...)
 		if len(flags.bootClasspath) == 0 && ctx.Device() {
@@ -409,7 +497,7 @@ func TransformZipAlign(ctx android.ModuleContext, outputFile android.WritablePat
 	})
 }
 
-type classpath []android.Path
+type classpath android.Paths
 
 func (x *classpath) FormJavaClassPath(optName string) string {
 	if optName != "" && !strings.HasSuffix(optName, "=") && !strings.HasSuffix(optName, " ") {
@@ -417,21 +505,6 @@ func (x *classpath) FormJavaClassPath(optName string) string {
 	}
 	if len(*x) > 0 {
 		return optName + strings.Join(x.Strings(), ":")
-	} else {
-		return ""
-	}
-}
-
-// Returns a --system argument in the form javac expects with -source 1.9.  If forceEmpty is true,
-// returns --system=none if the list is empty to ensure javac does not fall back to the default
-// system modules.
-func (x *classpath) FormJavaSystemModulesPath(optName string, forceEmpty bool) string {
-	if len(*x) > 1 {
-		panic("more than one system module")
-	} else if len(*x) == 1 {
-		return optName + strings.TrimSuffix((*x)[0].String(), "lib/modules")
-	} else if forceEmpty {
-		return optName + "none"
 	} else {
 		return ""
 	}
@@ -463,4 +536,22 @@ func (x *classpath) Strings() []string {
 		ret[i] = path.String()
 	}
 	return ret
+}
+
+type systemModules struct {
+	dir  android.Path
+	deps android.Paths
+}
+
+// Returns a --system argument in the form javac expects with -source 1.9.  If forceEmpty is true,
+// returns --system=none if the list is empty to ensure javac does not fall back to the default
+// system modules.
+func (x *systemModules) FormJavaSystemModulesPath(forceEmpty bool) (string, android.Paths) {
+	if x != nil {
+		return "--system=" + x.dir.String(), x.deps
+	} else if forceEmpty {
+		return "--system=none", nil
+	} else {
+		return "", nil
+	}
 }

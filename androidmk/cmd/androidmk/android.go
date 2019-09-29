@@ -15,9 +15,9 @@
 package main
 
 import (
+	"android/soong/android"
 	mkparser "android/soong/androidmk/parser"
 	"fmt"
-	"sort"
 	"strings"
 
 	bpparser "github.com/google/blueprint/parser"
@@ -173,6 +173,8 @@ func init() {
 			// Jacoco filters:
 			"LOCAL_JACK_COVERAGE_INCLUDE_FILTER": "jacoco.include_filter",
 			"LOCAL_JACK_COVERAGE_EXCLUDE_FILTER": "jacoco.exclude_filter",
+
+			"LOCAL_FULL_LIBS_MANIFEST_FILES": "additional_manifests",
 		})
 
 	addStandardProperties(bpparser.BoolType,
@@ -185,7 +187,6 @@ func init() {
 			"LOCAL_NO_CRT":                     "nocrt",
 			"LOCAL_ALLOW_UNDEFINED_SYMBOLS":    "allow_undefined_symbols",
 			"LOCAL_RTTI_FLAG":                  "rtti",
-			"LOCAL_NO_STANDARD_LIBRARIES":      "no_standard_libs",
 			"LOCAL_PACK_MODULE_RELOCATIONS":    "pack_relocations",
 			"LOCAL_TIDY":                       "tidy",
 			"LOCAL_USE_CLANG_LLD":              "use_clang_lld",
@@ -193,7 +194,7 @@ func init() {
 			"LOCAL_VENDOR_MODULE":              "vendor",
 			"LOCAL_ODM_MODULE":                 "device_specific",
 			"LOCAL_PRODUCT_MODULE":             "product_specific",
-			"LOCAL_PRODUCT_SERVICES_MODULE":    "product_services_specific",
+			"LOCAL_SYSTEM_EXT_MODULE":          "system_ext_specific",
 			"LOCAL_EXPORT_PACKAGE_RESOURCES":   "export_package_resources",
 			"LOCAL_PRIVILEGED_MODULE":          "privileged",
 			"LOCAL_AAPT_INCLUDE_ALL_RESOURCES": "aapt_include_all_resources",
@@ -335,15 +336,6 @@ func classifyLocalOrGlobalPath(value bpparser.Expression) (string, bpparser.Expr
 	}
 }
 
-func sortedMapKeys(inputMap map[string]string) (sortedKeys []string) {
-	keys := make([]string, 0, len(inputMap))
-	for key := range inputMap {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 // splitAndAssign splits a Make list into components and then
 // creates the corresponding variable assignments.
 func splitAndAssign(ctx variableAssignmentContext, splitFunc listSplitFunc, namesByClassification map[string]string) error {
@@ -357,7 +349,7 @@ func splitAndAssign(ctx variableAssignmentContext, splitFunc listSplitFunc, name
 		return err
 	}
 
-	for _, nameClassification := range sortedMapKeys(namesByClassification) {
+	for _, nameClassification := range android.SortedStringKeys(namesByClassification) {
 		name := namesByClassification[nameClassification]
 		if component, ok := lists[nameClassification]; ok && !emptyList(component) {
 			err = setVariable(ctx.file, ctx.append, ctx.prefix, name, component, true)
@@ -529,7 +521,7 @@ func sanitize(sub string) func(ctx variableAssignmentContext) error {
 				ctx.file.errorf(ctx.mkvalue, "unsupported sanitize expression")
 			case *bpparser.String:
 				switch v.Value {
-				case "never", "address", "coverage", "thread", "undefined", "cfi":
+				case "never", "address", "fuzzer", "thread", "undefined", "cfi":
 					bpTrue := &bpparser.Bool{
 						Value: true,
 					}
@@ -612,8 +604,8 @@ func prebuiltModulePath(ctx variableAssignmentContext) error {
 		return fmt.Errorf("Cannot handle appending to LOCAL_MODULE_PATH")
 	}
 	// Analyze value in order to set the correct values for the 'device_specific',
-	// 'product_specific', 'product_services_specific' 'vendor'/'soc_specific',
-	// 'product_services_specific' attribute. Two cases are allowed:
+	// 'product_specific', 'system_ext_specific' 'vendor'/'soc_specific',
+	// 'system_ext_specific' attribute. Two cases are allowed:
 	//   $(VAR)/<literal-value>
 	//   $(PRODUCT_OUT)/$(TARGET_COPY_OUT_VENDOR)/<literal-value>
 	// The last case is equivalent to $(TARGET_OUT_VENDOR)/<literal-value>

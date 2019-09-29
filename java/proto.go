@@ -34,7 +34,7 @@ func genProto(ctx android.ModuleContext, protoFile android.Path, flags android.P
 	// Proto generated java files have an unknown package name in the path, so package the entire output directory
 	// into a srcjar.
 	rule.Command().
-		Tool(ctx.Config().HostToolPath(ctx, "soong_zip")).
+		BuiltTool(ctx, "soong_zip").
 		Flag("-jar").
 		FlagWithOutput("-o ", srcJarFile).
 		FlagWithArg("-C ", outDir.String()).
@@ -75,9 +75,11 @@ func protoFlags(ctx android.ModuleContext, j *CompilerProperties, p *android.Pro
 	flags.proto = android.GetProtoFlags(ctx, p)
 
 	if String(p.Proto.Plugin) == "" {
+		var typeToPlugin string
 		switch String(p.Proto.Type) {
 		case "micro":
 			flags.proto.OutTypeFlag = "--javamicro_out"
+			typeToPlugin = "javamicro"
 		case "nano":
 			flags.proto.OutTypeFlag = "--javanano_out"
 		case "lite":
@@ -88,6 +90,12 @@ func protoFlags(ctx android.ModuleContext, j *CompilerProperties, p *android.Pro
 		default:
 			ctx.PropertyErrorf("proto.type", "unknown proto type %q",
 				String(p.Proto.Type))
+		}
+
+		if typeToPlugin != "" {
+			hostTool := ctx.Config().HostToolPath(ctx, "protoc-gen-"+typeToPlugin)
+			flags.proto.Deps = append(flags.proto.Deps, hostTool)
+			flags.proto.Flags = append(flags.proto.Flags, "--plugin=protoc-gen-"+typeToPlugin+"="+hostTool.String())
 		}
 	}
 

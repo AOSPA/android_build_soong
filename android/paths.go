@@ -41,13 +41,12 @@ var _ PathContext = SingletonContext(nil)
 var _ PathContext = ModuleContext(nil)
 
 type ModuleInstallPathContext interface {
-	PathContext
-
-	androidBaseContext
+	BaseModuleContext
 
 	InstallInData() bool
 	InstallInSanitizerDir() bool
 	InstallInRecovery() bool
+	InstallBypassMake() bool
 }
 
 var _ ModuleInstallPathContext = ModuleContext(nil)
@@ -217,21 +216,23 @@ func ExistentPathsForSources(ctx PathContext, paths []string) Paths {
 	return ret
 }
 
-// PathsForModuleSrc returns Paths rooted from the module's local source directory.  It expands globs and references
-// to SourceFileProducer modules using the ":name" syntax.  Properties passed as the paths argument must have been
-// annotated with struct tag `android:"path"` so that dependencies on SourceFileProducer modules will have already
-// been handled by the path_properties mutator.  If ctx.Config().AllowMissingDependencies() is true, then any missing
-// SourceFileProducer dependencies will cause the module to be marked as having missing dependencies.
+// PathsForModuleSrc returns Paths rooted from the module's local source directory.  It expands globs, references to
+// SourceFileProducer modules using the ":name" syntax, and references to OutputFileProducer modules using the
+// ":name{.tag}" syntax.  Properties passed as the paths argument must have been annotated with struct tag
+// `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
+// path_properties mutator.  If ctx.Config().AllowMissingDependencies() is true then any missing SourceFileProducer or
+// OutputFileProducer dependencies will cause the module to be marked as having missing dependencies.
 func PathsForModuleSrc(ctx ModuleContext, paths []string) Paths {
 	return PathsForModuleSrcExcludes(ctx, paths, nil)
 }
 
 // PathsForModuleSrcExcludes returns Paths rooted from the module's local source directory, excluding paths listed in
-// the excludes arguments.  It expands globs and references to SourceFileProducer modules in both paths and excludes
-// using the ":name" syntax.  Properties passed as the paths or excludes argument must have been annotated with struct
-// tag `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
-// path_properties mutator.  If ctx.Config().AllowMissingDependencies() is true, then any missing SourceFileProducer
-// dependencies will cause the module to be marked as having missing dependencies.
+// the excludes arguments.  It expands globs, references to SourceFileProducer modules using the ":name" syntax, and
+// references to OutputFileProducer modules using the ":name{.tag}" syntax.  Properties passed as the paths or excludes
+// argument must have been annotated with struct tag `android:"path"` so that dependencies on SourceFileProducer modules
+// will have already been handled by the path_properties mutator.  If ctx.Config().AllowMissingDependencies() is
+// true then any missing SourceFileProducer or OutputFileProducer dependencies will cause the module to be marked as
+// having missing dependencies.
 func PathsForModuleSrcExcludes(ctx ModuleContext, paths, excludes []string) Paths {
 	ret, missingDeps := PathsAndMissingDepsForModuleSrcExcludes(ctx, paths, excludes)
 	if ctx.Config().AllowMissingDependencies() {
@@ -245,12 +246,13 @@ func PathsForModuleSrcExcludes(ctx ModuleContext, paths, excludes []string) Path
 }
 
 // PathsAndMissingDepsForModuleSrcExcludes returns Paths rooted from the module's local source directory, excluding
-// paths listed in the excludes arguments, and a list of missing dependencies.  It expands globs and references to
-// SourceFileProducer modules in both paths and excludes using the ":name" syntax.  Properties passed as the paths or
-// excludes argument must have been annotated with struct tag `android:"path"` so that dependencies on
-// SourceFileProducer modules will have already been handled by the path_properties mutator.  If
-// ctx.Config().AllowMissingDependencies() is true, then any missing SourceFileProducer dependencies will be returned,
-// and they will NOT cause the module to be marked as having missing dependencies.
+// paths listed in the excludes arguments, and a list of missing dependencies.  It expands globs, references to
+// SourceFileProducer modules using the ":name" syntax, and references to OutputFileProducer modules using the
+// ":name{.tag}" syntax.  Properties passed as the paths or excludes argument must have been annotated with struct tag
+// `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
+// path_properties mutator.  If ctx.Config().AllowMissingDependencies() is true then any missing SourceFileProducer or
+// OutputFileProducer dependencies will be returned, and they will NOT cause the module to be marked as having missing
+// dependencies.
 func PathsAndMissingDepsForModuleSrcExcludes(ctx ModuleContext, paths, excludes []string) (Paths, []string) {
 	prefix := pathForModuleSrc(ctx).String()
 
@@ -262,16 +264,24 @@ func PathsAndMissingDepsForModuleSrcExcludes(ctx ModuleContext, paths, excludes 
 	var missingExcludeDeps []string
 
 	for _, e := range excludes {
-		if m := SrcIsModule(e); m != "" {
-			module := ctx.GetDirectDepWithTag(m, SourceDepTag)
+		if m, t := SrcIsModuleWithTag(e); m != "" {
+			module := ctx.GetDirectDepWithTag(m, sourceOrOutputDepTag(t))
 			if module == nil {
 				missingExcludeDeps = append(missingExcludeDeps, m)
 				continue
 			}
-			if srcProducer, ok := module.(SourceFileProducer); ok {
+			if outProducer, ok := module.(OutputFileProducer); ok {
+				outputFiles, err := outProducer.OutputFiles(t)
+				if err != nil {
+					ctx.ModuleErrorf("path dependency %q: %s", e, err)
+				}
+				expandedExcludes = append(expandedExcludes, outputFiles.Strings()...)
+			} else if t != "" {
+				ctx.ModuleErrorf("path dependency %q is not an output file producing module", e)
+			} else if srcProducer, ok := module.(SourceFileProducer); ok {
 				expandedExcludes = append(expandedExcludes, srcProducer.Srcs().Strings()...)
 			} else {
-				ctx.ModuleErrorf("srcs dependency %q is not a source file producing module", m)
+				ctx.ModuleErrorf("path dependency %q is not a source file producing module", e)
 			}
 		} else {
 			expandedExcludes = append(expandedExcludes, filepath.Join(prefix, e))
@@ -307,12 +317,20 @@ func (e missingDependencyError) Error() string {
 }
 
 func expandOneSrcPath(ctx ModuleContext, s string, expandedExcludes []string) (Paths, error) {
-	if m := SrcIsModule(s); m != "" {
-		module := ctx.GetDirectDepWithTag(m, SourceDepTag)
+	if m, t := SrcIsModuleWithTag(s); m != "" {
+		module := ctx.GetDirectDepWithTag(m, sourceOrOutputDepTag(t))
 		if module == nil {
 			return nil, missingDependencyError{[]string{m}}
 		}
-		if srcProducer, ok := module.(SourceFileProducer); ok {
+		if outProducer, ok := module.(OutputFileProducer); ok {
+			outputFiles, err := outProducer.OutputFiles(t)
+			if err != nil {
+				return nil, fmt.Errorf("path dependency %q: %s", s, err)
+			}
+			return outputFiles, nil
+		} else if t != "" {
+			return nil, fmt.Errorf("path dependency %q is not an output file producing module", s)
+		} else if srcProducer, ok := module.(SourceFileProducer); ok {
 			moduleSrcs := srcProducer.Srcs()
 			for _, e := range expandedExcludes {
 				for j := 0; j < len(moduleSrcs); j++ {
@@ -324,7 +342,7 @@ func expandOneSrcPath(ctx ModuleContext, s string, expandedExcludes []string) (P
 			}
 			return moduleSrcs, nil
 		} else {
-			return nil, fmt.Errorf("path dependency %q is not a source file producing module", m)
+			return nil, fmt.Errorf("path dependency %q is not a source file producing module", s)
 		}
 	} else if pathtools.IsGlob(s) {
 		paths := ctx.GlobFiles(pathForModuleSrc(ctx, s).String(), expandedExcludes)
@@ -350,7 +368,7 @@ func expandOneSrcPath(ctx ModuleContext, s string, expandedExcludes []string) (P
 // each string. If incDirs is false, strip paths with a trailing '/' from the list.
 // It intended for use in globs that only list files that exist, so it allows '$' in
 // filenames.
-func pathsForModuleSrcFromFullPath(ctx ModuleContext, paths []string, incDirs bool) Paths {
+func pathsForModuleSrcFromFullPath(ctx BaseModuleContext, paths []string, incDirs bool) Paths {
 	prefix := filepath.Join(ctx.Config().srcDir, ctx.ModuleDir()) + "/"
 	if prefix == "./" {
 		prefix = ""
@@ -801,6 +819,17 @@ func PathForOutput(ctx PathContext, pathComponents ...string) OutputPath {
 	return OutputPath{basePath{path, ctx.Config(), ""}}
 }
 
+// pathForInstallInMakeDir is used by PathForModuleInstall when the module returns true
+// for InstallBypassMake to produce an OutputPath that installs to $OUT_DIR instead of
+// $OUT_DIR/soong.
+func pathForInstallInMakeDir(ctx PathContext, pathComponents ...string) OutputPath {
+	path, err := validatePath(pathComponents...)
+	if err != nil {
+		reportPathError(ctx, err)
+	}
+	return OutputPath{basePath{"../" + path, ctx.Config(), ""}}
+}
+
 // PathsForOutput returns Paths rooted from buildDir
 func PathsForOutput(ctx PathContext, paths []string) WritablePaths {
 	ret := make(WritablePaths, len(paths))
@@ -967,7 +996,7 @@ func pathForModule(ctx ModuleContext) OutputPath {
 // PathForVndkRefAbiDump returns an OptionalPath representing the path of the
 // reference abi dump for the given module. This is not guaranteed to be valid.
 func PathForVndkRefAbiDump(ctx ModuleContext, version, fileName string,
-	isLlndkOrNdk, isVndk, isGzip bool) OptionalPath {
+	isNdk, isLlndkOrVndk, isGzip bool) OptionalPath {
 
 	arches := ctx.DeviceConfig().Arches()
 	if len(arches) == 0 {
@@ -980,9 +1009,9 @@ func PathForVndkRefAbiDump(ctx ModuleContext, version, fileName string,
 	}
 
 	var dirName string
-	if isLlndkOrNdk {
+	if isNdk {
 		dirName = "ndk"
-	} else if isVndk {
+	} else if isLlndkOrVndk {
 		dirName = "vndk"
 	} else {
 		dirName = "platform" // opt-in libs
@@ -1106,6 +1135,9 @@ func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string
 		outPaths = append([]string{"debug"}, outPaths...)
 	}
 	outPaths = append(outPaths, pathComponents...)
+	if ctx.InstallBypassMake() && ctx.Config().EmbeddedInMake() {
+		return pathForInstallInMakeDir(ctx, outPaths...)
+	}
 	return PathForOutput(ctx, outPaths...)
 }
 
@@ -1128,8 +1160,8 @@ func modulePartition(ctx ModuleInstallPathContext) string {
 		partition = ctx.DeviceConfig().OdmPath()
 	} else if ctx.ProductSpecific() {
 		partition = ctx.DeviceConfig().ProductPath()
-	} else if ctx.ProductServicesSpecific() {
-		partition = ctx.DeviceConfig().ProductServicesPath()
+	} else if ctx.SystemExtSpecific() {
+		partition = ctx.DeviceConfig().SystemExtPath()
 	} else {
 		partition = "system"
 	}

@@ -42,7 +42,11 @@ var (
 			`${config.MergeZipsCmd} -j ${workDir}/module.jar ${workDir}/classes.jar $in && ` +
 			`${config.JmodCmd} create --module-version 9 --target-platform android ` +
 			`  --class-path ${workDir}/module.jar ${workDir}/jmod/${moduleName}.jmod && ` +
-			`${config.JlinkCmd} --module-path ${workDir}/jmod --add-modules ${moduleName} --output ${outDir} && ` +
+			`${config.JlinkCmd} --module-path ${workDir}/jmod --add-modules ${moduleName} --output ${outDir} ` +
+			// Note: The system-modules jlink plugin is disabled because (a) it is not
+			// useful on Android, and (b) it causes errors with later versions of jlink
+			// when the jdk.internal.module is absent from java.base (as it is here).
+			`  --disable-plugin system-modules && ` +
 			`cp ${config.JrtFsJar} ${outDir}/lib/`,
 		CommandDeps: []string{
 			"${moduleInfoJavaPath}",
@@ -57,7 +61,7 @@ var (
 		"moduleName", "classpath", "outDir", "workDir")
 )
 
-func TransformJarsToSystemModules(ctx android.ModuleContext, moduleName string, jars android.Paths) android.WritablePath {
+func TransformJarsToSystemModules(ctx android.ModuleContext, moduleName string, jars android.Paths) (android.Path, android.Paths) {
 	outDir := android.PathForModuleOut(ctx, "system")
 	workDir := android.PathForModuleOut(ctx, "modules")
 	outputFile := android.PathForModuleOut(ctx, "system/lib/modules")
@@ -80,33 +84,30 @@ func TransformJarsToSystemModules(ctx android.ModuleContext, moduleName string, 
 		},
 	})
 
-	return outputFile
+	return outDir, outputs.Paths()
 }
 
 func SystemModulesFactory() android.Module {
 	module := &SystemModules{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
 	return module
 }
 
 type SystemModules struct {
 	android.ModuleBase
+	android.DefaultableModuleBase
 
 	properties SystemModulesProperties
 
-	outputFile android.Path
+	outputDir  android.Path
+	outputDeps android.Paths
 }
 
 type SystemModulesProperties struct {
 	// List of java library modules that should be included in the system modules
 	Libs []string
-
-	// List of prebuilt jars that should be included in the system modules
-	Jars []string
-
-	// Sdk version that should be included in the system modules
-	Sdk_version *string
 }
 
 func (system *SystemModules) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -117,9 +118,7 @@ func (system *SystemModules) GenerateAndroidBuildActions(ctx android.ModuleConte
 		jars = append(jars, dep.HeaderJars()...)
 	})
 
-	jars = append(jars, android.PathsForModuleSrc(ctx, system.properties.Jars)...)
-
-	system.outputFile = TransformJarsToSystemModules(ctx, "java.base", jars)
+	system.outputDir, system.outputDeps = TransformJarsToSystemModules(ctx, "java.base", jars)
 }
 
 func (system *SystemModules) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -129,16 +128,22 @@ func (system *SystemModules) DepsMutator(ctx android.BottomUpMutatorContext) {
 func (system *SystemModules) AndroidMk() android.AndroidMkData {
 	return android.AndroidMkData{
 		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
-			makevar := "SOONG_SYSTEM_MODULES_" + name
 			fmt.Fprintln(w)
-			fmt.Fprintln(w, makevar, ":=", system.outputFile.String())
-			fmt.Fprintln(w, ".KATI_READONLY", ":=", makevar)
+
+			makevar := "SOONG_SYSTEM_MODULES_" + name
+			fmt.Fprintln(w, makevar, ":=$=", system.outputDir.String())
+			fmt.Fprintln(w)
+
+			makevar = "SOONG_SYSTEM_MODULES_LIBS_" + name
+			fmt.Fprintln(w, makevar, ":=$=", strings.Join(system.properties.Libs, " "))
+			fmt.Fprintln(w)
+
+			makevar = "SOONG_SYSTEM_MODULES_DEPS_" + name
+			fmt.Fprintln(w, makevar, ":=$=", strings.Join(system.outputDeps.Strings(), " "))
+			fmt.Fprintln(w)
+
 			fmt.Fprintln(w, name+":", "$("+makevar+")")
 			fmt.Fprintln(w, ".PHONY:", name)
-			fmt.Fprintln(w)
-			makevar = "SOONG_SYSTEM_MODULES_LIBS_" + name
-			fmt.Fprintln(w, makevar, ":=", strings.Join(system.properties.Libs, " "))
-			fmt.Fprintln(w, ".KATI_READONLY :=", makevar)
 		},
 	}
 }

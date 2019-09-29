@@ -15,6 +15,7 @@
 package cc
 
 import (
+	"fmt"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -32,7 +33,7 @@ import (
 
 type StaticSharedLibraryProperties struct {
 	Srcs   []string `android:"path,arch_variant"`
-	Cflags []string `android:"path,arch_variant"`
+	Cflags []string `android:"arch_variant"`
 
 	Enabled            *bool    `android:"arch_variant"`
 	Whole_static_libs  []string `android:"arch_variant"`
@@ -109,11 +110,12 @@ type LibraryProperties struct {
 		// Symbol tags that should be ignored from the symbol file
 		Exclude_symbol_tags []string
 	}
+
+	// Order symbols in .bss section by their sizes.  Only useful for shared libraries.
+	Sort_bss_symbols_by_size *bool
 }
 
 type LibraryMutatedProperties struct {
-	VariantName string `blueprint:"mutated"`
-
 	// Build a static variant
 	BuildStatic bool `blueprint:"mutated"`
 	// Build a shared variant
@@ -207,8 +209,10 @@ func LibraryHeaderFactory() android.Module {
 type flagExporter struct {
 	Properties FlagExporterProperties
 
-	flags     []string
-	flagsDeps android.Paths
+	dirs       []string
+	systemDirs []string
+	flags      []string
+	deps       android.Paths
 }
 
 func (f *flagExporter) exportedIncludes(ctx ModuleContext) android.Paths {
@@ -219,32 +223,57 @@ func (f *flagExporter) exportedIncludes(ctx ModuleContext) android.Paths {
 	}
 }
 
-func (f *flagExporter) exportIncludes(ctx ModuleContext, inc string) {
-	includeDirs := f.exportedIncludes(ctx)
-	for _, dir := range includeDirs.Strings() {
-		f.flags = append(f.flags, inc+dir)
-	}
+func (f *flagExporter) exportIncludes(ctx ModuleContext) {
+	f.dirs = append(f.dirs, f.exportedIncludes(ctx).Strings()...)
 }
 
-func (f *flagExporter) reexportFlags(flags []string) {
+func (f *flagExporter) exportIncludesAsSystem(ctx ModuleContext) {
+	f.systemDirs = append(f.systemDirs, f.exportedIncludes(ctx).Strings()...)
+}
+
+func (f *flagExporter) reexportDirs(dirs ...string) {
+	f.dirs = append(f.dirs, dirs...)
+}
+
+func (f *flagExporter) reexportSystemDirs(dirs ...string) {
+	f.systemDirs = append(f.systemDirs, dirs...)
+}
+
+func (f *flagExporter) reexportFlags(flags ...string) {
+	for _, flag := range flags {
+		if strings.HasPrefix(flag, "-I") || strings.HasPrefix(flag, "-isystem") {
+			panic(fmt.Errorf("Exporting invalid flag %q: "+
+				"use reexportDirs or reexportSystemDirs to export directories", flag))
+		}
+	}
 	f.flags = append(f.flags, flags...)
 }
 
-func (f *flagExporter) reexportDeps(deps android.Paths) {
-	f.flagsDeps = append(f.flagsDeps, deps...)
+func (f *flagExporter) reexportDeps(deps ...android.Path) {
+	f.deps = append(f.deps, deps...)
+}
+
+func (f *flagExporter) exportedDirs() []string {
+	return f.dirs
+}
+
+func (f *flagExporter) exportedSystemDirs() []string {
+	return f.systemDirs
 }
 
 func (f *flagExporter) exportedFlags() []string {
 	return f.flags
 }
 
-func (f *flagExporter) exportedFlagsDeps() android.Paths {
-	return f.flagsDeps
+func (f *flagExporter) exportedDeps() android.Paths {
+	return f.deps
 }
 
 type exportedFlagsProducer interface {
+	exportedDirs() []string
+	exportedSystemDirs() []string
 	exportedFlags() []string
-	exportedFlagsDeps() android.Paths
+	exportedDeps() android.Paths
 }
 
 var _ exportedFlagsProducer = (*flagExporter)(nil)
@@ -256,9 +285,7 @@ type libraryDecorator struct {
 	MutatedProperties LibraryMutatedProperties
 
 	// For reusing static library objects for shared library
-	reuseObjects       Objects
-	reuseExportedFlags []string
-	reuseExportedDeps  android.Paths
+	reuseObjects Objects
 
 	// table-of-contents file to optimize out relinking when possible
 	tocFile android.OptionalPath
@@ -405,30 +432,46 @@ func (library *libraryDecorator) compilerFlags(ctx ModuleContext, flags Flags, d
 	return flags
 }
 
-func extractExportIncludesFromFlags(flags []string) []string {
-	// This method is used in the  generation of rules which produce
-	// abi-dumps for source files. Exported headers are needed to infer the
-	// abi exported by a library and filter out the rest of the abi dumped
-	// from a source. We extract the include flags exported by a library.
-	// This includes the flags exported which are re-exported from static
-	// library dependencies, exported header library dependencies and
-	// generated header dependencies. -isystem headers are not included
-	// since for bionic libraries, abi-filtering is taken care of by version
-	// scripts.
-	var exportedIncludes []string
-	for _, flag := range flags {
-		if strings.HasPrefix(flag, "-I") {
-			exportedIncludes = append(exportedIncludes, flag)
+// Returns a string that represents the class of the ABI dump.
+// Returns an empty string if ABI check is disabled for this library.
+func (library *libraryDecorator) classifySourceAbiDump(ctx ModuleContext) string {
+	enabled := library.Properties.Header_abi_checker.Enabled
+	if enabled != nil && !Bool(enabled) {
+		return ""
+	}
+	// Return NDK if the library is both NDK and LLNDK.
+	if ctx.isNdk() {
+		return "NDK"
+	}
+	if ctx.isLlndkPublic(ctx.Config()) {
+		return "LLNDK"
+	}
+	if ctx.useVndk() && ctx.isVndk() && !ctx.isVndkPrivate(ctx.Config()) {
+		if ctx.isVndkSp() {
+			if ctx.isVndkExt() {
+				return "VNDK-SP-ext"
+			} else {
+				return "VNDK-SP"
+			}
+		} else {
+			if ctx.isVndkExt() {
+				return "VNDK-ext"
+			} else {
+				return "VNDK-core"
+			}
 		}
 	}
-	return exportedIncludes
+	if enabled != nil && Bool(enabled) {
+		return "PLATFORM"
+	}
+	return ""
 }
 
-func (library *libraryDecorator) shouldCreateVndkSourceAbiDump(ctx ModuleContext) bool {
-	if library.Properties.Header_abi_checker.Enabled != nil {
-		return Bool(library.Properties.Header_abi_checker.Enabled)
+func (library *libraryDecorator) shouldCreateSourceAbiDump(ctx ModuleContext) bool {
+	if !ctx.shouldCreateSourceAbiDump() {
+		return false
 	}
-	return ctx.shouldCreateVndkSourceAbiDump(ctx.Config())
+	return library.classifySourceAbiDump(ctx) != ""
 }
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
@@ -450,14 +493,14 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		}
 		return Objects{}
 	}
-	if library.shouldCreateVndkSourceAbiDump(ctx) || library.sabi.Properties.CreateSAbiDumps {
+	if library.shouldCreateSourceAbiDump(ctx) || library.sabi.Properties.CreateSAbiDumps {
 		exportIncludeDirs := library.flagExporter.exportedIncludes(ctx)
 		var SourceAbiFlags []string
 		for _, dir := range exportIncludeDirs.Strings() {
 			SourceAbiFlags = append(SourceAbiFlags, "-I"+dir)
 		}
-		for _, reexportedInclude := range extractExportIncludesFromFlags(library.sabi.Properties.ReexportedIncludeFlags) {
-			SourceAbiFlags = append(SourceAbiFlags, reexportedInclude)
+		for _, reexportedInclude := range library.sabi.Properties.ReexportedIncludes {
+			SourceAbiFlags = append(SourceAbiFlags, "-I"+reexportedInclude)
 		}
 		flags.SAbiFlags = SourceAbiFlags
 		total_length := len(library.baseCompiler.Properties.Srcs) + len(deps.GeneratedSources) + len(library.Properties.Shared.Srcs) +
@@ -486,8 +529,9 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 type libraryInterface interface {
 	getWholeStaticMissingDeps() []string
 	static() bool
+	shared() bool
 	objs() Objects
-	reuseObjs() (Objects, []string, android.Paths)
+	reuseObjs() (Objects, exportedFlagsProducer)
 	toc() android.OptionalPath
 
 	// Returns true if the build options for the module have selected a static or shared build
@@ -521,7 +565,7 @@ func (library *libraryDecorator) getLibName(ctx ModuleContext) string {
 		}
 	}
 
-	return name + library.MutatedProperties.VariantName
+	return name
 }
 
 var versioningMacroNamesListMutex sync.Mutex
@@ -626,7 +670,7 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 	library.objects = deps.WholeStaticLibObjs.Copy()
 	library.objects = library.objects.Append(objs)
 
-	fileName := ctx.ModuleName() + library.MutatedProperties.VariantName + staticLibraryExtension
+	fileName := ctx.ModuleName() + staticLibraryExtension
 	outputFile := android.PathForModuleOut(ctx, fileName)
 	builderFlags := flagsToBuilderFlags(flags)
 
@@ -644,8 +688,7 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 
 	TransformObjToStaticLib(ctx, library.objects.objFiles, builderFlags, outputFile, objs.tidyFiles)
 
-	library.coverageOutputFile = TransformCoverageFilesToLib(ctx, library.objects, builderFlags,
-		ctx.ModuleName()+library.MutatedProperties.VariantName)
+	library.coverageOutputFile = TransformCoverageFilesToZip(ctx, library.objects, ctx.ModuleName())
 
 	library.wholeStaticMissingDeps = ctx.GetMissingDependencies()
 
@@ -721,7 +764,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 		}
 		strippedOutputFile := outputFile
 		outputFile = android.PathForModuleOut(ctx, "unstripped", fileName)
-		library.stripper.strip(ctx, outputFile, strippedOutputFile, builderFlags)
+		library.stripper.stripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile, builderFlags)
 	}
 
 	library.unstrippedOutputFile = outputFile
@@ -738,7 +781,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 			if library.stripper.needsStrip(ctx) {
 				out := android.PathForModuleOut(ctx, "versioned-stripped", fileName)
 				library.distFile = android.OptionalPathForPath(out)
-				library.stripper.strip(ctx, versionedOutputFile, out, builderFlags)
+				library.stripper.stripExecutableOrSharedLib(ctx, versionedOutputFile, out, builderFlags)
 			}
 
 			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
@@ -754,6 +797,18 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
 	linkerDeps = append(linkerDeps, objs.tidyFiles...)
 
+	if Bool(library.Properties.Sort_bss_symbols_by_size) {
+		unsortedOutputFile := android.PathForModuleOut(ctx, "unsorted", fileName)
+		TransformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
+			deps.StaticLibs, deps.LateStaticLibs, deps.WholeStaticLibs,
+			linkerDeps, deps.CrtBegin, deps.CrtEnd, false, builderFlags, unsortedOutputFile, implicitOutputs)
+
+		symbolOrderingFile := android.PathForModuleOut(ctx, "unsorted", fileName+".symbol_order")
+		symbolOrderingFlag := library.baseLinker.sortBssSymbolsBySize(ctx, unsortedOutputFile, symbolOrderingFile, builderFlags)
+		builderFlags.ldFlags += " " + symbolOrderingFlag
+		linkerDeps = append(linkerDeps, symbolOrderingFile)
+	}
+
 	TransformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
 		deps.StaticLibs, deps.LateStaticLibs, deps.WholeStaticLibs,
 		linkerDeps, deps.CrtBegin, deps.CrtEnd, false, builderFlags, outputFile, implicitOutputs)
@@ -764,7 +819,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	objs.sAbiDumpFiles = append(objs.sAbiDumpFiles, deps.StaticLibObjs.sAbiDumpFiles...)
 	objs.sAbiDumpFiles = append(objs.sAbiDumpFiles, deps.WholeStaticLibObjs.sAbiDumpFiles...)
 
-	library.coverageOutputFile = TransformCoverageFilesToLib(ctx, objs, builderFlags, library.getLibName(ctx))
+	library.coverageOutputFile = TransformCoverageFilesToZip(ctx, objs, library.getLibName(ctx))
 	library.linkSAbiDumpFiles(ctx, objs, fileName, ret)
 
 	return ret
@@ -781,11 +836,16 @@ func (library *libraryDecorator) nativeCoverage() bool {
 	return true
 }
 
-func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
-	isLlndkOrNdk := inList(ctx.baseModuleName(), *llndkLibraries(ctx.Config())) || inList(ctx.baseModuleName(), ndkMigratedLibs)
+func (library *libraryDecorator) coverageOutputFilePath() android.OptionalPath {
+	return library.coverageOutputFile
+}
 
-	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isLlndkOrNdk, ctx.isVndk(), false)
-	refAbiDumpGzipFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isLlndkOrNdk, ctx.isVndk(), true)
+func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
+	isNdk := ctx.isNdk()
+	isLlndkOrVndk := ctx.isLlndkPublic(ctx.Config()) || ctx.isVndk()
+
+	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isLlndkOrVndk, false)
+	refAbiDumpGzipFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isLlndkOrVndk, true)
 
 	if refAbiDumpTextFile.Valid() {
 		if refAbiDumpGzipFile.Valid() {
@@ -803,7 +863,7 @@ func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.
 }
 
 func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objects, fileName string, soFile android.Path) {
-	if len(objs.sAbiDumpFiles) > 0 && library.shouldCreateVndkSourceAbiDump(ctx) {
+	if library.shouldCreateSourceAbiDump(ctx) {
 		vndkVersion := ctx.DeviceConfig().PlatformVndkVersion()
 		if ver := ctx.DeviceConfig().VndkVersion(); ver != "" && ver != "current" {
 			vndkVersion = ver
@@ -814,14 +874,16 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		for _, dir := range exportIncludeDirs.Strings() {
 			SourceAbiFlags = append(SourceAbiFlags, "-I"+dir)
 		}
-		for _, reexportedInclude := range extractExportIncludesFromFlags(library.sabi.Properties.ReexportedIncludeFlags) {
-			SourceAbiFlags = append(SourceAbiFlags, reexportedInclude)
+		for _, reexportedInclude := range library.sabi.Properties.ReexportedIncludes {
+			SourceAbiFlags = append(SourceAbiFlags, "-I"+reexportedInclude)
 		}
 		exportedHeaderFlags := strings.Join(SourceAbiFlags, " ")
 		library.sAbiOutputFile = TransformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags,
 			android.OptionalPathForModuleSrc(ctx, library.Properties.Header_abi_checker.Symbol_file),
 			library.Properties.Header_abi_checker.Exclude_symbol_versions,
 			library.Properties.Header_abi_checker.Exclude_symbol_tags)
+
+		addLsdumpPath(library.classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
 
 		refAbiDumpFile := getRefAbiDumpFile(ctx, vndkVersion, fileName)
 		if refAbiDumpFile != nil {
@@ -842,19 +904,17 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 		out = library.linkShared(ctx, flags, deps, objs)
 	}
 
-	library.exportIncludes(ctx, "-I")
-	library.reexportFlags(deps.ReexportedFlags)
-	library.reexportDeps(deps.ReexportedFlagsDeps)
+	library.exportIncludes(ctx)
+	library.reexportDirs(deps.ReexportedDirs...)
+	library.reexportSystemDirs(deps.ReexportedSystemDirs...)
+	library.reexportFlags(deps.ReexportedFlags...)
+	library.reexportDeps(deps.ReexportedDeps...)
 
 	if Bool(library.Properties.Aidl.Export_aidl_headers) {
 		if library.baseCompiler.hasSrcExt(".aidl") {
-			flags := []string{
-				"-I" + android.PathForModuleGen(ctx, "aidl").String(),
-			}
-			library.reexportFlags(flags)
-			library.reuseExportedFlags = append(library.reuseExportedFlags, flags...)
-			library.reexportDeps(library.baseCompiler.pathDeps) // TODO: restrict to aidl deps
-			library.reuseExportedDeps = append(library.reuseExportedDeps, library.baseCompiler.pathDeps...)
+			dir := android.PathForModuleGen(ctx, "aidl").String()
+			library.reexportDirs(dir)
+			library.reexportDeps(library.baseCompiler.pathDeps...) // TODO: restrict to aidl deps
 		}
 	}
 
@@ -862,45 +922,32 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 		if library.baseCompiler.hasSrcExt(".proto") {
 			includes := []string{}
 			if flags.proto.CanonicalPathFromRoot {
-				includes = append(includes, "-I"+flags.proto.SubDir.String())
+				includes = append(includes, flags.proto.SubDir.String())
 			}
-			includes = append(includes, "-I"+flags.proto.Dir.String())
-			library.reexportFlags(includes)
-			library.reuseExportedFlags = append(library.reuseExportedFlags, includes...)
-			library.reexportDeps(library.baseCompiler.pathDeps) // TODO: restrict to proto deps
-			library.reuseExportedDeps = append(library.reuseExportedDeps, library.baseCompiler.pathDeps...)
+			includes = append(includes, flags.proto.Dir.String())
+			library.reexportDirs(includes...)
+			library.reexportDeps(library.baseCompiler.pathDeps...) // TODO: restrict to proto deps
 		}
 	}
 
 	if library.baseCompiler.hasSrcExt(".sysprop") {
-		internalFlags := []string{
-			"-I" + android.PathForModuleGen(ctx, "sysprop", "include").String(),
-		}
-		systemFlags := []string{
-			"-I" + android.PathForModuleGen(ctx, "sysprop/system", "include").String(),
-		}
-
-		flags := internalFlags
-
+		dir := android.PathForModuleGen(ctx, "sysprop", "include").String()
 		if library.Properties.Sysprop.Platform != nil {
 			isProduct := ctx.ProductSpecific() && !ctx.useVndk()
 			isVendor := ctx.useVndk()
 			isOwnerPlatform := Bool(library.Properties.Sysprop.Platform)
 
-			useSystem := isProduct || (isOwnerPlatform == isVendor)
-
-			if useSystem {
-				flags = systemFlags
+			if !ctx.inRecovery() && (isProduct || (isOwnerPlatform == isVendor)) {
+				dir = android.PathForModuleGen(ctx, "sysprop/public", "include").String()
 			}
 		}
 
-		library.reexportFlags(flags)
-		library.reexportDeps(library.baseCompiler.pathDeps)
-		library.reuseExportedFlags = append(library.reuseExportedFlags, flags...)
+		library.reexportDirs(dir)
+		library.reexportDeps(library.baseCompiler.pathDeps...)
 	}
 
 	if library.buildStubs() {
-		library.reexportFlags([]string{"-D" + versioningMacroName(ctx.ModuleName()) + "=" + library.stubsVersion()})
+		library.reexportFlags("-D" + versioningMacroName(ctx.ModuleName()) + "=" + library.stubsVersion())
 	}
 
 	return out
@@ -922,8 +969,8 @@ func (library *libraryDecorator) objs() Objects {
 	return library.objects
 }
 
-func (library *libraryDecorator) reuseObjs() (Objects, []string, android.Paths) {
-	return library.reuseObjects, library.reuseExportedFlags, library.reuseExportedDeps
+func (library *libraryDecorator) reuseObjs() (Objects, exportedFlagsProducer) {
+	return library.reuseObjects, &library.flagExporter
 }
 
 func (library *libraryDecorator) toc() android.OptionalPath {
@@ -961,13 +1008,18 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 			// Bionic libraries (e.g. libc.so) is installed to the bootstrap subdirectory.
 			// The original path becomes a symlink to the corresponding file in the
 			// runtime APEX.
-			if installToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() && ctx.Arch().Native && !ctx.inRecovery() {
+			translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled || !ctx.Arch().Native
+			if installToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() && !translatedArch && !ctx.inRecovery() {
 				if ctx.Device() && isBionic(ctx.baseModuleName()) {
 					library.installSymlinkToRuntimeApex(ctx, file)
 				}
 				library.baseInstaller.subDir = "bootstrap"
 			}
+		} else if android.DirectlyInAnyApex(ctx, ctx.ModuleName()) && ctx.isLlndk(ctx.Config()) && !isBionic(ctx.baseModuleName()) {
+			// Skip installing LLNDK (non-bionic) libraries moved to APEX.
+			ctx.Module().SkipInstall()
 		}
+
 		library.baseInstaller.install(ctx, file)
 	}
 

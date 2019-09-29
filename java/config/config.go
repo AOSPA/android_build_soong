@@ -42,10 +42,16 @@ var (
 		"android.car",
 		"android.car7",
 		"conscrypt",
+		"core-icu4j",
 		"core-oj",
 		"core-libart",
 		"updatable-media",
 	}
+)
+
+const (
+	JavaVmFlags  = `-XX:OnError="cat hs_err_pid%p.log" -XX:CICompilerCount=6 -XX:+UseDynamicNumberOfGCThreads`
+	JavacVmFlags = `-J-XX:OnError="cat hs_err_pid%p.log" -J-XX:CICompilerCount=6 -J-XX:+UseDynamicNumberOfGCThreads`
 )
 
 func init() {
@@ -53,7 +59,7 @@ func init() {
 
 	pctx.StaticVariable("JavacHeapSize", "2048M")
 	pctx.StaticVariable("JavacHeapFlags", "-J-Xmx${JavacHeapSize}")
-	pctx.StaticVariable("DexFlags", "-JXX:+TieredCompilation -JXX:TieredStopAtLevel=1")
+	pctx.StaticVariable("DexFlags", "-JXX:OnError='cat hs_err_pid%p.log' -JXX:CICompilerCount=6 -JXX:+UseDynamicNumberOfGCThreads")
 
 	pctx.StaticVariable("CommonJdkFlags", strings.Join([]string{
 		`-Xmaxerrs 9999999`,
@@ -71,6 +77,9 @@ func init() {
 		`-XDstringConcat=inline`,
 	}, " "))
 
+	pctx.StaticVariable("JavaVmFlags", JavaVmFlags)
+	pctx.StaticVariable("JavacVmFlags", JavacVmFlags)
+
 	pctx.VariableConfigMethod("hostPrebuiltTag", android.Config.PrebuiltOS)
 
 	pctx.VariableFunc("JavaHome", func(ctx android.PackageVarContext) string {
@@ -87,6 +96,7 @@ func init() {
 	pctx.SourcePathVariable("JlinkCmd", "${JavaToolchain}/jlink")
 	pctx.SourcePathVariable("JmodCmd", "${JavaToolchain}/jmod")
 	pctx.SourcePathVariable("JrtFsJar", "${JavaHome}/lib/jrt-fs.jar")
+	pctx.SourcePathVariable("JavaKytheExtractorJar", "prebuilts/build-tools/common/framework/javac_extractor.jar")
 	pctx.SourcePathVariable("Ziptime", "prebuilts/build-tools/${hostPrebuiltTag}/bin/ziptime")
 
 	pctx.SourcePathVariable("GenKotlinBuildFileCmd", "build/soong/scripts/gen-kotlin-build-file.sh")
@@ -143,7 +153,8 @@ func init() {
 
 	hostBinToolVariableWithPrebuilt("Aapt2Cmd", "prebuilts/sdk/tools", "aapt2")
 
-	pctx.SourcePathVariable("ManifestFixerCmd", "build/soong/scripts/manifest_fixer.py")
+	pctx.HostBinToolVariable("ManifestCheckCmd", "manifest_check")
+	pctx.HostBinToolVariable("ManifestFixerCmd", "manifest_fixer")
 
 	pctx.HostBinToolVariable("ManifestMergerCmd", "manifest-merger")
 
@@ -151,4 +162,42 @@ func init() {
 
 	pctx.HostBinToolVariable("Class2Greylist", "class2greylist")
 	pctx.HostBinToolVariable("HiddenAPI", "hiddenapi")
+}
+
+// JavaCmd returns a SourcePath object with the path to the java command.
+func JavaCmd(ctx android.PathContext) android.SourcePath {
+	return javaTool(ctx, "java")
+}
+
+// JavadocCmd returns a SourcePath object with the path to the java command.
+func JavadocCmd(ctx android.PathContext) android.SourcePath {
+	return javaTool(ctx, "javadoc")
+}
+
+func javaTool(ctx android.PathContext, tool string) android.SourcePath {
+	type javaToolKey string
+
+	key := android.NewCustomOnceKey(javaToolKey(tool))
+
+	return ctx.Config().OnceSourcePath(key, func() android.SourcePath {
+		return javaToolchain(ctx).Join(ctx, tool)
+	})
+
+}
+
+var javaToolchainKey = android.NewOnceKey("javaToolchain")
+
+func javaToolchain(ctx android.PathContext) android.SourcePath {
+	return ctx.Config().OnceSourcePath(javaToolchainKey, func() android.SourcePath {
+		return javaHome(ctx).Join(ctx, "bin")
+	})
+}
+
+var javaHomeKey = android.NewOnceKey("javaHome")
+
+func javaHome(ctx android.PathContext) android.SourcePath {
+	return ctx.Config().OnceSourcePath(javaHomeKey, func() android.SourcePath {
+		// This is set up and guaranteed by soong_ui
+		return android.PathForSource(ctx, ctx.Config().Getenv("ANDROID_JAVA_HOME"))
+	})
 }

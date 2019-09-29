@@ -59,17 +59,6 @@ type variableProperties struct {
 			Cflags []string
 		}
 
-		// Product_is_iot is true for Android Things devices.
-		Product_is_iot struct {
-			Cflags       []string
-			Enabled      bool
-			Exclude_srcs []string
-			Init_rc      []string
-			Shared_libs  []string
-			Srcs         []string
-			Static_libs  []string
-		}
-
 		// treble_linker_namespaces is true when the system/vendor linker namespace separation is
 		// enabled.
 		Treble_linker_namespaces struct {
@@ -193,15 +182,17 @@ type productVariables struct {
 	DeviceSecondaryCpuVariant  *string  `json:",omitempty"`
 	DeviceSecondaryAbi         []string `json:",omitempty"`
 
-	NativeBridgeArch        *string  `json:",omitempty"`
-	NativeBridgeArchVariant *string  `json:",omitempty"`
-	NativeBridgeCpuVariant  *string  `json:",omitempty"`
-	NativeBridgeAbi         []string `json:",omitempty"`
+	NativeBridgeArch         *string  `json:",omitempty"`
+	NativeBridgeArchVariant  *string  `json:",omitempty"`
+	NativeBridgeCpuVariant   *string  `json:",omitempty"`
+	NativeBridgeAbi          []string `json:",omitempty"`
+	NativeBridgeRelativePath *string  `json:",omitempty"`
 
-	NativeBridgeSecondaryArch        *string  `json:",omitempty"`
-	NativeBridgeSecondaryArchVariant *string  `json:",omitempty"`
-	NativeBridgeSecondaryCpuVariant  *string  `json:",omitempty"`
-	NativeBridgeSecondaryAbi         []string `json:",omitempty"`
+	NativeBridgeSecondaryArch         *string  `json:",omitempty"`
+	NativeBridgeSecondaryArchVariant  *string  `json:",omitempty"`
+	NativeBridgeSecondaryCpuVariant   *string  `json:",omitempty"`
+	NativeBridgeSecondaryAbi          []string `json:",omitempty"`
+	NativeBridgeSecondaryRelativePath *string  `json:",omitempty"`
 
 	HostArch          *string `json:",omitempty"`
 	HostSecondaryArch *string `json:",omitempty"`
@@ -236,6 +227,7 @@ type productVariables struct {
 	HostStaticBinaries               *bool `json:",omitempty"`
 	Binder32bit                      *bool `json:",omitempty"`
 	UseGoma                          *bool `json:",omitempty"`
+	UseRBE                           *bool `json:",omitempty"`
 	Debuggable                       *bool `json:",omitempty"`
 	Eng                              *bool `json:",omitempty"`
 	Treble_linker_namespaces         *bool `json:",omitempty"`
@@ -264,10 +256,10 @@ type productVariables struct {
 	EnableXOM       *bool    `json:",omitempty"`
 	XOMExcludePaths []string `json:",omitempty"`
 
-	VendorPath          *string `json:",omitempty"`
-	OdmPath             *string `json:",omitempty"`
-	ProductPath         *string `json:",omitempty"`
-	ProductServicesPath *string `json:",omitempty"`
+	VendorPath    *string `json:",omitempty"`
+	OdmPath       *string `json:",omitempty"`
+	ProductPath   *string `json:",omitempty"`
+	SystemExtPath *string `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
@@ -291,8 +283,6 @@ type productVariables struct {
 
 	Override_rs_driver *string `json:",omitempty"`
 
-	Product_is_iot *bool `json:",omitempty"`
-
 	Fuchsia *bool `json:",omitempty"`
 
 	DeviceKernelHeaders []string `json:",omitempty"`
@@ -303,7 +293,8 @@ type productVariables struct {
 
 	PgoAdditionalProfileDirs []string `json:",omitempty"`
 
-	VndkUseCoreVariant *bool `json:",omitempty"`
+	VndkUseCoreVariant         *bool `json:",omitempty"`
+	VndkSnapshotBuildArtifacts *bool `json:",omitempty"`
 
 	BoardVendorSepolicyDirs      []string `json:",omitempty"`
 	BoardOdmSepolicyDirs         []string `json:",omitempty"`
@@ -318,7 +309,7 @@ type productVariables struct {
 	Ndk_abis               *bool `json:",omitempty"`
 	Exclude_draft_ndk_apis *bool `json:",omitempty"`
 
-	FlattenApex *bool `json:",omitempty"`
+	Flatten_apex *bool `json:",omitempty"`
 
 	DexpreoptGlobalConfig *string `json:",omitempty"`
 
@@ -338,6 +329,8 @@ type productVariables struct {
 	ProductCompatibleProperty  *bool    `json:",omitempty"`
 
 	TargetFSConfigGen []string `json:",omitempty"`
+
+	MissingUsesLibraries []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
@@ -432,12 +425,12 @@ func variableMutator(mctx BottomUpMutatorContext) {
 	}
 }
 
-func (a *ModuleBase) setVariableProperties(ctx BottomUpMutatorContext,
+func (m *ModuleBase) setVariableProperties(ctx BottomUpMutatorContext,
 	prefix string, productVariablePropertyValue reflect.Value, variableValue interface{}) {
 
 	printfIntoProperties(ctx, prefix, productVariablePropertyValue, variableValue)
 
-	err := proptools.AppendMatchingProperties(a.generalProperties,
+	err := proptools.AppendMatchingProperties(m.generalProperties,
 		productVariablePropertyValue.Addr().Interface(), nil)
 	if err != nil {
 		if propertyErr, ok := err.(*proptools.ExtendPropertyError); ok {

@@ -957,37 +957,37 @@ prebuilt_etc {
 `,
 	},
 	{
-		desc: "prebuilt_etc_TARGET_OUT_PRODUCT_SERVICES/etc",
+		desc: "prebuilt_etc_TARGET_OUT_SYSTEM_EXT/etc",
 		in: `
 include $(CLEAR_VARS)
 LOCAL_MODULE := etc.test1
 LOCAL_MODULE_CLASS := ETC
-LOCAL_MODULE_PATH := $(TARGET_OUT_PRODUCT_SERVICES)/etc/foo/bar
+LOCAL_MODULE_PATH := $(TARGET_OUT_SYSTEM_EXT)/etc/foo/bar
 include $(BUILD_PREBUILT)
 `,
 		expected: `
 prebuilt_etc {
 	name: "etc.test1",
 	sub_dir: "foo/bar",
-	product_services_specific: true,
+	system_ext_specific: true,
 
 }
 `,
 	},
 	{
-		desc: "prebuilt_etc_TARGET_OUT_PRODUCT_SERVICES_ETC",
+		desc: "prebuilt_etc_TARGET_OUT_SYSTEM_EXT_ETC",
 		in: `
 include $(CLEAR_VARS)
 LOCAL_MODULE := etc.test1
 LOCAL_MODULE_CLASS := ETC
-LOCAL_MODULE_PATH := $(TARGET_OUT_PRODUCT_SERVICES_ETC)/foo/bar
+LOCAL_MODULE_PATH := $(TARGET_OUT_SYSTEM_EXT_ETC)/foo/bar
 include $(BUILD_PREBUILT)
 `,
 		expected: `
 prebuilt_etc {
 	name: "etc.test1",
 	sub_dir: "foo/bar",
-	product_services_specific: true,
+	system_ext_specific: true,
 
 
 }
@@ -1175,6 +1175,84 @@ prebuilt_usr_share_host {
 
 	src: "foo.txt",
 	sub_dir: "bar",
+}
+`,
+	},
+	{
+		desc: "prebuilt_firmware subdir_bar in $(TARGET_OUT_ETC)",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(TARGET_OUT_ETC)/firmware/bar
+LOCAL_SRC_FILES := foo.fw
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_firmware {
+	name: "foo",
+
+	src: "foo.fw",
+	sub_dir: "bar",
+}
+`,
+	},
+	{
+		desc: "prebuilt_firmware subdir_bar in $(TARGET_OUT)",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(TARGET_OUT)/etc/firmware/bar
+LOCAL_SRC_FILES := foo.fw
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_firmware {
+	name: "foo",
+
+	src: "foo.fw",
+	sub_dir: "bar",
+}
+`,
+	},
+	{
+		desc: "prebuilt_firmware subdir_bar in $(TARGET_OUT_VENDOR)",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(TARGET_OUT_VENDOR)/firmware/bar
+LOCAL_SRC_FILES := foo.fw
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_firmware {
+	name: "foo",
+
+	src: "foo.fw",
+	sub_dir: "bar",
+	proprietary: true,
+}
+`,
+	},
+	{
+		desc: "prebuilt_firmware subdir_bar in $(TARGET_OUT)/vendor",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_CLASS := ETC
+LOCAL_MODULE_PATH := $(TARGET_OUT)/vendor/firmware/bar
+LOCAL_SRC_FILES := foo.fw
+include $(BUILD_PREBUILT)
+`,
+		expected: `
+prebuilt_firmware {
+	name: "foo",
+
+	src: "foo.fw",
+	sub_dir: "bar",
+	proprietary: true,
 }
 `,
 	},
