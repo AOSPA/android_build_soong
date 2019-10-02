@@ -115,7 +115,9 @@ var (
 	noOverrideGlobalCflags = []string{
 		"-Werror=int-to-pointer-cast",
 		"-Werror=pointer-to-int-cast",
-		"-Werror=fortify-source",
+		// SDClang does not support -Werror=fortify-source.
+		// TODO: b/142476859
+		// "-Werror=fortify-source",
 	}
 
 	IllegalFlags = []string{
