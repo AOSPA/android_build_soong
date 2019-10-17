@@ -116,6 +116,10 @@ type variableProperties struct {
 			Srcs         []string
 		}
 
+		Flatten_apex struct {
+			Enabled *bool
+		}
+
 		Real_hal struct {
 			Cflags       []string
 			Exclude_srcs []string

@@ -36,9 +36,9 @@ func init() {
 	android.RegisterModuleType("cc_defaults", defaultsFactory)
 
 	android.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
+		ctx.BottomUp("vndk", VndkMutator).Parallel()
 		ctx.BottomUp("image", ImageMutator).Parallel()
 		ctx.BottomUp("link", LinkageMutator).Parallel()
-		ctx.BottomUp("vndk", VndkMutator).Parallel()
 		ctx.BottomUp("ndk_api", ndkApiMutator).Parallel()
 		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
 		ctx.BottomUp("version", VersionMutator).Parallel()
@@ -153,6 +153,7 @@ type Flags struct {
 	rsFlags         []string // Flags that apply to renderscript source files
 	LdFlags         []string // Flags that apply to linker command lines
 	libFlags        []string // Flags to add libraries early to the link order
+	extraLibFlags   []string // Flags to add libraries late in the link order after LdFlags
 	TidyFlags       []string // Flags that apply to clang-tidy
 	SAbiFlags       []string // Flags that apply to header-abi-dumper
 	YasmFlags       []string // Flags that apply to yasm assembly source files
@@ -174,24 +175,14 @@ type Flags struct {
 	CFlagsDeps  android.Paths // Files depended on by compiler flags
 	LdFlagsDeps android.Paths // Files depended on by linker flags
 
-	GroupStaticLibs bool
+	AssemblerWithCpp bool
+	GroupStaticLibs  bool
 
 	proto            android.ProtoFlags
 	protoC           bool // Whether to use C instead of C++
 	protoOptionsFile bool // Whether to look for a .options file next to the .proto
 
 	Yacc *YaccProperties
-}
-
-type ObjectLinkerProperties struct {
-	// list of modules that should only provide headers for this module.
-	Header_libs []string `android:"arch_variant,variant_prepend"`
-
-	// names of other cc_object modules to link into this module using partial linking
-	Objs []string `android:"arch_variant"`
-
-	// if set, add an extra objcopy --prefix-symbols= step
-	Prefix_symbols *string
 }
 
 // Properties used to compile all C or C++ modules
@@ -213,7 +204,8 @@ type BaseProperties struct {
 	PreventInstall            bool     `blueprint:"mutated"`
 	ApexesProvidingSharedLibs []string `blueprint:"mutated"`
 
-	UseVndk bool `blueprint:"mutated"`
+	VndkVersion string `blueprint:"mutated"`
+	SubName     string `blueprint:"mutated"`
 
 	// *.logtags files, to combine together in order to generate the /system/etc/event-log-tags
 	// file
@@ -405,6 +397,14 @@ func IsTestPerSrcDepTag(depTag blueprint.DependencyTag) bool {
 	return ok && ccDepTag == testPerSrcDepTag
 }
 
+func SharedDepTag() dependencyTag {
+	return sharedDepTag
+}
+
+func StaticDepTag() dependencyTag {
+	return staticDepTag
+}
+
 // Module contains the properties and members used by all C/C++ module types, and implements
 // the blueprint.Module interface.  It delegates to compiler, linker, and installer interfaces
 // to construct the output file.  Behavior can be customized with a Customizer interface
@@ -483,6 +483,19 @@ func (c *Module) RelativeInstallPath() string {
 	return ""
 }
 
+// IsVndkOnSystem returns true if a module is supposed to be a vndk library provided by system to vendor
+func (c *Module) IsVndkOnSystem() bool {
+	if linker, ok := c.linker.(libraryInterface); ok {
+		return linker.shared() && c.isVndk() && c.useVndk() && !c.isVndkExt()
+	}
+
+	return false
+}
+
+func (c *Module) VndkVersion() string {
+	return c.vndkVersion()
+}
+
 func (c *Module) Init() android.Module {
 	c.AddProperties(&c.Properties, &c.VendorProperties)
 	if c.compiler != nil {
@@ -554,7 +567,7 @@ func (c *Module) isDependencyRoot() bool {
 }
 
 func (c *Module) useVndk() bool {
-	return c.Properties.UseVndk
+	return c.Properties.VndkVersion != ""
 }
 
 func (c *Module) isCoverageVariant() bool {
@@ -588,10 +601,7 @@ func (c *Module) isVndk() bool {
 }
 
 func (c *Module) vndkVersion() string {
-	if vndkdep := c.vndkdep; vndkdep != nil {
-		return vndkdep.Properties.Vndk.Version
-	}
-	return ""
+	return c.Properties.VndkVersion
 }
 
 func (c *Module) isPgoCompile() bool {
@@ -671,6 +681,10 @@ func (c *Module) bootstrap() bool {
 }
 
 func (c *Module) nativeCoverage() bool {
+	// Bug: http://b/137883967 - native-bridge modules do not currently work with coverage
+	if c.Target().NativeBridge == android.NativeBridgeEnabled {
+		return false
+	}
 	return c.linker != nil && c.linker.nativeCoverage()
 }
 
@@ -682,7 +696,7 @@ func isBionic(name string) bool {
 	return false
 }
 
-func installToBootstrap(name string, config android.Config) bool {
+func InstallToBootstrap(name string, config android.Config) bool {
 	if name == "libclang_rt.hwasan-aarch64-android" {
 		return inList("hwaddress", config.SanitizeDevice())
 	}
@@ -997,6 +1011,31 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	c.makeLinkType = c.getMakeLinkType(actx)
 
+	c.Properties.SubName = ""
+
+	if c.Target().NativeBridge == android.NativeBridgeEnabled {
+		c.Properties.SubName += nativeBridgeSuffix
+	}
+
+	if _, ok := c.linker.(*vndkPrebuiltLibraryDecorator); ok {
+		// .vendor suffix is added for backward compatibility with VNDK snapshot whose names with
+		// such suffixes are already hard-coded in prebuilts/vndk/.../Android.bp.
+		c.Properties.SubName += vendorSuffix
+	} else if _, ok := c.linker.(*llndkStubDecorator); ok || (c.useVndk() && c.hasVendorVariant()) {
+		// .vendor.{version} suffix is added only when we will have two variants: core and vendor.
+		// The suffix is not added for vendor-only module.
+		c.Properties.SubName += vendorSuffix
+		vendorVersion := actx.DeviceConfig().VndkVersion()
+		if vendorVersion == "current" {
+			vendorVersion = actx.DeviceConfig().PlatformVndkVersion()
+		}
+		if c.Properties.VndkVersion != vendorVersion {
+			c.Properties.SubName += "." + c.Properties.VndkVersion
+		}
+	} else if c.inRecovery() && !c.onlyInRecovery() {
+		c.Properties.SubName += recoverySuffix
+	}
+
 	ctx := &moduleContext{
 		ModuleContext: actx,
 		moduleContextImpl: moduleContextImpl{
@@ -1068,6 +1107,9 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if c.sabi != nil {
 		flags = c.sabi.flags(ctx, flags)
 	}
+
+	flags.AssemblerWithCpp = inList("-xassembler-with-cpp", flags.AsFlags)
+
 	// Optimization to reduce size of build.ninja
 	// Replace the long list of flags for each file with a module-local variable
 	ctx.Variable(pctx, "cflags", strings.Join(flags.CFlags, " "))
@@ -1482,9 +1524,11 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	if vndkdep := c.vndkdep; vndkdep != nil {
 		if vndkdep.isVndkExt() {
-			baseModuleMode := vendorMode
+			var baseModuleMode string
 			if actx.DeviceConfig().VndkVersion() == "" {
 				baseModuleMode = coreMode
+			} else {
+				baseModuleMode = c.imageVariation()
 			}
 			actx.AddVariationDependencies([]blueprint.Variation{
 				{Mutator: "image", Variation: baseModuleMode},
@@ -1507,7 +1551,7 @@ func checkLinkType(ctx android.ModuleContext, from *Module, to *Module, tag depe
 		// Host code is not restricted
 		return
 	}
-	if from.Properties.UseVndk {
+	if from.useVndk() {
 		// Though vendor code is limited by the vendor mutator,
 		// each vendor-available module needs to check
 		// link-type for VNDK.
@@ -1929,7 +1973,15 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			} else if c.useVndk() && bothVendorAndCoreVariantsExist {
 				// The vendor module in Make will have been renamed to not conflict with the core
 				// module, so update the dependency name here accordingly.
-				return libName + vendorSuffix
+				ret := libName + vendorSuffix
+				vendorVersion := ctx.DeviceConfig().VndkVersion()
+				if vendorVersion == "current" {
+					vendorVersion = ctx.DeviceConfig().PlatformVndkVersion()
+				}
+				if c.Properties.VndkVersion != vendorVersion {
+					ret += "." + c.Properties.VndkVersion
+				}
+				return ret
 			} else if (ctx.Platform() || ctx.ProductSpecific()) && isVendorPublicLib {
 				return libName + vendorPublicLibrarySuffix
 			} else if ccDep.inRecovery() && !ccDep.onlyInRecovery() {
@@ -2115,13 +2167,12 @@ func (c *Module) installable() bool {
 }
 
 func (c *Module) imageVariation() string {
-	variation := "core"
 	if c.useVndk() {
-		variation = "vendor"
+		return vendorMode + "." + c.Properties.VndkVersion
 	} else if c.inRecovery() {
-		variation = "recovery"
+		return recoveryMode
 	}
-	return variation
+	return coreMode
 }
 
 func (c *Module) IDEInfo(dpInfo *android.IdeInfo) {
@@ -2173,6 +2224,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&BinaryLinkerProperties{},
 		&TestProperties{},
 		&TestBinaryProperties{},
+		&FuzzProperties{},
 		&StlProperties{},
 		&SanitizeProperties{},
 		&StripProperties{},
@@ -2198,7 +2250,7 @@ const (
 	// SDK libraries. (which framework-private libraries can use)
 	coreMode = "core"
 
-	// vendorMode is the variant used for /vendor code that compiles
+	// vendorMode is the variant prefix used for /vendor code that compiles
 	// against the VNDK.
 	vendorMode = "vendor"
 
@@ -2262,7 +2314,10 @@ func ImageMutator(mctx android.BottomUpMutatorContext) {
 				variants = append(variants, coreMode)
 			}
 			if vendorVariantNeeded {
-				variants = append(variants, vendorMode)
+				variants = append(variants, vendorMode+"."+mctx.DeviceConfig().PlatformVndkVersion())
+				if vndkVersion := mctx.DeviceConfig().VndkVersion(); vndkVersion != "current" {
+					variants = append(variants, vendorMode+"."+vndkVersion)
+				}
 			}
 			if recoveryVariantNeeded {
 				variants = append(variants, recoveryMode)
@@ -2334,32 +2389,51 @@ func ImageMutator(mctx android.BottomUpMutatorContext) {
 	}
 
 	var coreVariantNeeded bool = false
-	var vendorVariantNeeded bool = false
 	var recoveryVariantNeeded bool = false
+
+	var vendorVariants []string
+
+	platformVndkVersion := mctx.DeviceConfig().PlatformVndkVersion()
+	deviceVndkVersion := mctx.DeviceConfig().VndkVersion()
+	if deviceVndkVersion == "current" {
+		deviceVndkVersion = platformVndkVersion
+	}
 
 	if mctx.DeviceConfig().VndkVersion() == "" {
 		// If the device isn't compiling against the VNDK, we always
 		// use the core mode.
 		coreVariantNeeded = true
+	} else if m.Target().NativeBridge == android.NativeBridgeEnabled {
+		// Skip creating vendor variants for natvie bridge modules
+		coreVariantNeeded = true
 	} else if _, ok := m.linker.(*llndkStubDecorator); ok {
 		// LL-NDK stubs only exist in the vendor variant, since the
 		// real libraries will be used in the core variant.
-		vendorVariantNeeded = true
+		vendorVariants = append(vendorVariants,
+			platformVndkVersion,
+			deviceVndkVersion,
+		)
 	} else if _, ok := m.linker.(*llndkHeadersDecorator); ok {
 		// ... and LL-NDK headers as well
-		vendorVariantNeeded = true
-	} else if _, ok := m.linker.(*vndkPrebuiltLibraryDecorator); ok {
+		vendorVariants = append(vendorVariants,
+			platformVndkVersion,
+			deviceVndkVersion,
+		)
+	} else if lib, ok := m.linker.(*vndkPrebuiltLibraryDecorator); ok {
 		// Make vendor variants only for the versions in BOARD_VNDK_VERSION and
 		// PRODUCT_EXTRA_VNDK_VERSIONS.
-		vendorVariantNeeded = true
+		vendorVariants = append(vendorVariants, lib.version())
 	} else if m.hasVendorVariant() && !vendorSpecific {
 		// This will be available in both /system and /vendor
 		// or a /system directory that is available to vendor.
 		coreVariantNeeded = true
-		vendorVariantNeeded = true
+		vendorVariants = append(vendorVariants, platformVndkVersion)
+		if m.isVndk() {
+			vendorVariants = append(vendorVariants, deviceVndkVersion)
+		}
 	} else if vendorSpecific && String(m.Properties.Sdk_version) == "" {
 		// This will be available in /vendor (or /odm) only
-		vendorVariantNeeded = true
+		vendorVariants = append(vendorVariants, deviceVndkVersion)
 	} else {
 		// This is either in /system (or similar: /data), or is a
 		// modules built with the NDK. Modules built with the NDK
@@ -2388,17 +2462,17 @@ func ImageMutator(mctx android.BottomUpMutatorContext) {
 	if coreVariantNeeded {
 		variants = append(variants, coreMode)
 	}
-	if vendorVariantNeeded {
-		variants = append(variants, vendorMode)
+	for _, variant := range android.FirstUniqueStrings(vendorVariants) {
+		variants = append(variants, vendorMode+"."+variant)
 	}
 	if recoveryVariantNeeded {
 		variants = append(variants, recoveryMode)
 	}
 	mod := mctx.CreateVariations(variants...)
 	for i, v := range variants {
-		if v == vendorMode {
+		if strings.HasPrefix(v, vendorMode+".") {
 			m := mod[i].(*Module)
-			m.Properties.UseVndk = true
+			m.Properties.VndkVersion = strings.TrimPrefix(v, vendorMode+".")
 			squashVendorSrcs(m)
 		} else if v == recoveryMode {
 			m := mod[i].(*Module)

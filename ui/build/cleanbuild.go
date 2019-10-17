@@ -87,6 +87,7 @@ func installClean(ctx Context, config Config, what int) {
 	// otherwise we'd have to rebuild any generated files created with
 	// those tools.
 	removeGlobs(ctx,
+		hostOut("apex"),
 		hostOut("obj/NOTICE_FILES"),
 		hostOut("obj/PACKAGING"),
 		hostOut("coverage"),
@@ -99,6 +100,7 @@ func installClean(ctx Context, config Config, what int) {
 		productOut("*.img"),
 		productOut("*.zip"),
 		productOut("android-info.txt"),
+		productOut("apex"),
 		productOut("kernel"),
 		productOut("data"),
 		productOut("skin"),

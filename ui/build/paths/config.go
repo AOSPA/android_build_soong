@@ -197,11 +197,10 @@ var Configuration = map[string]PathConfig{
 
 func init() {
 	if runtime.GOOS == "darwin" {
-		Configuration["md5"] = Allowed
 		Configuration["sw_vers"] = Allowed
 		Configuration["xcrun"] = Allowed
 
-		// We don't have darwin prebuilts for some tools (like toybox),
+		// We don't have darwin prebuilts for some tools,
 		// so allow the host versions.
 		for name, config := range Configuration {
 			if config.LinuxOnlyPrebuilt {

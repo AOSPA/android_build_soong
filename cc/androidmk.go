@@ -37,6 +37,7 @@ type AndroidMkContext interface {
 	Os() android.OsType
 	Host() bool
 	useVndk() bool
+	vndkVersion() string
 	static() bool
 	inRecovery() bool
 }
@@ -68,7 +69,7 @@ func (c *Module) AndroidMk() android.AndroidMkData {
 		OutputFile: c.outputFile,
 		// TODO(jiyong): add the APEXes providing shared libs to the required modules
 		// Currently, adding c.Properties.ApexesProvidingSharedLibs is causing multiple
-		// runtime APEXes (com.android.runtime.debug|release) to be installed. And this
+		// ART APEXes (com.android.art.debug|release) to be installed. And this
 		// is breaking some older devices (like marlin) where system.img is small.
 		Required: c.Properties.AndroidMkRuntimeLibs,
 		Include:  "$(BUILD_SYSTEM)/soong_cc_prebuilt.mk",
@@ -109,17 +110,7 @@ func (c *Module) AndroidMk() android.AndroidMkData {
 	}
 	c.subAndroidMk(&ret, c.installer)
 
-	if c.Target().NativeBridge == android.NativeBridgeEnabled {
-		ret.SubName += nativeBridgeSuffix
-	}
-
-	if c.useVndk() && c.hasVendorVariant() {
-		// .vendor suffix is added only when we will have two variants: core and vendor.
-		// The suffix is not added for vendor-only module.
-		ret.SubName += vendorSuffix
-	} else if c.inRecovery() && !c.onlyInRecovery() {
-		ret.SubName += recoverySuffix
-	}
+	ret.SubName += c.Properties.SubName
 
 	return ret
 }
@@ -207,7 +198,7 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 		library.androidMkWriteExportedFlags(w)
 		library.androidMkWriteAdditionalDependenciesForSourceAbiDiff(w)
 
-		_, _, ext := splitFileExt(outputFile.Base())
+		_, _, ext := android.SplitFileExt(outputFile.Base())
 
 		fmt.Fprintln(w, "LOCAL_BUILT_MODULE_STEM := $(LOCAL_MODULE)"+ext)
 
@@ -312,6 +303,33 @@ func (test *testBinary) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkDa
 	androidMkWriteTestData(test.data, ctx, ret)
 }
 
+func (fuzz *fuzzBinary) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
+	ctx.subAndroidMk(ret, fuzz.binaryDecorator)
+
+	var fuzzFiles []string
+	for _, d := range fuzz.corpus {
+		rel := d.Rel()
+		path := d.String()
+		path = strings.TrimSuffix(path, rel)
+		fuzzFiles = append(fuzzFiles, path+":corpus/"+d.Base())
+	}
+
+	if fuzz.dictionary != nil {
+		path := strings.TrimSuffix(fuzz.dictionary.String(), fuzz.dictionary.Rel())
+		fuzzFiles = append(fuzzFiles, path+":"+fuzz.dictionary.Base())
+	}
+
+	if len(fuzzFiles) > 0 {
+		ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
+			fmt.Fprintln(w, "LOCAL_TEST_DATA := "+strings.Join(fuzzFiles, " "))
+		})
+	}
+
+	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
+		fmt.Fprintln(w, "LOCAL_IS_FUZZ_TARGET := true")
+	})
+}
+
 func (test *testLibrary) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
 	ctx.subAndroidMk(ret, test.libraryDecorator)
 }
@@ -319,7 +337,7 @@ func (test *testLibrary) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkD
 func (library *toolchainLibraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
 	ret.Class = "STATIC_LIBRARIES"
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
-		_, suffix, _ := splitFileExt(outputFile.Base())
+		_, suffix, _ := android.SplitFileExt(outputFile.Base())
 		fmt.Fprintln(w, "LOCAL_MODULE_SUFFIX := "+suffix)
 	})
 }
@@ -334,7 +352,7 @@ func (installer *baseInstaller) AndroidMk(ctx AndroidMkContext, ret *android.And
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		path := installer.path.RelPathString()
 		dir, file := filepath.Split(path)
-		stem, suffix, _ := splitFileExt(file)
+		stem, suffix, _ := android.SplitFileExt(file)
 		fmt.Fprintln(w, "LOCAL_MODULE_SUFFIX := "+suffix)
 		fmt.Fprintln(w, "LOCAL_MODULE_PATH := $(OUT_DIR)/"+filepath.Clean(dir))
 		fmt.Fprintln(w, "LOCAL_MODULE_STEM := "+stem)
@@ -347,7 +365,7 @@ func (c *stubDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkDa
 
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		path, file := filepath.Split(c.installPath.String())
-		stem, suffix, _ := splitFileExt(file)
+		stem, suffix, _ := android.SplitFileExt(file)
 		fmt.Fprintln(w, "LOCAL_MODULE_SUFFIX := "+suffix)
 		fmt.Fprintln(w, "LOCAL_MODULE_PATH := "+path)
 		fmt.Fprintln(w, "LOCAL_MODULE_STEM := "+stem)
@@ -357,11 +375,10 @@ func (c *stubDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkDa
 
 func (c *llndkStubDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
 	ret.Class = "SHARED_LIBRARIES"
-	ret.SubName = vendorSuffix
 
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		c.libraryDecorator.androidMkWriteExportedFlags(w)
-		_, _, ext := splitFileExt(outputFile.Base())
+		_, _, ext := android.SplitFileExt(outputFile.Base())
 
 		fmt.Fprintln(w, "LOCAL_BUILT_MODULE_STEM := $(LOCAL_MODULE)"+ext)
 		fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
@@ -380,7 +397,7 @@ func (c *vndkPrebuiltLibraryDecorator) AndroidMk(ctx AndroidMkContext, ret *andr
 
 		path := c.path.RelPathString()
 		dir, file := filepath.Split(path)
-		stem, suffix, ext := splitFileExt(file)
+		stem, suffix, ext := android.SplitFileExt(file)
 		fmt.Fprintln(w, "LOCAL_BUILT_MODULE_STEM := $(LOCAL_MODULE)"+ext)
 		fmt.Fprintln(w, "LOCAL_MODULE_SUFFIX := "+suffix)
 		fmt.Fprintln(w, "LOCAL_MODULE_PATH := $(OUT_DIR)/"+filepath.Clean(dir))
@@ -398,7 +415,7 @@ func (c *vendorPublicLibraryStubDecorator) AndroidMk(ctx AndroidMkContext, ret *
 
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		c.libraryDecorator.androidMkWriteExportedFlags(w)
-		_, _, ext := splitFileExt(outputFile.Base())
+		_, _, ext := android.SplitFileExt(outputFile.Base())
 
 		fmt.Fprintln(w, "LOCAL_BUILT_MODULE_STEM := $(LOCAL_MODULE)"+ext)
 		fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")

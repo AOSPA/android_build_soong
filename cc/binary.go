@@ -50,6 +50,9 @@ type BinaryLinkerProperties struct {
 	// binaries would be installed by default (in PRODUCT_PACKAGES) the other binary will be removed
 	// from PRODUCT_PACKAGES.
 	Overrides []string
+
+	// Inject boringssl hash into the shared library.  This is only intended for use by external/boringssl.
+	Inject_bssl_hash *bool `android:"arch_variant"`
 }
 
 func init() {
@@ -342,6 +345,8 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 			flagsToBuilderFlags(flags), afterPrefixSymbols)
 	}
 
+	outputFile = maybeInjectBoringSSLHash(ctx, outputFile, binary.Properties.Inject_bssl_hash, fileName)
+
 	if Bool(binary.baseLinker.Properties.Use_version_lib) {
 		if ctx.Host() {
 			versionedOutputFile := outputFile
@@ -449,7 +454,7 @@ func (binary *binaryDecorator) install(ctx ModuleContext, file android.Path) {
 	// The original path becomes a symlink to the corresponding file in the
 	// runtime APEX.
 	translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled || !ctx.Arch().Native
-	if installToBootstrap(ctx.baseModuleName(), ctx.Config()) && !translatedArch && ctx.apexName() == "" && !ctx.inRecovery() {
+	if InstallToBootstrap(ctx.baseModuleName(), ctx.Config()) && !translatedArch && ctx.apexName() == "" && !ctx.inRecovery() {
 		if ctx.Device() && isBionic(ctx.baseModuleName()) {
 			binary.installSymlinkToRuntimeApex(ctx, file)
 		}

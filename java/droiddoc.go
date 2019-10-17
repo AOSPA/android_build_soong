@@ -17,7 +17,6 @@ package java
 import (
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
@@ -58,17 +57,12 @@ type JavadocProperties struct {
 	// filegroup or genrule can be included within this property.
 	Exclude_srcs []string `android:"path,arch_variant"`
 
+	// list of package names that should actually be used. If this property is left unspecified,
+	// all the sources from the srcs property is used.
+	Filter_packages []string
+
 	// list of java libraries that will be in the classpath.
 	Libs []string `android:"arch_variant"`
-
-	// the java library (in classpath) for documentation that provides java srcs and srcjars.
-	Srcs_lib *string
-
-	// the base dirs under srcs_lib will be scanned for java srcs.
-	Srcs_lib_whitelist_dirs []string
-
-	// the sub dirs under srcs_lib_whitelist_dirs will be scanned for java srcs.
-	Srcs_lib_whitelist_pkgs []string
 
 	// If set to false, don't allow this module(-docs.zip) to be exported. Defaults to true.
 	Installable *bool
@@ -303,8 +297,10 @@ func InitDroiddocModule(module android.DefaultableModule, hod android.HostOrDevi
 	android.InitDefaultableModule(module)
 }
 
-func apiCheckEnabled(apiToCheck ApiToCheck, apiVersionTag string) bool {
-	if String(apiToCheck.Api_file) != "" && String(apiToCheck.Removed_api_file) != "" {
+func apiCheckEnabled(ctx android.ModuleContext, apiToCheck ApiToCheck, apiVersionTag string) bool {
+	if ctx.Config().IsEnvTrue("WITHOUT_CHECK_API") {
+		return false
+	} else if String(apiToCheck.Api_file) != "" && String(apiToCheck.Removed_api_file) != "" {
 		return true
 	} else if String(apiToCheck.Api_file) != "" {
 		panic("for " + apiVersionTag + " removed_api_file has to be non-empty!")
@@ -362,6 +358,8 @@ func (j *Javadoc) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
 	case "":
 		return android.Paths{j.stubsSrcJar}, nil
+	case ".docs.zip":
+		return android.Paths{j.docZip}, nil
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 	}
@@ -423,22 +421,6 @@ func (j *Javadoc) addDeps(ctx android.BottomUpMutatorContext) {
 	}
 
 	ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
-	if j.properties.Srcs_lib != nil {
-		ctx.AddVariationDependencies(nil, srcsLibTag, *j.properties.Srcs_lib)
-	}
-}
-
-func (j *Javadoc) genWhitelistPathPrefixes(whitelistPathPrefixes map[string]bool) {
-	for _, dir := range j.properties.Srcs_lib_whitelist_dirs {
-		for _, pkg := range j.properties.Srcs_lib_whitelist_pkgs {
-			// convert foo.bar.baz to foo/bar/baz
-			pkgAsPath := filepath.Join(strings.Split(pkg, ".")...)
-			prefix := filepath.Join(dir, pkgAsPath)
-			if _, found := whitelistPathPrefixes[prefix]; !found {
-				whitelistPathPrefixes[prefix] = true
-			}
-		}
-	}
 }
 
 func (j *Javadoc) collectAidlFlags(ctx android.ModuleContext, deps deps) droiddocBuilderFlags {
@@ -480,10 +462,12 @@ func (j *Javadoc) genSources(ctx android.ModuleContext, srcFiles android.Paths,
 
 	outSrcFiles := make(android.Paths, 0, len(srcFiles))
 
+	aidlIncludeFlags := genAidlIncludeFlags(srcFiles)
+
 	for _, srcFile := range srcFiles {
 		switch srcFile.Ext() {
 		case ".aidl":
-			javaFile := genAidl(ctx, srcFile, flags.aidlFlags, flags.aidlDeps)
+			javaFile := genAidl(ctx, srcFile, flags.aidlFlags+aidlIncludeFlags, flags.aidlDeps)
 			outSrcFiles = append(outSrcFiles, javaFile)
 		case ".logtags":
 			javaFile := genLogtags(ctx, srcFile)
@@ -530,28 +514,6 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 			default:
 				ctx.ModuleErrorf("depends on non-java module %q", otherName)
 			}
-		case srcsLibTag:
-			switch dep := module.(type) {
-			case Dependency:
-				srcs := dep.(SrcDependency).CompiledSrcs()
-				whitelistPathPrefixes := make(map[string]bool)
-				j.genWhitelistPathPrefixes(whitelistPathPrefixes)
-				for _, src := range srcs {
-					if _, ok := src.(android.WritablePath); ok { // generated sources
-						deps.srcs = append(deps.srcs, src)
-					} else { // select source path for documentation based on whitelist path prefixs.
-						for k := range whitelistPathPrefixes {
-							if strings.HasPrefix(src.Rel(), k) {
-								deps.srcs = append(deps.srcs, src)
-								break
-							}
-						}
-					}
-				}
-				deps.srcJars = append(deps.srcJars, dep.(SrcDependency).CompiledSrcJars()...)
-			default:
-				ctx.ModuleErrorf("depends on non-java module %q", otherName)
-			}
 		case systemModulesTag:
 			if deps.systemModules != nil {
 				panic("Found two system module dependencies")
@@ -566,6 +528,34 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 	// do not pass exclude_srcs directly when expanding srcFiles since exclude_srcs
 	// may contain filegroup or genrule.
 	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
+
+	filterByPackage := func(srcs []android.Path, filterPackages []string) []android.Path {
+		if filterPackages == nil {
+			return srcs
+		}
+		filtered := []android.Path{}
+		for _, src := range srcs {
+			if src.Ext() != ".java" {
+				// Don't filter-out non-Java (=generated sources) by package names. This is not ideal,
+				// but otherwise metalava emits stub sources having references to the generated AIDL classes
+				// in filtered-out pacages (e.g. com.android.internal.*).
+				// TODO(b/141149570) We need to fix this by introducing default private constructors or
+				// fixing metalava to not emit constructors having references to unknown classes.
+				filtered = append(filtered, src)
+				continue
+			}
+			packageName := strings.ReplaceAll(filepath.Dir(src.Rel()), "/", ".")
+			for _, pkg := range filterPackages {
+				if strings.HasPrefix(packageName, pkg) {
+					filtered = append(filtered, src)
+					break
+				}
+			}
+		}
+		return filtered
+	}
+	srcFiles = filterByPackage(srcFiles, j.properties.Filter_packages)
+
 	flags := j.collectAidlFlags(ctx, deps)
 	srcFiles = j.genSources(ctx, srcFiles, flags)
 
@@ -728,13 +718,6 @@ func (d *Droiddoc) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (d *Droiddoc) doclavaDocsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, docletPath classpath) {
-	var date string
-	if runtime.GOOS == "darwin" {
-		date = `date -r`
-	} else {
-		date = `date -d @`
-	}
-
 	// Droiddoc always gets "-source 1.8" because it doesn't support 1.9 sources.  For modules with 1.9
 	// sources, droiddoc will get sources produced by metalava which will have already stripped out the
 	// 1.9 language features.
@@ -745,7 +728,7 @@ func (d *Droiddoc) doclavaDocsFlags(ctx android.ModuleContext, cmd *android.Rule
 		FlagWithArg("-doclet ", "com.google.doclava.Doclava").
 		FlagWithInputList("-docletpath ", docletPath.Paths(), ":").
 		FlagWithArg("-hdf page.build ", ctx.Config().BuildId()+"-"+ctx.Config().BuildNumberFromFile()).
-		FlagWithArg("-hdf page.now ", `"$(`+date+`$(cat `+ctx.Config().Getenv("BUILD_DATETIME_FILE")+`) "+%d %b %Y %k:%M")" `)
+		FlagWithArg("-hdf page.now ", `"$(date -d @$(cat `+ctx.Config().Getenv("BUILD_DATETIME_FILE")+`) "+%d %b %Y %k:%M")" `)
 
 	if String(d.properties.Custom_template) == "" {
 		// TODO: This is almost always droiddoc-templates-sdk
@@ -808,8 +791,8 @@ func (d *Droiddoc) doclavaDocsFlags(ctx android.ModuleContext, cmd *android.Rule
 }
 
 func (d *Droiddoc) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsDir android.WritablePath) {
-	if apiCheckEnabled(d.properties.Check_api.Current, "current") ||
-		apiCheckEnabled(d.properties.Check_api.Last_released, "last_released") ||
+	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") ||
+		apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") ||
 		String(d.properties.Api_filename) != "" {
 
 		d.apiFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_api.txt")
@@ -817,8 +800,8 @@ func (d *Droiddoc) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuilde
 		d.apiFilePath = d.apiFile
 	}
 
-	if apiCheckEnabled(d.properties.Check_api.Current, "current") ||
-		apiCheckEnabled(d.properties.Check_api.Last_released, "last_released") ||
+	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") ||
+		apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") ||
 		String(d.properties.Removed_api_filename) != "" {
 		d.removedApiFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_removed.txt")
 		cmd.FlagWithOutput("-removedApi ", d.removedApiFile)
@@ -1036,7 +1019,7 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	rule.Build(pctx, ctx, "javadoc", desc)
 
-	if apiCheckEnabled(d.properties.Check_api.Current, "current") &&
+	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") &&
 		!ctx.Config().IsPdkBuild() {
 
 		apiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Current.Api_file))
@@ -1105,7 +1088,7 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		rule.Build(pctx, ctx, "doclavaCurrentApiUpdate", "update current API")
 	}
 
-	if apiCheckEnabled(d.properties.Check_api.Last_released, "last_released") &&
+	if apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") &&
 		!ctx.Config().IsPdkBuild() {
 
 		apiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Api_file))
@@ -1235,16 +1218,16 @@ func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsDir android.WritablePath) {
-	if apiCheckEnabled(d.properties.Check_api.Current, "current") ||
-		apiCheckEnabled(d.properties.Check_api.Last_released, "last_released") ||
+	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") ||
+		apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") ||
 		String(d.properties.Api_filename) != "" {
 		d.apiFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_api.txt")
 		cmd.FlagWithOutput("--api ", d.apiFile)
 		d.apiFilePath = d.apiFile
 	}
 
-	if apiCheckEnabled(d.properties.Check_api.Current, "current") ||
-		apiCheckEnabled(d.properties.Check_api.Last_released, "last_released") ||
+	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") ||
+		apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") ||
 		String(d.properties.Removed_api_filename) != "" {
 		d.removedApiFile = android.PathForModuleOut(ctx, ctx.ModuleName()+"_removed.txt")
 		cmd.FlagWithOutput("--removed-api ", d.removedApiFile)
@@ -1501,7 +1484,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Create rule for apicheck
 
-	if apiCheckEnabled(d.properties.Check_api.Current, "current") &&
+	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") &&
 		!ctx.Config().IsPdkBuild() {
 
 		if len(d.Javadoc.properties.Out) > 0 {
@@ -1586,7 +1569,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		rule.Build(pctx, ctx, "metalavaCurrentApiUpdate", "update current API")
 	}
 
-	if apiCheckEnabled(d.properties.Check_api.Last_released, "last_released") &&
+	if apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") &&
 		!ctx.Config().IsPdkBuild() {
 
 		if len(d.Javadoc.properties.Out) > 0 {

@@ -88,6 +88,16 @@ type LibraryProperties struct {
 	// set the name of the output
 	Stem *string `android:"arch_variant"`
 
+	// set suffix of the name of the output
+	Suffix *string `android:"arch_variant"`
+
+	Target struct {
+		Vendor struct {
+			// set suffix of the name of the output
+			Suffix *string `android:"arch_variant"`
+		}
+	}
+
 	// Names of modules to be overridden. Listed modules can only be other shared libraries
 	// (in Make or Soong).
 	// This does not completely prevent installation of the overridden libraries, but if both
@@ -113,6 +123,9 @@ type LibraryProperties struct {
 
 	// Order symbols in .bss section by their sizes.  Only useful for shared libraries.
 	Sort_bss_symbols_by_size *bool
+
+	// Inject boringssl hash into the shared library.  This is only intended for use by external/boringssl.
+	Inject_bssl_hash *bool `android:"arch_variant"`
 }
 
 type LibraryMutatedProperties struct {
@@ -461,7 +474,7 @@ func (library *libraryDecorator) classifySourceAbiDump(ctx ModuleContext) string
 			}
 		}
 	}
-	if enabled != nil && Bool(enabled) {
+	if Bool(enabled) || ctx.hasStubsVariants() {
 		return "PLATFORM"
 	}
 	return ""
@@ -546,7 +559,7 @@ type libraryInterface interface {
 	androidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Writer)
 }
 
-func (library *libraryDecorator) getLibName(ctx ModuleContext) string {
+func (library *libraryDecorator) getLibName(ctx BaseModuleContext) string {
 	name := library.libName
 	if name == "" {
 		name = String(library.Properties.Stem)
@@ -554,6 +567,16 @@ func (library *libraryDecorator) getLibName(ctx ModuleContext) string {
 			name = ctx.baseModuleName()
 		}
 	}
+
+	suffix := ""
+	if ctx.useVndk() {
+		suffix = String(library.Properties.Target.Vendor.Suffix)
+	}
+	if suffix == "" {
+		suffix = String(library.Properties.Suffix)
+	}
+
+	name += suffix
 
 	if ctx.isVndkExt() {
 		name = ctx.getVndkExtendsModuleName()
@@ -766,8 +789,9 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 		outputFile = android.PathForModuleOut(ctx, "unstripped", fileName)
 		library.stripper.stripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile, builderFlags)
 	}
-
 	library.unstrippedOutputFile = outputFile
+
+	outputFile = maybeInjectBoringSSLHash(ctx, outputFile, library.Properties.Inject_bssl_hash, fileName)
 
 	if Bool(library.baseLinker.Properties.Use_version_lib) {
 		if ctx.Host() {
@@ -879,7 +903,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		}
 		exportedHeaderFlags := strings.Join(SourceAbiFlags, " ")
 		library.sAbiOutputFile = TransformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags,
-			android.OptionalPathForModuleSrc(ctx, library.Properties.Header_abi_checker.Symbol_file),
+			android.OptionalPathForModuleSrc(ctx, library.symbolFileForAbiCheck(ctx)),
 			library.Properties.Header_abi_checker.Exclude_symbol_versions,
 			library.Properties.Header_abi_checker.Exclude_symbol_tags)
 
@@ -1009,8 +1033,8 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 			// The original path becomes a symlink to the corresponding file in the
 			// runtime APEX.
 			translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled || !ctx.Arch().Native
-			if installToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() && !translatedArch && !ctx.inRecovery() {
-				if ctx.Device() && isBionic(ctx.baseModuleName()) {
+			if InstallToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() && !translatedArch && !ctx.inRecovery() {
+				if ctx.Device() {
 					library.installSymlinkToRuntimeApex(ctx, file)
 				}
 				library.baseInstaller.subDir = "bootstrap"
@@ -1078,6 +1102,16 @@ func (library *libraryDecorator) HeaderOnly() {
 
 func (library *libraryDecorator) buildStubs() bool {
 	return library.MutatedProperties.BuildStubs
+}
+
+func (library *libraryDecorator) symbolFileForAbiCheck(ctx ModuleContext) *string {
+	if library.Properties.Header_abi_checker.Symbol_file != nil {
+		return library.Properties.Header_abi_checker.Symbol_file
+	}
+	if ctx.hasStubsVariants() && library.Properties.Stubs.Symbol_file != nil {
+		return library.Properties.Stubs.Symbol_file
+	}
+	return nil
 }
 
 func (library *libraryDecorator) stubsVersion() string {
@@ -1270,4 +1304,39 @@ func VersionMutator(mctx android.BottomUpMutatorContext) {
 			return
 		}
 	}
+}
+
+// maybeInjectBoringSSLHash adds a rule to run bssl_inject_hash on the output file if the module has the
+// inject_bssl_hash or if any static library dependencies have inject_bssl_hash set.  It returns the output path
+// that the linked output file should be written to.
+// TODO(b/137267623): Remove this in favor of a cc_genrule when they support operating on shared libraries.
+func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.ModuleOutPath,
+	inject *bool, fileName string) android.ModuleOutPath {
+	// TODO(b/137267623): Remove this in favor of a cc_genrule when they support operating on shared libraries.
+	injectBoringSSLHash := Bool(inject)
+	ctx.VisitDirectDeps(func(dep android.Module) {
+		tag := ctx.OtherModuleDependencyTag(dep)
+		if tag == staticDepTag || tag == staticExportDepTag || tag == wholeStaticDepTag || tag == lateStaticDepTag {
+			if cc, ok := dep.(*Module); ok {
+				if library, ok := cc.linker.(*libraryDecorator); ok {
+					if Bool(library.Properties.Inject_bssl_hash) {
+						injectBoringSSLHash = true
+					}
+				}
+			}
+		}
+	})
+	if injectBoringSSLHash {
+		hashedOutputfile := outputFile
+		outputFile = android.PathForModuleOut(ctx, "unhashed", fileName)
+
+		rule := android.NewRuleBuilder()
+		rule.Command().
+			BuiltTool(ctx, "bssl_inject_hash").
+			FlagWithInput("-in-object ", outputFile).
+			FlagWithOutput("-o ", hashedOutputfile)
+		rule.Build(pctx, ctx, "injectCryptoHash", "inject crypto hash")
+	}
+
+	return outputFile
 }
