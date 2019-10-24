@@ -67,8 +67,14 @@ type JavadocProperties struct {
 	// If set to false, don't allow this module(-docs.zip) to be exported. Defaults to true.
 	Installable *bool
 
-	// if not blank, set to the version of the sdk to compile against
+	// if not blank, set to the version of the sdk to compile against.
+	// Defaults to compiling against the current platform.
 	Sdk_version *string `android:"arch_variant"`
+
+	// When targeting 1.9 and above, override the modules to use with --system,
+	// otherwise provides defaults libraries to add to the bootclasspath.
+	// Defaults to "none"
+	System_modules *string
 
 	Aidl struct {
 		// Top level directories to pass to aidl tool
@@ -238,6 +244,16 @@ type DroidstubsProperties struct {
 		// do not perform API check against Last_released, in the case that both two specified API
 		// files by Last_released are modules which don't exist.
 		Ignore_missing_latest_api *bool `blueprint:"mutated"`
+
+		Api_lint struct {
+			Enabled *bool
+
+			// If set, performs api_lint on any new APIs not found in the given signature file
+			New_since *string `android:"path"`
+
+			// If not blank, path to the baseline txt file for approved API lint violations.
+			Baseline_file *string `android:"path"`
+		}
 	}
 
 	// user can specify the version of previous released API file in order to do compatibility check.
@@ -391,6 +407,10 @@ func (j *Javadoc) sdkVersion() string {
 	return proptools.StringDefault(j.properties.Sdk_version, defaultSdkVersion(j))
 }
 
+func (j *Javadoc) systemModules() string {
+	return proptools.String(j.properties.System_modules)
+}
+
 func (j *Javadoc) minSdkVersion() string {
 	return j.sdkVersion()
 }
@@ -417,6 +437,10 @@ func (j *Javadoc) addDeps(ctx android.BottomUpMutatorContext) {
 				}
 				ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.modules...)
 			}
+		} else if sdkDep.systemModules != "" {
+			// Add the system modules to both the system modules and bootclasspath.
+			ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
+			ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.systemModules)
 		}
 	}
 
@@ -461,20 +485,26 @@ func (j *Javadoc) genSources(ctx android.ModuleContext, srcFiles android.Paths,
 	flags droiddocBuilderFlags) android.Paths {
 
 	outSrcFiles := make(android.Paths, 0, len(srcFiles))
+	var aidlSrcs android.Paths
 
 	aidlIncludeFlags := genAidlIncludeFlags(srcFiles)
 
 	for _, srcFile := range srcFiles {
 		switch srcFile.Ext() {
 		case ".aidl":
-			javaFile := genAidl(ctx, srcFile, flags.aidlFlags+aidlIncludeFlags, flags.aidlDeps)
-			outSrcFiles = append(outSrcFiles, javaFile)
+			aidlSrcs = append(aidlSrcs, srcFile)
 		case ".logtags":
 			javaFile := genLogtags(ctx, srcFile)
 			outSrcFiles = append(outSrcFiles, javaFile)
 		default:
 			outSrcFiles = append(outSrcFiles, srcFile)
 		}
+	}
+
+	// Process all aidl files together to support sharding them into one or more rules that produce srcjars.
+	if len(aidlSrcs) > 0 {
+		srcJarFiles := genAidl(ctx, aidlSrcs, flags.aidlFlags+aidlIncludeFlags, flags.aidlDeps)
+		outSrcFiles = append(outSrcFiles, srcJarFiles...)
 	}
 
 	return outSrcFiles
@@ -498,6 +528,10 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 		case bootClasspathTag:
 			if dep, ok := module.(Dependency); ok {
 				deps.bootClasspath = append(deps.bootClasspath, dep.ImplementationJars()...)
+			} else if sm, ok := module.(*SystemModules); ok {
+				// A system modules dependency has been added to the bootclasspath
+				// so add its libs to the bootclasspath.
+				deps.bootClasspath = append(deps.bootClasspath, sm.headerJars...)
 			} else {
 				panic(fmt.Errorf("unknown dependency %q for %q", otherName, ctx.ModuleName()))
 			}
@@ -1148,6 +1182,7 @@ type Droidstubs struct {
 	checkCurrentApiTimestamp      android.WritablePath
 	updateCurrentApiTimestamp     android.WritablePath
 	checkLastReleasedApiTimestamp android.WritablePath
+	apiLintTimestamp              android.WritablePath
 
 	checkNullabilityWarningsTimestamp android.WritablePath
 
@@ -1158,6 +1193,9 @@ type Droidstubs struct {
 
 	jdiffDocZip      android.WritablePath
 	jdiffStubsSrcJar android.WritablePath
+
+	metadataZip android.WritablePath
+	metadataDir android.WritablePath
 }
 
 // droidstubs passes sources files through Metalava to generate stub .java files that only contain the API to be
@@ -1269,7 +1307,8 @@ func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuil
 	}
 
 	if Bool(d.properties.Write_sdk_values) {
-		cmd.FlagWithArg("--sdk-values ", android.PathForModuleOut(ctx, "out").String())
+		d.metadataDir = android.PathForModuleOut(ctx, "metadata")
+		cmd.FlagWithArg("--sdk-values ", d.metadataDir.String())
 	}
 
 	if Bool(d.properties.Create_doc_stubs) {
@@ -1476,6 +1515,18 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		FlagWithOutput("-o ", d.Javadoc.stubsSrcJar).
 		FlagWithArg("-C ", stubsDir.String()).
 		FlagWithArg("-D ", stubsDir.String())
+
+	if Bool(d.properties.Write_sdk_values) {
+		d.metadataZip = android.PathForModuleOut(ctx, ctx.ModuleName()+"-metadata.zip")
+		rule.Command().
+			BuiltTool(ctx, "soong_zip").
+			Flag("-write_if_changed").
+			Flag("-d").
+			FlagWithOutput("-o ", d.metadataZip).
+			FlagWithArg("-C ", d.metadataDir.String()).
+			FlagWithArg("-D ", d.metadataDir.String())
+	}
+
 	rule.Restat()
 
 	zipSyncCleanupCmd(rule, srcJarDir)
@@ -1483,6 +1534,57 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	rule.Build(pctx, ctx, "metalava", "metalava")
 
 	// Create rule for apicheck
+
+	if BoolDefault(d.properties.Check_api.Api_lint.Enabled, false) && !ctx.Config().IsPdkBuild() {
+		rule := android.NewRuleBuilder()
+		rule.Command().Text("( true")
+
+		srcJarDir := android.PathForModuleOut(ctx, "api_lint", "srcjars")
+		srcJarList := zipSyncCmd(ctx, rule, srcJarDir, d.Javadoc.srcJars)
+
+		cmd := metalavaCmd(ctx, rule, javaVersion, d.Javadoc.srcFiles, srcJarList,
+			deps.bootClasspath, deps.classpath, d.Javadoc.sourcepaths)
+
+		cmd.Flag(d.Javadoc.args).Implicits(d.Javadoc.argFiles)
+
+		newSince := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.New_since)
+		if newSince.Valid() {
+			cmd.FlagWithInput("--api-lint ", newSince.Path())
+		} else {
+			cmd.Flag("--api-lint")
+		}
+
+		d.inclusionAnnotationsFlags(ctx, cmd)
+		d.mergeAnnoDirFlags(ctx, cmd)
+
+		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.Baseline_file)
+		updatedBaselineOutput := android.PathForModuleOut(ctx, "api_lint_baseline.txt")
+		d.apiLintTimestamp = android.PathForModuleOut(ctx, "api_lint.timestamp")
+
+		if baselineFile.Valid() {
+			cmd.FlagWithInput("--baseline ", baselineFile.Path())
+			cmd.FlagWithOutput("--update-baseline ", updatedBaselineOutput)
+		}
+
+		zipSyncCleanupCmd(rule, srcJarDir)
+
+		msg := fmt.Sprintf(`\n******************************\n`+
+			`Your API changes are triggering API Lint warnings or errors.\n\n`+
+			`To make these errors go away, you have two choices:\n`+
+			`   1. You can suppress the errors with @SuppressLint(\"<id>\").\n\n`+
+			`   2. You can update the baseline by executing the following command:\n`+
+			`         cp \"$PWD/%s\" \"$PWD/%s\"\n\n`+
+			`******************************\n`, updatedBaselineOutput, baselineFile.Path())
+		rule.Command().
+			Text("touch").Output(d.apiLintTimestamp).
+			Text(") || (").
+			Text("echo").Flag("-e").Flag(`"` + msg + `"`).
+			Text("; exit 38").
+			Text(")")
+
+		rule.Build(pctx, ctx, "metalavaApiLint", "metalava API lint")
+
+	}
 
 	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") &&
 		!ctx.Config().IsPdkBuild() {

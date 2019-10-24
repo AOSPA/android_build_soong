@@ -190,6 +190,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			name: "crtbegin_so",
 			recovery_available: true,
 			vendor_available: true,
+			stl: "none",
 		}
 
 		cc_object {
@@ -208,6 +209,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			name: "crtend_so",
 			recovery_available: true,
 			vendor_available: true,
+			stl: "none",
 		}
 
 		cc_object {
@@ -239,6 +241,7 @@ func CreateTestContext(bp string, fs map[string][]byte,
 	os android.OsType) *android.TestContext {
 
 	ctx := android.NewTestArchContext()
+	ctx.RegisterModuleType("cc_defaults", android.ModuleFactoryAdaptor(defaultsFactory))
 	ctx.RegisterModuleType("cc_binary", android.ModuleFactoryAdaptor(BinaryFactory))
 	ctx.RegisterModuleType("cc_binary_host", android.ModuleFactoryAdaptor(binaryHostFactory))
 	ctx.RegisterModuleType("cc_fuzz", android.ModuleFactoryAdaptor(FuzzFactory))
@@ -264,6 +267,7 @@ func CreateTestContext(bp string, fs map[string][]byte,
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.TopDown("double_loadable", checkDoubleLoadableLibraries).Parallel()
 	})
+	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	ctx.RegisterSingletonType("vndk-snapshot", android.SingletonFactoryAdaptor(VndkSnapshotSingleton))
 
 	// add some modules that are required by the compiler and/or linker
@@ -274,6 +278,7 @@ func CreateTestContext(bp string, fs map[string][]byte,
 		"foo.c":       nil,
 		"foo.lds":     nil,
 		"bar.c":       nil,
+		"baz.c":       nil,
 		"baz.o":       nil,
 		"a.proto":     nil,
 		"b.aidl":      nil,

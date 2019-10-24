@@ -100,18 +100,9 @@ func GatherRequiredDepsForTest() string {
 			system_modules: "core-platform-api-stubs-system-modules",
 			installable: true,
 		}
-
-		java_library {
-			name: "telephony-common",
-			srcs: ["a.java"],
-			sdk_version: "none",
-			system_modules: "core-platform-api-stubs-system-modules",
-			installable: true,
-		}
 	`
 
 	systemModules := []string{
-		"core-system-modules",
 		"core-current-stubs-system-modules",
 		"core-platform-api-stubs-system-modules",
 		"android_stubs_current_system_modules",
@@ -122,7 +113,13 @@ func GatherRequiredDepsForTest() string {
 	for _, extra := range systemModules {
 		bp += fmt.Sprintf(`
 			java_system_modules {
-				name: "%s",
+				name: "%[1]s",
+				libs: ["%[1]s-lib"],
+			}
+			java_library {
+				name: "%[1]s-lib",
+				sdk_version: "none",
+				system_modules: "none",
 			}
 		`, extra)
 	}

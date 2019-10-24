@@ -115,10 +115,6 @@ func init() {
 		// TODO: can we remove this now?
 		"-Wno-reserved-id-macro",
 
-		// Disable overly aggressive warning for format strings.
-		// Bug: 20148343
-		"-Wno-format-pedantic",
-
 		// Workaround for ccache with clang.
 		// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
 		"-Wno-unused-command-line-argument",
@@ -167,10 +163,6 @@ func init() {
 		// new warnings are fixed.
 		"-Wno-tautological-constant-compare",
 		"-Wno-tautological-type-limit-compare",
-
-		// Disable c++98-specific warning since Android is not concerned with C++98
-		// compatibility.
-		"-Wno-c++98-compat-extra-semi",
 	}, " "))
 
 	// Extra cflags for projects under external/ directory to disable warnings that are infeasible

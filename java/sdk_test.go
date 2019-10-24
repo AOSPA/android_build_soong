@@ -124,7 +124,7 @@ func TestClasspath(t *testing.T) {
 			name:          "nostdlib system_modules",
 			properties:    `sdk_version: "none", system_modules: "core-platform-api-stubs-system-modules"`,
 			system:        "core-platform-api-stubs-system-modules",
-			bootclasspath: []string{`""`},
+			bootclasspath: []string{"core-platform-api-stubs-system-modules-lib"},
 			classpath:     []string{},
 		},
 		{
@@ -206,7 +206,7 @@ func TestClasspath(t *testing.T) {
 				moduleType = testcase.moduleType
 			}
 
-			bp := moduleType + ` {
+			props := `
 				name: "foo",
 				srcs: ["a.java"],
 				target: {
@@ -214,6 +214,10 @@ func TestClasspath(t *testing.T) {
 						srcs: ["bar-doc/IFoo.aidl"],
 					},
 				},
+				`
+			bp := moduleType + " {" + props + testcase.properties + `
+			}`
+			bpJava8 := moduleType + " {" + props + `java_version: "1.8",
 				` + testcase.properties + `
 			}`
 
@@ -233,38 +237,63 @@ func TestClasspath(t *testing.T) {
 			bootclasspath := convertModulesToPaths(testcase.bootclasspath)
 			classpath := convertModulesToPaths(testcase.classpath)
 
-			bc := strings.Join(bootclasspath, ":")
-			if bc != "" {
-				bc = "-bootclasspath " + bc
+			bc := ""
+			var bcDeps []string
+			if len(bootclasspath) > 0 {
+				bc = "-bootclasspath " + strings.Join(bootclasspath, ":")
+				if bootclasspath[0] != `""` {
+					bcDeps = bootclasspath
+				}
 			}
 
-			c := strings.Join(classpath, ":")
-			if c != "" {
-				c = "-classpath " + c
+			c := ""
+			if len(classpath) > 0 {
+				c = "-classpath " + strings.Join(classpath, ":")
 			}
+
 			system := ""
+			var systemDeps []string
 			if testcase.system == "none" {
 				system = "--system=none"
+			} else if testcase.system == "bootclasspath" {
+				system = bc
+				systemDeps = bcDeps
 			} else if testcase.system != "" {
 				system = "--system=" + filepath.Join(buildDir, ".intermediates", testcase.system, "android_common", "system")
+				// The module-relative parts of these paths are hardcoded in system_modules.go:
+				systemDeps = []string{
+					filepath.Join(buildDir, ".intermediates", testcase.system, "android_common", "system", "lib", "modules"),
+					filepath.Join(buildDir, ".intermediates", testcase.system, "android_common", "system", "lib", "jrt-fs.jar"),
+					filepath.Join(buildDir, ".intermediates", testcase.system, "android_common", "system", "release"),
+				}
 			}
 
-			checkClasspath := func(t *testing.T, ctx *android.TestContext) {
-				javac := ctx.ModuleForTests("foo", variant).Rule("javac")
+			checkClasspath := func(t *testing.T, ctx *android.TestContext, isJava8 bool) {
+				foo := ctx.ModuleForTests("foo", variant)
+				javac := foo.Rule("javac")
+				var deps []string
+
+				aidl := foo.MaybeRule("aidl")
+				if aidl.Rule != nil {
+					deps = append(deps, aidl.Output.String())
+				}
 
 				got := javac.Args["bootClasspath"]
-				if got != bc {
-					t.Errorf("bootclasspath expected %q != got %q", bc, got)
+				expected := ""
+				if isJava8 {
+					expected = bc
+					deps = append(deps, bcDeps...)
+				} else {
+					expected = system
+					deps = append(deps, systemDeps...)
+				}
+				if got != expected {
+					t.Errorf("bootclasspath expected %q != got %q", expected, got)
 				}
 
 				got = javac.Args["classpath"]
 				if got != c {
 					t.Errorf("classpath expected %q != got %q", c, got)
-				}
-
-				var deps []string
-				if len(bootclasspath) > 0 && bootclasspath[0] != `""` {
-					deps = append(deps, bootclasspath...)
 				}
 				deps = append(deps, classpath...)
 
@@ -273,8 +302,31 @@ func TestClasspath(t *testing.T) {
 				}
 			}
 
+			// Test with legacy javac -source 1.8 -target 1.8
 			t.Run("Java language level 8", func(t *testing.T) {
-				// Test default javac -source 1.8 -target 1.8
+				config := testConfig(nil)
+				if testcase.unbundled {
+					config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
+				}
+				if testcase.pdk {
+					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
+				}
+				ctx := testContext(bpJava8, nil)
+				run(t, ctx, config)
+
+				checkClasspath(t, ctx, true /* isJava8 */)
+
+				if testcase.host != android.Host {
+					aidl := ctx.ModuleForTests("foo", variant).Rule("aidl")
+
+					if g, w := aidl.RuleParams.Command, testcase.aidl+" -I."; !strings.Contains(g, w) {
+						t.Errorf("want aidl command to contain %q, got %q", w, g)
+					}
+				}
+			})
+
+			// Test with default javac -source 9 -target 9
+			t.Run("Java language level 9", func(t *testing.T) {
 				config := testConfig(nil)
 				if testcase.unbundled {
 					config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
@@ -285,46 +337,19 @@ func TestClasspath(t *testing.T) {
 				ctx := testContext(bp, nil)
 				run(t, ctx, config)
 
-				checkClasspath(t, ctx)
+				checkClasspath(t, ctx, false /* isJava8 */)
 
 				if testcase.host != android.Host {
 					aidl := ctx.ModuleForTests("foo", variant).Rule("aidl")
 
-					aidlFlags := aidl.Args["aidlFlags"]
-					// Trim trailing "-I." to avoid having to specify it in every test
-					aidlFlags = strings.TrimSpace(strings.TrimSuffix(aidlFlags, "-I."))
-
-					if g, w := aidlFlags, testcase.aidl; g != w {
-						t.Errorf("want aidl flags %q, got %q", w, g)
+					if g, w := aidl.RuleParams.Command, testcase.aidl+" -I."; !strings.Contains(g, w) {
+						t.Errorf("want aidl command to contain %q, got %q", w, g)
 					}
 				}
 			})
 
-			// Test again with javac -source 9 -target 9
-			t.Run("Java language level 9", func(t *testing.T) {
-				config := testConfig(map[string]string{"EXPERIMENTAL_JAVA_LANGUAGE_LEVEL_9": "true"})
-				if testcase.unbundled {
-					config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
-				}
-				if testcase.pdk {
-					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
-				}
-				ctx := testContext(bp, nil)
-				run(t, ctx, config)
-
-				javac := ctx.ModuleForTests("foo", variant).Rule("javac")
-				got := javac.Args["bootClasspath"]
-				expected := system
-				if testcase.system == "bootclasspath" {
-					expected = bc
-				}
-				if got != expected {
-					t.Errorf("bootclasspath expected %q != got %q", expected, got)
-				}
-			})
-
-			// Test again with PLATFORM_VERSION_CODENAME=REL
-			t.Run("REL", func(t *testing.T) {
+			// Test again with PLATFORM_VERSION_CODENAME=REL, javac -source 8 -target 8
+			t.Run("REL + Java language level 8", func(t *testing.T) {
 				config := testConfig(nil)
 				config.TestProductVariables.Platform_sdk_codename = proptools.StringPtr("REL")
 				config.TestProductVariables.Platform_sdk_final = proptools.BoolPtr(true)
@@ -335,11 +360,13 @@ func TestClasspath(t *testing.T) {
 				if testcase.pdk {
 					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
 				}
-				ctx := testContext(bp, nil)
+				ctx := testContext(bpJava8, nil)
 				run(t, ctx, config)
 
-				checkClasspath(t, ctx)
+				checkClasspath(t, ctx, true /* isJava8 */)
 			})
+
+			// TODO(b/142896162): Add a with PLATFORM_VERSION_CODENAME=REL, javac -source 9 -target 9, when that all works.
 		})
 	}
 

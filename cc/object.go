@@ -52,8 +52,9 @@ type ObjectLinkerProperties struct {
 // input to a cc_genrule module.
 func ObjectFactory() android.Module {
 	module := newBaseModule(android.HostAndDeviceSupported, android.MultilibBoth)
+	module.sanitize = &sanitize{}
 	module.linker = &objectLinker{
-		baseLinker: NewBaseLinker(nil),
+		baseLinker: NewBaseLinker(module.sanitize),
 	}
 	module.compiler = NewBaseCompiler()
 
@@ -103,7 +104,7 @@ func (object *objectLinker) link(ctx ModuleContext,
 	var outputFile android.Path
 	builderFlags := flagsToBuilderFlags(flags)
 
-	if len(objs.objFiles) == 1 {
+	if len(objs.objFiles) == 1 && String(object.Properties.Linker_script) == "" {
 		outputFile = objs.objFiles[0]
 
 		if String(object.Properties.Prefix_symbols) != "" {

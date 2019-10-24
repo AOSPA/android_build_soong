@@ -45,6 +45,7 @@ bootstrap_go_package {
         "android/api_levels.go",
         "android/arch.go",
         "android/config.go",
+        "android/csuite_config.go",
         "android/defaults.go",
         "android/defs.go",
         "android/expand.go",
@@ -67,6 +68,7 @@ bootstrap_go_package {
         "android/proto.go",
         "android/register.go",
         "android/rule_builder.go",
+        "android/sdk.go",
         "android/sh_binary.go",
         "android/singleton.go",
         "android/testing.go",
@@ -84,6 +86,7 @@ bootstrap_go_package {
         "android/androidmk_test.go",
         "android/arch_test.go",
         "android/config_test.go",
+        "android/csuite_config_test.go",
         "android/expand_test.go",
         "android/module_test.go",
         "android/mutator_test.go",
@@ -171,6 +174,7 @@ bootstrap_go_package {
         "cc/vndk_prebuilt.go",
         "cc/xom.go",
 
+        "cc/cflag_artifacts.go",
         "cc/cmakelists.go",
         "cc/compdb.go",
         "cc/compiler.go",
@@ -292,6 +296,7 @@ bootstrap_go_package {
         "java/support_libraries.go",
         "java/system_modules.go",
         "java/testing.go",
+        "java/tradefed.go",
     ],
     testSrcs: [
         "java/androidmk_test.go",
@@ -303,7 +308,6 @@ bootstrap_go_package {
         "java/jdeps_test.go",
         "java/kotlin_test.go",
         "java/plugin_test.go",
-        "java/robolectric_test.go",
         "java/sdk_test.go",
     ],
     pluginFor: ["soong_build"],
@@ -332,9 +336,12 @@ bootstrap_go_package {
         "soong-cc-config",
     ],
     srcs: [
+        "rust/config/arm_device.go",
+        "rust/config/arm64_device.go",
         "rust/config/global.go",
         "rust/config/toolchain.go",
         "rust/config/whitelist.go",
+        "rust/config/x86_darwin_host.go",
         "rust/config/x86_linux_host.go",
         "rust/config/x86_64_device.go",
     ],
@@ -471,6 +478,27 @@ bootstrap_go_package {
     ],
     testSrcs: [
         "sysprop/sysprop_test.go",
+    ],
+    pluginFor: ["soong_build"],
+}
+
+bootstrap_go_package {
+    name: "soong-sdk",
+    pkgPath: "android/soong/sdk",
+    deps: [
+        "blueprint",
+        "soong",
+        "soong-android",
+        "soong-apex",
+        "soong-cc",
+        "soong-java",
+    ],
+    srcs: [
+        "sdk/sdk.go",
+        "sdk/update.go",
+    ],
+    testSrcs: [
+        "sdk/sdk_test.go",
     ],
     pluginFor: ["soong_build"],
 }

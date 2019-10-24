@@ -17,6 +17,8 @@ package build
 import (
 	"bytes"
 	"fmt"
+	"io/ioutil"
+	"os"
 	"strings"
 
 	"android/soong/ui/metrics"
@@ -40,6 +42,7 @@ func DumpMakeVars(ctx Context, config Config, goals, vars []string) (map[string]
 	soongUiVars := map[string]func() string{
 		"OUT_DIR":  func() string { return config.OutDir() },
 		"DIST_DIR": func() string { return config.DistDir() },
+		"TMPDIR":   func() string { return absPath(ctx, config.TempDir()) },
 	}
 
 	makeVars := make([]string, 0, len(vars))
@@ -51,7 +54,17 @@ func DumpMakeVars(ctx Context, config Config, goals, vars []string) (map[string]
 
 	var ret map[string]string
 	if len(makeVars) > 0 {
-		var err error
+		tmpDir, err := ioutil.TempDir("", "dumpvars")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// It's not safe to use the same TMPDIR as the build, as that can be removed.
+		config.Environment().Set("TMPDIR", tmpDir)
+
+		SetupLitePath(ctx, config)
+
 		ret, err = dumpMakeVars(ctx, config, goals, makeVars, false)
 		if err != nil {
 			return ret, err
@@ -208,6 +221,8 @@ func runMakeProductConfig(ctx Context, config Config) {
 
 		"DEFAULT_WARNING_BUILD_MODULE_TYPES",
 		"DEFAULT_ERROR_BUILD_MODULE_TYPES",
+		"BUILD_BROKEN_PREBUILT_ELF_FILES",
+		"BUILD_BROKEN_TREBLE_SYSPROP_NEVERALLOW",
 		"BUILD_BROKEN_USES_BUILD_AUX_EXECUTABLE",
 		"BUILD_BROKEN_USES_BUILD_AUX_STATIC_LIBRARY",
 		"BUILD_BROKEN_USES_BUILD_COPY_HEADERS",

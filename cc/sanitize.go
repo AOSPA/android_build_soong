@@ -465,13 +465,18 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 	if Bool(sanitize.Properties.Sanitize.Fuzzer) {
 		flags.CFlags = append(flags.CFlags, "-fsanitize=fuzzer-no-link")
-		flags.LdFlags = append(flags.LdFlags, "-fsanitize=fuzzer-no-link")
 
 		// TODO(b/131771163): LTO and Fuzzer support is mutually incompatible.
 		_, flags.LdFlags = removeFromList("-flto", flags.LdFlags)
 		_, flags.CFlags = removeFromList("-flto", flags.CFlags)
 		flags.LdFlags = append(flags.LdFlags, "-fno-lto")
 		flags.CFlags = append(flags.CFlags, "-fno-lto")
+
+		// TODO(b/142430592): Upstream linker scripts for sanitizer runtime libraries
+		// discard the sancov_lowest_stack symbol, because it's emulated TLS (and thus
+		// doesn't match the linker script due to the "__emutls_v." prefix).
+		flags.LdFlags = append(flags.LdFlags, "-fno-sanitize-coverage=stack-depth")
+		flags.CFlags = append(flags.CFlags, "-fno-sanitize-coverage=stack-depth")
 
 		// TODO(b/133876586): Experimental PM breaks sanitizer coverage.
 		_, flags.CFlags = removeFromList("-fexperimental-new-pass-manager", flags.CFlags)
@@ -674,7 +679,7 @@ func (sanitize *sanitize) isSanitizerEnabled(t sanitizerType) bool {
 
 func isSanitizableDependencyTag(tag blueprint.DependencyTag) bool {
 	t, ok := tag.(dependencyTag)
-	return ok && t.library || t == reuseObjTag
+	return ok && t.library || t == reuseObjTag || t == objDepTag
 }
 
 // Propagate sanitizer requirements down from binaries
@@ -860,7 +865,8 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 			} else {
 				runtimeLibrary = config.ScudoRuntimeLibrary(toolchain)
 			}
-		} else if len(diagSanitizers) > 0 || c.sanitize.Properties.UbsanRuntimeDep {
+		} else if len(diagSanitizers) > 0 || c.sanitize.Properties.UbsanRuntimeDep ||
+			Bool(c.sanitize.Properties.Sanitize.Fuzzer) {
 			runtimeLibrary = config.UndefinedBehaviorSanitizerRuntimeLibrary(toolchain)
 		}
 
@@ -878,18 +884,16 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 			// added to libFlags and LOCAL_SHARED_LIBRARIES by cc.Module
 			if c.staticBinary() {
 				// static executable gets static runtime libs
-				mctx.AddFarVariationDependencies([]blueprint.Variation{
+				mctx.AddFarVariationDependencies(append(mctx.Target().Variations(), []blueprint.Variation{
 					{Mutator: "link", Variation: "static"},
 					{Mutator: "image", Variation: c.imageVariation()},
-					{Mutator: "arch", Variation: mctx.Target().String()},
-				}, staticDepTag, runtimeLibrary)
+				}...), staticDepTag, runtimeLibrary)
 			} else if !c.static() && !c.header() {
 				// dynamic executable and shared libs get shared runtime libs
-				mctx.AddFarVariationDependencies([]blueprint.Variation{
+				mctx.AddFarVariationDependencies(append(mctx.Target().Variations(), []blueprint.Variation{
 					{Mutator: "link", Variation: "shared"},
 					{Mutator: "image", Variation: c.imageVariation()},
-					{Mutator: "arch", Variation: mctx.Target().String()},
-				}, earlySharedDepTag, runtimeLibrary)
+				}...), earlySharedDepTag, runtimeLibrary)
 			}
 			// static lib does not have dependency to the runtime library. The
 			// dependency will be added to the executables or shared libs using
