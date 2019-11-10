@@ -72,6 +72,8 @@ func (mod *Module) AndroidMk() android.AndroidMkData {
 
 	mod.subAndroidMk(&ret, mod.compiler)
 
+	ret.SubName += mod.Properties.SubName
+
 	return ret
 }
 
@@ -85,6 +87,11 @@ func (binary *binaryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.Andr
 	})
 }
 
+func (test *testBinaryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
+	test.binaryDecorator.AndroidMk(ctx, ret)
+	ret.SubName = "_" + String(test.baseCompiler.Properties.Stem)
+}
+
 func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
 	ctx.subAndroidMk(ret, library.baseCompiler)
 
@@ -92,7 +99,12 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 		ret.Class = "RLIB_LIBRARIES"
 	} else if library.dylib() {
 		ret.Class = "DYLIB_LIBRARIES"
+	} else if library.static() {
+		ret.Class = "STATIC_LIBRARIES"
+	} else if library.shared() {
+		ret.Class = "SHARED_LIBRARIES"
 	}
+
 	ret.DistFile = library.distFile
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		if !library.rlib() {

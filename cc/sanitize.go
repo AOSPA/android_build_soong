@@ -678,8 +678,8 @@ func (sanitize *sanitize) isSanitizerEnabled(t sanitizerType) bool {
 }
 
 func isSanitizableDependencyTag(tag blueprint.DependencyTag) bool {
-	t, ok := tag.(dependencyTag)
-	return ok && t.library || t == reuseObjTag || t == objDepTag
+	t, ok := tag.(DependencyTag)
+	return ok && t.Library || t == reuseObjTag || t == objDepTag
 }
 
 // Propagate sanitizer requirements down from binaries
@@ -848,12 +848,14 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 
 		// Determine the runtime library required
 		runtimeLibrary := ""
+		var extraStaticDeps []string
 		toolchain := c.toolchain(mctx)
 		if Bool(c.sanitize.Properties.Sanitize.Address) {
 			runtimeLibrary = config.AddressSanitizerRuntimeLibrary(toolchain)
 		} else if Bool(c.sanitize.Properties.Sanitize.Hwaddress) {
 			if c.staticBinary() {
 				runtimeLibrary = config.HWAddressSanitizerStaticLibrary(toolchain)
+				extraStaticDeps = []string{"libdl"}
 			} else {
 				runtimeLibrary = config.HWAddressSanitizerRuntimeLibrary(toolchain)
 			}
@@ -871,7 +873,7 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 		}
 
 		if mctx.Device() && runtimeLibrary != "" {
-			if inList(runtimeLibrary, *llndkLibraries(mctx.Config())) && !c.static() && c.useVndk() {
+			if inList(runtimeLibrary, *llndkLibraries(mctx.Config())) && !c.static() && c.UseVndk() {
 				runtimeLibrary = runtimeLibrary + llndkLibrarySuffix
 			}
 
@@ -887,7 +889,7 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 				mctx.AddFarVariationDependencies(append(mctx.Target().Variations(), []blueprint.Variation{
 					{Mutator: "link", Variation: "static"},
 					{Mutator: "image", Variation: c.imageVariation()},
-				}...), staticDepTag, runtimeLibrary)
+				}...), StaticDepTag, append([]string{runtimeLibrary}, extraStaticDeps...)...)
 			} else if !c.static() && !c.header() {
 				// dynamic executable and shared libs get shared runtime libs
 				mctx.AddFarVariationDependencies(append(mctx.Target().Variations(), []blueprint.Variation{
@@ -961,7 +963,7 @@ func sanitizerMutator(t sanitizerType) func(android.BottomUpMutatorContext) {
 						if t == cfi {
 							appendStringSync(c.Name(), cfiStaticLibs(mctx.Config()), &cfiStaticLibsMutex)
 						} else if t == hwasan {
-							if c.useVndk() {
+							if c.UseVndk() {
 								appendStringSync(c.Name(), hwasanVendorStaticLibs(mctx.Config()),
 									&hwasanStaticLibsMutex)
 							} else {

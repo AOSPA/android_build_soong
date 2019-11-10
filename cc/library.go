@@ -229,8 +229,8 @@ func LibraryHeaderFactory() android.Module {
 type flagExporter struct {
 	Properties FlagExporterProperties
 
-	dirs       []string
-	systemDirs []string
+	dirs       android.Paths
+	systemDirs android.Paths
 	flags      []string
 	deps       android.Paths
 }
@@ -244,18 +244,18 @@ func (f *flagExporter) exportedIncludes(ctx ModuleContext) android.Paths {
 }
 
 func (f *flagExporter) exportIncludes(ctx ModuleContext) {
-	f.dirs = append(f.dirs, f.exportedIncludes(ctx).Strings()...)
+	f.dirs = append(f.dirs, f.exportedIncludes(ctx)...)
 }
 
 func (f *flagExporter) exportIncludesAsSystem(ctx ModuleContext) {
-	f.systemDirs = append(f.systemDirs, f.exportedIncludes(ctx).Strings()...)
+	f.systemDirs = append(f.systemDirs, f.exportedIncludes(ctx)...)
 }
 
-func (f *flagExporter) reexportDirs(dirs ...string) {
+func (f *flagExporter) reexportDirs(dirs ...android.Path) {
 	f.dirs = append(f.dirs, dirs...)
 }
 
-func (f *flagExporter) reexportSystemDirs(dirs ...string) {
+func (f *flagExporter) reexportSystemDirs(dirs ...android.Path) {
 	f.systemDirs = append(f.systemDirs, dirs...)
 }
 
@@ -273,11 +273,11 @@ func (f *flagExporter) reexportDeps(deps ...android.Path) {
 	f.deps = append(f.deps, deps...)
 }
 
-func (f *flagExporter) exportedDirs() []string {
+func (f *flagExporter) exportedDirs() android.Paths {
 	return f.dirs
 }
 
-func (f *flagExporter) exportedSystemDirs() []string {
+func (f *flagExporter) exportedSystemDirs() android.Paths {
 	return f.systemDirs
 }
 
@@ -290,8 +290,8 @@ func (f *flagExporter) exportedDeps() android.Paths {
 }
 
 type exportedFlagsProducer interface {
-	exportedDirs() []string
-	exportedSystemDirs() []string
+	exportedDirs() android.Paths
+	exportedSystemDirs() android.Paths
 	exportedFlags() []string
 	exportedDeps() android.Paths
 }
@@ -599,7 +599,11 @@ func (library *libraryDecorator) getLibName(ctx BaseModuleContext) string {
 	name += suffix
 
 	if ctx.isVndkExt() {
-		name = ctx.getVndkExtendsModuleName()
+		// vndk-ext lib should have the same name with original lib
+		ctx.VisitDirectDepsWithTag(vndkExtDepTag, func(module android.Module) {
+			originalName := module.(*Module).outputFile.Path()
+			name = strings.TrimSuffix(originalName.Base(), originalName.Ext())
+		})
 	}
 
 	if ctx.Host() && Bool(library.Properties.Unique_host_soname) {
@@ -954,7 +958,7 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 
 	if Bool(library.Properties.Aidl.Export_aidl_headers) {
 		if library.baseCompiler.hasSrcExt(".aidl") {
-			dir := android.PathForModuleGen(ctx, "aidl").String()
+			dir := android.PathForModuleGen(ctx, "aidl")
 			library.reexportDirs(dir)
 			library.reexportDeps(library.baseCompiler.pathDeps...) // TODO: restrict to aidl deps
 		}
@@ -962,25 +966,25 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 
 	if Bool(library.Properties.Proto.Export_proto_headers) {
 		if library.baseCompiler.hasSrcExt(".proto") {
-			includes := []string{}
+			var includes android.Paths
 			if flags.proto.CanonicalPathFromRoot {
-				includes = append(includes, flags.proto.SubDir.String())
+				includes = append(includes, flags.proto.SubDir)
 			}
-			includes = append(includes, flags.proto.Dir.String())
+			includes = append(includes, flags.proto.Dir)
 			library.reexportDirs(includes...)
 			library.reexportDeps(library.baseCompiler.pathDeps...) // TODO: restrict to proto deps
 		}
 	}
 
 	if library.baseCompiler.hasSrcExt(".sysprop") {
-		dir := android.PathForModuleGen(ctx, "sysprop", "include").String()
+		dir := android.PathForModuleGen(ctx, "sysprop", "include")
 		if library.Properties.Sysprop.Platform != nil {
 			isProduct := ctx.ProductSpecific() && !ctx.useVndk()
 			isVendor := ctx.useVndk()
 			isOwnerPlatform := Bool(library.Properties.Sysprop.Platform)
 
 			if !ctx.inRecovery() && (isProduct || (isOwnerPlatform == isVendor)) {
-				dir = android.PathForModuleGen(ctx, "sysprop/public", "include").String()
+				dir = android.PathForModuleGen(ctx, "sysprop/public", "include")
 			}
 		}
 
@@ -1223,45 +1227,59 @@ func reuseStaticLibrary(mctx android.BottomUpMutatorContext, static, shared *Mod
 }
 
 func LinkageMutator(mctx android.BottomUpMutatorContext) {
+	cc_prebuilt := false
 	if m, ok := mctx.Module().(*Module); ok && m.linker != nil {
-		switch library := m.linker.(type) {
-		case prebuiltLibraryInterface:
-			// Always create both the static and shared variants for prebuilt libraries, and then disable the one
-			// that is not being used.  This allows them to share the name of a cc_library module, which requires that
-			// all the variants of the cc_library also exist on the prebuilt.
-			modules := mctx.CreateLocalVariations("static", "shared")
-			static := modules[0].(*Module)
-			shared := modules[1].(*Module)
+		_, cc_prebuilt = m.linker.(prebuiltLibraryInterface)
+	}
+	if cc_prebuilt {
+		library := mctx.Module().(*Module).linker.(prebuiltLibraryInterface)
 
-			static.linker.(prebuiltLibraryInterface).setStatic()
-			shared.linker.(prebuiltLibraryInterface).setShared()
+		// Always create both the static and shared variants for prebuilt libraries, and then disable the one
+		// that is not being used.  This allows them to share the name of a cc_library module, which requires that
+		// all the variants of the cc_library also exist on the prebuilt.
+		modules := mctx.CreateLocalVariations("static", "shared")
+		static := modules[0].(*Module)
+		shared := modules[1].(*Module)
 
-			if !library.buildStatic() {
-				static.linker.(prebuiltLibraryInterface).disablePrebuilt()
-			}
-			if !library.buildShared() {
-				shared.linker.(prebuiltLibraryInterface).disablePrebuilt()
-			}
+		static.linker.(prebuiltLibraryInterface).setStatic()
+		shared.linker.(prebuiltLibraryInterface).setShared()
 
-		case libraryInterface:
-			if library.buildStatic() && library.buildShared() {
-				modules := mctx.CreateLocalVariations("static", "shared")
-				static := modules[0].(*Module)
-				shared := modules[1].(*Module)
-
-				static.linker.(libraryInterface).setStatic()
-				shared.linker.(libraryInterface).setShared()
-
-				reuseStaticLibrary(mctx, static, shared)
-
-			} else if library.buildStatic() {
-				modules := mctx.CreateLocalVariations("static")
-				modules[0].(*Module).linker.(libraryInterface).setStatic()
-			} else if library.buildShared() {
-				modules := mctx.CreateLocalVariations("shared")
-				modules[0].(*Module).linker.(libraryInterface).setShared()
-			}
+		if !library.buildStatic() {
+			static.linker.(prebuiltLibraryInterface).disablePrebuilt()
 		}
+		if !library.buildShared() {
+			shared.linker.(prebuiltLibraryInterface).disablePrebuilt()
+		}
+	} else if library, ok := mctx.Module().(LinkableInterface); ok && library.CcLibraryInterface() {
+		if library.BuildStaticVariant() && library.BuildSharedVariant() {
+			variations := []string{"static", "shared"}
+
+			// Non-cc.Modules need an empty variant for their mutators.
+			if _, ok := mctx.Module().(*Module); !ok {
+				variations = append(variations, "")
+			}
+
+			modules := mctx.CreateLocalVariations(variations...)
+			static := modules[0].(LinkableInterface)
+			shared := modules[1].(LinkableInterface)
+
+			static.SetStatic()
+			shared.SetShared()
+
+			if _, ok := library.(*Module); ok {
+				reuseStaticLibrary(mctx, static.(*Module), shared.(*Module))
+			}
+		} else if library.BuildStaticVariant() {
+			modules := mctx.CreateLocalVariations("static")
+			modules[0].(LinkableInterface).SetStatic()
+		} else if library.BuildSharedVariant() {
+			modules := mctx.CreateLocalVariations("shared")
+			modules[0].(LinkableInterface).SetShared()
+		} else if _, ok := mctx.Module().(*Module); !ok {
+			// Non-cc.Modules need an empty variant for their mutators.
+			mctx.CreateLocalVariations("")
+		}
+
 	}
 }
 
@@ -1288,11 +1306,10 @@ func latestStubsVersionFor(config android.Config, name string) string {
 // Version mutator splits a module into the mandatory non-stubs variant
 // (which is unnamed) and zero or more stubs variants.
 func VersionMutator(mctx android.BottomUpMutatorContext) {
-	if m, ok := mctx.Module().(*Module); ok && !m.inRecovery() && m.linker != nil {
-		if library, ok := m.linker.(*libraryDecorator); ok && library.buildShared() &&
-			len(library.Properties.Stubs.Versions) > 0 {
+	if library, ok := mctx.Module().(LinkableInterface); ok && !library.InRecovery() {
+		if library.CcLibrary() && library.BuildSharedVariant() && len(library.StubsVersions()) > 0 {
 			versions := []string{}
-			for _, v := range library.Properties.Stubs.Versions {
+			for _, v := range library.StubsVersions() {
 				if _, err := strconv.Atoi(v); err != nil {
 					mctx.PropertyErrorf("versions", "%q is not a number", v)
 				}
@@ -1316,14 +1333,9 @@ func VersionMutator(mctx android.BottomUpMutatorContext) {
 
 			modules := mctx.CreateVariations(versions...)
 			for i, m := range modules {
-				l := m.(*Module).linker.(*libraryDecorator)
 				if versions[i] != "" {
-					l.MutatedProperties.BuildStubs = true
-					l.MutatedProperties.StubsVersion = versions[i]
-					m.(*Module).Properties.HideFromMake = true
-					m.(*Module).sanitize = nil
-					m.(*Module).stl = nil
-					m.(*Module).Properties.PreventInstall = true
+					m.(LinkableInterface).SetBuildStubs()
+					m.(LinkableInterface).SetStubsVersions(versions[i])
 				}
 			}
 		} else {
@@ -1349,7 +1361,7 @@ func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.Modu
 	injectBoringSSLHash := Bool(inject)
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		tag := ctx.OtherModuleDependencyTag(dep)
-		if tag == staticDepTag || tag == staticExportDepTag || tag == wholeStaticDepTag || tag == lateStaticDepTag {
+		if tag == StaticDepTag || tag == staticExportDepTag || tag == wholeStaticDepTag || tag == lateStaticDepTag {
 			if cc, ok := dep.(*Module); ok {
 				if library, ok := cc.linker.(*libraryDecorator); ok {
 					if Bool(library.Properties.Inject_bssl_hash) {
