@@ -147,15 +147,17 @@ type ModuleContext interface {
 	ExpandSource(srcFile, prop string) Path
 	ExpandOptionalSource(srcFile *string, prop string) OptionalPath
 
-	InstallExecutable(installPath OutputPath, name string, srcPath Path, deps ...Path) OutputPath
-	InstallFile(installPath OutputPath, name string, srcPath Path, deps ...Path) OutputPath
-	InstallSymlink(installPath OutputPath, name string, srcPath OutputPath) OutputPath
-	InstallAbsoluteSymlink(installPath OutputPath, name string, absPath string) OutputPath
+	InstallExecutable(installPath InstallPath, name string, srcPath Path, deps ...Path) InstallPath
+	InstallFile(installPath InstallPath, name string, srcPath Path, deps ...Path) InstallPath
+	InstallSymlink(installPath InstallPath, name string, srcPath InstallPath) InstallPath
+	InstallAbsoluteSymlink(installPath InstallPath, name string, absPath string) InstallPath
 	CheckbuildFile(srcPath Path)
 
 	InstallInData() bool
+	InstallInTestcases() bool
 	InstallInSanitizerDir() bool
 	InstallInRecovery() bool
+	InstallInRoot() bool
 	InstallBypassMake() bool
 
 	RequiredModuleNames() []string
@@ -192,8 +194,10 @@ type Module interface {
 	Enabled() bool
 	Target() Target
 	InstallInData() bool
+	InstallInTestcases() bool
 	InstallInSanitizerDir() bool
 	InstallInRecovery() bool
+	InstallInRoot() bool
 	InstallBypassMake() bool
 	SkipInstall()
 	ExportedToMake() bool
@@ -413,6 +417,7 @@ type commonProperties struct {
 	} `android:"arch_variant"`
 
 	// Set by TargetMutator
+	CompileOS           OsType   `blueprint:"mutated"`
 	CompileTarget       Target   `blueprint:"mutated"`
 	CompileMultiTargets []Target `blueprint:"mutated"`
 	CompilePrimary      bool     `blueprint:"mutated"`
@@ -510,8 +515,19 @@ func InitAndroidModule(m Module) {
 
 	m.AddProperties(
 		&base.nameProperties,
-		&base.commonProperties,
-		&base.variableProperties)
+		&base.commonProperties)
+
+	// Allow tests to override the default product variables
+	if base.variableProperties == nil {
+		base.variableProperties = zeroProductVariables
+	}
+
+	// Filter the product variables properties to the ones that exist on this module
+	base.variableProperties = createVariableProperties(m.GetProperties(), base.variableProperties)
+	if base.variableProperties != nil {
+		m.AddProperties(base.variableProperties)
+	}
+
 	base.generalProperties = m.GetProperties()
 	base.customizableProperties = m.GetProperties()
 
@@ -593,7 +609,7 @@ type ModuleBase struct {
 
 	nameProperties          nameProperties
 	commonProperties        commonProperties
-	variableProperties      variableProperties
+	variableProperties      interface{}
 	hostAndDeviceProperties hostAndDeviceProperties
 	generalProperties       []interface{}
 	archProperties          [][]interface{}
@@ -702,12 +718,6 @@ func (m *ModuleBase) visibility() []string {
 	} else {
 		return nil
 	}
-}
-
-func (m *ModuleBase) SetTarget(target Target, multiTargets []Target, primary bool) {
-	m.commonProperties.CompileTarget = target
-	m.commonProperties.CompileMultiTargets = multiTargets
-	m.commonProperties.CompilePrimary = primary
 }
 
 func (m *ModuleBase) Target() Target {
@@ -832,12 +842,20 @@ func (m *ModuleBase) InstallInData() bool {
 	return false
 }
 
+func (m *ModuleBase) InstallInTestcases() bool {
+	return false
+}
+
 func (m *ModuleBase) InstallInSanitizerDir() bool {
 	return false
 }
 
 func (m *ModuleBase) InstallInRecovery() bool {
 	return Bool(m.commonProperties.Recovery)
+}
+
+func (m *ModuleBase) InstallInRoot() bool {
+	return false
 }
 
 func (m *ModuleBase) InstallBypassMake() bool {
@@ -1177,6 +1195,12 @@ func (m *moduleContext) Variable(pctx PackageContext, name, value string) {
 func (m *moduleContext) Rule(pctx PackageContext, name string, params blueprint.RuleParams,
 	argNames ...string) blueprint.Rule {
 
+	if m.config.UseGoma() && params.Pool == nil {
+		// When USE_GOMA=true is set and the rule is not supported by goma, restrict jobs to the
+		// local parallelism value
+		params.Pool = localPool
+	}
+
 	rule := m.bp.Rule(pctx.PackageContext, name, params, argNames...)
 
 	if m.config.captureBuild {
@@ -1504,6 +1528,10 @@ func (m *moduleContext) InstallInData() bool {
 	return m.module.InstallInData()
 }
 
+func (m *moduleContext) InstallInTestcases() bool {
+	return m.module.InstallInTestcases()
+}
+
 func (m *moduleContext) InstallInSanitizerDir() bool {
 	return m.module.InstallInSanitizerDir()
 }
@@ -1512,11 +1540,15 @@ func (m *moduleContext) InstallInRecovery() bool {
 	return m.module.InstallInRecovery()
 }
 
+func (m *moduleContext) InstallInRoot() bool {
+	return m.module.InstallInRoot()
+}
+
 func (m *moduleContext) InstallBypassMake() bool {
 	return m.module.InstallBypassMake()
 }
 
-func (m *moduleContext) skipInstall(fullInstallPath OutputPath) bool {
+func (m *moduleContext) skipInstall(fullInstallPath InstallPath) bool {
 	if m.module.base().commonProperties.SkipInstall {
 		return true
 	}
@@ -1541,18 +1573,18 @@ func (m *moduleContext) skipInstall(fullInstallPath OutputPath) bool {
 	return false
 }
 
-func (m *moduleContext) InstallFile(installPath OutputPath, name string, srcPath Path,
-	deps ...Path) OutputPath {
+func (m *moduleContext) InstallFile(installPath InstallPath, name string, srcPath Path,
+	deps ...Path) InstallPath {
 	return m.installFile(installPath, name, srcPath, Cp, deps)
 }
 
-func (m *moduleContext) InstallExecutable(installPath OutputPath, name string, srcPath Path,
-	deps ...Path) OutputPath {
+func (m *moduleContext) InstallExecutable(installPath InstallPath, name string, srcPath Path,
+	deps ...Path) InstallPath {
 	return m.installFile(installPath, name, srcPath, CpExecutable, deps)
 }
 
-func (m *moduleContext) installFile(installPath OutputPath, name string, srcPath Path,
-	rule blueprint.Rule, deps []Path) OutputPath {
+func (m *moduleContext) installFile(installPath InstallPath, name string, srcPath Path,
+	rule blueprint.Rule, deps []Path) InstallPath {
 
 	fullInstallPath := installPath.Join(m, name)
 	m.module.base().hooks.runInstallHooks(m, fullInstallPath, false)
@@ -1587,7 +1619,7 @@ func (m *moduleContext) installFile(installPath OutputPath, name string, srcPath
 	return fullInstallPath
 }
 
-func (m *moduleContext) InstallSymlink(installPath OutputPath, name string, srcPath OutputPath) OutputPath {
+func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, srcPath InstallPath) InstallPath {
 	fullInstallPath := installPath.Join(m, name)
 	m.module.base().hooks.runInstallHooks(m, fullInstallPath, true)
 
@@ -1616,7 +1648,7 @@ func (m *moduleContext) InstallSymlink(installPath OutputPath, name string, srcP
 
 // installPath/name -> absPath where absPath might be a path that is available only at runtime
 // (e.g. /apex/...)
-func (m *moduleContext) InstallAbsoluteSymlink(installPath OutputPath, name string, absPath string) OutputPath {
+func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name string, absPath string) InstallPath {
 	fullInstallPath := installPath.Join(m, name)
 	m.module.base().hooks.runInstallHooks(m, fullInstallPath, true)
 

@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -811,19 +812,22 @@ func TestDroiddoc(t *testing.T) {
 		}
 		`)
 
-	inputs := ctx.ModuleForTests("bar-doc", "android_common").Rule("javadoc").Inputs
+	barDoc := ctx.ModuleForTests("bar-doc", "android_common").Rule("javadoc")
 	var javaSrcs []string
-	for _, i := range inputs {
+	for _, i := range barDoc.Inputs {
 		javaSrcs = append(javaSrcs, i.Base())
 	}
-	if len(javaSrcs) != 3 || javaSrcs[0] != "a.java" || javaSrcs[1] != "IFoo.java" || javaSrcs[2] != "IBar.java" {
-		t.Errorf("inputs of bar-doc must be []string{\"a.java\", \"IFoo.java\", \"IBar.java\", but was %#v.", javaSrcs)
+	if len(javaSrcs) != 1 || javaSrcs[0] != "a.java" {
+		t.Errorf("inputs of bar-doc must be []string{\"a.java\"}, but was %#v.", javaSrcs)
 	}
 
-	aidlRule := ctx.ModuleForTests("bar-doc", "android_common").Output(inputs[2].String())
-	aidlFlags := aidlRule.Args["aidlFlags"]
-	if !strings.Contains(aidlFlags, "-Ibar-doc") {
-		t.Errorf("aidl flags for IBar.aidl should contain \"-Ibar-doc\", but was %q", aidlFlags)
+	aidl := ctx.ModuleForTests("bar-doc", "android_common").Rule("aidl")
+	if g, w := barDoc.Implicits.Strings(), aidl.Output.String(); !inList(w, g) {
+		t.Errorf("implicits of bar-doc must contain %q, but was %q.", w, g)
+	}
+
+	if g, w := aidl.Implicits.Strings(), []string{"bar-doc/IBar.aidl", "bar-doc/IFoo.aidl"}; !reflect.DeepEqual(w, g) {
+		t.Errorf("aidl inputs must be %q, but was %q", w, g)
 	}
 }
 
@@ -1069,29 +1073,31 @@ func checkPatchModuleFlag(t *testing.T, ctx *android.TestContext, moduleName str
 }
 
 func TestPatchModule(t *testing.T) {
-	bp := `
-		java_library {
-			name: "foo",
-			srcs: ["a.java"],
-		}
-
-		java_library {
-			name: "bar",
-			srcs: ["b.java"],
-			sdk_version: "none",
-			system_modules: "none",
-			patch_module: "java.base",
-		}
-
-		java_library {
-			name: "baz",
-			srcs: ["c.java"],
-			patch_module: "java.base",
-		}
-	`
-
 	t.Run("Java language level 8", func(t *testing.T) {
-		// Test default javac -source 1.8 -target 1.8
+		// Test with legacy javac -source 1.8 -target 1.8
+		bp := `
+			java_library {
+				name: "foo",
+				srcs: ["a.java"],
+				java_version: "1.8",
+			}
+
+			java_library {
+				name: "bar",
+				srcs: ["b.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				patch_module: "java.base",
+				java_version: "1.8",
+			}
+
+			java_library {
+				name: "baz",
+				srcs: ["c.java"],
+				patch_module: "java.base",
+				java_version: "1.8",
+			}
+		`
 		ctx, _ := testJava(t, bp)
 
 		checkPatchModuleFlag(t, ctx, "foo", "")
@@ -1100,10 +1106,28 @@ func TestPatchModule(t *testing.T) {
 	})
 
 	t.Run("Java language level 9", func(t *testing.T) {
-		// Test again with javac -source 9 -target 9
-		config := testConfig(map[string]string{"EXPERIMENTAL_JAVA_LANGUAGE_LEVEL_9": "true"})
-		ctx := testContext(bp, nil)
-		run(t, ctx, config)
+		// Test with default javac -source 9 -target 9
+		bp := `
+			java_library {
+				name: "foo",
+				srcs: ["a.java"],
+			}
+
+			java_library {
+				name: "bar",
+				srcs: ["b.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				patch_module: "java.base",
+			}
+
+			java_library {
+				name: "baz",
+				srcs: ["c.java"],
+				patch_module: "java.base",
+			}
+		`
+		ctx, _ := testJava(t, bp)
 
 		checkPatchModuleFlag(t, ctx, "foo", "")
 		expected := "java.base=.:" + buildDir

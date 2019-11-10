@@ -195,7 +195,7 @@ var (
 
 	_ = pctx.SourcePathVariable("sAbiDiffer", "prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/header-abi-diff")
 
-	sAbiDiff = pctx.AndroidRuleFunc("sAbiDiff",
+	sAbiDiff = pctx.RuleFunc("sAbiDiff",
 		func(ctx android.PackageRuleContext) blueprint.RuleParams {
 			// TODO(b/78139997): Add -check-all-apis back
 			commandStr := "($sAbiDiffer ${allowFlags} -lib ${libName} -arch ${arch} -o ${out} -new ${in} -old ${referenceDump})"
@@ -224,12 +224,13 @@ var (
 
 	_ = pctx.SourcePathVariable("cxxExtractor",
 		"prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/cxx_extractor")
+	_ = pctx.SourcePathVariable("kytheVnames", "build/soong/vnames.json")
 	_ = pctx.VariableFunc("kytheCorpus",
 		func(ctx android.PackageVarContext) string { return ctx.Config().XrefCorpusName() })
 	kytheExtract = pctx.StaticRule("kythe",
 		blueprint.RuleParams{
-			Command:     "rm -f $out && KYTHE_CORPUS=${kytheCorpus} KYTHE_OUTPUT_FILE=$out $cxxExtractor $cFlags $in ",
-			CommandDeps: []string{"$cxxExtractor"},
+			Command:     "rm -f $out && KYTHE_CORPUS=${kytheCorpus} KYTHE_OUTPUT_FILE=$out KYTHE_VNAMES=$kytheVnames $cxxExtractor $cFlags $in ",
+			CommandDeps: []string{"$cxxExtractor", "$kytheVnames"},
 		},
 		"cFlags")
 )

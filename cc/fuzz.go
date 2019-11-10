@@ -16,6 +16,7 @@ package cc
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/google/blueprint/proptools"
 
@@ -33,6 +34,7 @@ type FuzzProperties struct {
 
 func init() {
 	android.RegisterModuleType("cc_fuzz", FuzzFactory)
+	android.RegisterSingletonType("cc_fuzz_packaging", fuzzPackagingFactory)
 }
 
 // cc_fuzz creates a host/device fuzzer binary. Host binaries can be found at
@@ -51,9 +53,10 @@ type fuzzBinary struct {
 	*binaryDecorator
 	*baseCompiler
 
-	Properties FuzzProperties
-	corpus     android.Paths
-	dictionary android.Path
+	Properties            FuzzProperties
+	dictionary            android.Path
+	corpus                android.Paths
+	corpusIntermediateDir android.Path
 }
 
 func (fuzz *fuzzBinary) linkerProps() []interface{} {
@@ -101,6 +104,16 @@ func (fuzz *fuzzBinary) install(ctx ModuleContext, file android.Path) {
 	fuzz.binaryDecorator.baseInstaller.install(ctx, file)
 
 	fuzz.corpus = android.PathsForModuleSrc(ctx, fuzz.Properties.Corpus)
+	builder := android.NewRuleBuilder()
+	intermediateDir := android.PathForModuleOut(ctx, "corpus")
+	for _, entry := range fuzz.corpus {
+		builder.Command().Text("cp").
+			Input(entry).
+			Output(intermediateDir.Join(ctx, entry.Base()))
+	}
+	builder.Build(pctx, ctx, "copy_corpus", "copy corpus")
+	fuzz.corpusIntermediateDir = intermediateDir
+
 	if fuzz.Properties.Dictionary != nil {
 		fuzz.dictionary = android.PathForModuleSrc(ctx, *fuzz.Properties.Dictionary)
 		if fuzz.dictionary.Ext() != ".dict" {
@@ -146,12 +159,108 @@ func NewFuzz(hod android.HostOrDeviceSupported) *Module {
 	// include the STL.
 	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
 		staticStlLinkage := struct {
-			Stl *string
+			Target struct {
+				Linux_glibc struct {
+					Stl *string
+				}
+			}
 		}{}
 
-		staticStlLinkage.Stl = proptools.StringPtr("libc++_static")
+		staticStlLinkage.Target.Linux_glibc.Stl = proptools.StringPtr("libc++_static")
 		ctx.AppendProperties(&staticStlLinkage)
 	})
 
 	return module
+}
+
+// Responsible for generating GNU Make rules that package fuzz targets into
+// their architecture & target/host specific zip file.
+type fuzzPackager struct {
+	packages android.Paths
+}
+
+func fuzzPackagingFactory() android.Singleton {
+	return &fuzzPackager{}
+}
+
+type fileToZip struct {
+	SourceFilePath        android.Path
+	DestinationPathPrefix string
+}
+
+func (s *fuzzPackager) GenerateBuildActions(ctx android.SingletonContext) {
+	// Map between each architecture + host/device combination, and the files that
+	// need to be packaged (in the tuple of {source file, destination folder in
+	// archive}).
+	archDirs := make(map[android.OutputPath][]fileToZip)
+
+	ctx.VisitAllModules(func(module android.Module) {
+		// Discard non-fuzz targets.
+		ccModule, ok := module.(*Module)
+		if !ok {
+			return
+		}
+		fuzzModule, ok := ccModule.compiler.(*fuzzBinary)
+		if !ok {
+			return
+		}
+
+		// Discard vendor-NDK-linked modules, they're duplicates of fuzz targets
+		// we're going to package anyway.
+		if ccModule.useVndk() || !ccModule.Enabled() {
+			return
+		}
+
+		hostOrTargetString := "target"
+		if ccModule.Host() {
+			hostOrTargetString = "host"
+		}
+
+		archString := ccModule.Arch().ArchType.String()
+		archDir := android.PathForIntermediates(ctx, "fuzz", hostOrTargetString, archString)
+
+		// The executable.
+		archDirs[archDir] = append(archDirs[archDir],
+			fileToZip{ccModule.outputFile.Path(), ccModule.Name()})
+
+		// The corpora.
+		for _, corpusEntry := range fuzzModule.corpus {
+			archDirs[archDir] = append(archDirs[archDir],
+				fileToZip{corpusEntry, ccModule.Name() + "/corpus"})
+		}
+
+		// The dictionary.
+		if fuzzModule.dictionary != nil {
+			archDirs[archDir] = append(archDirs[archDir],
+				fileToZip{fuzzModule.dictionary, ccModule.Name()})
+		}
+	})
+
+	for archDir, filesToZip := range archDirs {
+		arch := archDir.Base()
+		hostOrTarget := filepath.Base(filepath.Dir(archDir.String()))
+		builder := android.NewRuleBuilder()
+		outputFile := android.PathForOutput(ctx, "fuzz-"+hostOrTarget+"-"+arch+".zip")
+		s.packages = append(s.packages, outputFile)
+
+		command := builder.Command().BuiltTool(ctx, "soong_zip").
+			Flag("-j").
+			FlagWithOutput("-o ", outputFile)
+
+		for _, fileToZip := range filesToZip {
+			command.FlagWithArg("-P ", fileToZip.DestinationPathPrefix).
+				FlagWithInput("-f ", fileToZip.SourceFilePath)
+		}
+
+		builder.Build(pctx, ctx, "create-fuzz-package-"+arch+"-"+hostOrTarget,
+			"Create fuzz target packages for "+arch+"-"+hostOrTarget)
+	}
+}
+
+func (s *fuzzPackager) MakeVars(ctx android.MakeVarsContext) {
+	// TODO(mitchp): Migrate this to use MakeVarsContext::DistForGoal() when it's
+	// ready to handle phony targets created in Soong. In the meantime, this
+	// exports the phony 'fuzz' target and dependencies on packages to
+	// core/main.mk so that we can use dist-for-goals.
+	ctx.Strict("SOONG_FUZZ_PACKAGING_ARCH_MODULES", strings.Join(s.packages.Strings(), " "))
 }

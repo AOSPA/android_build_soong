@@ -20,19 +20,29 @@ import (
 
 	"android/soong/android"
 	"android/soong/rust/config"
+	"github.com/google/blueprint/proptools"
 )
+
+func getEdition(compiler *baseCompiler) string {
+	return proptools.StringDefault(compiler.Properties.Edition, config.DefaultEdition)
+}
+
+func getDenyWarnings(compiler *baseCompiler) bool {
+	return BoolDefault(compiler.Properties.Deny_warnings, config.DefaultDenyWarnings)
+}
 
 func NewBaseCompiler(dir, dir64 string) *baseCompiler {
 	return &baseCompiler{
-		Properties: BaseCompilerProperties{
-			Edition: &config.DefaultEdition,
-		},
-		dir:   dir,
-		dir64: dir64,
+		Properties: BaseCompilerProperties{},
+		dir:        dir,
+		dir64:      dir64,
 	}
 }
 
 type BaseCompilerProperties struct {
+	// whether to pass "-D warnings" to rustc. Defaults to true.
+	Deny_warnings *bool
+
 	// flags to pass to rustc
 	Flags []string `android:"path,arch_variant"`
 
@@ -90,7 +100,7 @@ type baseCompiler struct {
 	dir64    string
 	subDir   string
 	relative string
-	path     android.OutputPath
+	path     android.InstallPath
 }
 
 var _ compiler = (*baseCompiler)(nil)
@@ -109,11 +119,16 @@ func (compiler *baseCompiler) featuresToFlags(features []string) []string {
 
 func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flags {
 
+	if getDenyWarnings(compiler) {
+		flags.RustFlags = append(flags.RustFlags, "-D warnings")
+	}
 	flags.RustFlags = append(flags.RustFlags, compiler.Properties.Flags...)
 	flags.RustFlags = append(flags.RustFlags, compiler.featuresToFlags(compiler.Properties.Features)...)
-	flags.RustFlags = append(flags.RustFlags, "--edition="+*compiler.Properties.Edition)
+	flags.RustFlags = append(flags.RustFlags, "--edition="+getEdition(compiler))
 	flags.LinkFlags = append(flags.LinkFlags, compiler.Properties.Ld_flags...)
-	flags.GlobalFlags = append(flags.GlobalFlags, ctx.toolchain().ToolchainRustFlags())
+	flags.GlobalRustFlags = append(flags.GlobalRustFlags, config.GlobalRustFlags...)
+	flags.GlobalRustFlags = append(flags.GlobalRustFlags, ctx.toolchain().ToolchainRustFlags())
+	flags.GlobalLinkFlags = append(flags.GlobalLinkFlags, ctx.toolchain().ToolchainLinkFlags())
 
 	if ctx.Host() && !ctx.Windows() {
 		rpath_prefix := `\$$ORIGIN/`
@@ -148,16 +163,28 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	return deps
 }
 
+func (compiler *baseCompiler) bionicDeps(ctx DepsContext, deps Deps) Deps {
+	deps.SharedLibs = append(deps.SharedLibs, "liblog")
+	deps.SharedLibs = append(deps.SharedLibs, "libc")
+	deps.SharedLibs = append(deps.SharedLibs, "libm")
+	deps.SharedLibs = append(deps.SharedLibs, "libdl")
+
+	//TODO(b/141331117) libstd requires libgcc on Android
+	deps.StaticLibs = append(deps.StaticLibs, "libgcc")
+
+	return deps
+}
+
 func (compiler *baseCompiler) crateName() string {
 	return compiler.Properties.Crate_name
 }
 
-func (compiler *baseCompiler) installDir(ctx ModuleContext) android.OutputPath {
+func (compiler *baseCompiler) installDir(ctx ModuleContext) android.InstallPath {
 	dir := compiler.dir
 	if ctx.toolchain().Is64Bit() && compiler.dir64 != "" {
 		dir = compiler.dir64
 	}
-	if (!ctx.Host() && !ctx.Arch().Native) || ctx.Target().NativeBridge == android.NativeBridgeEnabled {
+	if !ctx.Host() || ctx.Target().NativeBridge == android.NativeBridgeEnabled {
 		dir = filepath.Join(dir, ctx.Arch().ArchType.String())
 	}
 	return android.PathForModuleInstall(ctx, dir, compiler.subDir,
