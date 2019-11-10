@@ -52,6 +52,10 @@ type SingletonContext interface {
 	VisitAllModulesBlueprint(visit func(blueprint.Module))
 	VisitAllModules(visit func(Module))
 	VisitAllModulesIf(pred func(Module) bool, visit func(Module))
+
+	VisitDirectDeps(module Module, visit func(Module))
+	VisitDirectDepsIf(module Module, pred func(Module) bool, visit func(Module))
+
 	// Deprecated: use WalkDeps instead to support multiple dependency tags on the same module
 	VisitDepsDepthFirst(module Module, visit func(Module))
 	// Deprecated: use WalkDeps instead to support multiple dependency tags on the same module
@@ -127,6 +131,11 @@ func (s *singletonContextAdaptor) Variable(pctx PackageContext, name, value stri
 }
 
 func (s *singletonContextAdaptor) Rule(pctx PackageContext, name string, params blueprint.RuleParams, argNames ...string) blueprint.Rule {
+	if s.Config().UseGoma() && params.Pool == nil {
+		// When USE_GOMA=true is set and the rule is not supported by goma, restrict jobs to the
+		// local parallelism value
+		params.Pool = localPool
+	}
 	rule := s.SingletonContext.Rule(pctx.PackageContext, name, params, argNames...)
 	if s.Config().captureBuild {
 		s.ruleParams[rule] = params
@@ -185,6 +194,14 @@ func (s *singletonContextAdaptor) VisitAllModules(visit func(Module)) {
 
 func (s *singletonContextAdaptor) VisitAllModulesIf(pred func(Module) bool, visit func(Module)) {
 	s.SingletonContext.VisitAllModulesIf(predAdaptor(pred), visitAdaptor(visit))
+}
+
+func (s *singletonContextAdaptor) VisitDirectDeps(module Module, visit func(Module)) {
+	s.SingletonContext.VisitDirectDeps(module, visitAdaptor(visit))
+}
+
+func (s *singletonContextAdaptor) VisitDirectDepsIf(module Module, pred func(Module) bool, visit func(Module)) {
+	s.SingletonContext.VisitDirectDepsIf(module, predAdaptor(pred), visitAdaptor(visit))
 }
 
 func (s *singletonContextAdaptor) VisitDepsDepthFirst(module Module, visit func(Module)) {

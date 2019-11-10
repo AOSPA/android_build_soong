@@ -41,16 +41,17 @@ func (me *VtsConfig) GenerateAndroidBuildActions(ctx ModuleContext) {
 func (me *VtsConfig) AndroidMk() AndroidMkData {
 	androidMkData := AndroidMkData{
 		Class:      "FAKE",
-		Include:    "$(BUILD_SYSTEM)/android_vts_host_config.mk",
+		Include:    "$(BUILD_SYSTEM)/suite_host_config.mk",
 		OutputFile: OptionalPathForPath(me.OutputFilePath),
 	}
-	if me.properties.Test_config != nil {
-		androidMkData.Extra = []AndroidMkExtraFunc{
-			func(w io.Writer, outputFile Path) {
+	androidMkData.Extra = []AndroidMkExtraFunc{
+		func(w io.Writer, outputFile Path) {
+			if me.properties.Test_config != nil {
 				fmt.Fprintf(w, "LOCAL_TEST_CONFIG := %s\n",
 					*me.properties.Test_config)
-			},
-		}
+			}
+			fmt.Fprintln(w, "LOCAL_COMPATIBILITY_SUITE := vts")
+		},
 	}
 	return androidMkData
 }

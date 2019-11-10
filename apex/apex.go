@@ -47,13 +47,15 @@ var (
 		Description: "fs_config ${out}",
 	}, "ro_paths", "exec_paths")
 
-	injectApexDependency = pctx.StaticRule("injectApexDependency", blueprint.RuleParams{
+	apexManifestRule = pctx.StaticRule("apexManifestRule", blueprint.RuleParams{
 		Command: `rm -f $out && ${jsonmodify} $in ` +
 			`-a provideNativeLibs ${provideNativeLibs} ` +
-			`-a requireNativeLibs ${requireNativeLibs} -o $out`,
+			`-a requireNativeLibs ${requireNativeLibs} ` +
+			`${opt} ` +
+			`-o $out`,
 		CommandDeps: []string{"${jsonmodify}"},
-		Description: "Inject dependency into ${out}",
-	}, "provideNativeLibs", "requireNativeLibs")
+		Description: "prepare ${out}",
+	}, "provideNativeLibs", "requireNativeLibs", "opt")
 
 	// TODO(b/113233103): make sure that file_contexts is sane, i.e., validate
 	// against the binary policy using sefcontext_compiler -p <policy>.
@@ -147,16 +149,6 @@ var (
 	androidAppTag  = dependencyTag{name: "androidApp"}
 )
 
-var (
-	whitelistNoApex = map[string][]string{
-		"apex_test_build_features":       []string{"libbinder"},
-		"com.android.neuralnetworks":     []string{"libbinder"},
-		"com.android.media.swcodec":      []string{"libbinder"},
-		"test_com.android.media.swcodec": []string{"libbinder"},
-		"com.android.vndk":               []string{"libbinder"},
-	}
-)
-
 func init() {
 	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/java")
@@ -184,7 +176,7 @@ func init() {
 	pctx.HostBinToolVariable("zipalign", "zipalign")
 	pctx.HostBinToolVariable("jsonmodify", "jsonmodify")
 
-	android.RegisterModuleType("apex", apexBundleFactory)
+	android.RegisterModuleType("apex", BundleFactory)
 	android.RegisterModuleType("apex_test", testApexBundleFactory)
 	android.RegisterModuleType("apex_vndk", vndkApexBundleFactory)
 	android.RegisterModuleType("apex_defaults", defaultsFactory)
@@ -194,12 +186,20 @@ func init() {
 		ctx.TopDown("apex_vndk_gather", apexVndkGatherMutator).Parallel()
 		ctx.BottomUp("apex_vndk_add_deps", apexVndkAddDepsMutator).Parallel()
 	})
-	android.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.TopDown("apex_deps", apexDepsMutator)
-		ctx.BottomUp("apex", apexMutator).Parallel()
-		ctx.BottomUp("apex_flattened", apexFlattenedMutator).Parallel()
-		ctx.BottomUp("apex_uses", apexUsesMutator).Parallel()
+	android.PostDepsMutators(RegisterPostDepsMutators)
+
+	android.RegisterMakeVarsProvider(pctx, func(ctx android.MakeVarsContext) {
+		apexFileContextsInfos := apexFileContextsInfos(ctx.Config())
+		sort.Strings(*apexFileContextsInfos)
+		ctx.Strict("APEX_FILE_CONTEXTS_INFOS", strings.Join(*apexFileContextsInfos, " "))
 	})
+}
+
+func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
+	ctx.TopDown("apex_deps", apexDepsMutator)
+	ctx.BottomUp("apex", apexMutator).Parallel()
+	ctx.BottomUp("apex_flattened", apexFlattenedMutator).Parallel()
+	ctx.BottomUp("apex_uses", apexUsesMutator).Parallel()
 }
 
 var (
@@ -219,12 +219,14 @@ func apexVndkGatherMutator(mctx android.TopDownMutatorContext) {
 		if ab.IsNativeBridgeSupported() {
 			mctx.PropertyErrorf("native_bridge_supported", "%q doesn't support native bridge binary.", mctx.ModuleType())
 		}
-		vndkVersion := proptools.StringDefault(ab.vndkProperties.Vndk_version, mctx.DeviceConfig().PlatformVndkVersion())
+
+		vndkVersion := proptools.String(ab.vndkProperties.Vndk_version)
+
 		vndkApexListMutex.Lock()
 		defer vndkApexListMutex.Unlock()
 		vndkApexList := vndkApexList(mctx.Config())
 		if other, ok := vndkApexList[vndkVersion]; ok {
-			mctx.PropertyErrorf("vndk_version", "%v is already defined in %q", vndkVersion, other.Name())
+			mctx.PropertyErrorf("vndk_version", "%v is already defined in %q", vndkVersion, other.BaseModuleName())
 		}
 		vndkApexList[vndkVersion] = ab
 	}
@@ -277,20 +279,49 @@ func apexDepsMutator(mctx android.TopDownMutatorContext) {
 func apexMutator(mctx android.BottomUpMutatorContext) {
 	if am, ok := mctx.Module().(android.ApexModule); ok && am.CanHaveApexVariants() {
 		am.CreateApexVariations(mctx)
-	} else if _, ok := mctx.Module().(*apexBundle); ok {
+	} else if a, ok := mctx.Module().(*apexBundle); ok {
 		// apex bundle itself is mutated so that it and its modules have same
 		// apex variant.
 		apexBundleName := mctx.ModuleName()
 		mctx.CreateVariations(apexBundleName)
+
+		// collects APEX list
+		if mctx.Device() && a.installable() {
+			addApexFileContextsInfos(mctx, a)
+		}
 	}
 }
 
+var (
+	apexFileContextsInfosKey   = android.NewOnceKey("apexFileContextsInfosKey")
+	apexFileContextsInfosMutex sync.Mutex
+)
+
+func apexFileContextsInfos(config android.Config) *[]string {
+	return config.Once(apexFileContextsInfosKey, func() interface{} {
+		return &[]string{}
+	}).(*[]string)
+}
+
+func addApexFileContextsInfos(ctx android.BaseModuleContext, a *apexBundle) {
+	apexName := proptools.StringDefault(a.properties.Apex_name, ctx.ModuleName())
+	fileContextsName := proptools.StringDefault(a.properties.File_contexts, ctx.ModuleName())
+
+	apexFileContextsInfosMutex.Lock()
+	defer apexFileContextsInfosMutex.Unlock()
+	apexFileContextsInfos := apexFileContextsInfos(ctx.Config())
+	*apexFileContextsInfos = append(*apexFileContextsInfos, apexName+":"+fileContextsName)
+}
+
 func apexFlattenedMutator(mctx android.BottomUpMutatorContext) {
-	if _, ok := mctx.Module().(*apexBundle); ok {
+	if ab, ok := mctx.Module().(*apexBundle); ok {
 		if !mctx.Config().FlattenApex() || mctx.Config().UnbundledBuild() {
 			modules := mctx.CreateLocalVariations("", "flattened")
 			modules[0].(*apexBundle).SetFlattened(false)
 			modules[1].(*apexBundle).SetFlattened(true)
+		} else {
+			ab.SetFlattened(true)
+			ab.SetFlattenedConfigValue()
 		}
 	}
 }
@@ -406,9 +437,19 @@ type apexBundleProperties struct {
 	// List of APKs to package inside APEX
 	Apps []string
 
-	// To distinguish between flattened and non-flattened variants.
-	// if set true, then this variant is flattened variant.
+	// To distinguish between flattened and non-flattened apex.
+	// if set true, then output files are flattened.
 	Flattened bool `blueprint:"mutated"`
+
+	// if true, it means that TARGET_FLATTEN_APEX is true and
+	// TARGET_BUILD_APPS is false
+	FlattenedConfigValue bool `blueprint:"mutated"`
+
+	// List of SDKs that are used to build this APEX. A reference to an SDK should be either
+	// `name#version` or `name` which is an alias for `name#current`. If left empty, `platform#current`
+	// is implied. This value affects all modules included in this APEX. In other words, they are
+	// also built with the SDKs specified here.
+	Uses_sdks []string
 }
 
 type apexTargetBundleProperties struct {
@@ -517,7 +558,14 @@ func (class apexFileClass) NameInMake() string {
 	case nativeTest:
 		return "NATIVE_TESTS"
 	case app:
-		return "APPS"
+		// b/142537672 Why isn't this APP? We want to have full control over
+		// the paths and file names of the apk file under the flattend APEX.
+		// If this is set to APP, then the paths and file names are modified
+		// by the Make build system. For example, it is installed to
+		// /system/apex/<apexname>/app/<Appname>/<apexname>.<Appname>/ instead of
+		// /system/apex/<apexname>/app/<Appname> because the build system automatically
+		// appends module name (which is <apexname>.<Appname> to the path.
+		return "ETC"
 	default:
 		panic(fmt.Errorf("unknown class %d", class))
 	}
@@ -535,6 +583,7 @@ type apexFile struct {
 type apexBundle struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	android.SdkBase
 
 	properties       apexBundleProperties
 	targetProperties apexTargetBundleProperties
@@ -544,8 +593,8 @@ type apexBundle struct {
 
 	bundleModuleFile android.WritablePath
 	outputFiles      map[apexPackaging]android.WritablePath
-	flattenedOutput  android.OutputPath
-	installDir       android.OutputPath
+	flattenedOutput  android.InstallPath
+	installDir       android.InstallPath
 
 	prebuiltFileToDelete string
 
@@ -566,35 +615,29 @@ type apexBundle struct {
 
 	// intermediate path for apex_manifest.json
 	manifestOut android.WritablePath
-
-	// A config value of (TARGET_FLATTEN_APEX && !TARGET_BUILD_APPS)
-	flattenedConfigValue bool
 }
 
 func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext,
 	native_shared_libs []string, binaries []string, tests []string,
-	arch string, imageVariation string) {
+	target android.Target, imageVariation string) {
 	// Use *FarVariation* to be able to depend on modules having
 	// conflicting variations with this module. This is required since
 	// arch variant of an APEX bundle is 'common' but it is 'arm' or 'arm64'
 	// for native shared libs.
-	ctx.AddFarVariationDependencies([]blueprint.Variation{
-		{Mutator: "arch", Variation: arch},
+	ctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
 		{Mutator: "image", Variation: imageVariation},
 		{Mutator: "link", Variation: "shared"},
 		{Mutator: "version", Variation: ""}, // "" is the non-stub variant
-	}, sharedLibTag, native_shared_libs...)
+	}...), sharedLibTag, native_shared_libs...)
 
-	ctx.AddFarVariationDependencies([]blueprint.Variation{
-		{Mutator: "arch", Variation: arch},
-		{Mutator: "image", Variation: imageVariation},
-	}, executableTag, binaries...)
+	ctx.AddFarVariationDependencies(append(target.Variations(),
+		blueprint.Variation{Mutator: "image", Variation: imageVariation}),
+		executableTag, binaries...)
 
-	ctx.AddFarVariationDependencies([]blueprint.Variation{
-		{Mutator: "arch", Variation: arch},
+	ctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
 		{Mutator: "image", Variation: imageVariation},
 		{Mutator: "test_per_src", Variation: ""}, // "" is the all-tests variant
-	}, testTag, tests...)
+	}...), testTag, tests...)
 }
 
 func (a *apexBundle) combineProperties(ctx android.BottomUpMutatorContext) {
@@ -626,49 +669,45 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	for i, target := range targets {
 		// When multilib.* is omitted for native_shared_libs, it implies
 		// multilib.both.
-		ctx.AddFarVariationDependencies([]blueprint.Variation{
-			{Mutator: "arch", Variation: target.String()},
+		ctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
 			{Mutator: "image", Variation: a.getImageVariation(config)},
 			{Mutator: "link", Variation: "shared"},
-		}, sharedLibTag, a.properties.Native_shared_libs...)
+		}...), sharedLibTag, a.properties.Native_shared_libs...)
 
 		// When multilib.* is omitted for tests, it implies
 		// multilib.both.
-		ctx.AddFarVariationDependencies([]blueprint.Variation{
-			{Mutator: "arch", Variation: target.String()},
+		ctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
 			{Mutator: "image", Variation: a.getImageVariation(config)},
 			{Mutator: "test_per_src", Variation: ""}, // "" is the all-tests variant
-		}, testTag, a.properties.Tests...)
+		}...), testTag, a.properties.Tests...)
 
 		// Add native modules targetting both ABIs
 		addDependenciesForNativeModules(ctx,
 			a.properties.Multilib.Both.Native_shared_libs,
 			a.properties.Multilib.Both.Binaries,
 			a.properties.Multilib.Both.Tests,
-			target.String(),
+			target,
 			a.getImageVariation(config))
 
 		isPrimaryAbi := i == 0
 		if isPrimaryAbi {
 			// When multilib.* is omitted for binaries, it implies
 			// multilib.first.
-			ctx.AddFarVariationDependencies([]blueprint.Variation{
-				{Mutator: "arch", Variation: target.String()},
-				{Mutator: "image", Variation: a.getImageVariation(config)},
-			}, executableTag, a.properties.Binaries...)
+			ctx.AddFarVariationDependencies(append(target.Variations(),
+				blueprint.Variation{Mutator: "image", Variation: a.getImageVariation(config)}),
+				executableTag, a.properties.Binaries...)
 
 			// Add native modules targetting the first ABI
 			addDependenciesForNativeModules(ctx,
 				a.properties.Multilib.First.Native_shared_libs,
 				a.properties.Multilib.First.Binaries,
 				a.properties.Multilib.First.Tests,
-				target.String(),
+				target,
 				a.getImageVariation(config))
 
 			// When multilib.* is omitted for prebuilts, it implies multilib.first.
-			ctx.AddFarVariationDependencies([]blueprint.Variation{
-				{Mutator: "arch", Variation: target.String()},
-			}, prebuiltTag, a.properties.Prebuilts...)
+			ctx.AddFarVariationDependencies(target.Variations(),
+				prebuiltTag, a.properties.Prebuilts...)
 		}
 
 		switch target.Arch.ArchType.Multilib {
@@ -678,14 +717,14 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 				a.properties.Multilib.Lib32.Native_shared_libs,
 				a.properties.Multilib.Lib32.Binaries,
 				a.properties.Multilib.Lib32.Tests,
-				target.String(),
+				target,
 				a.getImageVariation(config))
 
 			addDependenciesForNativeModules(ctx,
 				a.properties.Multilib.Prefer32.Native_shared_libs,
 				a.properties.Multilib.Prefer32.Binaries,
 				a.properties.Multilib.Prefer32.Tests,
-				target.String(),
+				target,
 				a.getImageVariation(config))
 		case "lib64":
 			// Add native modules targetting 64-bit ABI
@@ -693,7 +732,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 				a.properties.Multilib.Lib64.Native_shared_libs,
 				a.properties.Multilib.Lib64.Binaries,
 				a.properties.Multilib.Lib64.Tests,
-				target.String(),
+				target,
 				a.getImageVariation(config))
 
 			if !has32BitTarget {
@@ -701,7 +740,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 					a.properties.Multilib.Prefer32.Native_shared_libs,
 					a.properties.Multilib.Prefer32.Binaries,
 					a.properties.Multilib.Prefer32.Tests,
-					target.String(),
+					target,
 					a.getImageVariation(config))
 			}
 
@@ -710,7 +749,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 					if sanitizer == "hwaddress" {
 						addDependenciesForNativeModules(ctx,
 							[]string{"libclang_rt.hwasan-aarch64-android"},
-							nil, nil, target.String(), a.getImageVariation(config))
+							nil, nil, target, a.getImageVariation(config))
 						break
 					}
 				}
@@ -719,13 +758,11 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 	}
 
-	ctx.AddFarVariationDependencies([]blueprint.Variation{
-		{Mutator: "arch", Variation: "android_common"},
-	}, javaLibTag, a.properties.Java_libs...)
+	ctx.AddFarVariationDependencies(ctx.Config().AndroidCommonTarget.Variations(),
+		javaLibTag, a.properties.Java_libs...)
 
-	ctx.AddFarVariationDependencies([]blueprint.Variation{
-		{Mutator: "arch", Variation: "android_common"},
-	}, androidAppTag, a.properties.Apps...)
+	ctx.AddFarVariationDependencies(ctx.Config().AndroidCommonTarget.Variations(),
+		androidAppTag, a.properties.Apps...)
 
 	if String(a.properties.Key) == "" {
 		ctx.ModuleErrorf("key is missing")
@@ -737,6 +774,21 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if cert != "" {
 		ctx.AddDependency(ctx.Module(), certificateTag, cert)
 	}
+
+	// TODO(jiyong): ensure that all apexes are with non-empty uses_sdks
+	if len(a.properties.Uses_sdks) > 0 {
+		sdkRefs := []android.SdkRef{}
+		for _, str := range a.properties.Uses_sdks {
+			parsed := android.ParseSdkRef(ctx, str, "uses_sdks")
+			sdkRefs = append(sdkRefs, parsed)
+		}
+		a.BuildWithSdks(sdkRefs)
+	}
+}
+
+func (a *apexBundle) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
+	// direct deps of an APEX bundle are all part of the APEX bundle
+	return true
 }
 
 func (a *apexBundle) getCertString(ctx android.BaseModuleContext) string {
@@ -819,6 +871,20 @@ func (a *apexBundle) SetFlattened(flattened bool) {
 	a.properties.Flattened = flattened
 }
 
+func (a *apexBundle) SetFlattenedConfigValue() {
+	a.properties.FlattenedConfigValue = true
+}
+
+// isFlattenedVariant returns true when the current module is the flattened
+// variant of an apex that has both a flattened and an unflattened variant.
+// It returns false when the current module is flattened but there is no
+// unflattened variant, which occurs when ctx.Config().FlattenedApex() returns
+// true. It can be used to avoid collisions between the install paths of the
+// flattened and unflattened variants.
+func (a *apexBundle) isFlattenedVariant() bool {
+	return a.properties.Flattened && !a.properties.FlattenedConfigValue
+}
+
 func getCopyManifestForNativeLibrary(ccMod *cc.Module, config android.Config, handleSpecialLibs bool) (fileToCopy android.Path, dirInApex string) {
 	// Decide the APEX-local directory by the multilib of the library
 	// In the future, we may query this to the module.
@@ -829,9 +895,7 @@ func getCopyManifestForNativeLibrary(ccMod *cc.Module, config android.Config, ha
 		dirInApex = "lib64"
 	}
 	dirInApex = filepath.Join(dirInApex, ccMod.RelativeInstallPath())
-	if !ccMod.Arch().Native {
-		dirInApex = filepath.Join(dirInApex, ccMod.Arch().ArchType.String())
-	} else if ccMod.Target().NativeBridge == android.NativeBridgeEnabled {
+	if ccMod.Target().NativeBridge == android.NativeBridgeEnabled {
 		dirInApex = filepath.Join(dirInApex, ccMod.Target().NativeBridgeRelativePath)
 	}
 	if handleSpecialLibs && cc.InstallToBootstrap(ccMod.BaseModuleName(), config) {
@@ -854,9 +918,7 @@ func getCopyManifestForNativeLibrary(ccMod *cc.Module, config android.Config, ha
 
 func getCopyManifestForExecutable(cc *cc.Module) (fileToCopy android.Path, dirInApex string) {
 	dirInApex = filepath.Join("bin", cc.RelativeInstallPath())
-	if !cc.Arch().Native {
-		dirInApex = filepath.Join(dirInApex, cc.Arch().ArchType.String())
-	} else if cc.Target().NativeBridge == android.NativeBridgeEnabled {
+	if cc.Target().NativeBridge == android.NativeBridgeEnabled {
 		dirInApex = filepath.Join(dirInApex, cc.Target().NativeBridgeRelativePath)
 	}
 	fileToCopy = cc.OutputFile().Path()
@@ -910,7 +972,11 @@ func getCopyManifestForPrebuiltEtc(prebuilt *android.PrebuiltEtc) (fileToCopy an
 }
 
 func getCopyManifestForAndroidApp(app *java.AndroidApp, pkgName string) (fileToCopy android.Path, dirInApex string) {
-	dirInApex = filepath.Join("app", pkgName)
+	appDir := "app"
+	if app.Privileged() {
+		appDir = "priv-app"
+	}
+	dirInApex = filepath.Join(appDir, pkgName)
 	fileToCopy = app.OutputFile()
 	return
 }
@@ -997,7 +1063,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					return true
 				} else if sh, ok := child.(*android.ShBinary); ok {
 					fileToCopy, dirInApex := getCopyManifestForShBinary(sh)
-					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, dirInApex, shBinary, sh, nil})
+					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, dirInApex, shBinary, sh, sh.Symlinks()})
 				} else if py, ok := child.(*python.Module); ok && py.HostToolPath().Valid() {
 					fileToCopy, dirInApex := getCopyManifestForPyBinary(py)
 					filesInfo = append(filesInfo, apexFile{fileToCopy, depName, dirInApex, pyBinary, py, nil})
@@ -1132,18 +1198,12 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					}
 				} else if am.CanHaveApexVariants() && am.IsInstallableToApex() {
 					ctx.ModuleErrorf("unexpected tag %q for indirect dependency %q", depTag, depName)
-				} else if am.NoApex() && !android.InList(depName, whitelistNoApex[ctx.ModuleName()]) {
-					ctx.ModuleErrorf("tries to include no_apex module %s", depName)
 				}
 			}
 		}
 		return false
 	})
 
-	a.flattenedConfigValue = ctx.Config().FlattenApex() && !ctx.Config().UnbundledBuild()
-	if a.flattenedConfigValue {
-		a.properties.Flattened = true
-	}
 	if a.private_key_file == nil {
 		ctx.PropertyErrorf("key", "private_key for %q could not be found", String(a.properties.Key))
 		return
@@ -1169,12 +1229,14 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		return filesInfo[i].builtFile.String() < filesInfo[j].builtFile.String()
 	})
 
-	// check no_apex modules
-	whitelist := whitelistNoApex[ctx.ModuleName()]
-	for i := range filesInfo {
-		if am, ok := filesInfo[i].module.(android.ApexModule); ok {
-			if am.NoApex() && !android.InList(filesInfo[i].moduleName, whitelist) {
-				ctx.ModuleErrorf("tries to include no_apex module %s", filesInfo[i].moduleName)
+	// check apex_available requirements
+	if !ctx.Host() {
+		for _, fi := range filesInfo {
+			if am, ok := fi.module.(android.ApexModule); ok {
+				if !am.AvailableFor(ctx.ModuleName()) {
+					ctx.ModuleErrorf("requires %q that is not available for the APEX", fi.module.Name())
+					return
+				}
 			}
 		}
 	}
@@ -1188,18 +1250,28 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.installDir = android.PathForModuleInstall(ctx, "apex")
 	a.filesInfo = filesInfo
 
+	// prepare apex_manifest.json
 	a.manifestOut = android.PathForModuleOut(ctx, "apex_manifest.json")
-	// put dependency({provide|require}NativeLibs) in apex_manifest.json
 	manifestSrc := android.PathForModuleSrc(ctx, proptools.StringDefault(a.properties.Manifest, "apex_manifest.json"))
+
+	// put dependency({provide|require}NativeLibs) in apex_manifest.json
 	provideNativeLibs = android.SortedUniqueStrings(provideNativeLibs)
 	requireNativeLibs = android.SortedUniqueStrings(android.RemoveListFromList(requireNativeLibs, provideNativeLibs))
+
+	// apex name can be overridden
+	optCommands := []string{}
+	if a.properties.Apex_name != nil {
+		optCommands = append(optCommands, "-v name "+*a.properties.Apex_name)
+	}
+
 	ctx.Build(pctx, android.BuildParams{
-		Rule:   injectApexDependency,
+		Rule:   apexManifestRule,
 		Input:  manifestSrc,
 		Output: a.manifestOut,
 		Args: map[string]string{
 			"provideNativeLibs": strings.Join(provideNativeLibs, " "),
 			"requireNativeLibs": strings.Join(requireNativeLibs, " "),
+			"opt":               strings.Join(optCommands, " "),
 		},
 	})
 
@@ -1209,7 +1281,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// instead of `android.PathForOutput`) to return the correct path to the flattened
 	// APEX (as its contents is installed by Make, not Soong).
 	factx := flattenedApexContext{ctx}
-	a.flattenedOutput = android.PathForModuleInstall(&factx, "apex", factx.ModuleName())
+	apexName := proptools.StringDefault(a.properties.Apex_name, ctx.ModuleName())
+	a.flattenedOutput = android.PathForModuleInstall(&factx, "apex", apexName)
 
 	if a.apexTypes.zip() {
 		a.buildUnflattenedApex(ctx, zipApex)
@@ -1413,6 +1486,12 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, apexType ap
 			optFlags = append(optFlags, "--no_hashtree")
 		}
 
+		if a.properties.Apex_name != nil {
+			// If apex_name is set, apexer can skip checking if key name matches with apex name.
+			// Note that apex_manifest is also mended.
+			optFlags = append(optFlags, "--do_not_check_keyname")
+		}
+
 		ctx.Build(pctx, android.BuildParams{
 			Rule:        apexRule,
 			Implicits:   implicitInputs,
@@ -1482,7 +1561,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext, apexType ap
 	})
 
 	// Install to $OUT/soong/{target,host}/.../apex
-	if a.installable() && (!ctx.Config().FlattenApex() || apexType.zip()) && (!a.properties.Flattened || a.flattenedConfigValue) {
+	if a.installable() && (!ctx.Config().FlattenApex() || apexType.zip()) && !a.isFlattenedVariant() {
 		ctx.InstallFile(a.installDir, ctx.ModuleName()+suffix, a.outputFiles[apexType])
 	}
 }
@@ -1503,8 +1582,9 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 		a.filesInfo = append(a.filesInfo, apexFile{copiedPubkey, ctx.ModuleName() + ".apex_pubkey", ".", etc, nil, nil})
 
 		if ctx.Config().FlattenApex() {
+			apexName := proptools.StringDefault(a.properties.Apex_name, ctx.ModuleName())
 			for _, fi := range a.filesInfo {
-				dir := filepath.Join("apex", ctx.ModuleName(), fi.installDir)
+				dir := filepath.Join("apex", apexName, fi.installDir)
 				target := ctx.InstallFile(android.PathForModuleInstall(ctx, dir), fi.builtFile.Base(), fi.builtFile)
 				for _, sym := range fi.symlinks {
 					ctx.InstallSymlink(android.PathForModuleInstall(ctx, dir), sym, target)
@@ -1535,7 +1615,7 @@ func (a *apexBundle) AndroidMk() android.AndroidMkData {
 		}}
 }
 
-func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string, apexType apexPackaging) []string {
+func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string, apexType apexPackaging) []string {
 	moduleNames := []string{}
 
 	for _, fi := range a.filesInfo {
@@ -1547,7 +1627,7 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string, apex
 		}
 
 		var suffix string
-		if a.properties.Flattened && !a.flattenedConfigValue {
+		if a.isFlattenedVariant() {
 			suffix = ".flattened"
 		}
 
@@ -1559,13 +1639,12 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string, apex
 		fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
 		fmt.Fprintln(w, "LOCAL_MODULE :=", fi.moduleName+suffix)
 		// /apex/<apex_name>/{lib|framework|...}
-		pathWhenActivated := filepath.Join("$(PRODUCT_OUT)", "apex",
-			proptools.StringDefault(a.properties.Apex_name, name), fi.installDir)
+		pathWhenActivated := filepath.Join("$(PRODUCT_OUT)", "apex", apexName, fi.installDir)
 		if a.properties.Flattened && apexType.image() {
 			// /system/apex/<name>/{lib|framework|...}
-			fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", filepath.Join("$(OUT_DIR)",
-				a.installDir.RelPathString(), name, fi.installDir))
-			if a.flattenedConfigValue {
+			fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", filepath.Join(a.installDir.ToMakePath().String(),
+				apexName, fi.installDir))
+			if !a.isFlattenedVariant() {
 				fmt.Fprintln(w, "LOCAL_SOONG_SYMBOL_PATH :=", pathWhenActivated)
 			}
 			if len(fi.symlinks) > 0 {
@@ -1585,17 +1664,17 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, name, moduleDir string, apex
 			host := false
 			switch fi.module.Target().Os.Class {
 			case android.Host:
-				if archStr != "common" {
+				if fi.module.Target().Arch.ArchType != android.Common {
 					fmt.Fprintln(w, "LOCAL_MODULE_HOST_ARCH :=", archStr)
 				}
 				host = true
 			case android.HostCross:
-				if archStr != "common" {
+				if fi.module.Target().Arch.ArchType != android.Common {
 					fmt.Fprintln(w, "LOCAL_MODULE_HOST_CROSS_ARCH :=", archStr)
 				}
 				host = true
 			case android.Device:
-				if archStr != "common" {
+				if fi.module.Target().Arch.ArchType != android.Common {
 					fmt.Fprintln(w, "LOCAL_MODULE_TARGET_ARCH :=", archStr)
 				}
 			}
@@ -1644,10 +1723,11 @@ func (a *apexBundle) androidMkForType(apexType apexPackaging) android.AndroidMkD
 		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
 			moduleNames := []string{}
 			if a.installable() {
-				moduleNames = a.androidMkForFiles(w, name, moduleDir, apexType)
+				apexName := proptools.StringDefault(a.properties.Apex_name, name)
+				moduleNames = a.androidMkForFiles(w, apexName, moduleDir, apexType)
 			}
 
-			if a.properties.Flattened && !a.flattenedConfigValue {
+			if a.isFlattenedVariant() {
 				name = name + ".flattened"
 			}
 
@@ -1662,7 +1742,7 @@ func (a *apexBundle) androidMkForType(apexType apexPackaging) android.AndroidMkD
 				fmt.Fprintln(w, "include $(BUILD_PHONY_PACKAGE)")
 				fmt.Fprintln(w, "$(LOCAL_INSTALLED_MODULE): .KATI_IMPLICIT_OUTPUTS :=", a.flattenedOutput.String())
 
-			} else if !a.properties.Flattened || a.flattenedConfigValue {
+			} else if !a.isFlattenedVariant() {
 				// zip-apex is the less common type so have the name refer to the image-apex
 				// only and use {name}.zip if you want the zip-apex
 				if apexType == zipApex && a.apexTypes == both {
@@ -1673,7 +1753,7 @@ func (a *apexBundle) androidMkForType(apexType apexPackaging) android.AndroidMkD
 				fmt.Fprintln(w, "LOCAL_MODULE :=", name)
 				fmt.Fprintln(w, "LOCAL_MODULE_CLASS := ETC") // do we need a new class?
 				fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", a.outputFiles[apexType].String())
-				fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", filepath.Join("$(OUT_DIR)", a.installDir.RelPathString()))
+				fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", a.installDir.ToMakePath().String())
 				fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", name+apexType.suffix())
 				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !a.installable())
 				if len(moduleNames) > 0 {
@@ -1684,7 +1764,7 @@ func (a *apexBundle) androidMkForType(apexType apexPackaging) android.AndroidMkD
 				}
 				if a.prebuiltFileToDelete != "" {
 					fmt.Fprintln(w, "LOCAL_POST_INSTALL_CMD :=", "rm -rf "+
-						filepath.Join("$(OUT_DIR)", a.installDir.RelPathString(), a.prebuiltFileToDelete))
+						filepath.Join(a.installDir.ToMakePath().String(), a.prebuiltFileToDelete))
 				}
 				fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
 
@@ -1706,6 +1786,7 @@ func newApexBundle() *apexBundle {
 	})
 	android.InitAndroidMultiTargetsArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
+	android.InitSdkAwareModule(module)
 	return module
 }
 
@@ -1721,7 +1802,7 @@ func testApexBundleFactory() android.Module {
 	return bundle
 }
 
-func apexBundleFactory() android.Module {
+func BundleFactory() android.Module {
 	return newApexBundle()
 }
 
@@ -1738,6 +1819,15 @@ func vndkApexBundleFactory() android.Module {
 		}{
 			proptools.StringPtr("both"),
 		})
+
+		vndkVersion := proptools.StringDefault(bundle.vndkProperties.Vndk_version, "current")
+		if vndkVersion == "current" {
+			vndkVersion = ctx.DeviceConfig().PlatformVndkVersion()
+			bundle.vndkProperties.Vndk_version = proptools.StringPtr(vndkVersion)
+		}
+
+		// Ensure VNDK APEX mount point is formatted as com.android.vndk.v###
+		bundle.properties.Apex_name = proptools.StringPtr("com.android.vndk.v" + vndkVersion)
 	})
 	return bundle
 }
@@ -1777,7 +1867,7 @@ type Prebuilt struct {
 	properties PrebuiltProperties
 
 	inputApex       android.Path
-	installDir      android.OutputPath
+	installDir      android.InstallPath
 	installFilename string
 	outputApex      android.WritablePath
 }
@@ -1924,7 +2014,7 @@ func (p *Prebuilt) AndroidMkEntries() android.AndroidMkEntries {
 		Include:    "$(BUILD_PREBUILT)",
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(entries *android.AndroidMkEntries) {
-				entries.SetString("LOCAL_MODULE_PATH", filepath.Join("$(OUT_DIR)", p.installDir.RelPathString()))
+				entries.SetString("LOCAL_MODULE_PATH", p.installDir.ToMakePath().String())
 				entries.SetString("LOCAL_MODULE_STEM", p.installFilename)
 				entries.SetBoolIfTrue("LOCAL_UNINSTALLABLE_MODULE", !p.installable())
 				entries.AddStrings("LOCAL_OVERRIDES_PACKAGES", p.properties.Overrides...)

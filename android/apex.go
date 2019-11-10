@@ -19,7 +19,6 @@ import (
 	"sync"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/proptools"
 )
 
 // ApexModule is the interface that a module type is expected to implement if
@@ -76,13 +75,21 @@ type ApexModule interface {
 	// CreateApexVariations.
 	setApexName(apexName string)
 
-	// Return the no_apex property
-	NoApex() bool
+	// Tests if this module is available for the specified APEX or ":platform"
+	AvailableFor(what string) bool
+
+	// DepIsInSameApex tests if the other module 'dep' is installed to the same
+	// APEX as this module
+	DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
 }
 
 type ApexProperties struct {
-	// Whether this module should not be part of any APEX. Default is false.
-	No_apex *bool
+	// Availability of this module in APEXes. Only the listed APEXes can include this module.
+	// "//apex_available:anyapex" is a pseudo APEX name that matches to any APEX.
+	// "//apex_available:platform" refers to non-APEX partitions like "system.img".
+	// Default is ["//apex_available:platform", "//apex_available:anyapex"].
+	// TODO(b/128708192) change the default to ["//apex_available:platform"]
+	Apex_available []string
 
 	// Name of the apex variant that this module is mutated into
 	ApexName string `blueprint:"mutated"`
@@ -132,19 +139,57 @@ func (m *ApexModuleBase) IsInstallableToApex() bool {
 	return false
 }
 
-func (m *ApexModuleBase) NoApex() bool {
-	return proptools.Bool(m.ApexProperties.No_apex)
+const (
+	availableToPlatform = "//apex_available:platform"
+	availableToAnyApex  = "//apex_available:anyapex"
+)
+
+func CheckAvailableForApex(what string, apex_available []string) bool {
+	if len(apex_available) == 0 {
+		// apex_available defaults to ["//apex_available:platform", "//apex_available:anyapex"],
+		// which means 'available to everybody'.
+		return true
+	}
+	return InList(what, apex_available) ||
+		(what != availableToPlatform && InList(availableToAnyApex, apex_available))
+}
+
+func (m *ApexModuleBase) AvailableFor(what string) bool {
+	return CheckAvailableForApex(what, m.ApexProperties.Apex_available)
+}
+
+func (m *ApexModuleBase) DepIsInSameApex(ctx BaseModuleContext, dep Module) bool {
+	// By default, if there is a dependency from A to B, we try to include both in the same APEX,
+	// unless B is explicitly from outside of the APEX (i.e. a stubs lib). Thus, returning true.
+	// This is overridden by some module types like apex.ApexBundle, cc.Module, java.Module, etc.
+	return true
+}
+
+func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
+	for _, n := range m.ApexProperties.Apex_available {
+		if n == availableToPlatform || n == availableToAnyApex {
+			continue
+		}
+		if !mctx.OtherModuleExists(n) && !mctx.Config().AllowMissingDependencies() {
+			mctx.PropertyErrorf("apex_available", "%q is not a valid module name", n)
+		}
+	}
 }
 
 func (m *ApexModuleBase) CreateApexVariations(mctx BottomUpMutatorContext) []blueprint.Module {
 	if len(m.apexVariations) > 0 {
+		m.checkApexAvailableProperty(mctx)
 		sort.Strings(m.apexVariations)
-		variations := []string{""} // Original variation for platform
+		variations := []string{}
+		availableForPlatform := mctx.Module().(ApexModule).AvailableFor(availableToPlatform)
+		if availableForPlatform {
+			variations = append(variations, "") // Original variation for platform
+		}
 		variations = append(variations, m.apexVariations...)
 
 		modules := mctx.CreateVariations(variations...)
 		for i, m := range modules {
-			if i == 0 {
+			if availableForPlatform && i == 0 {
 				continue
 			}
 			m.(ApexModule).setApexName(variations[i])

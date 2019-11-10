@@ -52,7 +52,7 @@ type baseInstaller struct {
 	relative string
 	location installLocation
 
-	path android.OutputPath
+	path android.InstallPath
 }
 
 var _ installer = (*baseInstaller)(nil)
@@ -61,16 +61,15 @@ func (installer *baseInstaller) installerProps() []interface{} {
 	return []interface{}{&installer.Properties}
 }
 
-func (installer *baseInstaller) installDir(ctx ModuleContext) android.OutputPath {
+func (installer *baseInstaller) installDir(ctx ModuleContext) android.InstallPath {
 	dir := installer.dir
 	if ctx.toolchain().Is64Bit() && installer.dir64 != "" {
 		dir = installer.dir64
 	}
-	if !ctx.Host() && !ctx.Arch().Native {
-		dir = filepath.Join(dir, ctx.Arch().ArchType.String())
-	}
 	if ctx.Target().NativeBridge == android.NativeBridgeEnabled {
 		dir = filepath.Join(dir, ctx.Target().NativeBridgeRelativePath)
+	} else if !ctx.Host() && ctx.Config().HasMultilibConflict(ctx.Arch().ArchType) {
+		dir = filepath.Join(dir, ctx.Arch().ArchType.String())
 	}
 	if installer.location == InstallInData && ctx.useVndk() {
 		dir = filepath.Join(dir, "vendor")
