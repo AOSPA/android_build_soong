@@ -289,6 +289,10 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
+		if s.Integer_overflow == nil && ctx.Config().IntegerOverflowEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
+			s.Integer_overflow = boolPtr(true)
+		}
+
 	// Enable CFI for all components in the include paths (for Aarch64 only)
 	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
 		s.Cfi = boolPtr(true)

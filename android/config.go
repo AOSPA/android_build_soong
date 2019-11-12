@@ -1028,6 +1028,13 @@ func (c *config) IntegerOverflowDisabledForPath(path string) bool {
 	return PrefixInList(path, c.productVariables.IntegerOverflowExcludePaths)
 }
 
+func (c *config) IntegerOverflowEnabledForPath(path string) bool {
+	if c.productVariables.IntegerOverflowIncludePaths == nil {
+		return false
+	}
+	return PrefixInList(path, c.productVariables.IntegerOverflowIncludePaths)
+}
+
 func (c *config) CFIDisabledForPath(path string) bool {
 	if c.productVariables.CFIExcludePaths == nil {
 		return false
