@@ -165,7 +165,6 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 		a.aapt.deps(ctx, sdkDep)
 	}
 
-	embedJni := a.shouldEmbedJnis(ctx)
 	for _, jniTarget := range ctx.MultiTargets() {
 		variation := append(jniTarget.Variations(),
 			blueprint.Variation{Mutator: "link", Variation: "shared"})
@@ -174,7 +173,7 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
 		if String(a.appProperties.Stl) == "c++_shared" {
-			if embedJni {
+			if a.shouldEmbedJnis(ctx) {
 				ctx.AddFarVariationDependencies(variation, tag, "ndk_libc++_shared")
 			}
 		}
@@ -206,6 +205,7 @@ func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleCon
 
 func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.checkPlatformAPI(ctx)
+	a.checkSdkVersion(ctx)
 	a.generateAndroidBuildActions(ctx)
 }
 
@@ -479,14 +479,13 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.certificate = certificates[0]
 
 	// Build a final signed app package.
-	// TODO(jungjw): Consider changing this to installApkName.
-	packageFile := android.PathForModuleOut(ctx, ctx.ModuleName()+".apk")
+	packageFile := android.PathForModuleOut(ctx, a.installApkName+".apk")
 	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps)
 	a.outputFile = packageFile
 
 	for _, split := range a.aapt.splits {
 		// Sign the split APKs
-		packageFile := android.PathForModuleOut(ctx, ctx.ModuleName()+"_"+split.suffix+".apk")
+		packageFile := android.PathForModuleOut(ctx, a.installApkName+"_"+split.suffix+".apk")
 		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps)
 		a.extraOutputFiles = append(a.extraOutputFiles, packageFile)
 	}
@@ -497,9 +496,9 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.bundleFile = bundleFile
 
 	// Install the app package.
-	ctx.InstallFile(a.installDir, a.installApkName+".apk", a.outputFile)
-	for _, split := range a.aapt.splits {
-		ctx.InstallFile(a.installDir, a.installApkName+"_"+split.suffix+".apk", split.path)
+	ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile)
+	for _, extra := range a.extraOutputFiles {
+		ctx.InstallFile(a.installDir, extra.Base(), extra)
 	}
 }
 

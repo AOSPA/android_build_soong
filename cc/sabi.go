@@ -70,15 +70,17 @@ func filterOutWithPrefix(list []string, filter []string) (remainder []string) {
 func (sabimod *sabi) flags(ctx ModuleContext, flags Flags) Flags {
 	// Assuming that the cflags which clang LibTooling tools cannot
 	// understand have not been converted to ninja variables yet.
-	flags.ToolingCFlags = filterOutWithPrefix(flags.CFlags, config.ClangLibToolingUnknownCflags)
-	flags.ToolingCppFlags = filterOutWithPrefix(flags.CppFlags, config.ClangLibToolingUnknownCflags)
+	flags.Local.ToolingCFlags = filterOutWithPrefix(flags.Local.CFlags, config.ClangLibToolingUnknownCflags)
+	flags.Global.ToolingCFlags = filterOutWithPrefix(flags.Global.CFlags, config.ClangLibToolingUnknownCflags)
+	flags.Local.ToolingCppFlags = filterOutWithPrefix(flags.Local.CppFlags, config.ClangLibToolingUnknownCflags)
+	flags.Global.ToolingCppFlags = filterOutWithPrefix(flags.Global.CppFlags, config.ClangLibToolingUnknownCflags)
 
 	return flags
 }
 
 func sabiDepsMutator(mctx android.TopDownMutatorContext) {
 	if c, ok := mctx.Module().(*Module); ok &&
-		((c.IsVndk() && c.UseVndk()) || inList(c.Name(), *llndkLibraries(mctx.Config())) ||
+		((c.IsVndk() && c.UseVndk()) || c.isLlndk(mctx.Config()) ||
 			(c.sabi != nil && c.sabi.Properties.CreateSAbiDumps)) {
 		mctx.VisitDirectDeps(func(m android.Module) {
 			tag := mctx.OtherModuleDependencyTag(m)

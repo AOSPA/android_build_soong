@@ -101,9 +101,6 @@ func init() {
 		// not emit the table by default on Android since NDK still uses GNU binutils.
 		"-faddrsig",
 
-		// -Wimplicit-fallthrough is not enabled by -Wall.
-		"-Wimplicit-fallthrough",
-
 		// Help catch common 32/64-bit errors.
 		"-Werror=int-conversion",
 
@@ -138,10 +135,11 @@ func init() {
 	}, " "))
 
 	pctx.StaticVariable("ClangExtraCppflags", strings.Join([]string{
+		// -Wimplicit-fallthrough is not enabled by -Wall.
+		"-Wimplicit-fallthrough",
+
 		// Enable clang's thread-safety annotations in libcxx.
-		// Turn off -Wthread-safety-negative, to avoid breaking projects that use -Weverything.
 		"-D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS",
-		"-Wno-thread-safety-negative",
 
 		// libc++'s math.h has an #include_next outside of system_headers.
 		"-Wno-gnu-include-next",
@@ -165,8 +163,8 @@ func init() {
 		"-Wno-tautological-type-limit-compare",
 	}, " "))
 
-	// Extra cflags for projects under external/ directory to disable warnings that are infeasible
-	// to fix in all the external projects and their upstream repos.
+	// Extra cflags for external third-party projects to disable warnings that
+	// are infeasible to fix in all the external projects and their upstream repos.
 	pctx.StaticVariable("ClangExtraExternalCflags", strings.Join([]string{
 		"-Wno-enum-compare",
 		"-Wno-enum-compare-switch",

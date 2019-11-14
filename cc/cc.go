@@ -140,26 +140,34 @@ type PathDeps struct {
 	DynamicLinker android.OptionalPath
 }
 
-type Flags struct {
-	GlobalFlags     []string // Flags that apply to C, C++, and assembly source files
-	ArFlags         []string // Flags that apply to ar
+// LocalOrGlobalFlags contains flags that need to have values set globally by the build system or locally by the module
+// tracked separately, in order to maintain the required ordering (most of the global flags need to go first on the
+// command line so they can be overridden by the local module flags).
+type LocalOrGlobalFlags struct {
+	CommonFlags     []string // Flags that apply to C, C++, and assembly source files
 	AsFlags         []string // Flags that apply to assembly source files
+	YasmFlags       []string // Flags that apply to yasm assembly source files
 	CFlags          []string // Flags that apply to C and C++ source files
 	ToolingCFlags   []string // Flags that apply to C and C++ source files parsed by clang LibTooling tools
 	ConlyFlags      []string // Flags that apply to C source files
 	CppFlags        []string // Flags that apply to C++ source files
 	ToolingCppFlags []string // Flags that apply to C++ source files parsed by clang LibTooling tools
-	aidlFlags       []string // Flags that apply to aidl source files
-	rsFlags         []string // Flags that apply to renderscript source files
 	LdFlags         []string // Flags that apply to linker command lines
-	libFlags        []string // Flags to add libraries early to the link order
-	extraLibFlags   []string // Flags to add libraries late in the link order after LdFlags
-	TidyFlags       []string // Flags that apply to clang-tidy
-	SAbiFlags       []string // Flags that apply to header-abi-dumper
-	YasmFlags       []string // Flags that apply to yasm assembly source files
+}
+
+type Flags struct {
+	Local  LocalOrGlobalFlags
+	Global LocalOrGlobalFlags
+
+	aidlFlags     []string // Flags that apply to aidl source files
+	rsFlags       []string // Flags that apply to renderscript source files
+	libFlags      []string // Flags to add libraries early to the link order
+	extraLibFlags []string // Flags to add libraries late in the link order after LdFlags
+	TidyFlags     []string // Flags that apply to clang-tidy
+	SAbiFlags     []string // Flags that apply to header-abi-dumper
 
 	// Global include flags that apply to C, C++, and assembly source files
-	// These must be after any module include flags, which will be in GlobalFlags.
+	// These must be after any module include flags, which will be in CommonFlags.
 	SystemIncludeFlags []string
 
 	Toolchain config.Toolchain
@@ -715,11 +723,9 @@ func (c *Module) Init() android.Module {
 		}
 	})
 	android.InitAndroidArchModule(c, c.hod, c.multilib)
-
-	android.InitDefaultableModule(c)
-
 	android.InitApexModule(c)
 	android.InitSdkAwareModule(c)
+	android.InitDefaultableModule(c)
 
 	return c
 }
@@ -749,17 +755,18 @@ func (c *Module) isNdk() bool {
 
 func (c *Module) isLlndk(config android.Config) bool {
 	// Returns true for both LLNDK (public) and LLNDK-private libs.
-	return inList(c.BaseModuleName(), *llndkLibraries(config))
+	return isLlndkLibrary(c.BaseModuleName(), config)
 }
 
 func (c *Module) isLlndkPublic(config android.Config) bool {
 	// Returns true only for LLNDK (public) libs.
-	return c.isLlndk(config) && !c.isVndkPrivate(config)
+	name := c.BaseModuleName()
+	return isLlndkLibrary(name, config) && !isVndkPrivateLibrary(name, config)
 }
 
 func (c *Module) isVndkPrivate(config android.Config) bool {
 	// Returns true for LLNDK-private, VNDK-SP-private, and VNDK-core-private.
-	return inList(c.BaseModuleName(), *vndkPrivateLibraries(config))
+	return isVndkPrivateLibrary(c.BaseModuleName(), config)
 }
 
 func (c *Module) IsVndk() bool {
@@ -855,6 +862,34 @@ func (c *Module) nativeCoverage() bool {
 		return false
 	}
 	return c.linker != nil && c.linker.nativeCoverage()
+}
+
+func (c *Module) ExportedIncludeDirs() android.Paths {
+	if flagsProducer, ok := c.linker.(exportedFlagsProducer); ok {
+		return flagsProducer.exportedDirs()
+	}
+	return nil
+}
+
+func (c *Module) ExportedSystemIncludeDirs() android.Paths {
+	if flagsProducer, ok := c.linker.(exportedFlagsProducer); ok {
+		return flagsProducer.exportedSystemDirs()
+	}
+	return nil
+}
+
+func (c *Module) ExportedFlags() []string {
+	if flagsProducer, ok := c.linker.(exportedFlagsProducer); ok {
+		return flagsProducer.exportedFlags()
+	}
+	return nil
+}
+
+func (c *Module) ExportedDeps() android.Paths {
+	if flagsProducer, ok := c.linker.(exportedFlagsProducer); ok {
+		return flagsProducer.exportedDeps()
+	}
+	return nil
 }
 
 func isBionic(name string) bool {
@@ -1260,17 +1295,17 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		return
 	}
 
-	flags.CFlags, _ = filterList(flags.CFlags, config.IllegalFlags)
-	flags.CppFlags, _ = filterList(flags.CppFlags, config.IllegalFlags)
-	flags.ConlyFlags, _ = filterList(flags.ConlyFlags, config.IllegalFlags)
+	flags.Local.CFlags, _ = filterList(flags.Local.CFlags, config.IllegalFlags)
+	flags.Local.CppFlags, _ = filterList(flags.Local.CppFlags, config.IllegalFlags)
+	flags.Local.ConlyFlags, _ = filterList(flags.Local.ConlyFlags, config.IllegalFlags)
 
-	flags.GlobalFlags = append(flags.GlobalFlags, deps.Flags...)
+	flags.Local.CommonFlags = append(flags.Local.CommonFlags, deps.Flags...)
 
 	for _, dir := range deps.IncludeDirs {
-		flags.GlobalFlags = append(flags.GlobalFlags, "-I"+dir.String())
+		flags.Local.CommonFlags = append(flags.Local.CommonFlags, "-I"+dir.String())
 	}
 	for _, dir := range deps.SystemIncludeDirs {
-		flags.GlobalFlags = append(flags.GlobalFlags, "-isystem "+dir.String())
+		flags.Local.CommonFlags = append(flags.Local.CommonFlags, "-isystem "+dir.String())
 	}
 
 	c.flags = flags
@@ -1279,16 +1314,16 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		flags = c.sabi.flags(ctx, flags)
 	}
 
-	flags.AssemblerWithCpp = inList("-xassembler-with-cpp", flags.AsFlags)
+	flags.AssemblerWithCpp = inList("-xassembler-with-cpp", flags.Local.AsFlags)
 
 	// Optimization to reduce size of build.ninja
 	// Replace the long list of flags for each file with a module-local variable
-	ctx.Variable(pctx, "cflags", strings.Join(flags.CFlags, " "))
-	ctx.Variable(pctx, "cppflags", strings.Join(flags.CppFlags, " "))
-	ctx.Variable(pctx, "asflags", strings.Join(flags.AsFlags, " "))
-	flags.CFlags = []string{"$cflags"}
-	flags.CppFlags = []string{"$cppflags"}
-	flags.AsFlags = []string{"$asflags"}
+	ctx.Variable(pctx, "cflags", strings.Join(flags.Local.CFlags, " "))
+	ctx.Variable(pctx, "cppflags", strings.Join(flags.Local.CppFlags, " "))
+	ctx.Variable(pctx, "asflags", strings.Join(flags.Local.AsFlags, " "))
+	flags.Local.CFlags = []string{"$cflags"}
+	flags.Local.CppFlags = []string{"$cppflags"}
+	flags.Local.AsFlags = []string{"$asflags"}
 
 	var objs Objects
 	if c.compiler != nil {
@@ -1461,7 +1496,7 @@ func (c *Module) beginMutator(actx android.BottomUpMutatorContext) {
 }
 
 // Split name#version into name and version
-func stubsLibNameAndVersion(name string) (string, string) {
+func StubsLibNameAndVersion(name string) (string, string) {
 	if sharp := strings.LastIndex(name, "#"); sharp != -1 && sharp != len(name)-1 {
 		version := name[sharp+1:]
 		libname := name[:sharp]
@@ -1501,21 +1536,20 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		// The caller can then know to add the variantLibs dependencies differently from the
 		// nonvariantLibs
 
-		llndkLibraries := llndkLibraries(actx.Config())
 		vendorPublicLibraries := vendorPublicLibraries(actx.Config())
 		rewriteNdkLibs := func(list []string) (nonvariantLibs []string, variantLibs []string) {
 			variantLibs = []string{}
 			nonvariantLibs = []string{}
 			for _, entry := range list {
 				// strip #version suffix out
-				name, _ := stubsLibNameAndVersion(entry)
+				name, _ := StubsLibNameAndVersion(entry)
 				if ctx.useSdk() && inList(name, ndkPrebuiltSharedLibraries) {
 					if !inList(name, ndkMigratedLibs) {
 						nonvariantLibs = append(nonvariantLibs, name+".ndk."+version)
 					} else {
 						variantLibs = append(variantLibs, name+ndkLibrarySuffix)
 					}
-				} else if ctx.useVndk() && inList(name, *llndkLibraries) {
+				} else if ctx.useVndk() && isLlndkLibrary(name, ctx.Config()) {
 					nonvariantLibs = append(nonvariantLibs, name+llndkLibrarySuffix)
 				} else if (ctx.Platform() || ctx.ProductSpecific()) && inList(name, *vendorPublicLibraries) {
 					vendorPublicLib := name + vendorPublicLibrarySuffix
@@ -1614,7 +1648,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		// If the version is not specified, add dependency to the latest stubs library.
 		// The stubs library will be used when the depending module is built for APEX and
 		// the dependent module is not in the same APEX.
-		latestVersion := latestStubsVersionFor(actx.Config(), name)
+		latestVersion := LatestStubsVersionFor(actx.Config(), name)
 		if version == "" && latestVersion != "" && versionVariantAvail {
 			actx.AddVariationDependencies([]blueprint.Variation{
 				{Mutator: "link", Variation: "shared"},
@@ -1637,7 +1671,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 			lib = impl
 		}
 
-		name, version := stubsLibNameAndVersion(lib)
+		name, version := StubsLibNameAndVersion(lib)
 		sharedLibNames = append(sharedLibNames, name)
 
 		addSharedLibDependencies(depTag, name, version)
@@ -1825,7 +1859,6 @@ func checkLinkType(ctx android.ModuleContext, from LinkableInterface, to Linkabl
 // it is subject to be double loaded. Such lib should be explicitly marked as double_loadable: true
 // or as vndk-sp (vndk: { enabled: true, support_system_process: true}).
 func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
-	llndkLibraries := llndkLibraries(ctx.Config())
 	check := func(child, parent android.Module) bool {
 		to, ok := child.(*Module)
 		if !ok {
@@ -1842,7 +1875,7 @@ func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
 			return true
 		}
 
-		if to.isVndkSp() || inList(child.Name(), *llndkLibraries) || Bool(to.VendorProperties.Double_loadable) {
+		if to.isVndkSp() || to.isLlndk(ctx.Config()) || Bool(to.VendorProperties.Double_loadable) {
 			return false
 		}
 
@@ -1857,7 +1890,7 @@ func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
 	}
 	if module, ok := ctx.Module().(*Module); ok {
 		if lib, ok := module.linker.(*libraryDecorator); ok && lib.shared() {
-			if inList(ctx.ModuleName(), *llndkLibraries) || Bool(module.VendorProperties.Double_loadable) {
+			if module.isLlndk(ctx.Config()) || Bool(module.VendorProperties.Double_loadable) {
 				ctx.WalkDeps(check)
 			}
 		}
@@ -1886,7 +1919,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	directStaticDeps := []LinkableInterface{}
 	directSharedDeps := []LinkableInterface{}
 
-	llndkLibraries := llndkLibraries(ctx.Config())
 	vendorPublicLibraries := vendorPublicLibraries(ctx.Config())
 
 	reexportExporter := func(exporter exportedFlagsProducer) {
@@ -2158,7 +2190,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			libName := strings.TrimSuffix(depName, llndkLibrarySuffix)
 			libName = strings.TrimSuffix(libName, vendorPublicLibrarySuffix)
 			libName = strings.TrimPrefix(libName, "prebuilt_")
-			isLLndk := inList(libName, *llndkLibraries)
+			isLLndk := isLlndkLibrary(libName, ctx.Config())
 			isVendorPublicLib := inList(libName, *vendorPublicLibraries)
 			bothVendorAndCoreVariantsExist := ccDep.HasVendorVariant() || isLLndk
 
@@ -2349,7 +2381,9 @@ func (c *Module) IsInstallableToApex() bool {
 	if shared, ok := c.linker.(interface {
 		shared() bool
 	}); ok {
-		return shared.shared()
+		// Stub libs and prebuilt libs in a versioned SDK are not
+		// installable to APEX even though they are shared libs.
+		return shared.shared() && !c.IsStubs() && c.ContainingSdk().Unversioned()
 	} else if _, ok := c.linker.(testPerSrc); ok {
 		return true
 	}
@@ -2453,10 +2487,10 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&PgoProperties{},
 		&XomProperties{},
 		&android.ProtoProperties{},
+		&android.ApexProperties{},
 	)
 
 	android.InitDefaultsModule(module)
-	android.InitApexModule(module)
 
 	return module
 }
@@ -2652,7 +2686,11 @@ func ImageMutator(mctx android.BottomUpMutatorContext) {
 		// or a /system directory that is available to vendor.
 		coreVariantNeeded = true
 		vendorVariants = append(vendorVariants, platformVndkVersion)
-		if m.IsVndk() {
+		// VNDK modules must not create BOARD_VNDK_VERSION variant because its
+		// code is PLATFORM_VNDK_VERSION.
+		// On the other hand, vendor_available modules which are not VNDK should
+		// also build BOARD_VNDK_VERSION because it's installed in /vendor.
+		if !m.IsVndk() {
 			vendorVariants = append(vendorVariants, deviceVndkVersion)
 		}
 	} else if vendorSpecific && String(m.Properties.Sdk_version) == "" {

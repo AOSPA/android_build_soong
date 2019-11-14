@@ -37,6 +37,7 @@ var (
 
 	InstrumentFrameworkModules = []string{
 		"framework",
+		"framework-minus-apex",
 		"telephony-common",
 		"services",
 		"android.car",
@@ -87,12 +88,10 @@ func init() {
 		return ctx.Config().Getenv("ANDROID_JAVA_HOME")
 	})
 	pctx.VariableFunc("JlinkVersion", func(ctx android.PackageVarContext) string {
-		switch ctx.Config().Getenv("EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN") {
-		case "true":
-			return "11"
-		default:
-			return "9"
+		if override := ctx.Config().Getenv("OVERRIDE_JLINK_VERSION_NUMBER"); override != "" {
+			return override
 		}
+		return "11"
 	})
 
 	pctx.SourcePathVariable("JavaToolchain", "${JavaHome}/bin")

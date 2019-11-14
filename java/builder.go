@@ -38,7 +38,7 @@ var (
 	// this, all java rules write into separate directories and then are combined into a .jar file
 	// (if the rule produces .class files) or a .srcjar file (if the rule produces .java files).
 	// .srcjar files are unzipped into a temporary directory when compiled with javac.
-	javac = pctx.AndroidGomaStaticRule("javac",
+	javac = pctx.AndroidRemoteStaticRule("javac", android.SUPPORTS_GOMA,
 		blueprint.RuleParams{
 			Command: `rm -rf "$outDir" "$annoDir" "$srcJarDir" && mkdir -p "$outDir" "$annoDir" "$srcJarDir" && ` +
 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
@@ -238,12 +238,14 @@ func emitXrefRule(ctx android.ModuleContext, xrefFile android.WritablePath, idx 
 	flags javaBuilderFlags, deps android.Paths) {
 
 	deps = append(deps, srcJars...)
+	classpath := flags.classpath
 
 	var bootClasspath string
 	if flags.javaVersion.usesJavaModules() {
 		var systemModuleDeps android.Paths
 		bootClasspath, systemModuleDeps = flags.systemModules.FormJavaSystemModulesPath(ctx.Device())
 		deps = append(deps, systemModuleDeps...)
+		classpath = append(flags.java9Classpath, classpath...)
 	} else {
 		deps = append(deps, flags.bootClasspath...)
 		if len(flags.bootClasspath) == 0 && ctx.Device() {
@@ -255,7 +257,7 @@ func emitXrefRule(ctx android.ModuleContext, xrefFile android.WritablePath, idx 
 		}
 	}
 
-	deps = append(deps, flags.classpath...)
+	deps = append(deps, classpath...)
 	deps = append(deps, flags.processorPath...)
 
 	processor := "-proc:none"
@@ -278,7 +280,7 @@ func emitXrefRule(ctx android.ModuleContext, xrefFile android.WritablePath, idx 
 			Args: map[string]string{
 				"annoDir":       android.PathForModuleOut(ctx, intermediatesDir, "anno").String(),
 				"bootClasspath": bootClasspath,
-				"classpath":     flags.classpath.FormJavaClassPath("-classpath"),
+				"classpath":     classpath.FormJavaClassPath("-classpath"),
 				"javacFlags":    flags.javacFlags,
 				"javaVersion":   flags.javaVersion.String(),
 				"outDir":        android.PathForModuleOut(ctx, "javac", "classes.xref").String(),
@@ -311,7 +313,7 @@ func TransformJavaToHeaderClasses(ctx android.ModuleContext, outputFile android.
 			// ensure turbine does not fall back to the default bootclasspath.
 			bootClasspath = `--bootclasspath ""`
 		} else {
-			bootClasspath = strings.Join(flags.bootClasspath.FormTurbineClasspath("--bootclasspath "), " ")
+			bootClasspath = flags.bootClasspath.FormTurbineClassPath("--bootclasspath ")
 		}
 	}
 
@@ -328,7 +330,7 @@ func TransformJavaToHeaderClasses(ctx android.ModuleContext, outputFile android.
 			"javacFlags":    flags.javacFlags,
 			"bootClasspath": bootClasspath,
 			"srcJars":       strings.Join(srcJars.Strings(), " "),
-			"classpath":     strings.Join(classpath.FormTurbineClasspath("--classpath "), " "),
+			"classpath":     classpath.FormTurbineClassPath("--classpath "),
 			"outDir":        android.PathForModuleOut(ctx, "turbine", "classes").String(),
 			"javaVersion":   flags.javaVersion.String(),
 		},
@@ -521,18 +523,26 @@ func TransformZipAlign(ctx android.ModuleContext, outputFile android.WritablePat
 
 type classpath android.Paths
 
-func (x *classpath) FormJavaClassPath(optName string) string {
+func (x *classpath) formJoinedClassPath(optName string, sep string) string {
 	if optName != "" && !strings.HasSuffix(optName, "=") && !strings.HasSuffix(optName, " ") {
 		optName += " "
 	}
 	if len(*x) > 0 {
-		return optName + strings.Join(x.Strings(), ":")
+		return optName + strings.Join(x.Strings(), sep)
 	} else {
 		return ""
 	}
 }
+func (x *classpath) FormJavaClassPath(optName string) string {
+	return x.formJoinedClassPath(optName, ":")
+}
 
-func (x *classpath) FormTurbineClasspath(optName string) []string {
+func (x *classpath) FormTurbineClassPath(optName string) string {
+	return x.formJoinedClassPath(optName, " ")
+}
+
+// FormRepeatedClassPath returns a list of arguments with the given optName prefixed to each element of the classpath.
+func (x *classpath) FormRepeatedClassPath(optName string) []string {
 	if x == nil || *x == nil {
 		return nil
 	}
