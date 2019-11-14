@@ -168,24 +168,32 @@ func CreateTestContext(bp string) *android.TestContext {
 	ctx.RegisterModuleType("cc_object", android.ModuleFactoryAdaptor(cc.ObjectFactory))
 	ctx.RegisterModuleType("rust_binary", android.ModuleFactoryAdaptor(RustBinaryFactory))
 	ctx.RegisterModuleType("rust_binary_host", android.ModuleFactoryAdaptor(RustBinaryHostFactory))
+	ctx.RegisterModuleType("rust_test", android.ModuleFactoryAdaptor(RustTestFactory))
+	ctx.RegisterModuleType("rust_test_host", android.ModuleFactoryAdaptor(RustTestHostFactory))
 	ctx.RegisterModuleType("rust_library", android.ModuleFactoryAdaptor(RustLibraryFactory))
 	ctx.RegisterModuleType("rust_library_host", android.ModuleFactoryAdaptor(RustLibraryHostFactory))
 	ctx.RegisterModuleType("rust_library_host_rlib", android.ModuleFactoryAdaptor(RustLibraryRlibHostFactory))
 	ctx.RegisterModuleType("rust_library_host_dylib", android.ModuleFactoryAdaptor(RustLibraryDylibHostFactory))
 	ctx.RegisterModuleType("rust_library_rlib", android.ModuleFactoryAdaptor(RustLibraryRlibFactory))
 	ctx.RegisterModuleType("rust_library_dylib", android.ModuleFactoryAdaptor(RustLibraryDylibFactory))
+	ctx.RegisterModuleType("rust_library_shared", android.ModuleFactoryAdaptor(RustLibrarySharedFactory))
+	ctx.RegisterModuleType("rust_library_static", android.ModuleFactoryAdaptor(RustLibraryStaticFactory))
+	ctx.RegisterModuleType("rust_library_host_shared", android.ModuleFactoryAdaptor(RustLibrarySharedHostFactory))
+	ctx.RegisterModuleType("rust_library_host_static", android.ModuleFactoryAdaptor(RustLibraryStaticHostFactory))
 	ctx.RegisterModuleType("rust_proc_macro", android.ModuleFactoryAdaptor(ProcMacroFactory))
 	ctx.RegisterModuleType("rust_prebuilt_dylib", android.ModuleFactoryAdaptor(PrebuiltDylibFactory))
 	ctx.RegisterModuleType("toolchain_library", android.ModuleFactoryAdaptor(cc.ToolchainLibraryFactory))
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
-
+		// cc mutators
 		ctx.BottomUp("image", cc.ImageMutator).Parallel()
 		ctx.BottomUp("link", cc.LinkageMutator).Parallel()
 		ctx.BottomUp("version", cc.VersionMutator).Parallel()
 		ctx.BottomUp("begin", cc.BeginMutator).Parallel()
-	})
 
+		// rust mutators
+		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
+		ctx.BottomUp("rust_unit_tests", TestPerSrcMutator).Parallel()
+	})
 	bp = bp + GatherRequiredDepsForTest()
 
 	mockFS := map[string][]byte{

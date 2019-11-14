@@ -20,13 +20,13 @@ import (
 	"strconv"
 )
 
-func getNdkStlFamily(m *Module) string {
+func getNdkStlFamily(m LinkableInterface) string {
 	family, _ := getNdkStlFamilyAndLinkType(m)
 	return family
 }
 
-func getNdkStlFamilyAndLinkType(m *Module) (string, string) {
-	stl := m.stl.Properties.SelectedStl
+func getNdkStlFamilyAndLinkType(m LinkableInterface) (string, string) {
+	stl := m.SelectedStl()
 	switch stl {
 	case "ndk_libc++_shared":
 		return "libc++", "shared"
@@ -175,7 +175,7 @@ func (stl *stl) deps(ctx BaseModuleContext, deps Deps) Deps {
 				deps.StaticLibs = append(deps.StaticLibs, "libunwind_llvm")
 			}
 			if ctx.staticBinary() {
-				deps.StaticLibs = append(deps.StaticLibs, "libm", "libc", "libdl")
+				deps.StaticLibs = append(deps.StaticLibs, "libm", "libc")
 			}
 		}
 	case "":

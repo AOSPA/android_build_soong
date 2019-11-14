@@ -130,20 +130,15 @@ func (p *vndkPrebuiltLibraryDecorator) singleSourcePath(ctx ModuleContext) andro
 func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 	flags Flags, deps PathDeps, objs Objects) android.Path {
 
-	arches := ctx.DeviceConfig().Arches()
-	if len(arches) == 0 || arches[0].ArchType.String() != p.arch() {
-		ctx.Module().SkipInstall()
-		return nil
-	}
-
-	if ctx.DeviceConfig().BinderBitness() != p.binderBit() {
+	if !p.matchesWithDevice(ctx.DeviceConfig()) {
 		ctx.Module().SkipInstall()
 		return nil
 	}
 
 	if len(p.properties.Srcs) > 0 && p.shared() {
 		p.libraryDecorator.exportIncludes(ctx)
-		p.libraryDecorator.reexportSystemDirs(p.properties.Export_system_include_dirs...)
+		p.libraryDecorator.reexportSystemDirs(
+			android.PathsForModuleSrc(ctx, p.properties.Export_system_include_dirs)...)
 		p.libraryDecorator.reexportFlags(p.properties.Export_flags...)
 		// current VNDK prebuilts are only shared libs.
 		return p.singleSourcePath(ctx)
@@ -151,6 +146,20 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 
 	ctx.Module().SkipInstall()
 	return nil
+}
+
+func (p *vndkPrebuiltLibraryDecorator) matchesWithDevice(config android.DeviceConfig) bool {
+	arches := config.Arches()
+	if len(arches) == 0 || arches[0].ArchType.String() != p.arch() {
+		return false
+	}
+	if config.BinderBitness() != p.binderBit() {
+		return false
+	}
+	if len(p.properties.Srcs) == 0 {
+		return false
+	}
+	return true
 }
 
 func (p *vndkPrebuiltLibraryDecorator) nativeCoverage() bool {
