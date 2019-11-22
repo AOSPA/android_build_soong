@@ -265,10 +265,8 @@ func init() {
 
 func setSdclangVars() {
 	sdclangPath := ""
-	sdclangPath2 := ""
 	sdclangAEFlag := ""
 	sdclangFlags := ""
-	sdclangFlags2 := ""
 
 	product := android.SdclangEnv["TARGET_PRODUCT"]
 	aeConfigPath := android.SdclangEnv["SDCLANG_AE_CONFIG"]
@@ -310,19 +308,9 @@ func setSdclangVars() {
 				} else {
 					panic("SDCLANG_PATH is required in the default block")
 				}
-				// SDCLANG_PATH_2 is required in the default block
-				if _, ok := devConfig["SDCLANG_PATH_2"]; ok {
-					sdclangPath2 = devConfig["SDCLANG_PATH_2"].(string)
-				} else {
-					panic("SDCLANG_PATH_2 is required in the default block")
-				}
 				// SDCLANG_FLAGS is optional in the default block
 				if _, ok := devConfig["SDCLANG_FLAGS"]; ok {
 					sdclangFlags = devConfig["SDCLANG_FLAGS"].(string)
-				}
-				// SDCLANG_FLAGS_2 is optional in the default block
-				if _, ok := devConfig["SDCLANG_FLAGS_2"]; ok {
-					sdclangFlags2 = devConfig["SDCLANG_FLAGS_2"].(string)
 				}
 			} else {
 				panic("Default block is required in the SD Clang config file")
@@ -338,17 +326,9 @@ func setSdclangVars() {
 				if _, ok := devConfig["SDCLANG_PATH"]; ok {
 					sdclangPath = devConfig["SDCLANG_PATH"].(string)
 				}
-				// SDCLANG_PATH_2 is optional in the device specific block
-				if _, ok := devConfig["SDCLANG_PATH_2"]; ok {
-					sdclangPath2 = devConfig["SDCLANG_PATH_2"].(string)
-				}
 				// SDCLANG_FLAGS is optional in the device specific block
 				if _, ok := devConfig["SDCLANG_FLAGS"]; ok {
 					sdclangFlags = devConfig["SDCLANG_FLAGS"].(string)
-				}
-				// SDCLANG_FLAGS_2 is optional in the device specific block
-				if _, ok := devConfig["SDCLANG_FLAGS_2"]; ok {
-					sdclangFlags2 = devConfig["SDCLANG_FLAGS_2"].(string)
 				}
 			}
 			b, _ := strconv.ParseBool(sdclangSA)
@@ -379,11 +359,6 @@ func setSdclangVars() {
 		panic("SDCLANG_PATH can not be empty")
 	}
 
-	// Sanity check SDCLANG_PATH_2
-	if envPath := android.SdclangEnv["SDCLANG_PATH_2"]; sdclangPath2 == "" && envPath == "" {
-		panic("SDCLANG_PATH_2 can not be empty")
-	}
-
 	// Override SDCLANG_PATH if the variable is set in the environment
 	pctx.VariableFunc("SDClangBin", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("SDCLANG_PATH"); override != "" {
@@ -392,28 +367,12 @@ func setSdclangVars() {
 		return sdclangPath
 	})
 
-	// Override SDCLANG_PATH_2 if the variable is set in the environment
-	pctx.VariableFunc("SDClangBin2", func(ctx android.PackageVarContext) string {
-		if override := ctx.Config().Getenv("SDCLANG_PATH_2"); override != "" {
-			return override
-		}
-		return sdclangPath2
-	})
-
 	// Override SDCLANG_COMMON_FLAGS if the variable is set in the environment
 	pctx.VariableFunc("SDClangFlags", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("SDCLANG_COMMON_FLAGS"); override != "" {
 			return override
 		}
 		return sdclangAEFlag + " " + sdclangFlags
-	})
-
-	// Override SDCLANG_COMMON_FLAGS_2 if the variable is set in the environment
-	pctx.VariableFunc("SDClangFlags2", func(ctx android.PackageVarContext) string {
-		if override := ctx.Config().Getenv("SDCLANG_COMMON_FLAGS_2"); override != "" {
-			return override
-		}
-		return sdclangAEFlag + " " + sdclangFlags2
 	})
 
 	SDClangPath = sdclangPath
