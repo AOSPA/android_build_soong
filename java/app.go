@@ -38,6 +38,7 @@ func init() {
 	android.RegisterModuleType("android_test_helper_app", AndroidTestHelperAppFactory)
 	android.RegisterModuleType("android_app_certificate", AndroidAppCertificateFactory)
 	android.RegisterModuleType("override_android_app", OverrideAndroidAppModuleFactory)
+	android.RegisterModuleType("override_android_test", OverrideAndroidTestModuleFactory)
 	android.RegisterModuleType("android_app_import", AndroidAppImportFactory)
 	android.RegisterModuleType("android_test_import", AndroidTestImportFactory)
 
@@ -78,8 +79,9 @@ type appProperties struct {
 
 	// Store native libraries uncompressed in the APK and set the android:extractNativeLibs="false" manifest
 	// flag so that they are used from inside the APK at runtime.  Defaults to true for android_test modules unless
-	// sdk_version or min_sdk_version is set to a version that doesn't support it (<23), defaults to false for other
-	// module types where the native libraries are generally preinstalled outside the APK.
+	// sdk_version or min_sdk_version is set to a version that doesn't support it (<23), defaults to true for
+	// android_app modules that are embedded to APEXes, defaults to false for other module types where the native
+	// libraries are generally preinstalled outside the APK.
 	Use_embedded_native_libs *bool
 
 	// Store dex files uncompressed in the APK and set the android:useEmbeddedDex="true" manifest attribute so that
@@ -217,7 +219,8 @@ func (a *AndroidApp) useEmbeddedNativeLibs(ctx android.ModuleContext) bool {
 		ctx.PropertyErrorf("min_sdk_version", "invalid value %q: %s", a.minSdkVersion(), err)
 	}
 
-	return minSdkVersion >= 23 && Bool(a.appProperties.Use_embedded_native_libs)
+	return (minSdkVersion >= 23 && Bool(a.appProperties.Use_embedded_native_libs)) ||
+		!a.IsForPlatform()
 }
 
 // Returns whether this module should have the dex file stored uncompressed in the APK.
@@ -241,7 +244,7 @@ func (a *AndroidApp) shouldUncompressDex(ctx android.ModuleContext) bool {
 
 func (a *AndroidApp) shouldEmbedJnis(ctx android.BaseModuleContext) bool {
 	return ctx.Config().UnbundledBuild() || Bool(a.appProperties.Use_embedded_native_libs) ||
-		a.appProperties.AlwaysPackageNativeLibs
+		!a.IsForPlatform() || a.appProperties.AlwaysPackageNativeLibs
 }
 
 func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
@@ -496,9 +499,11 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.bundleFile = bundleFile
 
 	// Install the app package.
-	ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile)
-	for _, extra := range a.extraOutputFiles {
-		ctx.InstallFile(a.installDir, extra.Base(), extra)
+	if (Bool(a.Module.properties.Installable) || ctx.Host()) && a.IsForPlatform() {
+		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile)
+		for _, extra := range a.extraOutputFiles {
+			ctx.InstallFile(a.installDir, extra.Base(), extra)
+		}
 	}
 }
 
@@ -585,12 +590,16 @@ func AndroidAppFactory() android.Module {
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	android.InitOverridableModule(module, &module.appProperties.Overrides)
+	android.InitApexModule(module)
 
 	return module
 }
 
 type appTestProperties struct {
 	Instrumentation_for *string
+
+	// if specified, the instrumentation target package name in the manifest is overwritten by it.
+	Instrumentation_target_package *string
 }
 
 type AndroidTest struct {
@@ -609,8 +618,11 @@ func (a *AndroidTest) InstallInTestcases() bool {
 }
 
 func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	// Check if the instrumentation target package is overridden before generating build actions.
-	if a.appTestProperties.Instrumentation_for != nil {
+	if a.appTestProperties.Instrumentation_target_package != nil {
+		a.additionalAaptFlags = append(a.additionalAaptFlags,
+			"--rename-instrumentation-target-package "+*a.appTestProperties.Instrumentation_target_package)
+	} else if a.appTestProperties.Instrumentation_for != nil {
+		// Check if the instrumentation target package is overridden.
 		manifestPackageName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(*a.appTestProperties.Instrumentation_for)
 		if overridden {
 			a.additionalAaptFlags = append(a.additionalAaptFlags, "--rename-instrumentation-target-package "+manifestPackageName)
@@ -625,6 +637,10 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 func (a *AndroidTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 	a.AndroidApp.DepsMutator(ctx)
+}
+
+func (a *AndroidTest) OverridablePropertiesDepsMutator(ctx android.BottomUpMutatorContext) {
+	a.AndroidApp.OverridablePropertiesDepsMutator(ctx)
 	if a.appTestProperties.Instrumentation_for != nil {
 		// The android_app dependency listed in instrumentation_for needs to be added to the classpath for javac,
 		// but not added to the aapt2 link includes like a normal android_app or android_library dependency, so
@@ -660,6 +676,7 @@ func AndroidTestFactory() android.Module {
 
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
+	android.InitOverridableModule(module, &module.appProperties.Overrides)
 	return module
 }
 
@@ -752,6 +769,28 @@ func (i *OverrideAndroidApp) GenerateAndroidBuildActions(ctx android.ModuleConte
 func OverrideAndroidAppModuleFactory() android.Module {
 	m := &OverrideAndroidApp{}
 	m.AddProperties(&overridableAppProperties{})
+
+	android.InitAndroidMultiTargetsArchModule(m, android.DeviceSupported, android.MultilibCommon)
+	android.InitOverrideModule(m)
+	return m
+}
+
+type OverrideAndroidTest struct {
+	android.ModuleBase
+	android.OverrideModuleBase
+}
+
+func (i *OverrideAndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	// All the overrides happen in the base module.
+	// TODO(jungjw): Check the base module type.
+}
+
+// override_android_test is used to create an android_app module based on another android_test by overriding
+// some of its properties.
+func OverrideAndroidTestModuleFactory() android.Module {
+	m := &OverrideAndroidTest{}
+	m.AddProperties(&overridableAppProperties{})
+	m.AddProperties(&appTestProperties{})
 
 	android.InitAndroidMultiTargetsArchModule(m, android.DeviceSupported, android.MultilibCommon)
 	android.InitOverrideModule(m)
