@@ -54,6 +54,18 @@ func init() {
 	android.RegisterSingletonType("kythe_java_extract", kytheExtractJavaFactory)
 }
 
+func (j *Module) checkSdkVersion(ctx android.ModuleContext) {
+	if j.SocSpecific() || j.DeviceSpecific() ||
+		(j.ProductSpecific() && ctx.Config().EnforceProductPartitionInterface()) {
+		if sc, ok := ctx.Module().(sdkContext); ok {
+			if sc.sdkVersion() == "" {
+				ctx.PropertyErrorf("sdk_version",
+					"sdk_version must have a value when the module is located at vendor or product(only if PRODUCT_ENFORCE_PRODUCT_PARTITION_INTERFACE is set).")
+			}
+		}
+	}
+}
+
 func (j *Module) checkPlatformAPI(ctx android.ModuleContext) {
 	if sc, ok := ctx.Module().(sdkContext); ok {
 		usePlatformAPI := proptools.Bool(j.deviceProperties.Platform_apis)
@@ -430,6 +442,11 @@ type jniDependencyTag struct {
 	target android.Target
 }
 
+func IsJniDepTag(depTag blueprint.DependencyTag) bool {
+	_, ok := depTag.(*jniDependencyTag)
+	return ok
+}
+
 var (
 	staticLibTag          = dependencyTag{name: "staticlib"}
 	libTag                = dependencyTag{name: "javalib"}
@@ -446,18 +463,6 @@ var (
 	instrumentationForTag = dependencyTag{name: "instrumentation_for"}
 	usesLibTag            = dependencyTag{name: "uses-library"}
 )
-
-func defaultSdkVersion(ctx checkVendorModuleContext) string {
-	if ctx.SocSpecific() || ctx.DeviceSpecific() {
-		return "system_current"
-	}
-	return ""
-}
-
-type checkVendorModuleContext interface {
-	SocSpecific() bool
-	DeviceSpecific() bool
-}
 
 type sdkDep struct {
 	useModule, useFiles, useDefaultLibs, invalidVersion bool
@@ -505,7 +510,7 @@ func (j *Module) shouldInstrumentStatic(ctx android.BaseModuleContext) bool {
 }
 
 func (j *Module) sdkVersion() string {
-	return proptools.StringDefault(j.deviceProperties.Sdk_version, defaultSdkVersion(j))
+	return String(j.deviceProperties.Sdk_version)
 }
 
 func (j *Module) systemModules() string {
@@ -967,6 +972,7 @@ func (j *Module) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaB
 		// disk and memory usage.
 		javacFlags = append(javacFlags, "-g:source,lines")
 	}
+	javacFlags = append(javacFlags, "-Xlint:-dep-ann")
 
 	if ctx.Config().RunErrorProne() {
 		if config.ErrorProneClasspath == nil {
@@ -1602,6 +1608,10 @@ func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 	return depTag == staticLibTag
 }
 
+func (j *Module) Stem() string {
+	return proptools.StringDefault(j.deviceProperties.Stem, j.Name())
+}
+
 //
 // Java libraries (.jar file)
 //
@@ -1631,8 +1641,8 @@ func shouldUncompressDex(ctx android.ModuleContext, dexpreopter *dexpreopter) bo
 }
 
 func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework",
-		proptools.StringDefault(j.deviceProperties.Stem, ctx.ModuleName())+".jar")
+	j.checkSdkVersion(ctx)
+	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar")
 	j.dexpreopter.isSDKLibrary = j.deviceProperties.IsSDKLibrary
 	j.dexpreopter.isInstallable = Bool(j.properties.Installable)
 	j.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &j.dexpreopter)
@@ -1674,9 +1684,9 @@ func LibraryFactory() android.Module {
 		&module.Module.dexpreoptProperties,
 		&module.Module.protoProperties)
 
-	InitJavaModule(module, android.HostAndDeviceSupported)
 	android.InitApexModule(module)
 	android.InitSdkAwareModule(module)
+	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
 }
 
@@ -1698,8 +1708,8 @@ func LibraryHostFactory() android.Module {
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
-	InitJavaModule(module, android.HostSupported)
 	android.InitApexModule(module)
+	InitJavaModule(module, android.HostSupported)
 	return module
 }
 
@@ -1975,7 +1985,7 @@ type Import struct {
 }
 
 func (j *Import) sdkVersion() string {
-	return proptools.StringDefault(j.properties.Sdk_version, defaultSdkVersion(j))
+	return String(j.properties.Sdk_version)
 }
 
 func (j *Import) minSdkVersion() string {
@@ -1994,6 +2004,10 @@ func (j *Import) Name() string {
 	return j.prebuilt.Name(j.ModuleBase.Name())
 }
 
+func (j *Import) Stem() string {
+	return proptools.StringDefault(j.properties.Stem, j.ModuleBase.Name())
+}
+
 func (j *Import) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
 }
@@ -2001,7 +2015,7 @@ func (j *Import) DepsMutator(ctx android.BottomUpMutatorContext) {
 func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	jars := android.PathsForModuleSrc(ctx, j.properties.Jars)
 
-	jarName := proptools.StringDefault(j.properties.Stem, ctx.ModuleName()) + ".jar"
+	jarName := j.Stem() + ".jar"
 	outputFile := android.PathForModuleOut(ctx, "combined", jarName)
 	TransformJarsToJar(ctx, outputFile, "for prebuilts", jars, android.OptionalPath{},
 		false, j.properties.Exclude_files, j.properties.Exclude_dirs)
@@ -2121,9 +2135,9 @@ func ImportFactory() android.Module {
 	module.AddProperties(&module.properties)
 
 	android.InitPrebuiltModule(module, &module.properties.Jars)
-	InitJavaModule(module, android.HostAndDeviceSupported)
 	android.InitApexModule(module)
 	android.InitSdkAwareModule(module)
+	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
 }
 
@@ -2138,8 +2152,8 @@ func ImportFactoryHost() android.Module {
 	module.AddProperties(&module.properties)
 
 	android.InitPrebuiltModule(module, &module.properties.Jars)
-	InitJavaModule(module, android.HostSupported)
 	android.InitApexModule(module)
+	InitJavaModule(module, android.HostSupported)
 	return module
 }
 
@@ -2178,13 +2192,16 @@ func (j *DexImport) Name() string {
 	return j.prebuilt.Name(j.ModuleBase.Name())
 }
 
+func (j *DexImport) Stem() string {
+	return proptools.StringDefault(j.properties.Stem, j.ModuleBase.Name())
+}
+
 func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	if len(j.properties.Jars) != 1 {
 		ctx.PropertyErrorf("jars", "exactly one jar must be provided")
 	}
 
-	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework",
-		proptools.StringDefault(j.properties.Stem, ctx.ModuleName())+".jar")
+	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar")
 	j.dexpreopter.isInstallable = true
 	j.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &j.dexpreopter)
 
@@ -2247,8 +2264,8 @@ func DexImportFactory() android.Module {
 	module.AddProperties(&module.properties)
 
 	android.InitPrebuiltModule(module, &module.properties.Jars)
-	InitJavaModule(module, android.DeviceSupported)
 	android.InitApexModule(module)
+	InitJavaModule(module, android.DeviceSupported)
 	return module
 }
 
@@ -2314,10 +2331,10 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&AARImportProperties{},
 		&sdkLibraryProperties{},
 		&DexImportProperties{},
+		&android.ApexProperties{},
 	)
 
 	android.InitDefaultsModule(module)
-	android.InitApexModule(module)
 	return module
 }
 

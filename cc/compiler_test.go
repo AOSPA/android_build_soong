@@ -12,37 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-python_test_host {
-    name: "par_test",
-    main: "par_test.py",
-    srcs: [
-        "par_test.py",
-        "testpkg/par_test.py",
-    ],
+package cc
 
-    version: {
-        py2: {
-            enabled: true,
-            embedded_launcher: true,
-        },
-        py3: {
-            enabled: false,
-            embedded_launcher: true,
-        },
-    },
-}
+import (
+	"testing"
+)
 
-python_test_host {
-    name: "par_test3",
-    main: "par_test.py",
-    srcs: [
-        "par_test.py",
-        "testpkg/par_test.py",
-    ],
-
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
+func TestIsThirdParty(t *testing.T) {
+	shouldFail := []string{
+		"external/foo/",
+		"vendor/bar/",
+		"hardware/underwater_jaguar/",
+	}
+	shouldPass := []string{
+		"vendor/google/cts/",
+		"hardware/google/pixel",
+		"hardware/interfaces/camera",
+		"hardware/ril/supa_ril",
+	}
+	for _, path := range shouldFail {
+		if !isThirdParty(path) {
+			t.Errorf("Expected %s to be considered third party", path)
+		}
+	}
+	for _, path := range shouldPass {
+		if isThirdParty(path) {
+			t.Errorf("Expected %s to *not* be considered third party", path)
+		}
+	}
 }

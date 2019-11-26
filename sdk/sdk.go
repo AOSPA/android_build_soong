@@ -19,14 +19,17 @@ import (
 	"strconv"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
 	// This package doesn't depend on the apex package, but import it to make its mutators to be
 	// registered before mutators in this package. See RegisterPostDepsMutators for more details.
 	_ "android/soong/apex"
+	"android/soong/cc"
 )
 
 func init() {
+	pctx.Import("android/soong/android")
 	android.RegisterModuleType("sdk", ModuleFactory)
 	android.RegisterModuleType("sdk_snapshot", SnapshotModuleFactory)
 	android.PreDepsMutators(RegisterPreDepsMutators)
@@ -39,8 +42,7 @@ type sdk struct {
 
 	properties sdkProperties
 
-	updateScript android.OutputPath
-	freezeScript android.OutputPath
+	snapshotFile android.OptionalPath
 }
 
 type sdkProperties struct {
@@ -59,6 +61,13 @@ func ModuleFactory() android.Module {
 	s.AddProperties(&s.properties)
 	android.InitAndroidMultiTargetsArchModule(s, android.HostAndDeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(s)
+	android.AddLoadHook(s, func(ctx android.LoadHookContext) {
+		type props struct {
+			Compile_multilib *string
+		}
+		p := &props{Compile_multilib: proptools.StringPtr("both")}
+		ctx.AppendProperties(p)
+	})
 	return s
 }
 
@@ -95,11 +104,24 @@ func (s *sdk) frozenVersions(ctx android.BaseModuleContext) []string {
 }
 
 func (s *sdk) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	s.buildSnapshotGenerationScripts(ctx)
+	if !s.snapshot() {
+		// We don't need to create a snapshot out of sdk_snapshot.
+		// That doesn't make sense. We need a snapshot to create sdk_snapshot.
+		s.snapshotFile = android.OptionalPathForPath(s.buildSnapshot(ctx))
+	}
 }
 
 func (s *sdk) AndroidMkEntries() android.AndroidMkEntries {
-	return s.androidMkEntriesForScript()
+	if !s.snapshotFile.Valid() {
+		return android.AndroidMkEntries{}
+	}
+
+	return android.AndroidMkEntries{
+		Class:      "FAKE",
+		OutputFile: s.snapshotFile,
+		DistFile:   s.snapshotFile,
+		Include:    "$(BUILD_PHONY_PACKAGE)",
+	}
 }
 
 // RegisterPreDepsMutators registers pre-deps mutators to support modules implementing SdkAware
@@ -148,10 +170,17 @@ func memberMutator(mctx android.BottomUpMutatorContext) {
 
 		targets := mctx.MultiTargets()
 		for _, target := range targets {
-			mctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
-				{Mutator: "image", Variation: "core"},
-				{Mutator: "link", Variation: "shared"},
-			}...), sdkMemberDepTag, m.properties.Native_shared_libs...)
+			for _, lib := range m.properties.Native_shared_libs {
+				name, version := cc.StubsLibNameAndVersion(lib)
+				if version == "" {
+					version = cc.LatestStubsVersionFor(mctx.Config(), name)
+				}
+				mctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
+					{Mutator: "image", Variation: "core"},
+					{Mutator: "link", Variation: "shared"},
+					{Mutator: "version", Variation: version},
+				}...), sdkMemberDepTag, name)
+			}
 		}
 	}
 }
