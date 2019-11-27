@@ -298,9 +298,20 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
-		if s.Integer_overflow == nil && ctx.Config().IntegerOverflowEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
-			s.Integer_overflow = boolPtr(true)
+	if s.Integer_overflow == nil && ctx.Config().IntegerOverflowEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
+		s.Integer_overflow = boolPtr(true)
+	}
+
+	if  ctx.Config().BoundSanitizerEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
+		s.Misc_undefined = append(s.Misc_undefined, "bounds")
+	}
+
+	if ctx.Config().BoundSanitizerDisabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
+		indx := indexList("bounds", s.Misc_undefined)
+		if (indexList("bounds", s.Misc_undefined) != -1) {
+			s.Misc_undefined = append(s.Misc_undefined[0:indx], s.Misc_undefined[indx+1:]...)
 		}
+	}
 
 	// Enable CFI for all components in the include paths (for Aarch64 only)
 	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
