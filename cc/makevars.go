@@ -192,6 +192,9 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 }
 
 func sdclangMakeVars(ctx android.MakeVarsContext) {
+	if config.ForceSDClangOff {
+		ctx.Strict("FORCE_SDCLANG_OFF", strconv.FormatBool(config.ForceSDClangOff))
+	}
 	if config.SDClang {
 		ctx.Strict("SDCLANG", strconv.FormatBool(config.SDClang))
 	}

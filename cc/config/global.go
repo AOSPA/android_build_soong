@@ -133,6 +133,7 @@ var (
 
 	SDClang                  = false
 	SDClangPath              = ""
+	ForceSDClangOff          = false
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
@@ -298,6 +299,10 @@ func setSdclangVars() {
 			// Retrieve the default block
 			if dev, ok := config["default"]; ok {
 				devConfig := dev.(map[string]interface{})
+				// FORCE_SDCLANG_OFF is required in the default block
+				if _, ok := devConfig["FORCE_SDCLANG_OFF"]; ok {
+					ForceSDClangOff = devConfig["FORCE_SDCLANG_OFF"].(bool)
+				}
 				// SDCLANG is optional in the default block
 				if _, ok := devConfig["SDCLANG"]; ok {
 					SDClang = devConfig["SDCLANG"].(bool)
