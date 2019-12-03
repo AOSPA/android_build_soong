@@ -431,6 +431,9 @@ type commonProperties struct {
 	DebugName       string   `blueprint:"mutated"`
 	DebugMutators   []string `blueprint:"mutated"`
 	DebugVariations []string `blueprint:"mutated"`
+
+	// set by ImageMutator
+	ImageVariation string `blueprint:"mutated"`
 }
 
 type hostAndDeviceProperties struct {
@@ -863,6 +866,21 @@ func (m *ModuleBase) Owner() string {
 
 func (m *ModuleBase) NoticeFile() OptionalPath {
 	return m.noticeFile
+}
+
+func (m *ModuleBase) setImageVariation(variant string) {
+	m.commonProperties.ImageVariation = variant
+}
+
+func (m *ModuleBase) ImageVariation() blueprint.Variation {
+	return blueprint.Variation{
+		Mutator:   "image",
+		Variation: m.base().commonProperties.ImageVariation,
+	}
+}
+
+func (m *ModuleBase) InRecovery() bool {
+	return m.base().commonProperties.ImageVariation == RecoveryVariation
 }
 
 func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
@@ -1515,9 +1533,11 @@ func (m *ModuleBase) EnableNativeBridgeSupportByDefault() {
 }
 
 func (m *ModuleBase) MakeAsSystemExt() {
-	if !Bool(m.commonProperties.Vendor) && !Bool(m.commonProperties.Product_specific) {
-		m.commonProperties.System_ext_specific = boolPtr(true)
-	}
+	m.commonProperties.Vendor = boolPtr(false)
+	m.commonProperties.Proprietary = boolPtr(false)
+	m.commonProperties.Soc_specific = boolPtr(false)
+	m.commonProperties.Product_specific = boolPtr(false)
+	m.commonProperties.System_ext_specific = boolPtr(true)
 }
 
 // IsNativeBridgeSupported returns true if "native_bridge_supported" is explicitly set as "true"
@@ -1771,7 +1791,7 @@ type SourceFileProducer interface {
 }
 
 // A module that implements OutputFileProducer can be referenced from any property that is tagged with `android:"path"`
-// using the ":module" syntax or ":module{.tag}" syntax and provides a list of otuput files to be used as if they were
+// using the ":module" syntax or ":module{.tag}" syntax and provides a list of output files to be used as if they were
 // listed in the property.
 type OutputFileProducer interface {
 	OutputFiles(tag string) (Paths, error)

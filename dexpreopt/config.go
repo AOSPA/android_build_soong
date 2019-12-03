@@ -38,15 +38,15 @@ type GlobalConfig struct {
 	DisableGenerateProfile bool   // don't generate profiles
 	ProfileDir             string // directory to find profiles in
 
-	BootJars []string // modules for jars that form the boot class path
+	BootJars          []string // modules for jars that form the boot class path
+	UpdatableBootJars []string // jars within apex that form the boot class path
 
-	ArtApexJars                   []string // modules for jars that are in the ART APEX
-	ProductUpdatableBootModules   []string
-	ProductUpdatableBootLocations []string
+	ArtApexJars       []string // modules for jars that are in the ART APEX
 
-	SystemServerJars []string // jars that form the system server
-	SystemServerApps []string // apps that are loaded into system server
-	SpeedApps        []string // apps that should be speed optimized
+	SystemServerJars          []string // jars that form the system server
+	SystemServerApps          []string // apps that are loaded into system server
+	UpdatableSystemServerJars []string // jars within apex that are loaded into system server
+	SpeedApps                 []string // apps that should be speed optimized
 
 	PreoptFlags []string // global dex2oat flags that should be used if no module-specific dex2oat flags are specified
 
@@ -280,11 +280,11 @@ func GlobalConfigForTests(ctx android.PathContext) GlobalConfig {
 		DisableGenerateProfile:             false,
 		ProfileDir:                         "",
 		BootJars:                           nil,
+		UpdatableBootJars:                  nil,
 		ArtApexJars:                        nil,
-		ProductUpdatableBootModules:        nil,
-		ProductUpdatableBootLocations:      nil,
 		SystemServerJars:                   nil,
 		SystemServerApps:                   nil,
+		UpdatableSystemServerJars:          nil,
 		SpeedApps:                          nil,
 		PreoptFlags:                        nil,
 		DefaultCompilerFilter:              "",
