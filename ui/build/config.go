@@ -144,6 +144,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		"DIST_DIR",
 
 		// Variables that have caused problems in the past
+		"BASH_ENV",
 		"CDPATH",
 		"DISPLAY",
 		"GREP_OPTIONS",
@@ -765,6 +766,10 @@ func (c *configImpl) StartRBE() bool {
 		}
 	}
 	return true
+}
+
+func (c *configImpl) UseRemoteBuild() bool {
+	return c.UseGoma() || c.UseRBE()
 }
 
 // RemoteParallel controls how many remote jobs (i.e., commands which contain
