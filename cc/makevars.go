@@ -192,13 +192,14 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 }
 
 func sdclangMakeVars(ctx android.MakeVarsContext) {
+	if config.ForceSDClangOff {
+		ctx.Strict("FORCE_SDCLANG_OFF", strconv.FormatBool(config.ForceSDClangOff))
+	}
 	if config.SDClang {
 		ctx.Strict("SDCLANG", strconv.FormatBool(config.SDClang))
 	}
 	ctx.Strict("SDCLANG_PATH", "${config.SDClangBin}")
-	ctx.Strict("SDCLANG_PATH_2", "${config.SDClangBin2}")
 	ctx.Strict("SDCLANG_COMMON_FLAGS", "${config.SDClangFlags}")
-	ctx.Strict("SDCLANG_COMMON_FLAGS_2", "${config.SDClangFlags2}")
 }
 
 func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,

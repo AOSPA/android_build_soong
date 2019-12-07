@@ -1901,7 +1901,7 @@ func (c *Module) sdclang(ctx BaseModuleContext) bool {
 	sdclang := Bool(c.Properties.Sdclang)
 
 	// SDLLVM is not for host build
-	if ctx.Host() {
+	if ctx.Host() || config.ForceSDClangOff {
 		return false
 	}
 
