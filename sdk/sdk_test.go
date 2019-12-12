@@ -42,20 +42,22 @@ func testSdkContext(t *testing.T, bp string) (*android.TestContext, android.Conf
 	})
 
 	// from java package
-	ctx.RegisterModuleType("android_app_certificate", android.ModuleFactoryAdaptor(java.AndroidAppCertificateFactory))
-	ctx.RegisterModuleType("java_library", android.ModuleFactoryAdaptor(java.LibraryFactory))
-	ctx.RegisterModuleType("java_import", android.ModuleFactoryAdaptor(java.ImportFactory))
+	ctx.RegisterModuleType("android_app_certificate", java.AndroidAppCertificateFactory)
+	ctx.RegisterModuleType("java_library", java.LibraryFactory)
+	ctx.RegisterModuleType("java_import", java.ImportFactory)
+	ctx.RegisterModuleType("droidstubs", java.DroidstubsFactory)
+	ctx.RegisterModuleType("prebuilt_stubs_sources", java.PrebuiltStubsSourcesFactory)
 
 	// from cc package
-	ctx.RegisterModuleType("cc_library", android.ModuleFactoryAdaptor(cc.LibraryFactory))
-	ctx.RegisterModuleType("cc_library_shared", android.ModuleFactoryAdaptor(cc.LibrarySharedFactory))
-	ctx.RegisterModuleType("cc_object", android.ModuleFactoryAdaptor(cc.ObjectFactory))
-	ctx.RegisterModuleType("cc_prebuilt_library_shared", android.ModuleFactoryAdaptor(cc.PrebuiltSharedLibraryFactory))
-	ctx.RegisterModuleType("cc_prebuilt_library_static", android.ModuleFactoryAdaptor(cc.PrebuiltStaticLibraryFactory))
-	ctx.RegisterModuleType("llndk_library", android.ModuleFactoryAdaptor(cc.LlndkLibraryFactory))
-	ctx.RegisterModuleType("toolchain_library", android.ModuleFactoryAdaptor(cc.ToolchainLibraryFactory))
+	ctx.RegisterModuleType("cc_library", cc.LibraryFactory)
+	ctx.RegisterModuleType("cc_library_shared", cc.LibrarySharedFactory)
+	ctx.RegisterModuleType("cc_object", cc.ObjectFactory)
+	ctx.RegisterModuleType("cc_prebuilt_library_shared", cc.PrebuiltSharedLibraryFactory)
+	ctx.RegisterModuleType("cc_prebuilt_library_static", cc.PrebuiltStaticLibraryFactory)
+	ctx.RegisterModuleType("llndk_library", cc.LlndkLibraryFactory)
+	ctx.RegisterModuleType("toolchain_library", cc.ToolchainLibraryFactory)
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("image", cc.ImageMutator).Parallel()
+		ctx.BottomUp("image", android.ImageMutator).Parallel()
 		ctx.BottomUp("link", cc.LinkageMutator).Parallel()
 		ctx.BottomUp("vndk", cc.VndkMutator).Parallel()
 		ctx.BottomUp("test_per_src", cc.TestPerSrcMutator).Parallel()
@@ -64,13 +66,13 @@ func testSdkContext(t *testing.T, bp string) (*android.TestContext, android.Conf
 	})
 
 	// from apex package
-	ctx.RegisterModuleType("apex", android.ModuleFactoryAdaptor(apex.BundleFactory))
-	ctx.RegisterModuleType("apex_key", android.ModuleFactoryAdaptor(apex.ApexKeyFactory))
+	ctx.RegisterModuleType("apex", apex.BundleFactory)
+	ctx.RegisterModuleType("apex_key", apex.ApexKeyFactory)
 	ctx.PostDepsMutators(apex.RegisterPostDepsMutators)
 
 	// from this package
-	ctx.RegisterModuleType("sdk", android.ModuleFactoryAdaptor(ModuleFactory))
-	ctx.RegisterModuleType("sdk_snapshot", android.ModuleFactoryAdaptor(SnapshotModuleFactory))
+	ctx.RegisterModuleType("sdk", ModuleFactory)
+	ctx.RegisterModuleType("sdk_snapshot", SnapshotModuleFactory)
 	ctx.PreDepsMutators(RegisterPreDepsMutators)
 	ctx.PostDepsMutators(RegisterPostDepsMutators)
 
@@ -104,6 +106,8 @@ func testSdkContext(t *testing.T, bp string) (*android.TestContext, android.Conf
 		"include/Test.h":                             nil,
 		"aidl/foo/bar/Test.aidl":                     nil,
 		"libfoo.so":                                  nil,
+		"stubs-sources/foo/bar/Foo.java":             nil,
+		"foo/bar/Foo.java":                           nil,
 	})
 
 	return ctx, config
@@ -135,33 +139,10 @@ func testSdkError(t *testing.T, pattern, bp string) {
 	t.Fatalf("missing expected error %q (0 errors are returned)", pattern)
 }
 
-// ensure that 'result' contains 'expected'
-func ensureContains(t *testing.T, result string, expected string) {
-	t.Helper()
-	if !strings.Contains(result, expected) {
-		t.Errorf("%q is not found in %q", expected, result)
-	}
-}
-
-// ensures that 'result' does not contain 'notExpected'
-func ensureNotContains(t *testing.T, result string, notExpected string) {
-	t.Helper()
-	if strings.Contains(result, notExpected) {
-		t.Errorf("%q is found in %q", notExpected, result)
-	}
-}
-
 func ensureListContains(t *testing.T, result []string, expected string) {
 	t.Helper()
 	if !android.InList(expected, result) {
 		t.Errorf("%q is not found in %v", expected, result)
-	}
-}
-
-func ensureListNotContains(t *testing.T, result []string, notExpected string) {
-	t.Helper()
-	if android.InList(notExpected, result) {
-		t.Errorf("%q is found in %v", notExpected, result)
 	}
 }
 
@@ -323,6 +304,39 @@ func TestBasicSdkWithCc(t *testing.T) {
 	ensureListContains(t, pathsToStrings(cpplibForMyApex2.Rule("ld").Implicits), sdkMemberV2.String())
 }
 
+// Note: This test does not verify that a droidstubs can be referenced, either
+// directly or indirectly from an APEX as droidstubs can never be a part of an
+// apex.
+func TestBasicSdkWithDroidstubs(t *testing.T) {
+	testSdk(t, `
+		sdk {
+				name: "mysdk",
+				stubs_sources: ["mystub"],
+		}
+		sdk_snapshot {
+				name: "mysdk@10",
+				stubs_sources: ["mystub_mysdk@10"],
+		}
+		prebuilt_stubs_sources {
+				name: "mystub_mysdk@10",
+				sdk_member_name: "mystub",
+				srcs: ["stubs-sources/foo/bar/Foo.java"],
+		}
+		droidstubs {
+				name: "mystub",
+				srcs: ["foo/bar/Foo.java"],
+				sdk_version: "none",
+				system_modules: "none",
+		}
+		java_library {
+				name: "myjavalib",
+				srcs: [":mystub"],
+				sdk_version: "none",
+				system_modules: "none",
+		}
+	`)
+}
+
 func TestDepNotInRequiredSdks(t *testing.T) {
 	testSdkError(t, `module "myjavalib".*depends on "otherlib".*that isn't part of the required SDKs:.*`, `
 		sdk {
@@ -417,6 +431,7 @@ func TestSnapshot(t *testing.T) {
 			name: "mysdk",
 			java_libs: ["myjavalib"],
 			native_shared_libs: ["mynativelib"],
+			stubs_sources: ["myjavaapistubs"],
 		}
 
 		java_library {
@@ -444,15 +459,115 @@ func TestSnapshot(t *testing.T) {
 			system_shared_libs: [],
 			stl: "none",
 		}
+
+		droidstubs {
+			name: "myjavaapistubs",
+			srcs: ["foo/bar/Foo.java"],
+			system_modules: "none",
+			sdk_version: "none",
+		}
 	`)
+
+	sdk := ctx.ModuleForTests("mysdk", "android_common").Module().(*sdk)
+
+	checkSnapshotAndroidBpContents(t, sdk, `// This is auto-generated. DO NOT EDIT.
+
+java_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    jars: ["java/myjavalib.jar"],
+}
+
+java_import {
+    name: "myjavalib",
+    prefer: false,
+    jars: ["java/myjavalib.jar"],
+}
+
+prebuilt_stubs_sources {
+    name: "mysdk_myjavaapistubs@current",
+    sdk_member_name: "myjavaapistubs",
+    srcs: ["java/myjavaapistubs_stubs_sources"],
+}
+
+prebuilt_stubs_sources {
+    name: "myjavaapistubs",
+    prefer: false,
+    srcs: ["java/myjavaapistubs_stubs_sources"],
+}
+
+cc_prebuilt_library_shared {
+    name: "mysdk_mynativelib@current",
+    sdk_member_name: "mynativelib",
+    arch: {
+        arm64: {
+            srcs: ["arm64/lib/mynativelib.so"],
+            export_include_dirs: [
+                "arm64/include/include",
+                "arm64/include_gen/mynativelib",
+            ],
+        },
+        arm: {
+            srcs: ["arm/lib/mynativelib.so"],
+            export_include_dirs: [
+                "arm/include/include",
+                "arm/include_gen/mynativelib",
+            ],
+        },
+    },
+    stl: "none",
+    system_shared_libs: [],
+}
+
+cc_prebuilt_library_shared {
+    name: "mynativelib",
+    prefer: false,
+    arch: {
+        arm64: {
+            srcs: ["arm64/lib/mynativelib.so"],
+            export_include_dirs: [
+                "arm64/include/include",
+                "arm64/include_gen/mynativelib",
+            ],
+        },
+        arm: {
+            srcs: ["arm/lib/mynativelib.so"],
+            export_include_dirs: [
+                "arm/include/include",
+                "arm/include_gen/mynativelib",
+            ],
+        },
+    },
+    stl: "none",
+    system_shared_libs: [],
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    java_libs: [
+        "mysdk_myjavalib@current",
+    ],
+    stubs_sources: [
+        "mysdk_myjavaapistubs@current",
+    ],
+    native_shared_libs: [
+        "mysdk_mynativelib@current",
+    ],
+}
+
+`)
 
 	var copySrcs []string
 	var copyDests []string
-	buildParams := ctx.ModuleForTests("mysdk", "android_common").Module().BuildParamsForTests()
+	buildParams := sdk.BuildParamsForTests()
+	var zipBp android.BuildParams
 	for _, bp := range buildParams {
-		if bp.Rule.String() == "android/soong/android.Cp" {
+		ruleString := bp.Rule.String()
+		if ruleString == "android/soong/android.Cp" {
 			copySrcs = append(copySrcs, bp.Input.String())
 			copyDests = append(copyDests, bp.Output.Rel()) // rooted at the snapshot root
+		} else if ruleString == "<local rule>:m.mysdk_android_common.snapshot" {
+			zipBp = bp
 		}
 	}
 
@@ -472,6 +587,27 @@ func TestSnapshot(t *testing.T) {
 	ensureListContains(t, copyDests, "arm64/include_gen/mynativelib/aidl/foo/bar/Test.h")
 	ensureListContains(t, copyDests, "java/myjavalib.jar")
 	ensureListContains(t, copyDests, "arm64/lib/mynativelib.so")
+
+	// Ensure that the droidstubs .srcjar as repackaged into a temporary zip file
+	// and then merged together with the intermediate snapshot zip.
+	snapshotCreationInputs := zipBp.Implicits.Strings()
+	ensureListContains(t, snapshotCreationInputs,
+		filepath.Join(buildDir, ".intermediates/mysdk/android_common/tmp/java/myjavaapistubs_stubs_sources.zip"))
+	ensureListContains(t, snapshotCreationInputs,
+		filepath.Join(buildDir, ".intermediates/mysdk/android_common/mysdk-current.unmerged.zip"))
+	actual := zipBp.Output.String()
+	expected := filepath.Join(buildDir, ".intermediates/mysdk/android_common/mysdk-current.zip")
+	if actual != expected {
+		t.Errorf("Expected snapshot output to be %q but was %q", expected, actual)
+	}
+}
+
+func checkSnapshotAndroidBpContents(t *testing.T, s *sdk, expectedContents string) {
+	t.Helper()
+	androidBpContents := strings.NewReplacer("\\n", "\n").Replace(s.GetAndroidBpContentsForTests())
+	if androidBpContents != expectedContents {
+		t.Errorf("Android.bp contents do not match, expected %s, actual %s", expectedContents, androidBpContents)
+	}
 }
 
 var buildDir string
