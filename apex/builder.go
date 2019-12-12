@@ -43,7 +43,7 @@ func init() {
 			if !ctx.Config().FrameworksBaseDirExists(ctx) {
 				return filepath.Join(prebuiltDir, runtime.GOOS, "bin", tool)
 			} else {
-				return pctx.HostBinToolPath(ctx, tool).String()
+				return ctx.Config().HostToolPath(ctx, tool).String()
 			}
 		})
 	}
@@ -375,7 +375,11 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			optFlags = append(optFlags, "--assets_dir "+filepath.Dir(noticeFile.String()))
 		}
 
-		if !ctx.Config().UnbundledBuild() && a.installable() {
+		if ctx.ModuleDir() != "system/apex/apexd/apexd_testdata" && a.testOnlyShouldSkipHashtreeGeneration() {
+			ctx.PropertyErrorf("test_only_no_hashtree", "not available")
+			return
+		}
+		if (!ctx.Config().UnbundledBuild() && a.installable()) || a.testOnlyShouldSkipHashtreeGeneration() {
 			// Apexes which are supposed to be installed in builtin dirs(/system, etc)
 			// don't need hashtree for activation. Therefore, by removing hashtree from
 			// apex bundle (filesystem image in it, to be specific), we can save storage.
@@ -476,7 +480,7 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 	apexName := proptools.StringDefault(a.properties.Apex_name, ctx.ModuleName())
 	a.outputFile = android.PathForModuleInstall(&factx, "apex", apexName)
 
-	if a.installable() {
+	if a.installable() && a.GetOverriddenBy() == "" {
 		installPath := android.PathForModuleInstall(ctx, "apex", apexName)
 		devicePath := android.InstallPathToOnDevicePath(ctx, installPath)
 		addFlattenedFileContextsInfos(ctx, apexName+":"+devicePath+":"+a.fileContexts.String())

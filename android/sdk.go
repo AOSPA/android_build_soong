@@ -17,6 +17,7 @@ package android
 import (
 	"strings"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -31,9 +32,6 @@ type SdkAware interface {
 	MemberName() string
 	BuildWithSdks(sdks SdkRefs)
 	RequiredSdks() SdkRefs
-
-	// Build a snapshot of the module.
-	BuildSnapshot(sdkModuleContext ModuleContext, builder SnapshotBuilder)
 }
 
 // SdkRef refers to a version of an SDK
@@ -167,16 +165,92 @@ type SnapshotBuilder interface {
 	// Unzip the supplied zip into the snapshot relative directory destDir.
 	UnzipToSnapshot(zipPath Path, destDir string)
 
-	// Get the AndroidBpFile for the snapshot.
-	AndroidBpFile() GeneratedSnapshotFile
-
-	// Get a versioned name appropriate for the SDK snapshot version being taken.
-	VersionedSdkMemberName(unversionedName string) interface{}
+	// Add a new prebuilt module to the snapshot. The returned module
+	// must be populated with the module type specific properties. The following
+	// properties will be automatically populated.
+	//
+	// * name
+	// * sdk_member_name
+	// * prefer
+	//
+	// This will result in two Soong modules being generated in the Android. One
+	// that is versioned, coupled to the snapshot version and marked as
+	// prefer=true. And one that is not versioned, not marked as prefer=true and
+	// will only be used if the equivalently named non-prebuilt module is not
+	// present.
+	AddPrebuiltModule(member SdkMember, moduleType string) BpModule
 }
 
-// Provides support for generating a file, e.g. the Android.bp file.
-type GeneratedSnapshotFile interface {
-	Printfln(format string, args ...interface{})
-	Indent()
-	Dedent()
+// A set of properties for use in a .bp file.
+type BpPropertySet interface {
+	// Add a property, the value can be one of the following types:
+	// * string
+	// * array of the above
+	// * bool
+	// * BpPropertySet
+	//
+	// It is an error is multiples properties with the same name are added.
+	AddProperty(name string, value interface{})
+
+	// Add a property set with the specified name and return so that additional
+	// properties can be added.
+	AddPropertySet(name string) BpPropertySet
+}
+
+// A .bp module definition.
+type BpModule interface {
+	BpPropertySet
+}
+
+// An individual member of the SDK, includes all of the variants that the SDK
+// requires.
+type SdkMember interface {
+	// The name of the member.
+	Name() string
+
+	// All the variants required by the SDK.
+	Variants() []SdkAware
+}
+
+// Interface that must be implemented for every type that can be a member of an
+// sdk.
+//
+// The basic implementation should look something like this, where ModuleType is
+// the name of the module type being supported.
+//
+//    var ModuleTypeSdkMemberType = newModuleTypeSdkMemberType()
+//
+//    func newModuleTypeSdkMemberType() android.SdkMemberType {
+//    	return &moduleTypeSdkMemberType{}
+//    }
+//
+//    type moduleTypeSdkMemberType struct {
+//    }
+//
+//    ...methods...
+//
+type SdkMemberType interface {
+	// Add dependencies from the SDK module to all the variants the member
+	// contributes to the SDK. The exact set of variants required is determined
+	// by the SDK and its properties. The dependencies must be added with the
+	// supplied tag.
+	//
+	// The BottomUpMutatorContext provided is for the SDK module.
+	AddDependencies(mctx BottomUpMutatorContext, dependencyTag blueprint.DependencyTag, names []string)
+
+	// Return true if the supplied module is an instance of this member type.
+	//
+	// This is used to check the type of each variant before added to the
+	// SdkMember. Returning false will cause an error to be logged expaining that
+	// the module is not allowed in whichever sdk property it was added.
+	IsInstance(module Module) bool
+
+	// Build the snapshot for the SDK member
+	//
+	// The ModuleContext provided is for the SDK module, so information for
+	// variants in the supplied member can be accessed using the Other... methods.
+	//
+	// The SdkMember is guaranteed to contain variants for which the
+	// IsInstance(Module) method returned true.
+	BuildSnapshot(sdkModuleContext ModuleContext, builder SnapshotBuilder, member SdkMember)
 }

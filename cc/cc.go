@@ -37,7 +37,6 @@ func init() {
 
 	android.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("vndk", VndkMutator).Parallel()
-		ctx.BottomUp("image", android.ImageMutator).Parallel()
 		ctx.BottomUp("link", LinkageMutator).Parallel()
 		ctx.BottomUp("ndk_api", ndkApiMutator).Parallel()
 		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
@@ -95,6 +94,7 @@ type Deps struct {
 
 	GeneratedSources []string
 	GeneratedHeaders []string
+	GeneratedDeps    []string
 
 	ReexportGeneratedHeaders []string
 
@@ -121,14 +121,16 @@ type PathDeps struct {
 	// Paths to generated source files
 	GeneratedSources android.Paths
 	GeneratedHeaders android.Paths
+	GeneratedDeps    android.Paths
 
-	Flags                []string
-	IncludeDirs          android.Paths
-	SystemIncludeDirs    android.Paths
-	ReexportedDirs       android.Paths
-	ReexportedSystemDirs android.Paths
-	ReexportedFlags      []string
-	ReexportedDeps       android.Paths
+	Flags                      []string
+	IncludeDirs                android.Paths
+	SystemIncludeDirs          android.Paths
+	ReexportedDirs             android.Paths
+	ReexportedSystemDirs       android.Paths
+	ReexportedFlags            []string
+	ReexportedGeneratedHeaders android.Paths
+	ReexportedDeps             android.Paths
 
 	// Paths to crt*.o files
 	CrtBegin, CrtEnd android.OptionalPath
@@ -222,7 +224,7 @@ type BaseProperties struct {
 	// Make this module available when building for recovery
 	Recovery_available *bool
 
-	// Set by ImageMutator
+	// Set by imageMutator
 	CoreVariantNeeded     bool     `blueprint:"mutated"`
 	RecoveryVariantNeeded bool     `blueprint:"mutated"`
 	VendorVariants        []string `blueprint:"mutated"`
@@ -288,6 +290,7 @@ type ModuleContextIntf interface {
 	isPgoCompile() bool
 	isNDKStubLibrary() bool
 	useClangLld(actx ModuleContext) bool
+	isForPlatform() bool
 	apexName() string
 	hasStubsVariants() bool
 	isStubs() bool
@@ -899,6 +902,13 @@ func (c *Module) ExportedDeps() android.Paths {
 	return nil
 }
 
+func (c *Module) ExportedGeneratedHeaders() android.Paths {
+	if flagsProducer, ok := c.linker.(exportedFlagsProducer); ok {
+		return flagsProducer.exportedGeneratedHeaders()
+	}
+	return nil
+}
+
 func isBionic(name string) bool {
 	switch name {
 	case "libc", "libm", "libdl", "libdl_android", "linker":
@@ -1051,10 +1061,6 @@ func (ctx *moduleContextImpl) shouldCreateSourceAbiDump() bool {
 		// Host modules do not need ABI dumps.
 		return false
 	}
-	if !ctx.mod.IsForPlatform() {
-		// APEX variants do not need ABI dumps.
-		return false
-	}
 	if ctx.isStubs() {
 		// Stubs do not need ABI dumps.
 		return false
@@ -1079,6 +1085,10 @@ func (ctx *moduleContextImpl) baseModuleName() string {
 
 func (ctx *moduleContextImpl) getVndkExtendsModuleName() string {
 	return ctx.mod.getVndkExtendsModuleName()
+}
+
+func (ctx *moduleContextImpl) isForPlatform() bool {
+	return ctx.mod.IsForPlatform()
 }
 
 func (ctx *moduleContextImpl) apexName() string {
@@ -1926,6 +1936,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		depPaths.ReexportedSystemDirs = append(depPaths.ReexportedSystemDirs, exporter.exportedSystemDirs()...)
 		depPaths.ReexportedFlags = append(depPaths.ReexportedFlags, exporter.exportedFlags()...)
 		depPaths.ReexportedDeps = append(depPaths.ReexportedDeps, exporter.exportedDeps()...)
+		depPaths.ReexportedGeneratedHeaders = append(depPaths.ReexportedGeneratedHeaders, exporter.exportedGeneratedHeaders()...)
 	}
 
 	ctx.VisitDirectDeps(func(dep android.Module) {
@@ -1949,11 +1960,15 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			case genHeaderDepTag, genHeaderExportDepTag:
 				if genRule, ok := dep.(genrule.SourceFileGenerator); ok {
 					depPaths.GeneratedHeaders = append(depPaths.GeneratedHeaders,
+						genRule.GeneratedSourceFiles()...)
+					depPaths.GeneratedDeps = append(depPaths.GeneratedDeps,
 						genRule.GeneratedDeps()...)
 					dirs := genRule.GeneratedHeaderDirs()
 					depPaths.IncludeDirs = append(depPaths.IncludeDirs, dirs...)
 					if depTag == genHeaderExportDepTag {
 						depPaths.ReexportedDirs = append(depPaths.ReexportedDirs, dirs...)
+						depPaths.ReexportedGeneratedHeaders = append(depPaths.ReexportedGeneratedHeaders,
+							genRule.GeneratedSourceFiles()...)
 						depPaths.ReexportedDeps = append(depPaths.ReexportedDeps, genRule.GeneratedDeps()...)
 						// Add these re-exported flags to help header-abi-dumper to infer the abi exported by a library.
 						c.sabi.Properties.ReexportedIncludes = append(c.sabi.Properties.ReexportedIncludes, dirs.Strings()...)
@@ -2066,7 +2081,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			if _, ok := ccDep.(*Module); ok {
 				if i, ok := ccDep.(*Module).linker.(exportedFlagsProducer); ok {
 					depPaths.SystemIncludeDirs = append(depPaths.SystemIncludeDirs, i.exportedSystemDirs()...)
-					depPaths.GeneratedHeaders = append(depPaths.GeneratedHeaders, i.exportedDeps()...)
+					depPaths.GeneratedHeaders = append(depPaths.GeneratedHeaders, i.exportedGeneratedHeaders()...)
+					depPaths.GeneratedDeps = append(depPaths.GeneratedDeps, i.exportedDeps()...)
 					depPaths.Flags = append(depPaths.Flags, i.exportedFlags()...)
 
 					if t.ReexportFlags {
@@ -2264,10 +2280,12 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	depPaths.IncludeDirs = android.FirstUniquePaths(depPaths.IncludeDirs)
 	depPaths.SystemIncludeDirs = android.FirstUniquePaths(depPaths.SystemIncludeDirs)
 	depPaths.GeneratedHeaders = android.FirstUniquePaths(depPaths.GeneratedHeaders)
+	depPaths.GeneratedDeps = android.FirstUniquePaths(depPaths.GeneratedDeps)
 	depPaths.ReexportedDirs = android.FirstUniquePaths(depPaths.ReexportedDirs)
 	depPaths.ReexportedSystemDirs = android.FirstUniquePaths(depPaths.ReexportedSystemDirs)
 	depPaths.ReexportedFlags = android.FirstUniqueStrings(depPaths.ReexportedFlags)
 	depPaths.ReexportedDeps = android.FirstUniquePaths(depPaths.ReexportedDeps)
+	depPaths.ReexportedGeneratedHeaders = android.FirstUniquePaths(depPaths.ReexportedGeneratedHeaders)
 
 	if c.sabi != nil {
 		c.sabi.Properties.ReexportedIncludes = android.FirstUniqueStrings(c.sabi.Properties.ReexportedIncludes)
@@ -2479,7 +2497,6 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&PgoProperties{},
 		&XomProperties{},
 		&android.ProtoProperties{},
-		&android.ApexProperties{},
 	)
 
 	android.InitDefaultsModule(module)
