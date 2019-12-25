@@ -51,6 +51,8 @@ func init() {
 		ctx.TopDown("hwasan_deps", sanitizerDepsMutator(hwasan))
 		ctx.BottomUp("hwasan", sanitizerMutator(hwasan)).Parallel()
 
+		// cfi mutator shouldn't run before sanitizers that return true for
+		// incompatibleWithCfi()
 		ctx.TopDown("cfi_deps", sanitizerDepsMutator(cfi))
 		ctx.BottomUp("cfi", sanitizerMutator(cfi)).Parallel()
 
@@ -243,6 +245,7 @@ type VendorProperties struct {
 type ModuleContextIntf interface {
 	static() bool
 	staticBinary() bool
+	header() bool
 	toolchain() config.Toolchain
 	useSdk() bool
 	sdkVersion() string
@@ -600,6 +603,9 @@ func (c *Module) HasStubsVariants() bool {
 	if library, ok := c.linker.(*libraryDecorator); ok {
 		return len(library.Properties.Stubs.Versions) > 0
 	}
+	if library, ok := c.linker.(*prebuiltLibraryLinker); ok {
+		return len(library.Properties.Stubs.Versions) > 0
+	}
 	return false
 }
 
@@ -617,6 +623,13 @@ func isBionic(name string) bool {
 		return true
 	}
 	return false
+}
+
+func installToBootstrap(name string, config android.Config) bool {
+	if name == "libclang_rt.hwasan-aarch64-android" {
+		return inList("hwaddress", config.SanitizeDevice())
+	}
+	return isBionic(name)
 }
 
 type baseModuleContext struct {
@@ -654,6 +667,10 @@ func (ctx *moduleContextImpl) static() bool {
 
 func (ctx *moduleContextImpl) staticBinary() bool {
 	return ctx.mod.staticBinary()
+}
+
+func (ctx *moduleContextImpl) header() bool {
+	return ctx.mod.header()
 }
 
 func (ctx *moduleContextImpl) useSdk() bool {
@@ -1931,6 +1948,15 @@ func (c *Module) staticBinary() bool {
 		staticBinary() bool
 	}); ok {
 		return static.staticBinary()
+	}
+	return false
+}
+
+func (c *Module) header() bool {
+	if h, ok := c.linker.(interface {
+		header() bool
+	}); ok {
+		return h.header()
 	}
 	return false
 }
