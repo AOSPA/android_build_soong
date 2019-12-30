@@ -192,6 +192,7 @@ func init() {
 			"LOCAL_USE_CLANG_LLD":              "use_clang_lld",
 			"LOCAL_PROPRIETARY_MODULE":         "proprietary",
 			"LOCAL_VENDOR_MODULE":              "vendor",
+			"LOCAL_VENDOR_OVERLAY_MODULE":      "vendor_overlay",
 			"LOCAL_ODM_MODULE":                 "device_specific",
 			"LOCAL_PRODUCT_MODULE":             "product_specific",
 			"LOCAL_SYSTEM_EXT_MODULE":          "system_ext_specific",
