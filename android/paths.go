@@ -1175,6 +1175,8 @@ func modulePartition(ctx ModuleInstallPathContext) string {
 		partition = "recovery/root/system"
 	} else if ctx.SocSpecific() {
 		partition = ctx.DeviceConfig().VendorPath()
+	} else if ctx.VendorOverlay() {
+		partition = ctx.DeviceConfig().VendorOverlayPath()
 	} else if ctx.DeviceSpecific() {
 		partition = ctx.DeviceConfig().OdmPath()
 	} else if ctx.ProductSpecific() {
