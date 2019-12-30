@@ -258,6 +258,7 @@ type productVariables struct {
 	XOMExcludePaths []string `json:",omitempty"`
 
 	VendorPath          *string `json:",omitempty"`
+	VendorOverlayPath   *string `json:",omitempty"`
 	OdmPath             *string `json:",omitempty"`
 	ProductPath         *string `json:",omitempty"`
 	ProductServicesPath *string `json:",omitempty"`
