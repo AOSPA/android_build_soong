@@ -255,6 +255,7 @@ func (a *AndroidMkEntries) fillInEntries(config Config, bpPath string, mod bluep
 		if Bool(amod.commonProperties.Vendor) || Bool(amod.commonProperties.Soc_specific) {
 			a.SetString("LOCAL_VENDOR_MODULE", "true")
 		}
+		a.SetBoolIfTrue("LOCAL_VENDOR_OVERLAY_MODULE", Bool(amod.commonProperties.Vendor_overlay))
 		a.SetBoolIfTrue("LOCAL_ODM_MODULE", Bool(amod.commonProperties.Device_specific))
 		a.SetBoolIfTrue("LOCAL_PRODUCT_MODULE", Bool(amod.commonProperties.Product_specific))
 		a.SetBoolIfTrue("LOCAL_SYSTEM_EXT_MODULE", Bool(amod.commonProperties.System_ext_specific))
