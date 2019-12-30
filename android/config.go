@@ -829,6 +829,13 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
+func (c *deviceConfig) VendorOverlayPath() string {
+        if c.config.productVariables.VendorOverlayPath != nil {
+                return *c.config.productVariables.VendorOverlayPath
+        }
+        return "vendor_overlay"
+}
+
 func (c *deviceConfig) VndkVersion() string {
 	return String(c.config.productVariables.DeviceVndkVersion)
 }
