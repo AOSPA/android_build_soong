@@ -202,7 +202,7 @@ func (w *Writer) Close() error {
 func (w *Writer) Create(name string) (io.Writer, error) {
 	header := &FileHeader{
 		Name:   name,
-		Method: Deflate,
+		Method: Store,
 	}
 	return w.CreateHeader(header)
 }
