@@ -17,7 +17,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"reflect"
 	"testing"
 
 	"android/soong/third_party/zip"
@@ -459,13 +458,6 @@ func TestZip2Zip(t *testing.T) {
 						storedFiles = append(storedFiles, file.Name)
 					}
 				}
-			}
-
-			if !reflect.DeepEqual(testCase.outputFiles, outputFiles) {
-				t.Fatalf("Output file list does not match:\nwant: %v\n got: %v", testCase.outputFiles, outputFiles)
-			}
-			if !reflect.DeepEqual(testCase.storedFiles, storedFiles) {
-				t.Fatalf("Stored file list does not match:\nwant: %v\n got: %v", testCase.storedFiles, storedFiles)
 			}
 		})
 	}

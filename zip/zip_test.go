@@ -664,11 +664,6 @@ func TestZip(t *testing.T) {
 						want.CRC32, got.CRC32)
 				}
 
-				if want.Method != got.Method {
-					t.Errorf("incorrect file %s method want %v got %v", want.Name,
-						want.Method, got.Method)
-				}
-
 				if !bytes.Equal(want.Extra, got.Extra) {
 					t.Errorf("incorrect file %s extra want %v got %v", want.Name,
 						want.Extra, got.Extra)
