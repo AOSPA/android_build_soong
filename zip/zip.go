@@ -429,10 +429,7 @@ func fillPathPairs(fa FileArg, src string, pathMappings *[]pathMapping,
 	}
 	dest = filepath.Join(fa.PathPrefixInZip, dest)
 
-	zipMethod := zip.Deflate
-	if _, found := nonDeflatedFiles[dest]; found || noCompression {
-		zipMethod = zip.Store
-	}
+	zipMethod := zip.Store
 	*pathMappings = append(*pathMappings,
 		pathMapping{dest: dest, src: src, zipMethod: zipMethod})
 
@@ -476,7 +473,7 @@ func (z *ZipWriter) write(f io.Writer, pathMappings []pathMapping, manifest stri
 
 	if emulateJar {
 		// manifest may be empty, in which case addManifest will fill in a default
-		pathMappings = append(pathMappings, pathMapping{jar.ManifestFile, manifest, zip.Deflate})
+		pathMappings = append(pathMappings, pathMapping{jar.ManifestFile, manifest, zip.Store})
 
 		jarSort(pathMappings)
 	}
