@@ -39,7 +39,16 @@ var (
 
 	hwasanCflags = []string{"-fno-omit-frame-pointer", "-Wno-frame-larger-than=",
 		"-fsanitize-hwaddress-abi=platform",
-		"-fno-experimental-new-pass-manager"}
+		"-fno-experimental-new-pass-manager",
+		// The following improves debug location information
+		// availability at the cost of its accuracy. It increases
+		// the likelihood of a stack variable's frame offset
+		// to be recorded in the debug info, which is important
+		// for the quality of hwasan reports. The downside is a
+		// higher number of "optimized out" stack variables.
+		// b/112437883.
+		"-mllvm", "-instcombine-lower-dbg-declare=0",
+	}
 
 	cfiCflags = []string{"-flto", "-fsanitize-cfi-cross-dso",
 		"-fsanitize-blacklist=external/compiler-rt/lib/cfi/cfi_blacklist.txt"}
@@ -288,6 +297,10 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 			ctx.ModuleErrorf("unknown global sanitizer diagnostics option %s", globalSanitizersDiag[0])
 		}
 	}
+
+		if s.Integer_overflow == nil && ctx.Config().IntegerOverflowEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
+			s.Integer_overflow = boolPtr(true)
+		}
 
 	// Enable CFI for all components in the include paths (for Aarch64 only)
 	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {

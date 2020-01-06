@@ -79,7 +79,7 @@ func testContext(bp string, fs map[string][]byte) *android.TestContext {
 	ctx.RegisterModuleType("java_test", TestFactory)
 	ctx.RegisterModuleType("java_import", ImportFactory)
 	ctx.RegisterModuleType("java_import_host", ImportFactoryHost)
-	ctx.RegisterModuleType("java_defaults", defaultsFactory)
+	ctx.RegisterModuleType("java_defaults", DefaultsFactory)
 	ctx.RegisterModuleType("java_system_modules", SystemModulesFactory)
 	ctx.RegisterModuleType("java_genrule", genRuleFactory)
 	ctx.RegisterModuleType("java_plugin", PluginFactory)
@@ -286,6 +286,94 @@ func moduleToPath(name string) string {
 	default:
 		return filepath.Join(buildDir, ".intermediates", name, "android_common", "turbine-combined", name+".jar")
 	}
+}
+
+func TestJavaLinkType(t *testing.T) {
+	testJava(t, `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			libs: ["bar"],
+			static_libs: ["baz"],
+		}
+
+		java_library {
+			name: "bar",
+			sdk_version: "current",
+			srcs: ["b.java"],
+		}
+
+		java_library {
+			name: "baz",
+			sdk_version: "system_current",
+			srcs: ["c.java"],
+		}
+	`)
+
+	testJavaError(t, "Adjust sdk_version: property of the source or target module so that target module is built with the same or smaller API set than the source.", `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			libs: ["bar"],
+			sdk_version: "current",
+			static_libs: ["baz"],
+		}
+
+		java_library {
+			name: "bar",
+			sdk_version: "current",
+			srcs: ["b.java"],
+		}
+
+		java_library {
+			name: "baz",
+			sdk_version: "system_current",
+			srcs: ["c.java"],
+		}
+	`)
+
+	testJava(t, `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			libs: ["bar"],
+			sdk_version: "system_current",
+			static_libs: ["baz"],
+		}
+
+		java_library {
+			name: "bar",
+			sdk_version: "current",
+			srcs: ["b.java"],
+		}
+
+		java_library {
+			name: "baz",
+			sdk_version: "system_current",
+			srcs: ["c.java"],
+		}
+	`)
+
+	testJavaError(t, "Adjust sdk_version: property of the source or target module so that target module is built with the same or smaller API set than the source.", `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			libs: ["bar"],
+			sdk_version: "system_current",
+			static_libs: ["baz"],
+		}
+
+		java_library {
+			name: "bar",
+			sdk_version: "current",
+			srcs: ["b.java"],
+		}
+
+		java_library {
+			name: "baz",
+			srcs: ["c.java"],
+		}
+	`)
 }
 
 func TestSimple(t *testing.T) {
@@ -1089,7 +1177,7 @@ func TestJavaSdkLibrary(t *testing.T) {
 	ctx.ModuleForTests("foo"+sdkDocsSuffix, "android_common")
 	ctx.ModuleForTests("foo"+sdkDocsSuffix+sdkSystemApiSuffix, "android_common")
 	ctx.ModuleForTests("foo"+sdkDocsSuffix+sdkTestApiSuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkXmlFileSuffix, "android_arm64_armv8-a")
+	ctx.ModuleForTests("foo"+sdkXmlFileSuffix, "android_arm64_armv8-a_core")
 	ctx.ModuleForTests("foo.api.public.28", "")
 	ctx.ModuleForTests("foo.api.system.28", "")
 	ctx.ModuleForTests("foo.api.test.28", "")
