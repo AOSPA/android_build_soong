@@ -15,6 +15,7 @@
 package android
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -218,18 +219,27 @@ type SdkMember interface {
 // The basic implementation should look something like this, where ModuleType is
 // the name of the module type being supported.
 //
-//    var ModuleTypeSdkMemberType = newModuleTypeSdkMemberType()
-//
-//    func newModuleTypeSdkMemberType() android.SdkMemberType {
-//    	return &moduleTypeSdkMemberType{}
+//    type moduleTypeSdkMemberType struct {
+//        android.SdkMemberTypeBase
 //    }
 //
-//    type moduleTypeSdkMemberType struct {
+//    func init() {
+//        android.RegisterSdkMemberType(&moduleTypeSdkMemberType{
+//            SdkMemberTypeBase: android.SdkMemberTypeBase{
+//                PropertyName: "module_types",
+//            },
+//        }
 //    }
 //
 //    ...methods...
 //
 type SdkMemberType interface {
+	// The name of the member type property on an sdk module.
+	SdkPropertyName() string
+
+	// True if the member type supports the sdk/sdk_snapshot, false otherwise.
+	UsableWithSdkAndSdkSnapshot() bool
+
 	// Add dependencies from the SDK module to all the variants the member
 	// contributes to the SDK. The exact set of variants required is determined
 	// by the SDK and its properties. The dependencies must be added with the
@@ -253,4 +263,84 @@ type SdkMemberType interface {
 	// The SdkMember is guaranteed to contain variants for which the
 	// IsInstance(Module) method returned true.
 	BuildSnapshot(sdkModuleContext ModuleContext, builder SnapshotBuilder, member SdkMember)
+}
+
+// Base type for SdkMemberType implementations.
+type SdkMemberTypeBase struct {
+	PropertyName string
+	SupportsSdk  bool
+}
+
+func (b *SdkMemberTypeBase) SdkPropertyName() string {
+	return b.PropertyName
+}
+
+func (b *SdkMemberTypeBase) UsableWithSdkAndSdkSnapshot() bool {
+	return b.SupportsSdk
+}
+
+// Encapsulates the information about registered SdkMemberTypes.
+type SdkMemberTypesRegistry struct {
+	// The list of types sorted by property name.
+	list []SdkMemberType
+
+	// The key that uniquely identifies this registry instance.
+	key OnceKey
+}
+
+func (r *SdkMemberTypesRegistry) copyAndAppend(memberType SdkMemberType) *SdkMemberTypesRegistry {
+	oldList := r.list
+
+	// Copy the slice just in case this is being read while being modified, e.g. when testing.
+	list := make([]SdkMemberType, 0, len(oldList)+1)
+	list = append(list, oldList...)
+	list = append(list, memberType)
+
+	// Sort the member types by their property name to ensure that registry order has no effect
+	// on behavior.
+	sort.Slice(list, func(i1, i2 int) bool {
+		t1 := list[i1]
+		t2 := list[i2]
+
+		return t1.SdkPropertyName() < t2.SdkPropertyName()
+	})
+
+	// Generate a key that identifies the slice of SdkMemberTypes by joining the property names
+	// from all the SdkMemberType .
+	var properties []string
+	for _, t := range list {
+		properties = append(properties, t.SdkPropertyName())
+	}
+	key := NewOnceKey(strings.Join(properties, "|"))
+
+	// Create a new registry so the pointer uniquely identifies the set of registered types.
+	return &SdkMemberTypesRegistry{
+		list: list,
+		key:  key,
+	}
+}
+
+func (r *SdkMemberTypesRegistry) RegisteredTypes() []SdkMemberType {
+	return r.list
+}
+
+func (r *SdkMemberTypesRegistry) UniqueOnceKey() OnceKey {
+	// Use the pointer to the registry as the unique key.
+	return NewCustomOnceKey(r)
+}
+
+// The set of registered SdkMemberTypes, one for sdk module and one for module_exports.
+var ModuleExportsMemberTypes = &SdkMemberTypesRegistry{}
+var SdkMemberTypes = &SdkMemberTypesRegistry{}
+
+// Register an SdkMemberType object to allow them to be used in the sdk and sdk_snapshot module
+// types.
+func RegisterSdkMemberType(memberType SdkMemberType) {
+	// All member types are usable with module_exports.
+	ModuleExportsMemberTypes = ModuleExportsMemberTypes.copyAndAppend(memberType)
+
+	// Only those that explicitly indicate it are usable with sdk.
+	if memberType.UsableWithSdkAndSdkSnapshot() {
+		SdkMemberTypes = SdkMemberTypes.copyAndAppend(memberType)
+	}
 }

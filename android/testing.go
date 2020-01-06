@@ -68,7 +68,11 @@ func (ctx *TestContext) PostDepsMutators(f RegisterMutatorFunc) {
 	ctx.postDeps = append(ctx.postDeps, f)
 }
 
-func (ctx *TestContext) Register() {
+func (ctx *TestContext) Register(config Config) {
+	ctx.SetFs(config.fs)
+	if config.mockBpList != "" {
+		ctx.SetModuleListFile(config.mockBpList)
+	}
 	registerMutators(ctx.Context.Context, ctx.preArch, ctx.preDeps, ctx.postDeps)
 
 	ctx.RegisterSingletonType("env", EnvSingleton)
@@ -130,25 +134,6 @@ func (ctx *TestContext) SingletonForTests(name string) TestingSingleton {
 
 	panic(fmt.Errorf("failed to find singleton %q."+
 		"\nall singletons: %v", name, allSingletonNames))
-}
-
-// MockFileSystem causes the Context to replace all reads with accesses to the provided map of
-// filenames to contents stored as a byte slice.
-func (ctx *TestContext) MockFileSystem(files map[string][]byte) {
-	// no module list file specified; find every file named Blueprints or Android.bp
-	pathsToParse := []string{}
-	for candidate := range files {
-		base := filepath.Base(candidate)
-		if base == "Blueprints" || base == "Android.bp" {
-			pathsToParse = append(pathsToParse, candidate)
-		}
-	}
-	if len(pathsToParse) < 1 {
-		panic(fmt.Sprintf("No Blueprint or Android.bp files found in mock filesystem: %v\n", files))
-	}
-	files[blueprint.MockModuleListFile] = []byte(strings.Join(pathsToParse, "\n"))
-
-	ctx.Context.MockFileSystem(files)
 }
 
 type testBuildProvider interface {
@@ -403,15 +388,18 @@ func CheckErrorsAgainstExpectations(t *testing.T, errs []error, expectedErrorPat
 
 }
 
-func AndroidMkEntriesForTest(t *testing.T, config Config, bpPath string, mod blueprint.Module) AndroidMkEntries {
+func AndroidMkEntriesForTest(t *testing.T, config Config, bpPath string, mod blueprint.Module) []AndroidMkEntries {
 	var p AndroidMkEntriesProvider
 	var ok bool
 	if p, ok = mod.(AndroidMkEntriesProvider); !ok {
 		t.Errorf("module does not implement AndroidMkEntriesProvider: " + mod.Name())
 	}
-	entries := p.AndroidMkEntries()
-	entries.fillInEntries(config, bpPath, mod)
-	return entries
+
+	entriesList := p.AndroidMkEntries()
+	for i, _ := range entriesList {
+		entriesList[i].fillInEntries(config, bpPath, mod)
+	}
+	return entriesList
 }
 
 func AndroidMkDataForTest(t *testing.T, config Config, bpPath string, mod blueprint.Module) AndroidMkData {
@@ -423,4 +411,34 @@ func AndroidMkDataForTest(t *testing.T, config Config, bpPath string, mod bluepr
 	data := p.AndroidMk()
 	data.fillInData(config, bpPath, mod)
 	return data
+}
+
+// Normalize the path for testing.
+//
+// If the path is relative to the build directory then return the relative path
+// to avoid tests having to deal with the dynamically generated build directory.
+//
+// Otherwise, return the supplied path as it is almost certainly a source path
+// that is relative to the root of the source tree.
+//
+// The build and source paths should be distinguishable based on their contents.
+func NormalizePathForTesting(path Path) string {
+	p := path.String()
+	if w, ok := path.(WritablePath); ok {
+		rel, err := filepath.Rel(w.buildDir(), p)
+		if err != nil {
+			panic(err)
+		}
+		return rel
+	}
+	return p
+}
+
+func NormalizePathsForTesting(paths Paths) []string {
+	var result []string
+	for _, path := range paths {
+		relative := NormalizePathForTesting(path)
+		result = append(result, relative)
+	}
+	return result
 }

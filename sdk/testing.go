@@ -29,62 +29,6 @@ import (
 )
 
 func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, android.Config) {
-	config := android.TestArchConfig(buildDir, nil)
-	ctx := android.NewTestArchContext()
-
-	// from android package
-	ctx.PreArchMutators(android.RegisterPackageRenamer)
-	ctx.PreArchMutators(android.RegisterVisibilityRuleChecker)
-	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
-	ctx.PreArchMutators(android.RegisterVisibilityRuleGatherer)
-	ctx.PostDepsMutators(android.RegisterVisibilityRuleEnforcer)
-
-	ctx.PreArchMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("prebuilts", android.PrebuiltMutator).Parallel()
-	})
-	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.TopDown("prebuilt_select", android.PrebuiltSelectModuleMutator).Parallel()
-		ctx.BottomUp("prebuilt_postdeps", android.PrebuiltPostDepsMutator).Parallel()
-	})
-	ctx.RegisterModuleType("package", android.PackageFactory)
-
-	// from java package
-	ctx.RegisterModuleType("android_app_certificate", java.AndroidAppCertificateFactory)
-	ctx.RegisterModuleType("java_defaults", java.DefaultsFactory)
-	ctx.RegisterModuleType("java_library", java.LibraryFactory)
-	ctx.RegisterModuleType("java_import", java.ImportFactory)
-	ctx.RegisterModuleType("droidstubs", java.DroidstubsFactory)
-	ctx.RegisterModuleType("prebuilt_stubs_sources", java.PrebuiltStubsSourcesFactory)
-
-	// from cc package
-	ctx.RegisterModuleType("cc_library", cc.LibraryFactory)
-	ctx.RegisterModuleType("cc_library_shared", cc.LibrarySharedFactory)
-	ctx.RegisterModuleType("cc_object", cc.ObjectFactory)
-	ctx.RegisterModuleType("cc_prebuilt_library_shared", cc.PrebuiltSharedLibraryFactory)
-	ctx.RegisterModuleType("cc_prebuilt_library_static", cc.PrebuiltStaticLibraryFactory)
-	ctx.RegisterModuleType("llndk_library", cc.LlndkLibraryFactory)
-	ctx.RegisterModuleType("toolchain_library", cc.ToolchainLibraryFactory)
-	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("link", cc.LinkageMutator).Parallel()
-		ctx.BottomUp("vndk", cc.VndkMutator).Parallel()
-		ctx.BottomUp("test_per_src", cc.TestPerSrcMutator).Parallel()
-		ctx.BottomUp("version", cc.VersionMutator).Parallel()
-		ctx.BottomUp("begin", cc.BeginMutator).Parallel()
-	})
-
-	// from apex package
-	ctx.RegisterModuleType("apex", apex.BundleFactory)
-	ctx.RegisterModuleType("apex_key", apex.ApexKeyFactory)
-	ctx.PostDepsMutators(apex.RegisterPostDepsMutators)
-
-	// from this package
-	ctx.RegisterModuleType("sdk", ModuleFactory)
-	ctx.RegisterModuleType("sdk_snapshot", SnapshotModuleFactory)
-	ctx.PreDepsMutators(RegisterPreDepsMutators)
-	ctx.PostDepsMutators(RegisterPostDepsMutators)
-
-	ctx.Register()
-
 	bp = bp + `
 		apex_key {
 			name: "myapex.key",
@@ -99,7 +43,6 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 	` + cc.GatherRequiredDepsForTest(android.Android)
 
 	mockFS := map[string][]byte{
-		"Android.bp":                                 []byte(bp),
 		"build/make/target/product/security":         nil,
 		"apex_manifest.json":                         nil,
 		"system/sepolicy/apex/myapex-file_contexts":  nil,
@@ -114,7 +57,41 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 		mockFS[k] = v
 	}
 
-	ctx.MockFileSystem(mockFS)
+	config := android.TestArchConfig(buildDir, nil, bp, mockFS)
+
+	ctx := android.NewTestArchContext()
+
+	// from android package
+	ctx.PreArchMutators(android.RegisterPackageRenamer)
+	ctx.PreArchMutators(android.RegisterVisibilityRuleChecker)
+	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
+	ctx.PreArchMutators(android.RegisterVisibilityRuleGatherer)
+	ctx.PostDepsMutators(android.RegisterVisibilityRuleEnforcer)
+
+	ctx.RegisterModuleType("package", android.PackageFactory)
+
+	// from java package
+	java.RegisterJavaBuildComponents(ctx)
+	java.RegisterAppBuildComponents(ctx)
+	java.RegisterStubsBuildComponents(ctx)
+
+	// from cc package
+	cc.RegisterRequiredBuildComponentsForTest(ctx)
+
+	// from apex package
+	ctx.RegisterModuleType("apex", apex.BundleFactory)
+	ctx.RegisterModuleType("apex_key", apex.ApexKeyFactory)
+	ctx.PostDepsMutators(apex.RegisterPostDepsMutators)
+
+	// from this package
+	ctx.RegisterModuleType("sdk", SdkModuleFactory)
+	ctx.RegisterModuleType("sdk_snapshot", SnapshotModuleFactory)
+	ctx.RegisterModuleType("module_exports", ModuleExportsFactory)
+	ctx.RegisterModuleType("module_exports_snapshot", ModuleExportsSnapshotsFactory)
+	ctx.PreDepsMutators(RegisterPreDepsMutators)
+	ctx.PostDepsMutators(RegisterPostDepsMutators)
+
+	ctx.Register(config)
 
 	return ctx, config
 }
@@ -208,7 +185,7 @@ func (r *testSdkResult) getSdkSnapshotBuildInfo(sdk *sdk) *snapshotBuildInfo {
 		switch bp.Rule.String() {
 		case android.Cp.String():
 			// Get source relative to build directory.
-			src := r.pathRelativeToBuildDir(bp.Input)
+			src := android.NormalizePathForTesting(bp.Input)
 			// Get destination relative to the snapshot root
 			dest := bp.Output.Rel()
 			_, _ = fmt.Fprintf(copyRules, "%s -> %s\n", src, dest)
@@ -224,12 +201,12 @@ func (r *testSdkResult) getSdkSnapshotBuildInfo(sdk *sdk) *snapshotBuildInfo {
 			// This could be an intermediate zip file and not the actual output zip.
 			// In that case this will be overridden when the rule to merge the zips
 			// is processed.
-			info.outputZip = r.pathRelativeToBuildDir(bp.Output)
+			info.outputZip = android.NormalizePathForTesting(bp.Output)
 
 		case mergeZips.String():
 			// Copy the current outputZip to the intermediateZip.
 			info.intermediateZip = info.outputZip
-			mergeInput := r.pathRelativeToBuildDir(bp.Input)
+			mergeInput := android.NormalizePathForTesting(bp.Input)
 			if info.intermediateZip != mergeInput {
 				r.t.Errorf("Expected intermediate zip %s to be an input to merge zips but found %s instead",
 					info.intermediateZip, mergeInput)
@@ -237,10 +214,10 @@ func (r *testSdkResult) getSdkSnapshotBuildInfo(sdk *sdk) *snapshotBuildInfo {
 
 			// Override output zip (which was actually the intermediate zip file) with the actual
 			// output zip.
-			info.outputZip = r.pathRelativeToBuildDir(bp.Output)
+			info.outputZip = android.NormalizePathForTesting(bp.Output)
 
 			// Save the zips to be merged into the intermediate zip.
-			info.mergeZips = r.pathsRelativeToBuildDir(bp.Inputs)
+			info.mergeZips = android.NormalizePathsForTesting(bp.Inputs)
 		}
 	}
 
@@ -255,19 +232,6 @@ func (r *testSdkResult) Module(name string, variant string) android.Module {
 
 func (r *testSdkResult) ModuleForTests(name string, variant string) android.TestingModule {
 	return r.ctx.ModuleForTests(name, variant)
-}
-
-func (r *testSdkResult) pathRelativeToBuildDir(path android.Path) string {
-	buildDir := filepath.Clean(r.config.BuildDir()) + "/"
-	return strings.TrimPrefix(filepath.Clean(path.String()), buildDir)
-}
-
-func (r *testSdkResult) pathsRelativeToBuildDir(paths android.Paths) []string {
-	var result []string
-	for _, path := range paths {
-		result = append(result, r.pathRelativeToBuildDir(path))
-	}
-	return result
 }
 
 // Check the snapshot build rules.

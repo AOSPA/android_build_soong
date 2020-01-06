@@ -89,6 +89,15 @@ func reportPathErrorf(ctx PathContext, format string, args ...interface{}) {
 	}
 }
 
+func pathContextName(ctx PathContext, module blueprint.Module) string {
+	if x, ok := ctx.(interface{ ModuleName(blueprint.Module) string }); ok {
+		return x.ModuleName(module)
+	} else if x, ok := ctx.(interface{ OtherModuleName(blueprint.Module) string }); ok {
+		return x.OtherModuleName(module)
+	}
+	return "unknown"
+}
+
 type Path interface {
 	// Returns the path in string form
 	String() string
@@ -108,6 +117,9 @@ type Path interface {
 // WritablePath is a type of path that can be used as an output for build rules.
 type WritablePath interface {
 	Path
+
+	// return the path to the build directory.
+	buildDir() string
 
 	// the writablePath method doesn't directly do anything,
 	// but it allows a struct to distinguish between whether or not it implements the WritablePath interface
@@ -512,8 +524,12 @@ func inPathList(p Path, list []Path) bool {
 }
 
 func FilterPathList(list []Path, filter []Path) (remainder []Path, filtered []Path) {
+	return FilterPathListPredicate(list, func(p Path) bool { return inPathList(p, filter) })
+}
+
+func FilterPathListPredicate(list []Path, predicate func(Path) bool) (remainder []Path, filtered []Path) {
 	for _, l := range list {
-		if inPathList(l, filter) {
+		if predicate(l) {
 			filtered = append(filtered, l)
 		} else {
 			remainder = append(remainder, l)
@@ -835,7 +851,12 @@ func (p OutputPath) WithoutRel() OutputPath {
 	return p
 }
 
+func (p OutputPath) buildDir() string {
+	return p.config.buildDir
+}
+
 var _ Path = OutputPath{}
+var _ WritablePath = OutputPath{}
 
 // PathForOutput joins the provided paths and returns an OutputPath that is
 // validated to not escape the build dir.
@@ -1138,6 +1159,13 @@ type InstallPath struct {
 	baseDir string // "../" for Make paths to convert "out/soong" to "out", "" for Soong paths
 }
 
+func (p InstallPath) buildDir() string {
+	return p.config.buildDir
+}
+
+var _ Path = InstallPath{}
+var _ WritablePath = InstallPath{}
+
 func (p InstallPath) writablePath() {}
 
 func (p InstallPath) String() string {
@@ -1289,6 +1317,10 @@ type PhonyPath struct {
 
 func (p PhonyPath) writablePath() {}
 
+func (p PhonyPath) buildDir() string {
+	return p.config.buildDir
+}
+
 var _ Path = PhonyPath{}
 var _ WritablePath = PhonyPath{}
 
@@ -1299,12 +1331,6 @@ type testPath struct {
 func (p testPath) String() string {
 	return p.path
 }
-
-type testWritablePath struct {
-	testPath
-}
-
-func (p testPath) writablePath() {}
 
 // PathForTesting returns a Path constructed from joining the elements of paths with '/'.  It should only be used from
 // within tests.
@@ -1326,42 +1352,19 @@ func PathsForTesting(strs ...string) Paths {
 	return p
 }
 
-// WritablePathForTesting returns a Path constructed from joining the elements of paths with '/'.  It should only be
-// used from within tests.
-func WritablePathForTesting(paths ...string) WritablePath {
-	p, err := validateSafePath(paths...)
-	if err != nil {
-		panic(err)
-	}
-	return testWritablePath{testPath{basePath{path: p, rel: p}}}
-}
-
-// WritablePathsForTesting returns a Path constructed from each element in strs. It should only be used from within
-// tests.
-func WritablePathsForTesting(strs ...string) WritablePaths {
-	p := make(WritablePaths, len(strs))
-	for i, s := range strs {
-		p[i] = WritablePathForTesting(s)
-	}
-
-	return p
-}
-
 type testPathContext struct {
 	config Config
-	fs     pathtools.FileSystem
 }
 
-func (x *testPathContext) Fs() pathtools.FileSystem   { return x.fs }
+func (x *testPathContext) Fs() pathtools.FileSystem   { return x.config.fs }
 func (x *testPathContext) Config() Config             { return x.config }
 func (x *testPathContext) AddNinjaFileDeps(...string) {}
 
 // PathContextForTesting returns a PathContext that can be used in tests, for example to create an OutputPath with
 // PathForOutput.
-func PathContextForTesting(config Config, fs map[string][]byte) PathContext {
+func PathContextForTesting(config Config) PathContext {
 	return &testPathContext{
 		config: config,
-		fs:     pathtools.MockFs(fs),
 	}
 }
 

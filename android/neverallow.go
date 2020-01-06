@@ -52,6 +52,7 @@ func init() {
 	AddNeverAllowRules(createTrebleRules()...)
 	AddNeverAllowRules(createLibcoreRules()...)
 	AddNeverAllowRules(createMediaRules()...)
+	AddNeverAllowRules(createMediaProviderRules()...)
 	AddNeverAllowRules(createJavaDeviceForHostRules()...)
 }
 
@@ -136,9 +137,6 @@ func createLibcoreRules() []Rule {
 		"external/icu",
 		"external/okhttp",
 		"external/wycheproof",
-
-		// Not really a core library but still needs access to same capabilities.
-		"development",
 	}
 
 	// Core library constraints. The sdk_version: "none" can only be used in core library projects.
@@ -157,6 +155,14 @@ func createMediaRules() []Rule {
 		NeverAllow().
 			With("libs", "updatable-media").
 			Because("updatable-media includes private APIs. Use updatable_media_stubs instead."),
+	}
+}
+
+func createMediaProviderRules() []Rule {
+	return []Rule{
+		NeverAllow().
+			With("libs", "framework-mediaprovider").
+			Because("framework-mediaprovider includes private APIs. Use framework_mediaprovider_stubs instead."),
 	}
 }
 

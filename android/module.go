@@ -302,9 +302,6 @@ type commonProperties struct {
 	// If a module does not specify the `visibility` property then it uses the
 	// `default_visibility` property of the `package` module in the module's package.
 	//
-	// If a module does not specify the `visibility` property then it uses the
-	// `default_visibility` property of the `package` module in the module's package.
-	//
 	// If the `default_visibility` property is not set for the module's package then
 	// it will use the `default_visibility` of its closest ancestor package for which
 	// a `default_visibility` property is specified.
@@ -1008,6 +1005,7 @@ func determineModuleKind(m *ModuleBase, ctx blueprint.BaseModuleContext) moduleK
 func (m *ModuleBase) baseModuleContextFactory(ctx blueprint.BaseModuleContext) baseModuleContext {
 	return baseModuleContext{
 		BaseModuleContext: ctx,
+		os:                m.commonProperties.CompileOS,
 		target:            m.commonProperties.CompileTarget,
 		targetPrimary:     m.commonProperties.CompilePrimary,
 		multiTargets:      m.commonProperties.CompileMultiTargets,
@@ -1120,6 +1118,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 type baseModuleContext struct {
 	blueprint.BaseModuleContext
+	os            OsType
 	target        Target
 	multiTargets  []Target
 	targetPrimary bool
@@ -1463,27 +1462,27 @@ func (b *baseModuleContext) Arch() Arch {
 }
 
 func (b *baseModuleContext) Os() OsType {
-	return b.target.Os
+	return b.os
 }
 
 func (b *baseModuleContext) Host() bool {
-	return b.target.Os.Class == Host || b.target.Os.Class == HostCross
+	return b.os.Class == Host || b.os.Class == HostCross
 }
 
 func (b *baseModuleContext) Device() bool {
-	return b.target.Os.Class == Device
+	return b.os.Class == Device
 }
 
 func (b *baseModuleContext) Darwin() bool {
-	return b.target.Os == Darwin
+	return b.os == Darwin
 }
 
 func (b *baseModuleContext) Fuchsia() bool {
-	return b.target.Os == Fuchsia
+	return b.os == Fuchsia
 }
 
 func (b *baseModuleContext) Windows() bool {
-	return b.target.Os == Windows
+	return b.os == Windows
 }
 
 func (b *baseModuleContext) Debug() bool {
@@ -1802,6 +1801,49 @@ type SourceFileProducer interface {
 // listed in the property.
 type OutputFileProducer interface {
 	OutputFiles(tag string) (Paths, error)
+}
+
+// OutputFilesForModule returns the paths from an OutputFileProducer with the given tag.  On error, including if the
+// module produced zero paths, it reports errors to the ctx and returns nil.
+func OutputFilesForModule(ctx PathContext, module blueprint.Module, tag string) Paths {
+	paths, err := outputFilesForModule(ctx, module, tag)
+	if err != nil {
+		reportPathError(ctx, err)
+		return nil
+	}
+	return paths
+}
+
+// OutputFileForModule returns the path from an OutputFileProducer with the given tag.  On error, including if the
+// module produced zero or multiple paths, it reports errors to the ctx and returns nil.
+func OutputFileForModule(ctx PathContext, module blueprint.Module, tag string) Path {
+	paths, err := outputFilesForModule(ctx, module, tag)
+	if err != nil {
+		reportPathError(ctx, err)
+		return nil
+	}
+	if len(paths) > 1 {
+		reportPathErrorf(ctx, "got multiple output files from module %q, expected exactly one",
+			pathContextName(ctx, module))
+		return nil
+	}
+	return paths[0]
+}
+
+func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
+	if outputFileProducer, ok := module.(OutputFileProducer); ok {
+		paths, err := outputFileProducer.OutputFiles(tag)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get output file from module %q: %s",
+				pathContextName(ctx, module), err.Error())
+		}
+		if len(paths) == 0 {
+			return nil, fmt.Errorf("failed to get output files from module %q", pathContextName(ctx, module))
+		}
+		return paths, nil
+	} else {
+		return nil, fmt.Errorf("module %q is not an OutputFileProducer", pathContextName(ctx, module))
+	}
 }
 
 type HostToolProvider interface {

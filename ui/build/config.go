@@ -50,10 +50,14 @@ type configImpl struct {
 	targetDevice    string
 	targetDeviceDir string
 
+	// Autodetected
+	totalRAM uint64
+
 	pdkBuild bool
 
-	brokenDupRules    bool
-	brokenUsesNetwork bool
+	brokenDupRules     bool
+	brokenUsesNetwork  bool
+	brokenNinjaEnvVars []string
 
 	pathReplaced bool
 }
@@ -95,6 +99,8 @@ func NewConfig(ctx Context, args ...string) Config {
 	// Sane default matching ninja
 	ret.parallel = runtime.NumCPU() + 2
 	ret.keepGoing = 1
+
+	ret.totalRAM = detectTotalRAM(ctx)
 
 	ret.parseArgs(ctx, args)
 
@@ -716,6 +722,10 @@ func (c *configImpl) Parallel() int {
 	return c.parallel
 }
 
+func (c *configImpl) TotalRAM() uint64 {
+	return c.totalRAM
+}
+
 func (c *configImpl) UseGoma() bool {
 	if v, ok := c.environ.Get("USE_GOMA"); ok {
 		v = strings.TrimSpace(v)
@@ -896,6 +906,14 @@ func (c *configImpl) SetBuildBrokenUsesNetwork(val bool) {
 
 func (c *configImpl) BuildBrokenUsesNetwork() bool {
 	return c.brokenUsesNetwork
+}
+
+func (c *configImpl) SetBuildBrokenNinjaUsesEnvVars(val []string) {
+	c.brokenNinjaEnvVars = val
+}
+
+func (c *configImpl) BuildBrokenNinjaUsesEnvVars() []string {
+	return c.brokenNinjaEnvVars
 }
 
 func (c *configImpl) SetTargetDeviceDir(dir string) {

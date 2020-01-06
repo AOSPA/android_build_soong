@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -52,43 +53,42 @@ func TestMain(m *testing.M) {
 	os.Exit(run())
 }
 
-func testContext(config android.Config, bp string,
-	fs map[string][]byte) *android.TestContext {
+func testContext(config android.Config) *android.TestContext {
 
 	ctx := android.NewTestArchContext()
-	ctx.RegisterModuleType("android_app", java.AndroidAppFactory)
-	ctx.RegisterModuleType("java_library", java.LibraryFactory)
-	ctx.RegisterModuleType("java_system_modules", java.SystemModulesFactory)
-	ctx.PreArchMutators(android.RegisterPrebuiltsPreArchMutators)
-	ctx.PreArchMutators(android.RegisterPrebuiltsPostDepsMutators)
+	java.RegisterJavaBuildComponents(ctx)
+	java.RegisterAppBuildComponents(ctx)
+	java.RegisterSystemModulesBuildComponents(ctx)
+
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	ctx.PreArchMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("sysprop_deps", syspropDepsMutator).Parallel()
 	})
 
-	ctx.RegisterModuleType("cc_library", cc.LibraryFactory)
-	ctx.RegisterModuleType("cc_library_headers", cc.LibraryHeaderFactory)
-	ctx.RegisterModuleType("cc_library_static", cc.LibraryFactory)
-	ctx.RegisterModuleType("cc_object", cc.ObjectFactory)
-	ctx.RegisterModuleType("llndk_library", cc.LlndkLibraryFactory)
-	ctx.RegisterModuleType("toolchain_library", cc.ToolchainLibraryFactory)
+	cc.RegisterRequiredBuildComponentsForTest(ctx)
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("link", cc.LinkageMutator).Parallel()
-		ctx.BottomUp("vndk", cc.VndkMutator).Parallel()
-		ctx.BottomUp("version", cc.VersionMutator).Parallel()
-		ctx.BottomUp("begin", cc.BeginMutator).Parallel()
-		ctx.BottomUp("sysprop", cc.SyspropMutator).Parallel()
+		ctx.BottomUp("sysprop_java", java.SyspropMutator).Parallel()
 	})
 
 	ctx.RegisterModuleType("sysprop_library", syspropLibraryFactory)
 
-	ctx.Register()
+	ctx.Register(config)
 
-	bp += java.GatherRequiredDepsForTest()
+	return ctx
+}
+
+func run(t *testing.T, ctx *android.TestContext, config android.Config) {
+	t.Helper()
+	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
+	android.FailIfErrored(t, errs)
+	_, errs = ctx.PrepareBuildActions(config)
+	android.FailIfErrored(t, errs)
+}
+
+func testConfig(env map[string]string, bp string, fs map[string][]byte) android.Config {
 	bp += cc.GatherRequiredDepsForTest(android.Android)
 
 	mockFS := map[string][]byte{
-		"Android.bp":                       []byte(bp),
 		"a.java":                           nil,
 		"b.java":                           nil,
 		"c.java":                           nil,
@@ -134,21 +134,7 @@ func testContext(config android.Config, bp string,
 		mockFS[k] = v
 	}
 
-	ctx.MockFileSystem(mockFS)
-
-	return ctx
-}
-
-func run(t *testing.T, ctx *android.TestContext, config android.Config) {
-	t.Helper()
-	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-	android.FailIfErrored(t, errs)
-	_, errs = ctx.PrepareBuildActions(config)
-	android.FailIfErrored(t, errs)
-}
-
-func testConfig(env map[string]string) android.Config {
-	config := java.TestConfig(buildDir, env)
+	config := java.TestConfig(buildDir, env, bp, mockFS)
 
 	config.TestProductVariables.DeviceSystemSdkVersions = []string{"28"}
 	config.TestProductVariables.DeviceVndkVersion = proptools.StringPtr("current")
@@ -160,8 +146,8 @@ func testConfig(env map[string]string) android.Config {
 
 func test(t *testing.T, bp string) *android.TestContext {
 	t.Helper()
-	config := testConfig(nil)
-	ctx := testContext(config, bp, nil)
+	config := testConfig(nil, bp, nil)
+	ctx := testContext(config)
 	run(t, ctx, config)
 
 	return ctx
@@ -206,6 +192,13 @@ func TestSyspropLibrary(t *testing.T) {
 			name: "java-platform",
 			srcs: ["c.java"],
 			sdk_version: "system_current",
+			libs: ["sysprop-platform"],
+		}
+
+		java_library {
+			name: "java-platform-private",
+			srcs: ["c.java"],
+			platform_apis: true,
 			libs: ["sysprop-platform"],
 		}
 
@@ -284,10 +277,10 @@ func TestSyspropLibrary(t *testing.T) {
 
 	// Check for generated cc_library
 	for _, variant := range []string{
-		"android_arm_armv7-a-neon_vendor.VER_shared",
-		"android_arm_armv7-a-neon_vendor.VER_static",
-		"android_arm64_armv8-a_vendor.VER_shared",
-		"android_arm64_armv8-a_vendor.VER_static",
+		"android_vendor.VER_arm_armv7-a-neon_shared",
+		"android_vendor.VER_arm_armv7-a-neon_static",
+		"android_vendor.VER_arm64_armv8-a_shared",
+		"android_vendor.VER_arm64_armv8-a_static",
 	} {
 		ctx.ModuleForTests("libsysprop-platform", variant)
 		ctx.ModuleForTests("libsysprop-vendor", variant)
@@ -295,10 +288,10 @@ func TestSyspropLibrary(t *testing.T) {
 	}
 
 	for _, variant := range []string{
-		"android_arm_armv7-a-neon_core_shared",
-		"android_arm_armv7-a-neon_core_static",
-		"android_arm64_armv8-a_core_shared",
-		"android_arm64_armv8-a_core_static",
+		"android_arm_armv7-a-neon_shared",
+		"android_arm_armv7-a-neon_static",
+		"android_arm64_armv8-a_shared",
+		"android_arm64_armv8-a_static",
 	} {
 		ctx.ModuleForTests("libsysprop-platform", variant)
 
@@ -307,20 +300,21 @@ func TestSyspropLibrary(t *testing.T) {
 	}
 
 	ctx.ModuleForTests("sysprop-platform", "android_common")
+	ctx.ModuleForTests("sysprop-platform_public", "android_common")
 	ctx.ModuleForTests("sysprop-vendor", "android_common")
 
 	// Check for exported includes
-	coreVariant := "android_arm64_armv8-a_core_static"
-	vendorVariant := "android_arm64_armv8-a_vendor.VER_static"
+	coreVariant := "android_arm64_armv8-a_static"
+	vendorVariant := "android_vendor.VER_arm64_armv8-a_static"
 
-	platformInternalPath := "libsysprop-platform/android_arm64_armv8-a_core_static/gen/sysprop/include"
-	platformPublicCorePath := "libsysprop-platform/android_arm64_armv8-a_core_static/gen/sysprop/public/include"
-	platformPublicVendorPath := "libsysprop-platform/android_arm64_armv8-a_vendor.VER_static/gen/sysprop/public/include"
+	platformInternalPath := "libsysprop-platform/android_arm64_armv8-a_static/gen/sysprop/include"
+	platformPublicCorePath := "libsysprop-platform/android_arm64_armv8-a_static/gen/sysprop/public/include"
+	platformPublicVendorPath := "libsysprop-platform/android_vendor.VER_arm64_armv8-a_static/gen/sysprop/public/include"
 
-	platformOnProductPath := "libsysprop-platform-on-product/android_arm64_armv8-a_core_static/gen/sysprop/public/include"
+	platformOnProductPath := "libsysprop-platform-on-product/android_arm64_armv8-a_static/gen/sysprop/public/include"
 
-	vendorInternalPath := "libsysprop-vendor/android_arm64_armv8-a_vendor.VER_static/gen/sysprop/include"
-	vendorPublicPath := "libsysprop-vendor/android_arm64_armv8-a_core_static/gen/sysprop/public/include"
+	vendorInternalPath := "libsysprop-vendor/android_vendor.VER_arm64_armv8-a_static/gen/sysprop/include"
+	vendorPublicPath := "libsysprop-vendor/android_arm64_armv8-a_static/gen/sysprop/public/include"
 
 	platformClient := ctx.ModuleForTests("cc-client-platform", coreVariant)
 	platformFlags := platformClient.Rule("cc").Args["cFlags"]
@@ -359,4 +353,17 @@ func TestSyspropLibrary(t *testing.T) {
 		t.Errorf("flags for vendor must contain %#v and %#v, but was %#v.",
 			platformPublicVendorPath, vendorInternalPath, vendorFlags)
 	}
+
+	// Java modules linking against system API should use public stub
+	javaSystemApiClient := ctx.ModuleForTests("java-platform", "android_common")
+	publicStubFound := false
+	ctx.VisitDirectDeps(javaSystemApiClient.Module(), func(dep blueprint.Module) {
+		if dep.Name() == "sysprop-platform_public" {
+			publicStubFound = true
+		}
+	})
+	if !publicStubFound {
+		t.Errorf("system api client should use public stub")
+	}
+
 }

@@ -51,6 +51,19 @@ func TestMain(m *testing.M) {
 	os.Exit(run())
 }
 
+func testConfig(bp string) android.Config {
+	bp = bp + GatherRequiredDepsForTest()
+
+	fs := map[string][]byte{
+		"foo.rs":     nil,
+		"src/bar.rs": nil,
+		"liby.so":    nil,
+		"libz.so":    nil,
+	}
+
+	return android.TestArchConfig(buildDir, nil, bp, fs)
+}
+
 func testRust(t *testing.T, bp string) *android.TestContext {
 	// TODO (b/140435149)
 	if runtime.GOOS != "linux" {
@@ -58,11 +71,11 @@ func testRust(t *testing.T, bp string) *android.TestContext {
 	}
 
 	t.Helper()
-	config := android.TestArchConfig(buildDir, nil)
+	config := testConfig(bp)
 
 	t.Helper()
-	ctx := CreateTestContext(bp)
-	ctx.Register()
+	ctx := CreateTestContext()
+	ctx.Register(config)
 
 	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
 	android.FailIfErrored(t, errs)
@@ -79,10 +92,10 @@ func testRustError(t *testing.T, pattern string, bp string) {
 	}
 
 	t.Helper()
-	config := android.TestArchConfig(buildDir, nil)
+	config := testConfig(bp)
 
-	ctx := CreateTestContext(bp)
-	ctx.Register()
+	ctx := CreateTestContext()
+	ctx.Register(config)
 
 	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
 	if len(errs) > 0 {
@@ -245,7 +258,7 @@ func TestNoStdlibs(t *testing.T) {
 			srcs: ["foo.rs"],
                         no_stdlibs: true,
 		}`)
-	module := ctx.ModuleForTests("fizz-buzz", "android_arm64_armv8-a_core").Module().(*Module)
+	module := ctx.ModuleForTests("fizz-buzz", "android_arm64_armv8-a").Module().(*Module)
 
 	if android.InList("libstd", module.Properties.AndroidMkDylibs) {
 		t.Errorf("no_stdlibs did not suppress dependency on libstd")

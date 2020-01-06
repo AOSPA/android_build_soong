@@ -138,7 +138,7 @@ func (m *ApexModuleBase) IsInstallableToApex() bool {
 }
 
 const (
-	availableToPlatform = "//apex_available:platform"
+	AvailableToPlatform = "//apex_available:platform"
 	availableToAnyApex  = "//apex_available:anyapex"
 )
 
@@ -149,7 +149,7 @@ func CheckAvailableForApex(what string, apex_available []string) bool {
 		return true
 	}
 	return InList(what, apex_available) ||
-		(what != availableToPlatform && InList(availableToAnyApex, apex_available))
+		(what != AvailableToPlatform && InList(availableToAnyApex, apex_available))
 }
 
 func (m *ApexModuleBase) AvailableFor(what string) bool {
@@ -165,7 +165,7 @@ func (m *ApexModuleBase) DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
 
 func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
 	for _, n := range m.ApexProperties.Apex_available {
-		if n == availableToPlatform || n == availableToAnyApex {
+		if n == AvailableToPlatform || n == availableToAnyApex {
 			continue
 		}
 		if !mctx.OtherModuleExists(n) && !mctx.Config().AllowMissingDependencies() {
@@ -179,12 +179,14 @@ func (m *ApexModuleBase) CreateApexVariations(mctx BottomUpMutatorContext) []Mod
 		m.checkApexAvailableProperty(mctx)
 		sort.Strings(m.apexVariations)
 		variations := []string{}
-		availableForPlatform := mctx.Module().(ApexModule).AvailableFor(availableToPlatform)
+		availableForPlatform := mctx.Module().(ApexModule).AvailableFor(AvailableToPlatform) || mctx.Host()
 		if availableForPlatform {
 			variations = append(variations, "") // Original variation for platform
 		}
 		variations = append(variations, m.apexVariations...)
 
+		defaultVariation := ""
+		mctx.SetDefaultDependencyVariation(&defaultVariation)
 		modules := mctx.CreateVariations(variations...)
 		for i, m := range modules {
 			if availableForPlatform && i == 0 {
@@ -226,6 +228,14 @@ func UpdateApexDependency(apexName string, moduleName string, directDep bool) {
 		apexNamesMap()[moduleName] = apexNames
 	}
 	apexNames[apexName] = apexNames[apexName] || directDep
+}
+
+// TODO(b/146393795): remove this when b/146393795 is fixed
+func ClearApexDependency() {
+	m := apexNamesMap()
+	for k := range m {
+		delete(m, k)
+	}
 }
 
 // Tests whether a module named moduleName is directly depended on by an APEX
