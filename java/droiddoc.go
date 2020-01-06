@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -1973,34 +1974,32 @@ func PrebuiltStubsSourcesFactory() android.Module {
 	return module
 }
 
-func (d *Droidstubs) BuildSnapshot(sdkModuleContext android.ModuleContext, builder android.SnapshotBuilder) {
+var DroidStubsSdkMemberType = &droidStubsSdkMemberType{}
+
+type droidStubsSdkMemberType struct {
+}
+
+func (mt *droidStubsSdkMemberType) AddDependencies(mctx android.BottomUpMutatorContext, dependencyTag blueprint.DependencyTag, names []string) {
+	mctx.AddVariationDependencies(nil, dependencyTag, names...)
+}
+
+func (mt *droidStubsSdkMemberType) IsInstance(module android.Module) bool {
+	_, ok := module.(*Droidstubs)
+	return ok
+}
+
+func (mt *droidStubsSdkMemberType) BuildSnapshot(sdkModuleContext android.ModuleContext, builder android.SnapshotBuilder, member android.SdkMember) {
+	variants := member.Variants()
+	if len(variants) != 1 {
+		sdkModuleContext.ModuleErrorf("sdk contains %d variants of member %q but only one is allowed", len(variants), member.Name())
+	}
+	variant := variants[0]
+	d, _ := variant.(*Droidstubs)
 	stubsSrcJar := d.stubsSrcJar
 
 	snapshotRelativeDir := filepath.Join("java", d.Name()+"_stubs_sources")
 	builder.UnzipToSnapshot(stubsSrcJar, snapshotRelativeDir)
 
-	d.generatePrebuiltStubsSources(builder, snapshotRelativeDir, true)
-
-	// This module is for the case when the source tree for the unversioned module
-	// doesn't exist (i.e. building in an unbundled tree). "prefer:" is set to false
-	// so that this module does not eclipse the unversioned module if it exists.
-	d.generatePrebuiltStubsSources(builder, snapshotRelativeDir, false)
-}
-
-func (d *Droidstubs) generatePrebuiltStubsSources(builder android.SnapshotBuilder, snapshotRelativeDir string, versioned bool) {
-	bp := builder.AndroidBpFile()
-	name := d.Name()
-	bp.Printfln("prebuilt_stubs_sources {")
-	bp.Indent()
-	if versioned {
-		bp.Printfln("name: %q,", builder.VersionedSdkMemberName(name))
-		bp.Printfln("sdk_member_name: %q,", name)
-	} else {
-		bp.Printfln("name: %q,", name)
-		bp.Printfln("prefer: false,")
-	}
-	bp.Printfln("srcs: [%q],", snapshotRelativeDir)
-	bp.Dedent()
-	bp.Printfln("}")
-	bp.Printfln("")
+	pbm := builder.AddPrebuiltModule(member, "prebuilt_stubs_sources")
+	pbm.AddProperty("srcs", []string{snapshotRelativeDir})
 }
