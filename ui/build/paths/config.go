@@ -102,7 +102,6 @@ var Configuration = map[string]PathConfig{
 	"printf":    Log,
 	"pstree":   Allowed,
 	"python3":  Allowed,
-	"realpath": Allowed,
 	"rsync":    Allowed,
 	"sh":       Allowed,
 	"tr":       Allowed,
@@ -187,7 +186,6 @@ var Configuration = map[string]PathConfig{
 	"wc":        LinuxOnlyPrebuilt,
 	"whoami":    LinuxOnlyPrebuilt,
 	"which":     LinuxOnlyPrebuilt,
-	"xargs":     LinuxOnlyPrebuilt,
 	// TODO (b/121282416): switch back to LinuxOnlyPrebuilt when build is hermetic
 	"xxd":       Log,
 }

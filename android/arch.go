@@ -824,9 +824,12 @@ func archMutator(mctx BottomUpMutatorContext) {
 
 	os := base.commonProperties.CompileOS
 	osTargets := mctx.Config().Targets[os]
-
+	image := base.commonProperties.ImageVariation
 	// Filter NativeBridge targets unless they are explicitly supported
-	if os == Android && !Bool(base.commonProperties.Native_bridge_supported) {
+	// Skip creating native bridge variants for vendor modules
+	if os == Android &&
+		!(Bool(base.commonProperties.Native_bridge_supported) && image == CoreVariation) {
+
 		var targets []Target
 		for _, t := range osTargets {
 			if !t.NativeBridge {
@@ -859,6 +862,12 @@ func archMutator(mctx BottomUpMutatorContext) {
 		if err != nil {
 			mctx.ModuleErrorf("%s", err.Error())
 		}
+	}
+
+	if image == RecoveryVariation {
+		primaryArch := mctx.Config().DevicePrimaryArchType()
+		targets = filterToArch(targets, primaryArch)
+		multiTargets = filterToArch(multiTargets, primaryArch)
 	}
 
 	if len(targets) == 0 {
@@ -907,6 +916,16 @@ func decodeMultilib(base *ModuleBase, class OsClass) (multilib, extraMultilib st
 		}
 		return base.commonProperties.Default_multilib, multilib
 	}
+}
+
+func filterToArch(targets []Target, arch ArchType) []Target {
+	for i := 0; i < len(targets); i++ {
+		if targets[i].Arch.ArchType != arch {
+			targets = append(targets[:i], targets[i+1:]...)
+			i--
+		}
+	}
+	return targets
 }
 
 // createArchType takes a reflect.Type that is either a struct or a pointer to a struct, and returns a list of
@@ -1581,6 +1600,15 @@ func getMegaDeviceConfig() []archConfig {
 func getNdkAbisConfig() []archConfig {
 	return []archConfig{
 		{"arm", "armv7-a", "", []string{"armeabi"}},
+		{"arm64", "armv8-a", "", []string{"arm64-v8a"}},
+		{"x86", "", "", []string{"x86"}},
+		{"x86_64", "", "", []string{"x86_64"}},
+	}
+}
+
+func getAmlAbisConfig() []archConfig {
+	return []archConfig{
+		{"arm", "armv7-a", "", []string{"armeabi-v7a"}},
 		{"arm64", "armv8-a", "", []string{"arm64-v8a"}},
 		{"x86", "", "", []string{"x86"}},
 		{"x86_64", "", "", []string{"x86_64"}},

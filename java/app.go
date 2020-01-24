@@ -33,16 +33,20 @@ import (
 var supportedDpis = []string{"ldpi", "mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"}
 
 func init() {
-	android.RegisterModuleType("android_app", AndroidAppFactory)
-	android.RegisterModuleType("android_test", AndroidTestFactory)
-	android.RegisterModuleType("android_test_helper_app", AndroidTestHelperAppFactory)
-	android.RegisterModuleType("android_app_certificate", AndroidAppCertificateFactory)
-	android.RegisterModuleType("override_android_app", OverrideAndroidAppModuleFactory)
-	android.RegisterModuleType("override_android_test", OverrideAndroidTestModuleFactory)
-	android.RegisterModuleType("android_app_import", AndroidAppImportFactory)
-	android.RegisterModuleType("android_test_import", AndroidTestImportFactory)
+	RegisterAppBuildComponents(android.InitRegistrationContext)
 
 	initAndroidAppImportVariantGroupTypes()
+}
+
+func RegisterAppBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("android_app", AndroidAppFactory)
+	ctx.RegisterModuleType("android_test", AndroidTestFactory)
+	ctx.RegisterModuleType("android_test_helper_app", AndroidTestHelperAppFactory)
+	ctx.RegisterModuleType("android_app_certificate", AndroidAppCertificateFactory)
+	ctx.RegisterModuleType("override_android_app", OverrideAndroidAppModuleFactory)
+	ctx.RegisterModuleType("override_android_test", OverrideAndroidTestModuleFactory)
+	ctx.RegisterModuleType("android_app_import", AndroidAppImportFactory)
+	ctx.RegisterModuleType("android_test_import", AndroidTestImportFactory)
 }
 
 // AndroidManifest.xml merging
@@ -167,18 +171,11 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 		a.aapt.deps(ctx, sdkDep)
 	}
 
+	tag := &jniDependencyTag{}
 	for _, jniTarget := range ctx.MultiTargets() {
 		variation := append(jniTarget.Variations(),
 			blueprint.Variation{Mutator: "link", Variation: "shared"})
-		tag := &jniDependencyTag{
-			target: jniTarget,
-		}
 		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
-		if String(a.appProperties.Stl) == "c++_shared" {
-			if a.shouldEmbedJnis(ctx) {
-				ctx.AddFarVariationDependencies(variation, tag, "ndk_libc++_shared")
-			}
-		}
 	}
 
 	a.usesLibrary.deps(ctx, sdkDep.hasFrameworkLibs())
@@ -471,7 +468,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	dexJarFile := a.dexBuildActions(ctx)
 
-	jniLibs, certificateDeps := collectAppDeps(ctx)
+	jniLibs, certificateDeps := collectAppDeps(ctx, a.shouldEmbedJnis(ctx))
 	jniJarFile := a.jniBuildActions(jniLibs, ctx)
 
 	if ctx.Failed() {
@@ -507,22 +504,33 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 }
 
-func collectAppDeps(ctx android.ModuleContext) ([]jniLib, []Certificate) {
+func collectAppDeps(ctx android.ModuleContext, shouldCollectRecursiveNativeDeps bool) ([]jniLib, []Certificate) {
 	var jniLibs []jniLib
 	var certificates []Certificate
+	seenModulePaths := make(map[string]bool)
 
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.WalkDeps(func(module android.Module, parent android.Module) bool {
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
 
-		if jniTag, ok := tag.(*jniDependencyTag); ok {
+		if IsJniDepTag(tag) || tag == cc.SharedDepTag {
 			if dep, ok := module.(*cc.Module); ok {
+				if dep.IsNdk() || dep.IsStubs() {
+					return false
+				}
+
 				lib := dep.OutputFile()
+				path := lib.Path()
+				if seenModulePaths[path.String()] {
+					return false
+				}
+				seenModulePaths[path.String()] = true
+
 				if lib.Valid() {
 					jniLibs = append(jniLibs, jniLib{
 						name:   ctx.OtherModuleName(module),
-						path:   lib.Path(),
-						target: jniTag.target,
+						path:   path,
+						target: module.Target(),
 					})
 				} else {
 					ctx.ModuleErrorf("dependency %q missing output file", otherName)
@@ -530,13 +538,19 @@ func collectAppDeps(ctx android.ModuleContext) ([]jniLib, []Certificate) {
 			} else {
 				ctx.ModuleErrorf("jni_libs dependency %q must be a cc library", otherName)
 			}
-		} else if tag == certificateTag {
+
+			return shouldCollectRecursiveNativeDeps
+		}
+
+		if tag == certificateTag {
 			if dep, ok := module.(*AndroidAppCertificate); ok {
 				certificates = append(certificates, dep.Certificate)
 			} else {
 				ctx.ModuleErrorf("certificate dependency %q must be an android_app_certificate module", otherName)
 			}
 		}
+
+		return false
 	})
 
 	return jniLibs, certificates
@@ -632,6 +646,17 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	a.testConfig = tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config,
 		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites, a.testProperties.Auto_gen_config)
+	if a.overridableAppProperties.Package_name != nil {
+		fixedConfig := android.PathForModuleOut(ctx, "test_config_fixer", "AndroidTest.xml")
+		rule := android.NewRuleBuilder()
+		rule.Command().BuiltTool(ctx, "test_config_fixer").
+			FlagWithInput("--manifest ", a.manifestPath).
+			FlagWithArg("--package-name ", *a.overridableAppProperties.Package_name).
+			Input(a.testConfig).
+			Output(fixedConfig)
+		rule.Build(pctx, ctx, "fix_test_config", "fix test config")
+		a.testConfig = fixedConfig
+	}
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
 }
 
@@ -957,7 +982,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		ctx.ModuleErrorf("One and only one of certficate, presigned, and default_dev_cert properties must be set")
 	}
 
-	_, certificates := collectAppDeps(ctx)
+	_, certificates := collectAppDeps(ctx, false)
 
 	// TODO: LOCAL_EXTRACT_APK/LOCAL_EXTRACT_DPI_APK
 	// TODO: LOCAL_PACKAGE_SPLITS

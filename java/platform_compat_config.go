@@ -32,47 +32,31 @@ type platformCompatConfig struct {
 	properties     platformCompatConfigProperties
 	installDirPath android.InstallPath
 	configFile     android.OutputPath
+	metadataFile   android.OutputPath
 }
 
 func (p *platformCompatConfig) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	rule := android.NewRuleBuilder()
 
 	configFileName := p.Name() + ".xml"
+	metadataFileName := p.Name() + "_meta.xml"
 	p.configFile = android.PathForModuleOut(ctx, configFileName).OutputPath
+	p.metadataFile = android.PathForModuleOut(ctx, metadataFileName).OutputPath
 	path := android.PathForModuleSrc(ctx, String(p.properties.Src))
 
-	// Use the empty config if the compat config file idoesn't exist (can happen if @ChangeId
-	// annotation is not used).
-	emptyConfig := `'<?xml version="1.0" encoding="UTF-8" standalone="no"?><config/>'`
-	configPath := `compat/compat_config.xml`
-
 	rule.Command().
-		Text(`unzip`).
-		Flag(`-l`).
-		Input(path).
-		Text(`| grep`).
-		Flag(`-q`).
-		Text(configPath).
-		Text(`; if [ "$?" = "0" ] ; then`).
-		Text(`unzip`).
-		Flag(`-qp`).
-		Input(path).
-		Text(configPath).
-		Text(`>`).
-		Output(p.configFile).
-		Text(`; else echo `).
-		Text(emptyConfig).
-		Text(`>`).
-		Output(p.configFile).
-		Text(`; fi`)
+		BuiltTool(ctx, "process-compat-config").
+		FlagWithInput("--jar ", path).
+		FlagWithOutput("--device-config ", p.configFile).
+		FlagWithOutput("--merged-config ", p.metadataFile)
 
 	p.installDirPath = android.PathForModuleInstall(ctx, "etc", "compatconfig")
 	rule.Build(pctx, ctx, configFileName, "Extract compat/compat_config.xml and install it")
 
 }
 
-func (p *platformCompatConfig) AndroidMkEntries() android.AndroidMkEntries {
-	return android.AndroidMkEntries{
+func (p *platformCompatConfig) AndroidMkEntries() []android.AndroidMkEntries {
+	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "ETC",
 		OutputFile: android.OptionalPathForPath(p.configFile),
 		Include:    "$(BUILD_PREBUILT)",
@@ -82,7 +66,7 @@ func (p *platformCompatConfig) AndroidMkEntries() android.AndroidMkEntries {
 				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", p.configFile.Base())
 			},
 		},
-	}
+	}}
 }
 
 func platformCompatConfigFactory() android.Module {

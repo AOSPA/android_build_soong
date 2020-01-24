@@ -48,20 +48,18 @@ func TestMain(m *testing.M) {
 }
 
 func testXml(t *testing.T, bp string) *android.TestContext {
-	config := android.TestArchConfig(buildDir, nil)
+	fs := map[string][]byte{
+		"foo.xml": nil,
+		"foo.dtd": nil,
+		"bar.xml": nil,
+		"bar.xsd": nil,
+		"baz.xml": nil,
+	}
+	config := android.TestArchConfig(buildDir, nil, bp, fs)
 	ctx := android.NewTestArchContext()
 	ctx.RegisterModuleType("prebuilt_etc", android.PrebuiltEtcFactory)
 	ctx.RegisterModuleType("prebuilt_etc_xml", PrebuiltEtcXmlFactory)
-	ctx.Register()
-	mockFiles := map[string][]byte{
-		"Android.bp": []byte(bp),
-		"foo.xml":    nil,
-		"foo.dtd":    nil,
-		"bar.xml":    nil,
-		"bar.xsd":    nil,
-		"baz.xml":    nil,
-	}
-	ctx.MockFileSystem(mockFiles)
+	ctx.Register(config)
 	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
 	android.FailIfErrored(t, errs)
 	_, errs = ctx.PrepareBuildActions(config)
@@ -104,7 +102,7 @@ func TestPrebuiltEtcXml(t *testing.T) {
 		{rule: "xmllint-minimal", input: "baz.xml"},
 	} {
 		t.Run(tc.schemaType, func(t *testing.T) {
-			rule := ctx.ModuleForTests(tc.input, "android_arm64_armv8-a_core").Rule(tc.rule)
+			rule := ctx.ModuleForTests(tc.input, "android_arm64_armv8-a").Rule(tc.rule)
 			assertEqual(t, "input", tc.input, rule.Input.String())
 			if tc.schemaType != "" {
 				assertEqual(t, "schema", tc.schema, rule.Args[tc.schemaType])
@@ -112,6 +110,6 @@ func TestPrebuiltEtcXml(t *testing.T) {
 		})
 	}
 
-	m := ctx.ModuleForTests("foo.xml", "android_arm64_armv8-a_core").Module().(*prebuiltEtcXml)
+	m := ctx.ModuleForTests("foo.xml", "android_arm64_armv8-a").Module().(*prebuiltEtcXml)
 	assertEqual(t, "installDir", buildDir+"/target/product/test_device/system/etc", m.InstallDirPath().String())
 }

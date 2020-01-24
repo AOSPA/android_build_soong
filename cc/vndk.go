@@ -42,7 +42,6 @@ func VndkLibrariesTxtModules(vndkVersion string) []string {
 			vndkCoreLibrariesTxt,
 			vndkSpLibrariesTxt,
 			vndkPrivateLibrariesTxt,
-			vndkUsingCoreVariantLibrariesTxt,
 		}
 	}
 	// Snapshot vndks have their own *.libraries.VER.txt files.
@@ -132,16 +131,16 @@ func (vndk *vndkdep) vndkCheckLinkType(ctx android.ModuleContext, to *Module, ta
 		return
 	}
 	if !vndk.isVndk() {
-		// Non-VNDK modules (those installed to /vendor) can't depend on modules marked with
-		// vendor_available: false.
+		// Non-VNDK modules (those installed to /vendor, /product, or /system/product) can't depend
+		// on modules marked with vendor_available: false.
 		violation := false
 		if lib, ok := to.linker.(*llndkStubDecorator); ok && !Bool(lib.Properties.Vendor_available) {
 			violation = true
 		} else {
 			if _, ok := to.linker.(libraryInterface); ok && to.VendorProperties.Vendor_available != nil && !Bool(to.VendorProperties.Vendor_available) {
 				// Vendor_available == nil && !Bool(Vendor_available) should be okay since
-				// it means a vendor-only library which is a valid dependency for non-VNDK
-				// modules.
+				// it means a vendor-only, or product-only library which is a valid dependency
+				// for non-VNDK modules.
 				violation = true
 			}
 		}
@@ -227,7 +226,7 @@ var (
 	vndkSpLibrariesKey               = android.NewOnceKey("vndkSpLibrarires")
 	llndkLibrariesKey                = android.NewOnceKey("llndkLibrarires")
 	vndkPrivateLibrariesKey          = android.NewOnceKey("vndkPrivateLibrarires")
-	vndkUsingCoreVariantLibrariesKey = android.NewOnceKey("vndkUsingCoreVariantLibrarires")
+	vndkUsingCoreVariantLibrariesKey = android.NewOnceKey("vndkUsingCoreVariantLibraries")
 	vndkMustUseVendorVariantListKey  = android.NewOnceKey("vndkMustUseVendorVariantListKey")
 	vndkLibrariesLock                sync.Mutex
 
@@ -350,7 +349,7 @@ func IsForVndkApex(mctx android.BottomUpMutatorContext, m *Module) bool {
 	}
 
 	if lib, ok := m.linker.(libraryInterface); ok {
-		useCoreVariant := m.vndkVersion() == mctx.DeviceConfig().PlatformVndkVersion() &&
+		useCoreVariant := m.VndkVersion() == mctx.DeviceConfig().PlatformVndkVersion() &&
 			mctx.DeviceConfig().VndkUseCoreVariant() && !m.MustUseVendorVariant()
 		return lib.shared() && m.UseVndk() && m.IsVndk() && !m.isVndkExt() && !useCoreVariant
 	}
@@ -445,7 +444,13 @@ func (txt *vndkLibrariesTxt) GenerateAndroidBuildActions(ctx android.ModuleConte
 		return
 	}
 
-	filename := insertVndkVersion(txt.Name(), ctx.DeviceConfig().PlatformVndkVersion())
+	var filename string
+	if txt.Name() != vndkUsingCoreVariantLibrariesTxt {
+		filename = insertVndkVersion(txt.Name(), ctx.DeviceConfig().PlatformVndkVersion())
+	} else {
+		filename = txt.Name()
+	}
+
 	txt.outputFile = android.PathForModuleOut(ctx, filename).OutputPath
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        android.WriteFile,
@@ -460,8 +465,8 @@ func (txt *vndkLibrariesTxt) GenerateAndroidBuildActions(ctx android.ModuleConte
 	ctx.InstallFile(installPath, filename, txt.outputFile)
 }
 
-func (txt *vndkLibrariesTxt) AndroidMkEntries() android.AndroidMkEntries {
-	return android.AndroidMkEntries{
+func (txt *vndkLibrariesTxt) AndroidMkEntries() []android.AndroidMkEntries {
+	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "ETC",
 		OutputFile: android.OptionalPathForPath(txt.outputFile),
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
@@ -469,7 +474,7 @@ func (txt *vndkLibrariesTxt) AndroidMkEntries() android.AndroidMkEntries {
 				entries.SetString("LOCAL_MODULE_STEM", txt.outputFile.Base())
 			},
 		},
-	}
+	}}
 }
 
 func (txt *vndkLibrariesTxt) OutputFile() android.OutputPath {
@@ -665,14 +670,14 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		if m.Target().NativeBridge == android.NativeBridgeEnabled {
 			return nil, "", false
 		}
-		if !m.UseVndk() || !m.IsForPlatform() || !m.installable() {
+		if !m.UseVndk() || !m.IsForPlatform() || !m.installable() || !m.inVendor() {
 			return nil, "", false
 		}
 		l, ok := m.linker.(vndkSnapshotLibraryInterface)
 		if !ok || !l.shared() {
 			return nil, "", false
 		}
-		if m.vndkVersion() == ctx.DeviceConfig().PlatformVndkVersion() && m.IsVndk() && !m.isVndkExt() {
+		if m.VndkVersion() == ctx.DeviceConfig().PlatformVndkVersion() && m.IsVndk() && !m.isVndkExt() {
 			if m.isVndkSp() {
 				return l, "vndk-sp", true
 			} else {

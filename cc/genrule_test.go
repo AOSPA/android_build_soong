@@ -21,31 +21,20 @@ import (
 	"android/soong/android"
 )
 
-func testGenruleContext(config android.Config, bp string,
-	fs map[string][]byte) *android.TestContext {
-
+func testGenruleContext(config android.Config) *android.TestContext {
 	ctx := android.NewTestArchContext()
 	ctx.RegisterModuleType("cc_genrule", genRuleFactory)
-	ctx.Register()
-
-	mockFS := map[string][]byte{
-		"Android.bp": []byte(bp),
-		"tool":       nil,
-		"foo":        nil,
-		"bar":        nil,
-	}
-
-	for k, v := range fs {
-		mockFS[k] = v
-	}
-
-	ctx.MockFileSystem(mockFS)
+	ctx.Register(config)
 
 	return ctx
 }
 
 func TestArchGenruleCmd(t *testing.T) {
-	config := android.TestArchConfig(buildDir, nil)
+	fs := map[string][]byte{
+		"tool": nil,
+		"foo":  nil,
+		"bar":  nil,
+	}
 	bp := `
 				cc_genrule {
 					name: "gen",
@@ -63,8 +52,9 @@ func TestArchGenruleCmd(t *testing.T) {
 					},
 				}
 			`
+	config := android.TestArchConfig(buildDir, nil, bp, fs)
 
-	ctx := testGenruleContext(config, bp, nil)
+	ctx := testGenruleContext(config)
 
 	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
 	if errs == nil {
@@ -74,13 +64,13 @@ func TestArchGenruleCmd(t *testing.T) {
 		t.Fatal(errs)
 	}
 
-	gen := ctx.ModuleForTests("gen", "android_arm_armv7-a-neon_core").Output("out_arm")
+	gen := ctx.ModuleForTests("gen", "android_arm_armv7-a-neon").Output("out_arm")
 	expected := []string{"foo"}
 	if !reflect.DeepEqual(expected, gen.Inputs.Strings()) {
 		t.Errorf(`want arm inputs %v, got %v`, expected, gen.Inputs.Strings())
 	}
 
-	gen = ctx.ModuleForTests("gen", "android_arm64_armv8-a_core").Output("out_arm64")
+	gen = ctx.ModuleForTests("gen", "android_arm64_armv8-a").Output("out_arm64")
 	expected = []string{"bar"}
 	if !reflect.DeepEqual(expected, gen.Inputs.Strings()) {
 		t.Errorf(`want arm64 inputs %v, got %v`, expected, gen.Inputs.Strings())

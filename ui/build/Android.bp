@@ -59,6 +59,7 @@ bootstrap_go_package {
         "util.go",
     ],
     testSrcs: [
+        "cleanbuild_test.go",
         "config_test.go",
         "environment_test.go",
         "util_test.go",
@@ -66,11 +67,13 @@ bootstrap_go_package {
     ],
     darwin: {
         srcs: [
+            "config_darwin.go",
             "sandbox_darwin.go",
         ],
     },
     linux: {
         srcs: [
+            "config_linux.go",
             "sandbox_linux.go",
         ],
     },

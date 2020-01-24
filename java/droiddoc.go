@@ -27,19 +27,37 @@ import (
 )
 
 func init() {
-	android.RegisterModuleType("doc_defaults", DocDefaultsFactory)
-	android.RegisterModuleType("stubs_defaults", StubsDefaultsFactory)
+	RegisterDocsBuildComponents(android.InitRegistrationContext)
+	RegisterStubsBuildComponents(android.InitRegistrationContext)
 
-	android.RegisterModuleType("droiddoc", DroiddocFactory)
-	android.RegisterModuleType("droiddoc_host", DroiddocHostFactory)
-	android.RegisterModuleType("droiddoc_exported_dir", ExportedDroiddocDirFactory)
-	android.RegisterModuleType("javadoc", JavadocFactory)
-	android.RegisterModuleType("javadoc_host", JavadocHostFactory)
+	// Register sdk member type.
+	android.RegisterSdkMemberType(&droidStubsSdkMemberType{
+		SdkMemberTypeBase: android.SdkMemberTypeBase{
+			PropertyName: "stubs_sources",
+			// stubs_sources can be used with sdk to provide the source stubs for APIs provided by
+			// the APEX.
+			SupportsSdk: true,
+		},
+	})
+}
 
-	android.RegisterModuleType("droidstubs", DroidstubsFactory)
-	android.RegisterModuleType("droidstubs_host", DroidstubsHostFactory)
+func RegisterDocsBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("doc_defaults", DocDefaultsFactory)
 
-	android.RegisterModuleType("prebuilt_stubs_sources", PrebuiltStubsSourcesFactory)
+	ctx.RegisterModuleType("droiddoc", DroiddocFactory)
+	ctx.RegisterModuleType("droiddoc_host", DroiddocHostFactory)
+	ctx.RegisterModuleType("droiddoc_exported_dir", ExportedDroiddocDirFactory)
+	ctx.RegisterModuleType("javadoc", JavadocFactory)
+	ctx.RegisterModuleType("javadoc_host", JavadocHostFactory)
+}
+
+func RegisterStubsBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("stubs_defaults", StubsDefaultsFactory)
+
+	ctx.RegisterModuleType("droidstubs", DroidstubsFactory)
+	ctx.RegisterModuleType("droidstubs_host", DroidstubsHostFactory)
+
+	ctx.RegisterModuleType("prebuilt_stubs_sources", PrebuiltStubsSourcesFactory)
 }
 
 var (
@@ -775,7 +793,7 @@ func (d *Droiddoc) doclavaDocsFlags(ctx android.ModuleContext, cmd *android.Rule
 		if t, ok := m.(*ExportedDroiddocDir); ok {
 			cmd.FlagWithArg("-templatedir ", t.dir.String()).Implicits(t.deps)
 		} else {
-			ctx.PropertyErrorf("custom_template", "module %q is not a droiddoc_template", ctx.OtherModuleName(m))
+			ctx.PropertyErrorf("custom_template", "module %q is not a droiddoc_exported_dir", ctx.OtherModuleName(m))
 		}
 	})
 
@@ -1933,12 +1951,42 @@ type PrebuiltStubsSources struct {
 
 	properties PrebuiltStubsSourcesProperties
 
-	srcs        android.Paths
+	// The source directories containing stubs source files.
+	srcDirs     android.Paths
 	stubsSrcJar android.ModuleOutPath
 }
 
+func (p *PrebuiltStubsSources) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case "":
+		return android.Paths{p.stubsSrcJar}, nil
+	default:
+		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+	}
+}
+
 func (p *PrebuiltStubsSources) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	p.srcs = android.PathsForModuleSrc(ctx, p.properties.Srcs)
+	p.stubsSrcJar = android.PathForModuleOut(ctx, ctx.ModuleName()+"-"+"stubs.srcjar")
+
+	p.srcDirs = android.PathsForModuleSrc(ctx, p.properties.Srcs)
+
+	rule := android.NewRuleBuilder()
+	command := rule.Command().
+		BuiltTool(ctx, "soong_zip").
+		Flag("-write_if_changed").
+		Flag("-jar").
+		FlagWithOutput("-o ", p.stubsSrcJar)
+
+	for _, d := range p.srcDirs {
+		dir := d.String()
+		command.
+			FlagWithArg("-C ", dir).
+			FlagWithInput("-D ", d)
+	}
+
+	rule.Restat()
+
+	rule.Build(pctx, ctx, "zip src", "Create srcjar from prebuilt source")
 }
 
 func (p *PrebuiltStubsSources) Prebuilt() *android.Prebuilt {
@@ -1947,10 +1995,6 @@ func (p *PrebuiltStubsSources) Prebuilt() *android.Prebuilt {
 
 func (p *PrebuiltStubsSources) Name() string {
 	return p.prebuilt.Name(p.ModuleBase.Name())
-}
-
-func (p *PrebuiltStubsSources) Srcs() android.Paths {
-	return append(android.Paths{}, p.srcs...)
 }
 
 // prebuilt_stubs_sources imports a set of java source files as if they were
@@ -1974,9 +2018,8 @@ func PrebuiltStubsSourcesFactory() android.Module {
 	return module
 }
 
-var DroidStubsSdkMemberType = &droidStubsSdkMemberType{}
-
 type droidStubsSdkMemberType struct {
+	android.SdkMemberTypeBase
 }
 
 func (mt *droidStubsSdkMemberType) AddDependencies(mctx android.BottomUpMutatorContext, dependencyTag blueprint.DependencyTag, names []string) {
