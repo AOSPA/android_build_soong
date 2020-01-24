@@ -82,7 +82,10 @@ type ApexModule interface {
 }
 
 type ApexProperties struct {
-	// Availability of this module in APEXes. Only the listed APEXes can include this module.
+	// Availability of this module in APEXes. Only the listed APEXes can contain
+	// this module. If the module has stubs then other APEXes and the platform may
+	// access it through them (subject to visibility).
+	//
 	// "//apex_available:anyapex" is a pseudo APEX name that matches to any APEX.
 	// "//apex_available:platform" refers to non-APEX partitions like "system.img".
 	// Default is ["//apex_available:platform", "//apex_available:anyapex"].
@@ -144,9 +147,9 @@ const (
 
 func CheckAvailableForApex(what string, apex_available []string) bool {
 	if len(apex_available) == 0 {
-		// apex_available defaults to ["//apex_available:platform", "//apex_available:anyapex"],
-		// which means 'available to everybody'.
-		return true
+		// apex_available defaults to ["//apex_available:platform"],
+		// which means 'available to the platform but no apexes'.
+		return what == AvailableToPlatform
 	}
 	return InList(what, apex_available) ||
 		(what != AvailableToPlatform && InList(availableToAnyApex, apex_available))

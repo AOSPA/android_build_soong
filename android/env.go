@@ -55,6 +55,17 @@ func init() {
 	os.Clearenv()
 }
 
+// getenv checks either os.Getenv or originalEnv so that it works before or after the init()
+// function above.  It doesn't add any dependencies on the environment variable, so it should
+// only be used for values that won't change.  For values that might change use ctx.Config().Getenv.
+func getenv(key string) string {
+	if originalEnv == nil {
+		return os.Getenv(key)
+	} else {
+		return originalEnv[key]
+	}
+}
+
 func EnvSingleton() Singleton {
 	return &envSingleton{}
 }
@@ -69,7 +80,12 @@ func (c *envSingleton) GenerateBuildActions(ctx SingletonContext) {
 		return
 	}
 
-	err := env.WriteEnvFile(envFile.String(), envDeps)
+	data, err := env.EnvFileContents(envDeps)
+	if err != nil {
+		ctx.Errorf(err.Error())
+	}
+
+	err = WriteFileToOutputDir(envFile, data, 0666)
 	if err != nil {
 		ctx.Errorf(err.Error())
 	}

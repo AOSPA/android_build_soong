@@ -84,7 +84,9 @@ type Context struct {
 }
 
 func NewContext() *Context {
-	return &Context{blueprint.NewContext()}
+	ctx := &Context{blueprint.NewContext()}
+	ctx.SetSrcDir(absSrcDir)
+	return ctx
 }
 
 func (ctx *Context) Register() {
@@ -100,7 +102,7 @@ func (ctx *Context) Register() {
 		ctx.RegisterSingletonType(t.name, t.factory)
 	}
 
-	registerMutators(ctx.Context, preArch, preDeps, postDeps)
+	registerMutators(ctx.Context, preArch, preDeps, postDeps, finalDeps)
 
 	// Register makevars after other singletons so they can export values through makevars
 	ctx.RegisterSingletonType("makevars", SingletonFactoryAdaptor(makeVarsSingletonFunc))
@@ -125,8 +127,15 @@ type RegistrationContext interface {
 	RegisterModuleType(name string, factory ModuleFactory)
 	RegisterSingletonType(name string, factory SingletonFactory)
 	PreArchMutators(f RegisterMutatorFunc)
+
+	// Register pre arch mutators that are hard coded into mutator.go.
+	//
+	// Only registers mutators for testing, is a noop on the InitRegistrationContext.
+	HardCodedPreArchMutators(f RegisterMutatorFunc)
+
 	PreDepsMutators(f RegisterMutatorFunc)
 	PostDepsMutators(f RegisterMutatorFunc)
+	FinalDepsMutators(f RegisterMutatorFunc)
 }
 
 // Used to register build components from an init() method, e.g.
@@ -178,10 +187,18 @@ func (ctx *initRegistrationContext) PreArchMutators(f RegisterMutatorFunc) {
 	PreArchMutators(f)
 }
 
+func (ctx *initRegistrationContext) HardCodedPreArchMutators(f RegisterMutatorFunc) {
+	// Nothing to do as the mutators are hard code in preArch in mutator.go
+}
+
 func (ctx *initRegistrationContext) PreDepsMutators(f RegisterMutatorFunc) {
 	PreDepsMutators(f)
 }
 
 func (ctx *initRegistrationContext) PostDepsMutators(f RegisterMutatorFunc) {
 	PostDepsMutators(f)
+}
+
+func (ctx *initRegistrationContext) FinalDepsMutators(f RegisterMutatorFunc) {
+	FinalDepsMutators(f)
 }

@@ -37,8 +37,6 @@ func NewTestContext() *TestContext {
 
 	ctx.SetNameInterface(nameResolver)
 
-	ctx.preArch = append(ctx.preArch, registerLoadHookMutator)
-
 	ctx.postDeps = append(ctx.postDeps, registerPathDepsMutator)
 
 	return ctx
@@ -52,12 +50,18 @@ func NewTestArchContext() *TestContext {
 
 type TestContext struct {
 	*Context
-	preArch, preDeps, postDeps []RegisterMutatorFunc
-	NameResolver               *NameResolver
+	preArch, preDeps, postDeps, finalDeps []RegisterMutatorFunc
+	NameResolver                          *NameResolver
+	config                                Config
 }
 
 func (ctx *TestContext) PreArchMutators(f RegisterMutatorFunc) {
 	ctx.preArch = append(ctx.preArch, f)
+}
+
+func (ctx *TestContext) HardCodedPreArchMutators(f RegisterMutatorFunc) {
+	// Register mutator function as normal for testing.
+	ctx.PreArchMutators(f)
 }
 
 func (ctx *TestContext) PreDepsMutators(f RegisterMutatorFunc) {
@@ -68,14 +72,32 @@ func (ctx *TestContext) PostDepsMutators(f RegisterMutatorFunc) {
 	ctx.postDeps = append(ctx.postDeps, f)
 }
 
+func (ctx *TestContext) FinalDepsMutators(f RegisterMutatorFunc) {
+	ctx.finalDeps = append(ctx.finalDeps, f)
+}
+
 func (ctx *TestContext) Register(config Config) {
 	ctx.SetFs(config.fs)
 	if config.mockBpList != "" {
 		ctx.SetModuleListFile(config.mockBpList)
 	}
-	registerMutators(ctx.Context.Context, ctx.preArch, ctx.preDeps, ctx.postDeps)
+	registerMutators(ctx.Context.Context, ctx.preArch, ctx.preDeps, ctx.postDeps, ctx.finalDeps)
 
 	ctx.RegisterSingletonType("env", EnvSingleton)
+
+	ctx.config = config
+}
+
+func (ctx *TestContext) ParseFileList(rootDir string, filePaths []string) (deps []string, errs []error) {
+	// This function adapts the old style ParseFileList calls that are spread throughout the tests
+	// to the new style that takes a config.
+	return ctx.Context.ParseFileList(rootDir, filePaths, ctx.config)
+}
+
+func (ctx *TestContext) ParseBlueprintsFiles(rootDir string) (deps []string, errs []error) {
+	// This function adapts the old style ParseBlueprintsFiles calls that are spread throughout the
+	// tests to the new style that takes a config.
+	return ctx.Context.ParseBlueprintsFiles(rootDir, ctx.config)
 }
 
 func (ctx *TestContext) RegisterModuleType(name string, factory ModuleFactory) {

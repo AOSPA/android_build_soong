@@ -388,7 +388,7 @@ func (module *SdkLibrary) sdkVersionForScope(apiScope apiScope) string {
 }
 
 // Get the sdk version for use when compiling the stubs library.
-func (module *SdkLibrary) sdkVersionForStubsLibrary(mctx android.BaseModuleContext, apiScope apiScope) string {
+func (module *SdkLibrary) sdkVersionForStubsLibrary(mctx android.LoadHookContext, apiScope apiScope) string {
 	sdkDep := decodeSdkDep(mctx, sdkContext(&module.Library))
 	if sdkDep.hasStandardLibs() {
 		// If building against a standard sdk then use the sdk version appropriate for the scope.
@@ -667,7 +667,11 @@ func (module *SdkLibrary) PrebuiltJars(ctx android.BaseModuleContext, sdkVersion
 	jar := filepath.Join(dir, module.BaseModuleName()+".jar")
 	jarPath := android.ExistentPathForSource(ctx, jar)
 	if !jarPath.Valid() {
-		ctx.PropertyErrorf("sdk_library", "invalid sdk version %q, %q does not exist", v, jar)
+		if ctx.Config().AllowMissingDependencies() {
+			return android.Paths{android.PathForSource(ctx, jar)}
+		} else {
+			ctx.PropertyErrorf("sdk_library", "invalid sdk version %q, %q does not exist", sdkVersion, jar)
+		}
 		return nil
 	}
 	return android.Paths{jarPath.Path()}
@@ -834,16 +838,8 @@ type sdkLibraryImportProperties struct {
 
 	Sdk_version *string
 
-	Installable *bool
-
 	// List of shared java libs that this module has dependencies to
 	Libs []string
-
-	// List of files to remove from the jar file(s)
-	Exclude_files []string
-
-	// List of directories to remove from the jar file(s)
-	Exclude_dirs []string
 }
 
 type sdkLibraryImport struct {

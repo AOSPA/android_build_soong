@@ -233,6 +233,19 @@ func (a *apexBundle) buildNoticeFile(ctx android.ModuleContext, apexFileName str
 	return android.BuildNoticeOutput(ctx, a.installDir, apexFileName, android.FirstUniquePaths(noticeFiles)).HtmlGzOutput
 }
 
+func (a *apexBundle) buildInstalledFilesFile(ctx android.ModuleContext, builtApex android.Path, imageDir android.Path) android.OutputPath {
+	output := android.PathForModuleOut(ctx, "installed-files.txt")
+	rule := android.NewRuleBuilder()
+	rule.Command().
+		Implicit(builtApex).
+		Text("(cd " + imageDir.String() + " ; ").
+		Text("find . -type f -printf \"%s %p\\n\") ").
+		Text(" | sort -nr > ").
+		Output(output)
+	rule.Build(pctx, ctx, "installed-files."+a.Name(), "Installed files")
+	return output.OutputPath
+}
+
 func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	var abis []string
 	for _, target := range ctx.MultiTargets() {
@@ -245,34 +258,40 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 
 	apexType := a.properties.ApexType
 	suffix := apexType.suffix()
+	var implicitInputs []android.Path
 	unsignedOutputFile := android.PathForModuleOut(ctx, a.Name()+suffix+".unsigned")
 
-	filesToCopy := []android.Path{}
-	for _, f := range a.filesInfo {
-		filesToCopy = append(filesToCopy, f.builtFile)
+	// TODO(jiyong): construct the copy rules using RuleBuilder
+	var copyCommands []string
+	for _, fi := range a.filesInfo {
+		destPath := android.PathForModuleOut(ctx, "image"+suffix, fi.Path()).String()
+		copyCommands = append(copyCommands, "mkdir -p "+filepath.Dir(destPath))
+		if a.linkToSystemLib && fi.transitiveDep && fi.AvailableToPlatform() {
+			// TODO(jiyong): pathOnDevice should come from fi.module, not being calculated here
+			pathOnDevice := filepath.Join("/system", fi.Path())
+			copyCommands = append(copyCommands, "ln -sfn "+pathOnDevice+" "+destPath)
+		} else {
+			copyCommands = append(copyCommands, "cp -f "+fi.builtFile.String()+" "+destPath)
+			implicitInputs = append(implicitInputs, fi.builtFile)
+		}
+		// create additional symlinks pointing the file inside the APEX
+		for _, symlinkPath := range fi.SymlinkPaths() {
+			symlinkDest := android.PathForModuleOut(ctx, "image"+suffix, symlinkPath).String()
+			copyCommands = append(copyCommands, "ln -sfn "+filepath.Base(destPath)+" "+symlinkDest)
+		}
 	}
 
-	copyCommands := []string{}
-	emitCommands := []string{}
-	imageContentFile := android.PathForModuleOut(ctx, a.Name()+"-content.txt")
+	// TODO(jiyong): use RuleBuilder
+	var emitCommands []string
+	imageContentFile := android.PathForModuleOut(ctx, "content.txt")
 	emitCommands = append(emitCommands, "echo ./apex_manifest.pb >> "+imageContentFile.String())
 	if proptools.Bool(a.properties.Legacy_android10_support) {
 		emitCommands = append(emitCommands, "echo ./apex_manifest.json >> "+imageContentFile.String())
 	}
-	for i, src := range filesToCopy {
-		dest := filepath.Join(a.filesInfo[i].installDir, src.Base())
-		emitCommands = append(emitCommands, "echo './"+dest+"' >> "+imageContentFile.String())
-		dest_path := filepath.Join(android.PathForModuleOut(ctx, "image"+suffix).String(), dest)
-		copyCommands = append(copyCommands, "mkdir -p "+filepath.Dir(dest_path))
-		copyCommands = append(copyCommands, "cp "+src.String()+" "+dest_path)
-		for _, sym := range a.filesInfo[i].symlinks {
-			symlinkDest := filepath.Join(filepath.Dir(dest_path), sym)
-			copyCommands = append(copyCommands, "ln -s "+filepath.Base(dest)+" "+symlinkDest)
-		}
+	for _, fi := range a.filesInfo {
+		emitCommands = append(emitCommands, "echo './"+fi.Path()+"' >> "+imageContentFile.String())
 	}
 	emitCommands = append(emitCommands, "sort -o "+imageContentFile.String()+" "+imageContentFile.String())
-
-	implicitInputs := append(android.Paths(nil), filesToCopy...)
 	implicitInputs = append(implicitInputs, a.manifestPbOut)
 
 	if a.properties.Whitelisted_files != nil {
@@ -307,6 +326,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	outHostBinDir := android.PathForOutput(ctx, "host", ctx.Config().PrebuiltOS(), "bin").String()
 	prebuiltSdkToolsBinDir := filepath.Join("prebuilts", "sdk", "tools", runtime.GOOS, "bin")
 
+	imageDir := android.PathForModuleOut(ctx, "image"+suffix)
 	if apexType == imageApex {
 		// files and dirs that will be created in APEX
 		var readOnlyPaths = []string{"apex_manifest.json", "apex_manifest.pb"}
@@ -383,7 +403,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			ctx.PropertyErrorf("test_only_no_hashtree", "not available")
 			return
 		}
-		if (!ctx.Config().UnbundledBuild() && a.installable()) || a.testOnlyShouldSkipHashtreeGeneration() {
+		if !proptools.Bool(a.properties.Legacy_android10_support) || a.testOnlyShouldSkipHashtreeGeneration() {
 			// Apexes which are supposed to be installed in builtin dirs(/system, etc)
 			// don't need hashtree for activation. Therefore, by removing hashtree from
 			// apex bundle (filesystem image in it, to be specific), we can save storage.
@@ -408,7 +428,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			Description: "apex (" + apexType.name() + ")",
 			Args: map[string]string{
 				"tool_path":        outHostBinDir + ":" + prebuiltSdkToolsBinDir,
-				"image_dir":        android.PathForModuleOut(ctx, "image"+suffix).String(),
+				"image_dir":        imageDir.String(),
 				"copy_commands":    strings.Join(copyCommands, " && "),
 				"manifest":         a.manifestPbOut.String(),
 				"file_contexts":    a.fileContexts.String(),
@@ -446,7 +466,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			Description: "apex (" + apexType.name() + ")",
 			Args: map[string]string{
 				"tool_path":     outHostBinDir + ":" + prebuiltSdkToolsBinDir,
-				"image_dir":     android.PathForModuleOut(ctx, "image"+suffix).String(),
+				"image_dir":     imageDir.String(),
 				"copy_commands": strings.Join(copyCommands, " && "),
 				"manifest":      a.manifestPbOut.String(),
 			},
@@ -474,6 +494,9 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		ctx.InstallFile(a.installDir, a.Name()+suffix, a.outputFile)
 	}
 	a.buildFilesInfo(ctx)
+
+	// installed-files.txt is dist'ed
+	a.installedFilesFile = a.buildInstalledFilesFile(ctx, a.outputFile, imageDir)
 }
 
 func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
@@ -513,7 +536,7 @@ func (a *apexBundle) buildFilesInfo(ctx android.ModuleContext) {
 	if a.installable() {
 		// For flattened APEX, do nothing but make sure that APEX manifest and apex_pubkey are also copied along
 		// with other ordinary files.
-		a.filesInfo = append(a.filesInfo, newApexFile(ctx, a.manifestPbOut, "apex_manifest.pb."+a.Name()+a.suffix, ".", etc, nil))
+		a.filesInfo = append(a.filesInfo, newApexFile(ctx, a.manifestPbOut, "apex_manifest.pb", ".", etc, nil))
 
 		// rename to apex_pubkey
 		copiedPubkey := android.PathForModuleOut(ctx, "apex_pubkey")
@@ -522,7 +545,7 @@ func (a *apexBundle) buildFilesInfo(ctx android.ModuleContext) {
 			Input:  a.public_key_file,
 			Output: copiedPubkey,
 		})
-		a.filesInfo = append(a.filesInfo, newApexFile(ctx, copiedPubkey, "apex_pubkey."+a.Name()+a.suffix, ".", etc, nil))
+		a.filesInfo = append(a.filesInfo, newApexFile(ctx, copiedPubkey, "apex_pubkey", ".", etc, nil))
 
 		if a.properties.ApexType == flattenedApex {
 			apexName := proptools.StringDefault(a.properties.Apex_name, a.Name())
@@ -553,4 +576,52 @@ func (a *apexBundle) getOverrideManifestPackageName(ctx android.ModuleContext) s
 		return manifestPackageName
 	}
 	return ""
+}
+
+func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
+	if !a.primaryApexType {
+		return
+	}
+
+	if a.properties.IsCoverageVariant {
+		// Otherwise, we will have duplicated rules for coverage and
+		// non-coverage variants of the same APEX
+		return
+	}
+
+	if ctx.Host() {
+		// No need to generate dependency info for host variant
+		return
+	}
+
+	internalDeps := a.internalDeps
+	externalDeps := a.externalDeps
+
+	internalDeps = android.SortedUniqueStrings(internalDeps)
+	externalDeps = android.SortedUniqueStrings(externalDeps)
+	externalDeps = android.RemoveListFromList(externalDeps, internalDeps)
+
+	var content strings.Builder
+	for _, name := range internalDeps {
+		fmt.Fprintf(&content, "internal %s\\n", name)
+	}
+	for _, name := range externalDeps {
+		fmt.Fprintf(&content, "external %s\\n", name)
+	}
+
+	depsInfoFile := android.PathForOutput(ctx, a.Name()+"-deps-info.txt")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        android.WriteFile,
+		Description: "Dependency Info",
+		Output:      depsInfoFile,
+		Args: map[string]string{
+			"content": content.String(),
+		},
+	})
+
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   android.Phony,
+		Output: android.PathForPhony(ctx, a.Name()+"-deps-info"),
+		Inputs: []android.Path{depsInfoFile},
+	})
 }

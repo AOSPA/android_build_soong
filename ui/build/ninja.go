@@ -114,6 +114,8 @@ func runNinja(ctx Context, config Config) {
 			"TARGET_BUILD_APPS",
 			"TARGET_BUILD_VARIANT",
 			"TARGET_PRODUCT",
+			// b/147197813 - used by art-check-debug-apex-gen
+			"EMMA_INSTRUMENT_FRAMEWORK",
 
 			// Goma -- gomacc may not need all of these
 			"GOMA_DIR",
@@ -125,6 +127,7 @@ func runNinja(ctx Context, config Config) {
 			"GOMA_USE_LOCAL",
 
 			// RBE client
+			"FLAG_compare",
 			"FLAG_exec_root",
 			"FLAG_exec_strategy",
 			"FLAG_invocation_id",
