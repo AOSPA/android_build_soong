@@ -21,7 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -207,10 +206,6 @@ type moduleInstallPathContextImpl struct {
 	inRoot         bool
 }
 
-func (moduleInstallPathContextImpl) Fs() pathtools.FileSystem {
-	return pathtools.MockFs(nil)
-}
-
 func (m moduleInstallPathContextImpl) Config() Config {
 	return m.baseModuleContext.config
 }
@@ -286,7 +281,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   socSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: socSpecificModule,
+					},
 				},
 			},
 			in:  []string{"bin", "my_test"},
@@ -298,7 +295,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   deviceSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: deviceSpecificModule,
+					},
 				},
 			},
 			in:  []string{"bin", "my_test"},
@@ -310,7 +309,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   productSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: productSpecificModule,
+					},
 				},
 			},
 			in:  []string{"bin", "my_test"},
@@ -322,7 +323,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   systemExtSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: systemExtSpecificModule,
+					},
 				},
 			},
 			in:  []string{"bin", "my_test"},
@@ -384,7 +387,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   socSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: socSpecificModule,
+					},
 				},
 				inData: true,
 			},
@@ -397,7 +402,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   deviceSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: deviceSpecificModule,
+					},
 				},
 				inData: true,
 			},
@@ -410,7 +417,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   productSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: productSpecificModule,
+					},
 				},
 				inData: true,
 			},
@@ -424,7 +433,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   systemExtSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: systemExtSpecificModule,
+					},
 				},
 				inData: true,
 			},
@@ -450,7 +461,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   socSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: socSpecificModule,
+					},
 				},
 				inSanitizerDir: true,
 			},
@@ -463,7 +476,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   deviceSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: deviceSpecificModule,
+					},
 				},
 				inSanitizerDir: true,
 			},
@@ -476,7 +491,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   productSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: productSpecificModule,
+					},
 				},
 				inSanitizerDir: true,
 			},
@@ -490,7 +507,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   systemExtSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: systemExtSpecificModule,
+					},
 				},
 				inSanitizerDir: true,
 			},
@@ -517,7 +536,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   socSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: socSpecificModule,
+					},
 				},
 				inData:         true,
 				inSanitizerDir: true,
@@ -531,7 +552,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   deviceSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: deviceSpecificModule,
+					},
 				},
 				inData:         true,
 				inSanitizerDir: true,
@@ -545,7 +568,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   productSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: productSpecificModule,
+					},
 				},
 				inData:         true,
 				inSanitizerDir: true,
@@ -559,7 +584,9 @@ func TestPathForModuleInstall(t *testing.T) {
 				baseModuleContext: baseModuleContext{
 					os:     deviceTarget.Os,
 					target: deviceTarget,
-					kind:   systemExtSpecificModule,
+					earlyModuleContext: earlyModuleContext{
+						kind: systemExtSpecificModule,
+					},
 				},
 				inData:         true,
 				inSanitizerDir: true,

@@ -52,13 +52,40 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 		return moduleNames
 	}
 
+	var postInstallCommands []string
+	for _, fi := range a.filesInfo {
+		if a.linkToSystemLib && fi.transitiveDep && fi.AvailableToPlatform() {
+			// TODO(jiyong): pathOnDevice should come from fi.module, not being calculated here
+			linkTarget := filepath.Join("/system", fi.Path())
+			linkPath := filepath.Join(a.installDir.ToMakePath().String(), apexName, fi.Path())
+			mkdirCmd := "mkdir -p " + filepath.Dir(linkPath)
+			linkCmd := "ln -sfn " + linkTarget + " " + linkPath
+			postInstallCommands = append(postInstallCommands, mkdirCmd, linkCmd)
+		}
+	}
+	postInstallCommands = append(postInstallCommands, a.compatSymlinks...)
+
 	for _, fi := range a.filesInfo {
 		if cc, ok := fi.module.(*cc.Module); ok && cc.Properties.HideFromMake {
 			continue
 		}
 
-		if !android.InList(fi.moduleName, moduleNames) {
-			moduleNames = append(moduleNames, fi.moduleName)
+		linkToSystemLib := a.linkToSystemLib && fi.transitiveDep && fi.AvailableToPlatform()
+
+		var moduleName string
+		if linkToSystemLib {
+			moduleName = fi.moduleName
+		} else {
+			moduleName = fi.moduleName + "." + apexName + a.suffix
+		}
+
+		if !android.InList(moduleName, moduleNames) {
+			moduleNames = append(moduleNames, moduleName)
+		}
+
+		if linkToSystemLib {
+			// No need to copy the file since it's linked to the system file
+			continue
 		}
 
 		fmt.Fprintln(w, "\ninclude $(CLEAR_VARS)")
@@ -67,7 +94,7 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 		} else {
 			fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
 		}
-		fmt.Fprintln(w, "LOCAL_MODULE :=", fi.moduleName)
+		fmt.Fprintln(w, "LOCAL_MODULE :=", moduleName)
 		// /apex/<apex_name>/{lib|framework|...}
 		pathWhenActivated := filepath.Join("$(PRODUCT_OUT)", "apex", apexName, fi.installDir)
 		if apexType == flattenedApex {
@@ -117,6 +144,9 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 				fmt.Fprintln(w, "LOCAL_IS_HOST_MODULE := true")
 			}
 		}
+		if fi.jacocoReportClassesFile != nil {
+			fmt.Fprintln(w, "LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR :=", fi.jacocoReportClassesFile.String())
+		}
 		if fi.class == javaSharedLib {
 			javaModule := fi.module.(javaLibrary)
 			// soong_java_prebuilt.mk sets LOCAL_MODULE_SUFFIX := .jar  Therefore
@@ -128,6 +158,12 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 			fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", fi.builtFile.String())
 			fmt.Fprintln(w, "LOCAL_DEX_PREOPT := false")
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
+		} else if fi.class == app {
+			// soong_app_prebuilt.mk sets LOCAL_MODULE_SUFFIX := .apk  Therefore
+			// we need to remove the suffix from LOCAL_MODULE_STEM, otherwise
+			// we will have foo.apk.apk
+			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", strings.TrimSuffix(fi.builtFile.Base(), ".apk"))
+			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_app_prebuilt.mk")
 		} else if fi.class == nativeSharedLib || fi.class == nativeExecutable || fi.class == nativeTest {
 			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
 			if cc, ok := fi.module.(*cc.Module); ok {
@@ -142,14 +178,45 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_prebuilt.mk")
 		} else {
 			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
-			// For flattened apexes, compat symlinks are attached to apex_manifest.json which is guaranteed for every apex
-			if a.primaryApexType && fi.builtFile == a.manifestPbOut && len(a.compatSymlinks) > 0 {
-				fmt.Fprintln(w, "LOCAL_POST_INSTALL_CMD :=", strings.Join(a.compatSymlinks, " && "))
+			if a.primaryApexType && fi.builtFile == a.manifestPbOut {
+				// Make apex_manifest.pb module for this APEX to override all other
+				// modules in the APEXes being overridden by this APEX
+				var patterns []string
+				for _, o := range a.overridableProperties.Overrides {
+					patterns = append(patterns, "%."+o+a.suffix)
+				}
+				fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES :=", strings.Join(patterns, " "))
+
+				if apexType == flattenedApex && len(postInstallCommands) > 0 {
+					// For flattened apexes, compat symlinks are attached to apex_manifest.json which is guaranteed for every apex
+					fmt.Fprintln(w, "LOCAL_POST_INSTALL_CMD :=", strings.Join(postInstallCommands, " && "))
+				}
 			}
 			fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
 		}
 	}
 	return moduleNames
+}
+
+func (a *apexBundle) writeRequiredModules(w io.Writer) {
+	var required []string
+	var targetRequired []string
+	var hostRequired []string
+	for _, fi := range a.filesInfo {
+		required = append(required, fi.requiredModuleNames...)
+		targetRequired = append(targetRequired, fi.targetRequiredModuleNames...)
+		hostRequired = append(hostRequired, fi.hostRequiredModuleNames...)
+	}
+
+	if len(required) > 0 {
+		fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(required, " "))
+	}
+	if len(targetRequired) > 0 {
+		fmt.Fprintln(w, "LOCAL_TARGET_REQUIRED_MODULES +=", strings.Join(targetRequired, " "))
+	}
+	if len(hostRequired) > 0 {
+		fmt.Fprintln(w, "LOCAL_HOST_REQUIRED_MODULES +=", strings.Join(hostRequired, " "))
+	}
 }
 
 func (a *apexBundle) androidMkForType() android.AndroidMkData {
@@ -170,6 +237,7 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				if len(moduleNames) > 0 {
 					fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES :=", strings.Join(moduleNames, " "))
 				}
+				a.writeRequiredModules(w)
 				fmt.Fprintln(w, "include $(BUILD_PHONY_PACKAGE)")
 
 			} else {
@@ -185,9 +253,10 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				if len(moduleNames) > 0 {
 					fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(moduleNames, " "))
 				}
-				if len(a.externalDeps) > 0 {
-					fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(a.externalDeps, " "))
+				if len(a.requiredDeps) > 0 {
+					fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(a.requiredDeps, " "))
 				}
+				a.writeRequiredModules(w)
 				var postInstallCommands []string
 				if a.prebuiltFileToDelete != "" {
 					postInstallCommands = append(postInstallCommands, "rm -rf "+
@@ -202,6 +271,14 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 
 				if apexType == imageApex {
 					fmt.Fprintln(w, "ALL_MODULES.$(LOCAL_MODULE).BUNDLE :=", a.bundleModuleFile.String())
+				}
+
+				if a.installedFilesFile != nil {
+					goal := "droidcore"
+					distFile := name + "-installed-files.txt"
+					fmt.Fprintln(w, ".PHONY:", goal)
+					fmt.Fprintf(w, "$(call dist-for-goals,%s,%s:%s)\n",
+						goal, a.installedFilesFile.String(), distFile)
 				}
 			}
 		}}

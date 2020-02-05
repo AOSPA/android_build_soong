@@ -402,6 +402,13 @@ func IsSharedDepTag(depTag blueprint.DependencyTag) bool {
 	return ok && ccDepTag.Shared
 }
 
+func IsStaticDepTag(depTag blueprint.DependencyTag) bool {
+	ccDepTag, ok := depTag.(DependencyTag)
+	return ok && (ccDepTag == staticExportDepTag ||
+		ccDepTag == lateStaticDepTag ||
+		ccDepTag == wholeStaticDepTag)
+}
+
 func IsRuntimeDepTag(depTag blueprint.DependencyTag) bool {
 	ccDepTag, ok := depTag.(DependencyTag)
 	return ok && ccDepTag == runtimeDepTag
@@ -467,6 +474,9 @@ type Module struct {
 	makeLinkType string
 	// Kythe (source file indexer) paths for this compilation module
 	kytheFiles android.Paths
+
+	// name of the modules that are direct or indirect static deps of this module
+	allStaticDeps []string
 }
 
 func (c *Module) Toc() android.OptionalPath {
@@ -1107,7 +1117,7 @@ func (ctx *moduleContextImpl) shouldCreateSourceAbiDump() bool {
 		// Host modules do not need ABI dumps.
 		return false
 	}
-	if ctx.isStubs() {
+	if ctx.isStubs() || ctx.isNDKStubLibrary() {
 		// Stubs do not need ABI dumps.
 		return false
 	}
@@ -1260,6 +1270,15 @@ func orderStaticModuleDeps(module LinkableInterface, staticDeps []LinkableInterf
 	module.SetDepsInLinkOrder(depsInLinkOrder)
 
 	return results
+}
+
+func gatherTransitiveStaticDeps(staticDeps []LinkableInterface) []string {
+	var ret []string
+	for _, dep := range staticDeps {
+		ret = append(ret, dep.Module().Name())
+		ret = append(ret, dep.AllStaticDeps()...)
+	}
+	return android.FirstUniqueStrings(ret)
 }
 
 func (c *Module) IsTestPerSrcAllTestsVariation() bool {
@@ -2348,6 +2367,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		c.sabi.Properties.ReexportedIncludes = android.FirstUniqueStrings(c.sabi.Properties.ReexportedIncludes)
 	}
 
+	c.allStaticDeps = gatherTransitiveStaticDeps(directStaticDeps)
+
 	return depPaths
 }
 
@@ -2480,7 +2501,29 @@ func (c *Module) AvailableFor(what string) bool {
 }
 
 func (c *Module) installable() bool {
-	return c.installer != nil && !c.Properties.PreventInstall && c.IsForPlatform() && c.outputFile.Valid()
+	ret := c.installer != nil && !c.Properties.PreventInstall && c.outputFile.Valid()
+
+	// The platform variant doesn't need further condition. Apex variants however might not
+	// be installable because it will likely to be included in the APEX and won't appear
+	// in the system partition.
+	if c.IsForPlatform() {
+		return ret
+	}
+
+	// Special case for modules that are configured to be installed to /data, which includes
+	// test modules. For these modules, both APEX and non-APEX variants are considered as
+	// installable. This is because even the APEX variants won't be included in the APEX, but
+	// will anyway be installed to /data/*.
+	// See b/146995717
+	if c.InstallInData() {
+		return ret
+	}
+
+	return false
+}
+
+func (c *Module) AllStaticDeps() []string {
+	return c.allStaticDeps
 }
 
 func (c *Module) AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Writer) {

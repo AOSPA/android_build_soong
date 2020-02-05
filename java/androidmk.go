@@ -141,6 +141,9 @@ func (j *Test) AndroidMkEntries() []android.AndroidMkEntries {
 			entries.SetPath("LOCAL_FULL_TEST_CONFIG", j.testConfig)
 		}
 		androidMkWriteTestData(j.data, entries)
+		if !BoolDefault(j.testProperties.Auto_gen_config, true) {
+			entries.SetString("LOCAL_DISABLE_AUTO_GENERATE_TEST_CONFIG", "true")
+		}
 	})
 
 	return entriesList
@@ -613,7 +616,7 @@ func (dstubs *Droidstubs) AndroidMkEntries() []android.AndroidMkEntries {
 					fmt.Fprintln(w, dstubs.Name()+"-check-last-released-api:",
 						dstubs.checkLastReleasedApiTimestamp.String())
 
-					if dstubs.Name() == "api-stubs-docs" || dstubs.Name() == "system-api-stubs-docs" {
+					if dstubs.Name() != "android.car-system-stubs-docs" {
 						fmt.Fprintln(w, ".PHONY: checkapi")
 						fmt.Fprintln(w, "checkapi:",
 							dstubs.checkLastReleasedApiTimestamp.String())

@@ -447,6 +447,7 @@ type Dependency interface {
 	ExportedPlugins() (android.Paths, []string)
 	SrcJarArgs() ([]string, android.Paths)
 	BaseModuleName() string
+	JacocoReportClassesFile() android.Path
 }
 
 type SdkLibraryDependency interface {
@@ -498,6 +499,14 @@ var (
 	instrumentationForTag = dependencyTag{name: "instrumentation_for"}
 	usesLibTag            = dependencyTag{name: "uses-library"}
 )
+
+func IsLibDepTag(depTag blueprint.DependencyTag) bool {
+	return depTag == libTag
+}
+
+func IsStaticLibDepTag(depTag blueprint.DependencyTag) bool {
+	return depTag == staticLibTag
+}
 
 type sdkDep struct {
 	useModule, useFiles, useDefaultLibs, invalidVersion bool
@@ -618,12 +627,9 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 			}
 
 			linkType, _ := j.getLinkType(ctx.ModuleName())
-			if linkType == javaSystem {
+			// only platform modules can use internal props
+			if linkType != javaPlatform {
 				ret[idx] = stub
-			} else if linkType != javaPlatform {
-				ctx.PropertyErrorf("sdk_version",
-					"can't link against sysprop_library %q from a module using public or core API",
-					lib)
 			}
 		}
 
@@ -651,7 +657,14 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 		}
 	}
 
-	if j.shouldInstrumentStatic(ctx) {
+	// Framework libraries need special handling in static coverage builds: they should not have
+	// static dependency on jacoco, otherwise there would be multiple conflicting definitions of
+	// the same jacoco classes coming from different bootclasspath jars.
+	if inList(ctx.ModuleName(), config.InstrumentFrameworkModules) {
+		if ctx.Config().IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK") {
+			j.properties.Instrument = true
+		}
+	} else if j.shouldInstrumentStatic(ctx) {
 		ctx.AddVariationDependencies(nil, staticLibTag, "jacocoagent")
 	}
 }
@@ -1454,12 +1467,6 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		j.headerJarFile = j.implementationJarFile
 	}
 
-	if ctx.Config().IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK") {
-		if inList(ctx.ModuleName(), config.InstrumentFrameworkModules) {
-			j.properties.Instrument = true
-		}
-	}
-
 	if j.shouldInstrument(ctx) {
 		outputFile = j.instrument(ctx, flags, outputFile, jarName)
 	}
@@ -1717,6 +1724,10 @@ func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 
 func (j *Module) Stem() string {
 	return proptools.StringDefault(j.deviceProperties.Stem, j.Name())
+}
+
+func (j *Module) JacocoReportClassesFile() android.Path {
+	return j.jacocoReportClassesFile
 }
 
 //
@@ -2293,6 +2304,10 @@ func (j *Import) Name() string {
 
 func (j *Import) Stem() string {
 	return proptools.StringDefault(j.properties.Stem, j.ModuleBase.Name())
+}
+
+func (a *Import) JacocoReportClassesFile() android.Path {
+	return nil
 }
 
 func (j *Import) DepsMutator(ctx android.BottomUpMutatorContext) {

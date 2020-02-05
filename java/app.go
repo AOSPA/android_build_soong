@@ -644,20 +644,38 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	a.generateAndroidBuildActions(ctx)
 
-	a.testConfig = tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config,
+	testConfig := tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config,
 		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites, a.testProperties.Auto_gen_config)
-	if a.overridableAppProperties.Package_name != nil {
-		fixedConfig := android.PathForModuleOut(ctx, "test_config_fixer", "AndroidTest.xml")
-		rule := android.NewRuleBuilder()
-		rule.Command().BuiltTool(ctx, "test_config_fixer").
-			FlagWithInput("--manifest ", a.manifestPath).
-			FlagWithArg("--package-name ", *a.overridableAppProperties.Package_name).
-			Input(a.testConfig).
-			Output(fixedConfig)
-		rule.Build(pctx, ctx, "fix_test_config", "fix test config")
-		a.testConfig = fixedConfig
-	}
+	a.testConfig = a.FixTestConfig(ctx, testConfig)
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
+}
+
+func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig android.Path) android.Path {
+	if testConfig == nil {
+		return nil
+	}
+
+	fixedConfig := android.PathForModuleOut(ctx, "test_config_fixer", "AndroidTest.xml")
+	rule := android.NewRuleBuilder()
+	command := rule.Command().BuiltTool(ctx, "test_config_fixer").Input(testConfig).Output(fixedConfig)
+	fixNeeded := false
+
+	if ctx.ModuleName() != a.installApkName {
+		fixNeeded = true
+		command.FlagWithArg("--test-file-name ", a.installApkName+".apk")
+	}
+
+	if a.overridableAppProperties.Package_name != nil {
+		fixNeeded = true
+		command.FlagWithInput("--manifest ", a.manifestPath).
+			FlagWithArg("--package-name ", *a.overridableAppProperties.Package_name)
+	}
+
+	if fixNeeded {
+		rule.Build(pctx, ctx, "fix_test_config", "fix test config")
+		return fixedConfig
+	}
+	return testConfig
 }
 
 func (a *AndroidTest) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -752,6 +770,7 @@ func AndroidTestHelperAppFactory() android.Module {
 
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
+	android.InitApexModule(module)
 	return module
 }
 
@@ -897,7 +916,7 @@ func (a *AndroidAppImport) processVariants(ctx android.LoadHookContext) {
 	MergePropertiesFromVariant(ctx, &a.properties, archProps, archType.Name)
 }
 
-func MergePropertiesFromVariant(ctx android.BaseModuleContext,
+func MergePropertiesFromVariant(ctx android.EarlyModuleContext,
 	dst interface{}, variantGroup reflect.Value, variant string) {
 	src := variantGroup.FieldByName(proptools.FieldNameForProperty(variant))
 	if !src.IsValid() {
@@ -925,6 +944,16 @@ func (a *AndroidAppImport) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 func (a *AndroidAppImport) uncompressEmbeddedJniLibs(
 	ctx android.ModuleContext, inputPath android.Path, outputPath android.OutputPath) {
+	// Test apps don't need their JNI libraries stored uncompressed. As a matter of fact, messing
+	// with them may invalidate pre-existing signature data.
+	if ctx.InstallInTestcases() && Bool(a.properties.Presigned) {
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.Cp,
+			Output: outputPath,
+			Input:  inputPath,
+		})
+		return
+	}
 	rule := android.NewRuleBuilder()
 	rule.Command().
 		Textf(`if (zipinfo %s 'lib/*.so' 2>/dev/null | grep -v ' stor ' >/dev/null) ; then`, inputPath).
@@ -1002,6 +1031,8 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	var installDir android.InstallPath
 	if Bool(a.properties.Privileged) {
 		installDir = android.PathForModuleInstall(ctx, "priv-app", a.BaseModuleName())
+	} else if ctx.InstallInTestcases() {
+		installDir = android.PathForModuleInstall(ctx, a.BaseModuleName(), ctx.DeviceConfig().DeviceArch())
 	} else {
 		installDir = android.PathForModuleInstall(ctx, "app", a.BaseModuleName())
 	}
@@ -1060,6 +1091,10 @@ func (a *AndroidAppImport) Name() string {
 
 func (a *AndroidAppImport) OutputFile() android.Path {
 	return a.outputFile
+}
+
+func (a *AndroidAppImport) JacocoReportClassesFile() android.Path {
+	return nil
 }
 
 var dpiVariantGroupType reflect.Type
@@ -1152,6 +1187,10 @@ func (a *AndroidTestImport) GenerateAndroidBuildActions(ctx android.ModuleContex
 	a.generateAndroidBuildActions(ctx)
 
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
+}
+
+func (a *AndroidTestImport) InstallInTestcases() bool {
+	return true
 }
 
 // android_test_import imports a prebuilt test apk with additional processing specified in the

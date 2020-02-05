@@ -23,6 +23,7 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	android.RegisterPrebuiltMutators(ctx)
 
 	RegisterCCBuildComponents(ctx)
+	RegisterBinaryBuildComponents(ctx)
 	RegisterLibraryBuildComponents(ctx)
 
 	ctx.RegisterModuleType("toolchain_library", ToolchainLibraryFactory)
@@ -135,6 +136,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			name: "libc",
 			no_libcrt: true,
 			nocrt: true,
+			stl: "none",
 			system_shared_libs: [],
 			recovery_available: true,
 		}
@@ -146,6 +148,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			name: "libm",
 			no_libcrt: true,
 			nocrt: true,
+			stl: "none",
 			system_shared_libs: [],
 			recovery_available: true,
 		}
@@ -157,6 +160,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			name: "libdl",
 			no_libcrt: true,
 			nocrt: true,
+			stl: "none",
 			system_shared_libs: [],
 			recovery_available: true,
 		}
@@ -305,8 +309,6 @@ func TestConfig(buildDir string, os android.OsType, env map[string]string,
 
 func CreateTestContext() *android.TestContext {
 	ctx := android.NewTestArchContext()
-	ctx.RegisterModuleType("cc_binary", BinaryFactory)
-	ctx.RegisterModuleType("cc_binary_host", binaryHostFactory)
 	ctx.RegisterModuleType("cc_fuzz", FuzzFactory)
 	ctx.RegisterModuleType("cc_test", TestFactory)
 	ctx.RegisterModuleType("llndk_headers", llndkHeadersFactory)
