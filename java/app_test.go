@@ -2207,3 +2207,59 @@ func checkAapt2LinkFlag(t *testing.T, aapt2Flags, flagName, expectedValue string
 		}
 	}
 }
+
+func TestRuntimeResourceOverlay(t *testing.T) {
+	ctx, config := testJava(t, `
+		runtime_resource_overlay {
+			name: "foo",
+			certificate: "platform",
+			product_specific: true,
+			aaptflags: ["--keep-raw-values"],
+		}
+
+		runtime_resource_overlay {
+			name: "foo_themed",
+			certificate: "platform",
+			product_specific: true,
+			theme: "faza",
+		}
+		`)
+
+	m := ctx.ModuleForTests("foo", "android_common")
+
+	// Check AAPT2 link flags.
+	aapt2Flags := m.Output("package-res.apk").Args["flags"]
+	expectedFlags := []string{"--keep-raw-values", "--no-resource-deduping", "--no-resource-removal"}
+	absentFlags := android.RemoveListFromList(expectedFlags, strings.Split(aapt2Flags, " "))
+	if len(absentFlags) > 0 {
+		t.Errorf("expected values, %q are missing in aapt2 link flags, %q", absentFlags, aapt2Flags)
+	}
+
+	// Check cert signing flag.
+	signedApk := m.Output("signed/foo.apk")
+	signingFlag := signedApk.Args["certificates"]
+	expected := "build/make/target/product/security/platform.x509.pem build/make/target/product/security/platform.pk8"
+	if expected != signingFlag {
+		t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected, signingFlag)
+	}
+	path := android.AndroidMkEntriesForTest(t, config, "", m.Module())[0].EntryMap["LOCAL_CERTIFICATE"]
+	expectedPath := []string{"build/make/target/product/security/platform.x509.pem"}
+	if !reflect.DeepEqual(path, expectedPath) {
+		t.Errorf("Unexpected LOCAL_CERTIFICATE value: %v, expected: %v", path, expectedPath)
+	}
+
+	// Check device location.
+	path = android.AndroidMkEntriesForTest(t, config, "", m.Module())[0].EntryMap["LOCAL_MODULE_PATH"]
+	expectedPath = []string{"/tmp/target/product/test_device/product/overlay"}
+	if !reflect.DeepEqual(path, expectedPath) {
+		t.Errorf("Unexpected LOCAL_MODULE_PATH value: %v, expected: %v", path, expectedPath)
+	}
+
+	// A themed module has a different device location
+	m = ctx.ModuleForTests("foo_themed", "android_common")
+	path = android.AndroidMkEntriesForTest(t, config, "", m.Module())[0].EntryMap["LOCAL_MODULE_PATH"]
+	expectedPath = []string{"/tmp/target/product/test_device/product/overlay/faza"}
+	if !reflect.DeepEqual(path, expectedPath) {
+		t.Errorf("Unexpected LOCAL_MODULE_PATH value: %v, expected: %v", path, expectedPath)
+	}
+}

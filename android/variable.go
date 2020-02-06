@@ -43,8 +43,10 @@ type variableProperties struct {
 		} `android:"arch_variant"`
 
 		Malloc_not_svelte struct {
-			Cflags      []string `android:"arch_variant"`
-			Shared_libs []string `android:"arch_variant"`
+			Cflags              []string `android:"arch_variant"`
+			Shared_libs         []string `android:"arch_variant"`
+			Whole_static_libs   []string `android:"arch_variant"`
+			Exclude_static_libs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
 
 		Safestack struct {
@@ -122,6 +124,11 @@ type variableProperties struct {
 
 		Experimental_mte struct {
 			Cflags []string `android:"arch_variant"`
+		} `android:"arch_variant"`
+
+		Native_coverage struct {
+			Srcs         []string `android:"arch_variant"`
+			Exclude_srcs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
 
 		Real_hal struct {
@@ -236,6 +243,9 @@ type productVariables struct {
 	Binder32bit                      *bool `json:",omitempty"`
 	UseGoma                          *bool `json:",omitempty"`
 	UseRBE                           *bool `json:",omitempty"`
+	UseRBEJAVAC                      *bool `json:",omitempty"`
+	UseRBER8                         *bool `json:",omitempty"`
+	UseRBED8                         *bool `json:",omitempty"`
 	Debuggable                       *bool `json:",omitempty"`
 	Eng                              *bool `json:",omitempty"`
 	Treble_linker_namespaces         *bool `json:",omitempty"`
@@ -275,7 +285,8 @@ type productVariables struct {
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
 
-	NativeCoverage       *bool    `json:",omitempty"`
+	Native_coverage      *bool    `json:",omitempty"`
+	ClangCoverage        *bool    `json:",omitempty"`
 	CoveragePaths        []string `json:",omitempty"`
 	CoverageExcludePaths []string `json:",omitempty"`
 
@@ -349,6 +360,8 @@ type productVariables struct {
 	EnforceProductPartitionInterface *bool `json:",omitempty"`
 
 	InstallExtraFlattenedApexes *bool `json:",omitempty"`
+
+	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

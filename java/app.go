@@ -47,6 +47,7 @@ func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("override_android_test", OverrideAndroidTestModuleFactory)
 	ctx.RegisterModuleType("android_app_import", AndroidAppImportFactory)
 	ctx.RegisterModuleType("android_test_import", AndroidTestImportFactory)
+	ctx.RegisterModuleType("runtime_resource_overlay", RuntimeResourceOverlayFactory)
 }
 
 // AndroidManifest.xml merging
@@ -153,16 +154,31 @@ func (a *AndroidApp) OutputFile() android.Path {
 	return a.outputFile
 }
 
+func (a *AndroidApp) Certificate() Certificate {
+	return a.certificate
+}
+
 var _ AndroidLibraryDependency = (*AndroidApp)(nil)
 
 type Certificate struct {
-	Pem, Key android.Path
+	Pem, Key  android.Path
+	presigned bool
+}
+
+var presignedCertificate = Certificate{presigned: true}
+
+func (c Certificate) AndroidMkString() string {
+	if c.presigned {
+		return "PRESIGNED"
+	} else {
+		return c.Pem.String()
+	}
 }
 
 func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 	a.Module.deps(ctx)
 
-	if String(a.appProperties.Stl) == "c++_shared" && a.sdkVersion() == "" {
+	if String(a.appProperties.Stl) == "c++_shared" && !a.sdkVersion().specified() {
 		ctx.PropertyErrorf("stl", "sdk_version must be set in order to use c++_shared")
 	}
 
@@ -211,7 +227,7 @@ func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 // Returns true if the native libraries should be stored in the APK uncompressed and the
 // extractNativeLibs application flag should be set to false in the manifest.
 func (a *AndroidApp) useEmbeddedNativeLibs(ctx android.ModuleContext) bool {
-	minSdkVersion, err := sdkVersionToNumber(ctx, a.minSdkVersion())
+	minSdkVersion, err := a.minSdkVersion().effectiveVersion(ctx)
 	if err != nil {
 		ctx.PropertyErrorf("min_sdk_version", "invalid value %q: %s", a.minSdkVersion(), err)
 	}
@@ -404,12 +420,15 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		if certPropValue != "" {
 			defaultDir := ctx.Config().DefaultAppCertificateDir(ctx)
 			mainCert = Certificate{
-				defaultDir.Join(ctx, certPropValue+".x509.pem"),
-				defaultDir.Join(ctx, certPropValue+".pk8"),
+				Pem: defaultDir.Join(ctx, certPropValue+".x509.pem"),
+				Key: defaultDir.Join(ctx, certPropValue+".pk8"),
 			}
 		} else {
 			pem, key := ctx.Config().DefaultAppCertificate(ctx)
-			mainCert = Certificate{pem, key}
+			mainCert = Certificate{
+				Pem: pem,
+				Key: key,
+			}
 		}
 		certificates = append([]Certificate{mainCert}, certificates...)
 	}
@@ -797,8 +816,8 @@ func AndroidAppCertificateFactory() android.Module {
 func (c *AndroidAppCertificate) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	cert := String(c.properties.Certificate)
 	c.Certificate = Certificate{
-		android.PathForModuleSrc(ctx, cert+".x509.pem"),
-		android.PathForModuleSrc(ctx, cert+".pk8"),
+		Pem: android.PathForModuleSrc(ctx, cert+".x509.pem"),
+		Key: android.PathForModuleSrc(ctx, cert+".pk8"),
 	}
 }
 
@@ -855,7 +874,7 @@ type AndroidAppImport struct {
 	archVariants interface{}
 
 	outputFile  android.Path
-	certificate *Certificate
+	certificate Certificate
 
 	dexpreopter
 
@@ -1063,7 +1082,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		if len(certificates) != 1 {
 			ctx.ModuleErrorf("Unexpected number of certificates were extracted: %q", certificates)
 		}
-		a.certificate = &certificates[0]
+		a.certificate = certificates[0]
 		signed := android.PathForModuleOut(ctx, "signed", ctx.ModuleName()+".apk")
 		SignAppPackage(ctx, signed, dexOutput, certificates)
 		a.outputFile = signed
@@ -1071,6 +1090,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		alignedApk := android.PathForModuleOut(ctx, "zip-aligned", ctx.ModuleName()+".apk")
 		TransformZipAlign(ctx, alignedApk, dexOutput)
 		a.outputFile = alignedApk
+		a.certificate = presignedCertificate
 	}
 
 	// TODO: Optionally compress the output apk.
@@ -1095,6 +1115,10 @@ func (a *AndroidAppImport) OutputFile() android.Path {
 
 func (a *AndroidAppImport) JacocoReportClassesFile() android.Path {
 	return nil
+}
+
+func (a *AndroidAppImport) Certificate() Certificate {
+	return a.certificate
 }
 
 var dpiVariantGroupType reflect.Type
@@ -1208,6 +1232,99 @@ func AndroidTestImportFactory() android.Module {
 
 	InitJavaModule(module, android.DeviceSupported)
 	android.InitSingleSourcePrebuiltModule(module, &module.properties, "Apk")
+
+	return module
+}
+
+type RuntimeResourceOverlay struct {
+	android.ModuleBase
+	android.DefaultableModuleBase
+	aapt
+
+	properties RuntimeResourceOverlayProperties
+
+	certificate Certificate
+
+	outputFile android.Path
+	installDir android.InstallPath
+}
+
+type RuntimeResourceOverlayProperties struct {
+	// the name of a certificate in the default certificate directory or an android_app_certificate
+	// module name in the form ":module".
+	Certificate *string
+
+	// optional theme name. If specified, the overlay package will be applied
+	// only when the ro.boot.vendor.overlay.theme system property is set to the same value.
+	Theme *string
+
+	// if not blank, set to the version of the sdk to compile against.
+	// Defaults to compiling against the current platform.
+	Sdk_version *string
+
+	// if not blank, set the minimum version of the sdk that the compiled artifacts will run against.
+	// Defaults to sdk_version if not set.
+	Min_sdk_version *string
+}
+
+func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext) {
+	sdkDep := decodeSdkDep(ctx, sdkContext(r))
+	if sdkDep.hasFrameworkLibs() {
+		r.aapt.deps(ctx, sdkDep)
+	}
+
+	cert := android.SrcIsModule(String(r.properties.Certificate))
+	if cert != "" {
+		ctx.AddDependency(ctx.Module(), certificateTag, cert)
+	}
+}
+
+func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	// Compile and link resources
+	r.aapt.hasNoCode = true
+	// Do not remove resources without default values nor dedupe resource configurations with the same value
+	r.aapt.buildActions(ctx, r, "--no-resource-deduping", "--no-resource-removal")
+
+	// Sign the built package
+	_, certificates := collectAppDeps(ctx, false)
+	certificates = processMainCert(r.ModuleBase, String(r.properties.Certificate), certificates, ctx)
+	signed := android.PathForModuleOut(ctx, "signed", r.Name()+".apk")
+	SignAppPackage(ctx, signed, r.aapt.exportPackage, certificates)
+	r.certificate = certificates[0]
+
+	r.outputFile = signed
+	r.installDir = android.PathForModuleInstall(ctx, "overlay", String(r.properties.Theme))
+	ctx.InstallFile(r.installDir, r.outputFile.Base(), r.outputFile)
+}
+
+func (r *RuntimeResourceOverlay) sdkVersion() sdkSpec {
+	return sdkSpecFrom(String(r.properties.Sdk_version))
+}
+
+func (r *RuntimeResourceOverlay) systemModules() string {
+	return ""
+}
+
+func (r *RuntimeResourceOverlay) minSdkVersion() sdkSpec {
+	if r.properties.Min_sdk_version != nil {
+		return sdkSpecFrom(*r.properties.Min_sdk_version)
+	}
+	return r.sdkVersion()
+}
+
+func (r *RuntimeResourceOverlay) targetSdkVersion() sdkSpec {
+	return r.sdkVersion()
+}
+
+// runtime_resource_overlay generates a resource-only apk file that can overlay application and
+// system resources at run time.
+func RuntimeResourceOverlayFactory() android.Module {
+	module := &RuntimeResourceOverlay{}
+	module.AddProperties(
+		&module.properties,
+		&module.aaptProperties)
+
+	InitJavaModule(module, android.DeviceSupported)
 
 	return module
 }

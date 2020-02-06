@@ -49,6 +49,7 @@ type ModuleInstallPathContext interface {
 	InstallInData() bool
 	InstallInTestcases() bool
 	InstallInSanitizerDir() bool
+	InstallInRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallBypassMake() bool
@@ -842,10 +843,12 @@ func (p SourcePath) OverlayPath(ctx ModuleContext, path Path) OptionalPath {
 // OutputPath is a Path representing an intermediates file path rooted from the build directory
 type OutputPath struct {
 	basePath
+	fullPath string
 }
 
 func (p OutputPath) withRel(rel string) OutputPath {
 	p.basePath = p.basePath.withRel(rel)
+	p.fullPath = filepath.Join(p.fullPath, rel)
 	return p
 }
 
@@ -869,7 +872,9 @@ func PathForOutput(ctx PathContext, pathComponents ...string) OutputPath {
 	if err != nil {
 		reportPathError(ctx, err)
 	}
-	return OutputPath{basePath{path, ctx.Config(), ""}}
+	fullPath := filepath.Join(ctx.Config().buildDir, path)
+	path = fullPath[len(fullPath)-len(path):]
+	return OutputPath{basePath{path, ctx.Config(), ""}, fullPath}
 }
 
 // PathsForOutput returns Paths rooted from buildDir
@@ -884,7 +889,7 @@ func PathsForOutput(ctx PathContext, paths []string) WritablePaths {
 func (p OutputPath) writablePath() {}
 
 func (p OutputPath) String() string {
-	return filepath.Join(p.config.buildDir, p.path)
+	return p.fullPath
 }
 
 // Join creates a new OutputPath with paths... joined with the current path. The
@@ -1254,6 +1259,15 @@ func modulePartition(ctx ModuleInstallPathContext) string {
 		partition = "data"
 	} else if ctx.InstallInTestcases() {
 		partition = "testcases"
+	} else if ctx.InstallInRamdisk() {
+		if ctx.DeviceConfig().BoardUsesRecoveryAsBoot() {
+			partition = "recovery/root/first_stage_ramdisk"
+		} else {
+			partition = "ramdisk"
+		}
+		if !ctx.InstallInRoot() {
+			partition += "/system"
+		}
 	} else if ctx.InstallInRecovery() {
 		if ctx.InstallInRoot() {
 			partition = "recovery/root"

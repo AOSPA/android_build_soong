@@ -63,7 +63,6 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 			postInstallCommands = append(postInstallCommands, mkdirCmd, linkCmd)
 		}
 	}
-	postInstallCommands = append(postInstallCommands, a.compatSymlinks...)
 
 	for _, fi := range a.filesInfo {
 		if cc, ok := fi.module.(*cc.Module); ok && cc.Properties.HideFromMake {
@@ -113,6 +112,11 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 			}
 		} else {
 			fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", pathWhenActivated)
+
+			// For non-flattend APEXes, the merged notice file is attached to the APEX itself.
+			// We don't need to have notice file for the individual modules in it. Otherwise,
+			// we will have duplicated notice entries.
+			fmt.Fprintln(w, "LOCAL_NO_NOTICE_FILE := true")
 		}
 		fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", fi.builtFile.String())
 		fmt.Fprintln(w, "LOCAL_MODULE_CLASS :=", fi.class.NameInMake())
@@ -159,6 +163,7 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 			fmt.Fprintln(w, "LOCAL_DEX_PREOPT := false")
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
 		} else if fi.class == app {
+			fmt.Fprintln(w, "LOCAL_CERTIFICATE :=", fi.certificate.AndroidMkString())
 			// soong_app_prebuilt.mk sets LOCAL_MODULE_SUFFIX := .apk  Therefore
 			// we need to remove the suffix from LOCAL_MODULE_STEM, otherwise
 			// we will have foo.apk.apk
@@ -178,17 +183,22 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexName, moduleDir string) 
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_prebuilt.mk")
 		} else {
 			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
-			if a.primaryApexType && fi.builtFile == a.manifestPbOut {
-				// Make apex_manifest.pb module for this APEX to override all other
-				// modules in the APEXes being overridden by this APEX
-				var patterns []string
-				for _, o := range a.overridableProperties.Overrides {
-					patterns = append(patterns, "%."+o+a.suffix)
-				}
-				fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES :=", strings.Join(patterns, " "))
+			if fi.builtFile == a.manifestPbOut && apexType == flattenedApex {
+				if a.primaryApexType {
+					// Make apex_manifest.pb module for this APEX to override all other
+					// modules in the APEXes being overridden by this APEX
+					var patterns []string
+					for _, o := range a.overridableProperties.Overrides {
+						patterns = append(patterns, "%."+o+a.suffix)
+					}
+					fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES :=", strings.Join(patterns, " "))
 
-				if apexType == flattenedApex && len(postInstallCommands) > 0 {
-					// For flattened apexes, compat symlinks are attached to apex_manifest.json which is guaranteed for every apex
+					if len(a.compatSymlinks) > 0 {
+						// For flattened apexes, compat symlinks are attached to apex_manifest.json which is guaranteed for every apex
+						postInstallCommands = append(postInstallCommands, a.compatSymlinks...)
+					}
+				}
+				if len(postInstallCommands) > 0 {
 					fmt.Fprintln(w, "LOCAL_POST_INSTALL_CMD :=", strings.Join(postInstallCommands, " && "))
 				}
 			}
@@ -267,6 +277,11 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				if len(postInstallCommands) > 0 {
 					fmt.Fprintln(w, "LOCAL_POST_INSTALL_CMD :=", strings.Join(postInstallCommands, " && "))
 				}
+
+				if a.mergedNotices.Merged.Valid() {
+					fmt.Fprintln(w, "LOCAL_NOTICE_FILE :=", a.mergedNotices.Merged.Path().String())
+				}
+
 				fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
 
 				if apexType == imageApex {

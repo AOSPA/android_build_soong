@@ -140,8 +140,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r370808"
-	ClangDefaultShortVersion = "10.0.1"
+	ClangDefaultVersion      = "clang-r370808b"
+	ClangDefaultShortVersion = "10.0.2"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -179,6 +179,8 @@ func init() {
 			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
 		} else if ctx.Config().IsEnvTrue("AUTO_PATTERN_INITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=pattern")
+		} else if ctx.Config().IsEnvTrue("AUTO_UNINITIALIZE") {
+			flags = append(flags, "-ftrivial-auto-var-init=uninitialized")
 		} else {
 			// Default to pattern initialization.
 			flags = append(flags, "-ftrivial-auto-var-init=pattern")

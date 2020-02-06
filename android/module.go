@@ -168,6 +168,7 @@ type ModuleContext interface {
 	InstallInData() bool
 	InstallInTestcases() bool
 	InstallInSanitizerDir() bool
+	InstallInRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallBypassMake() bool
@@ -208,6 +209,7 @@ type Module interface {
 	InstallInData() bool
 	InstallInTestcases() bool
 	InstallInSanitizerDir() bool
+	InstallInRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallBypassMake() bool
@@ -384,6 +386,9 @@ type commonProperties struct {
 
 	// Whether this module is installed to recovery partition
 	Recovery *bool
+
+	// Whether this module is installed to ramdisk
+	Ramdisk *bool
 
 	// Whether this module is built for non-native architecures (also known as native bridge binary)
 	Native_bridge_supported *bool `android:"arch_variant"`
@@ -872,6 +877,10 @@ func (m *ModuleBase) InstallInSanitizerDir() bool {
 	return false
 }
 
+func (m *ModuleBase) InstallInRamdisk() bool {
+	return Bool(m.commonProperties.Ramdisk)
+}
+
 func (m *ModuleBase) InstallInRecovery() bool {
 	return Bool(m.commonProperties.Recovery)
 }
@@ -901,6 +910,10 @@ func (m *ModuleBase) ImageVariation() blueprint.Variation {
 		Mutator:   "image",
 		Variation: m.base().commonProperties.ImageVariation,
 	}
+}
+
+func (m *ModuleBase) InRamdisk() bool {
+	return m.base().commonProperties.ImageVariation == RamdiskVariation
 }
 
 func (m *ModuleBase) InRecovery() bool {
@@ -1343,7 +1356,7 @@ func (m *moduleContext) Variable(pctx PackageContext, name, value string) {
 func (m *moduleContext) Rule(pctx PackageContext, name string, params blueprint.RuleParams,
 	argNames ...string) blueprint.Rule {
 
-	if (m.config.UseGoma() || m.config.UseRBE()) && params.Pool == nil {
+	if m.config.UseRemoteBuild() && params.Pool == nil {
 		// When USE_GOMA=true or USE_RBE=true are set and the rule is not supported by goma/RBE, restrict
 		// jobs to the local parallelism value
 		params.Pool = localPool
@@ -1652,6 +1665,10 @@ func (m *moduleContext) InstallInTestcases() bool {
 
 func (m *moduleContext) InstallInSanitizerDir() bool {
 	return m.module.InstallInSanitizerDir()
+}
+
+func (m *moduleContext) InstallInRamdisk() bool {
+	return m.module.InstallInRamdisk()
 }
 
 func (m *moduleContext) InstallInRecovery() bool {
