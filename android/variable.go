@@ -256,6 +256,9 @@ type productVariables struct {
 	IntegerOverflowExcludePaths []string `json:",omitempty"`
 	IntegerOverflowIncludePaths []string `json:",omitempty"`
 
+	BoundSanitizerExcludePaths []string `json:",omitempty"`
+	BoundSanitizerIncludePaths []string `json:",omitempty"`
+
 	EnableCFI       *bool    `json:",omitempty"`
 	CFIExcludePaths []string `json:",omitempty"`
 	CFIIncludePaths []string `json:",omitempty"`
