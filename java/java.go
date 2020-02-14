@@ -23,12 +23,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/dexpreopt"
 	"android/soong/java/config"
 	"android/soong/tradefed"
 )
@@ -37,14 +39,7 @@ func init() {
 	RegisterJavaBuildComponents(android.InitRegistrationContext)
 
 	// Register sdk member types.
-	android.RegisterSdkMemberType(&headerLibrarySdkMemberType{
-		librarySdkMemberType{
-			android.SdkMemberTypeBase{
-				PropertyName: "java_header_libs",
-				SupportsSdk:  true,
-			},
-		},
-	})
+	android.RegisterSdkMemberType(javaHeaderLibsSdkMemberType)
 
 	android.RegisterSdkMemberType(&implLibrarySdkMemberType{
 		librarySdkMemberType{
@@ -59,6 +54,8 @@ func init() {
 			PropertyName: "java_tests",
 		},
 	})
+
+	android.PostDepsMutators(RegisterPostDepsMutators)
 }
 
 func RegisterJavaBuildComponents(ctx android.RegistrationContext) {
@@ -81,6 +78,44 @@ func RegisterJavaBuildComponents(ctx android.RegistrationContext) {
 
 	ctx.RegisterSingletonType("logtags", LogtagsSingleton)
 	ctx.RegisterSingletonType("kythe_java_extract", kytheExtractJavaFactory)
+}
+
+func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
+	ctx.BottomUp("ordered_system_server_jars", systemServerJarsDepsMutator)
+}
+
+var (
+	dexpreoptedSystemServerJarsKey  = android.NewOnceKey("dexpreoptedSystemServerJars")
+	dexpreoptedSystemServerJarsLock sync.Mutex
+)
+
+func DexpreoptedSystemServerJars(config android.Config) *[]string {
+	return config.Once(dexpreoptedSystemServerJarsKey, func() interface{} {
+		return &[]string{}
+	}).(*[]string)
+}
+
+// A PostDepsMutator pass that enforces total order on non-updatable system server jars. A total
+// order is neededed because such jars must be dexpreopted together (each jar on the list must have
+// all preceding jars in its class loader context). The total order must be compatible with the
+// partial order imposed by genuine dependencies between system server jars (which is not always
+// respected by the PRODUCT_SYSTEM_SERVER_JARS variable).
+//
+// An earlier mutator pass creates genuine dependencies, and this pass traverses the jars in that
+// order (which is partial and non-deterministic). This pass adds additional dependencies between
+// jars, making the order total and deterministic. It also constructs a global ordered list.
+func systemServerJarsDepsMutator(ctx android.BottomUpMutatorContext) {
+	jars := dexpreopt.NonUpdatableSystemServerJars(ctx, dexpreoptGlobalConfig(ctx))
+	name := ctx.ModuleName()
+	if android.InList(name, jars) {
+		dexpreoptedSystemServerJarsLock.Lock()
+		defer dexpreoptedSystemServerJarsLock.Unlock()
+		jars := DexpreoptedSystemServerJars(ctx.Config())
+		for _, dep := range *jars {
+			ctx.AddDependency(ctx.Module(), dexpreopt.SystemServerDepTag, dep)
+		}
+		*jars = append(*jars, name)
+	}
 }
 
 func (j *Module) checkSdkVersion(ctx android.ModuleContext) {
@@ -666,6 +701,11 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	} else if j.shouldInstrumentStatic(ctx) {
 		ctx.AddVariationDependencies(nil, staticLibTag, "jacocoagent")
 	}
+
+	// services depend on com.android.location.provider, but dependency in not registered in a Blueprint file
+	if ctx.ModuleName() == "services" {
+		ctx.AddDependency(ctx.Module(), dexpreopt.SystemServerForcedDepTag, "com.android.location.provider")
+	}
 }
 
 func hasSrcExt(srcs []string, ext string) bool {
@@ -757,9 +797,12 @@ func checkProducesJars(ctx android.ModuleContext, dep android.SourceFileProducer
 type linkType int
 
 const (
+	// TODO(jiyong) rename these for better readability. Make the allowed
+	// and disallowed link types explicit
 	javaCore linkType = iota
 	javaSdk
 	javaSystem
+	javaModule
 	javaPlatform
 )
 
@@ -789,6 +832,10 @@ func (m *Module) getLinkType(name string) (ret linkType, stubs bool) {
 		return javaSdk, true
 	case ver.kind == sdkPublic:
 		return javaSdk, false
+	case name == "android_module_lib_stubs_current":
+		return javaModule, true
+	case ver.kind == sdkModule:
+		return javaModule, false
 	case ver.kind == sdkPrivate || ver.kind == sdkNone || ver.kind == sdkCorePlatform:
 		return javaPlatform, false
 	case !ver.valid():
@@ -824,8 +871,14 @@ func checkLinkType(ctx android.ModuleContext, from *Module, to linkTypeContext, 
 		}
 		break
 	case javaSystem:
-		if otherLinkType == javaPlatform {
+		if otherLinkType == javaPlatform || otherLinkType == javaModule {
 			ctx.ModuleErrorf("compiles against system API, but dependency %q is compiling against private API."+commonMessage,
+				ctx.OtherModuleName(to))
+		}
+		break
+	case javaModule:
+		if otherLinkType == javaPlatform {
+			ctx.ModuleErrorf("compiles against module API, but dependency %q is compiling against private API."+commonMessage,
 				ctx.OtherModuleName(to))
 		}
 		break
@@ -1469,6 +1522,16 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	j.implementationAndResourcesJar = implementationAndResourcesJar
 
+	// Enable dex compilation for the APEX variants, unless it is disabled explicitly
+	if android.DirectlyInAnyApex(ctx, ctx.ModuleName()) && !j.IsForPlatform() {
+		if j.deviceProperties.Compile_dex == nil {
+			j.deviceProperties.Compile_dex = proptools.BoolPtr(true)
+		}
+		if j.deviceProperties.Hostdex == nil {
+			j.deviceProperties.Hostdex = proptools.BoolPtr(true)
+		}
+	}
+
 	if ctx.Device() && j.hasCode(ctx) &&
 		(Bool(j.properties.Installable) || Bool(j.deviceProperties.Compile_dex)) {
 		// Dex compilation
@@ -1704,8 +1767,10 @@ func (j *Module) hasCode(ctx android.ModuleContext) bool {
 
 func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
 	depTag := ctx.OtherModuleDependencyTag(dep)
-	// dependencies other than the static linkage are all considered crossing APEX boundary
-	return depTag == staticLibTag
+	// Dependencies other than the static linkage are all considered crossing APEX boundary
+	// Also, a dependency to an sdk member is also considered as such. This is required because
+	// sdk members should be mutated into APEXes. Refer to sdk.sdkDepsReplaceMutator.
+	return depTag == staticLibTag || j.IsInAnySdk()
 }
 
 func (j *Module) Stem() string {
@@ -1832,6 +1897,15 @@ func (mt *librarySdkMemberType) buildSnapshot(
 
 	module := builder.AddPrebuiltModule(member, "java_import")
 	module.AddProperty("jars", []string{snapshotRelativeJavaLibPath})
+}
+
+var javaHeaderLibsSdkMemberType android.SdkMemberType = &headerLibrarySdkMemberType{
+	librarySdkMemberType{
+		android.SdkMemberTypeBase{
+			PropertyName: "java_header_libs",
+			SupportsSdk:  true,
+		},
+	},
 }
 
 type headerLibrarySdkMemberType struct {
@@ -2391,6 +2465,14 @@ func (j *Import) ExportedPlugins() (android.Paths, []string) {
 
 func (j *Import) SrcJarArgs() ([]string, android.Paths) {
 	return nil, nil
+}
+
+func (j *Import) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
+	depTag := ctx.OtherModuleDependencyTag(dep)
+	// dependencies other than the static linkage are all considered crossing APEX boundary
+	// Also, a dependency to an sdk member is also considered as such. This is required because
+	// sdk members should be mutated into APEXes. Refer to sdk.sdkDepsReplaceMutator.
+	return depTag == staticLibTag || j.IsInAnySdk()
 }
 
 // Add compile time check for interface implementation

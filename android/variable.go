@@ -25,7 +25,7 @@ import (
 
 func init() {
 	PreDepsMutators(func(ctx RegisterMutatorsContext) {
-		ctx.BottomUp("variable", variableMutator).Parallel()
+		ctx.BottomUp("variable", VariableMutator).Parallel()
 	})
 }
 
@@ -127,6 +127,7 @@ type variableProperties struct {
 		} `android:"arch_variant"`
 
 		Native_coverage struct {
+			Src          *string  `android:"arch_variant"`
 			Srcs         []string `android:"arch_variant"`
 			Exclude_srcs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
@@ -161,7 +162,7 @@ type variableProperties struct {
 	} `android:"arch_variant"`
 }
 
-var zeroProductVariables interface{} = variableProperties{}
+var defaultProductVariables interface{} = variableProperties{}
 
 type productVariables struct {
 	// Suffix to add to generated Makefiles
@@ -261,7 +262,8 @@ type productVariables struct {
 	UncompressPrivAppDex             *bool    `json:",omitempty"`
 	ModulesLoadedByPrivilegedModules []string `json:",omitempty"`
 
-	BootJars []string `json:",omitempty"`
+	BootJars          []string `json:",omitempty"`
+	UpdatableBootJars []string `json:",omitempty"`
 
 	IntegerOverflowExcludePaths []string `json:",omitempty"`
 	IntegerOverflowIncludePaths []string `json:",omitempty"`
@@ -288,6 +290,7 @@ type productVariables struct {
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
 
+	NativeLineCoverage   *bool    `json:",omitempty"`
 	Native_coverage      *bool    `json:",omitempty"`
 	ClangCoverage        *bool    `json:",omitempty"`
 	CoveragePaths        []string `json:",omitempty"`
@@ -419,7 +422,7 @@ func (v *productVariables) SetDefaultConfig() {
 	}
 }
 
-func variableMutator(mctx BottomUpMutatorContext) {
+func VariableMutator(mctx BottomUpMutatorContext) {
 	var module Module
 	var ok bool
 	if module, ok = mctx.Module().(Module); !ok {
@@ -434,11 +437,9 @@ func variableMutator(mctx BottomUpMutatorContext) {
 	}
 
 	variableValues := reflect.ValueOf(a.variableProperties).Elem().FieldByName("Product_variables")
-	zeroValues := reflect.ValueOf(zeroProductVariables).FieldByName("Product_variables")
 
 	for i := 0; i < variableValues.NumField(); i++ {
 		variableValue := variableValues.Field(i)
-		zeroValue := zeroValues.Field(i)
 		name := variableValues.Type().Field(i).Name
 		property := "product_variables." + proptools.PropertyNameForField(name)
 
@@ -456,10 +457,9 @@ func variableMutator(mctx BottomUpMutatorContext) {
 		}
 
 		// Check if any properties were set for the module
-		if reflect.DeepEqual(variableValue.Interface(), zeroValue.Interface()) {
+		if variableValue.IsZero() {
 			continue
 		}
-
 		a.setVariableProperties(mctx, property, variableValue, val.Interface())
 	}
 }
@@ -575,6 +575,20 @@ func sliceToTypeArray(s []interface{}) interface{} {
 		ret.Index(i).Set(reflect.ValueOf(reflect.TypeOf(e)))
 	}
 	return ret.Interface()
+}
+
+func initProductVariableModule(m Module) {
+	base := m.base()
+
+	// Allow tests to override the default product variables
+	if base.variableProperties == nil {
+		base.variableProperties = defaultProductVariables
+	}
+	// Filter the product variables properties to the ones that exist on this module
+	base.variableProperties = createVariableProperties(m.GetProperties(), base.variableProperties)
+	if base.variableProperties != nil {
+		m.AddProperties(base.variableProperties)
+	}
 }
 
 // createVariableProperties takes the list of property structs for a module and returns a property struct that

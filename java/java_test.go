@@ -479,7 +479,9 @@ func TestPrebuilts(t *testing.T) {
 
 		java_sdk_library_import {
 			name: "sdklib",
-			jars: ["b.jar"],
+			public: {
+				jars: ["c.jar"],
+			},
 		}
 
 		prebuilt_stubs_sources {
@@ -528,6 +530,54 @@ func TestPrebuilts(t *testing.T) {
 func assertDeepEquals(t *testing.T, message string, expected interface{}, actual interface{}) {
 	if !reflect.DeepEqual(expected, actual) {
 		t.Errorf("%s: expected %q, found %q", message, expected, actual)
+	}
+}
+
+func TestJavaSdkLibraryImport(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			libs: ["sdklib"],
+			sdk_version: "current",
+		}
+
+		java_library {
+			name: "foo.system",
+			srcs: ["a.java"],
+			libs: ["sdklib"],
+			sdk_version: "system_current",
+		}
+
+		java_library {
+			name: "foo.test",
+			srcs: ["a.java"],
+			libs: ["sdklib"],
+			sdk_version: "test_current",
+		}
+
+		java_sdk_library_import {
+			name: "sdklib",
+			public: {
+				jars: ["a.jar"],
+			},
+			system: {
+				jars: ["b.jar"],
+			},
+			test: {
+				jars: ["c.jar"],
+			},
+		}
+		`)
+
+	for _, scope := range []string{"", ".system", ".test"} {
+		fooModule := ctx.ModuleForTests("foo"+scope, "android_common")
+		javac := fooModule.Rule("javac")
+
+		sdklibStubsJar := ctx.ModuleForTests("sdklib.stubs"+scope, "android_common").Rule("combineJar").Output
+		if !strings.Contains(javac.Args["classpath"], sdklibStubsJar.String()) {
+			t.Errorf("foo classpath %v does not contain %q", javac.Args["classpath"], sdklibStubsJar.String())
+		}
 	}
 }
 
@@ -1049,6 +1099,12 @@ func TestJavaSdkLibrary(t *testing.T) {
 			libs: ["foo"],
 			sdk_version: "test_current",
 		}
+		java_library {
+			name: "baz-29",
+			srcs: ["c.java"],
+			libs: ["foo"],
+			sdk_version: "system_29",
+		}
 		`)
 
 	// check the existence of the internal modules
@@ -1056,9 +1112,9 @@ func TestJavaSdkLibrary(t *testing.T) {
 	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix, "android_common")
 	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix+sdkSystemApiSuffix, "android_common")
 	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix+sdkTestApiSuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkDocsSuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkDocsSuffix+sdkSystemApiSuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkDocsSuffix+sdkTestApiSuffix, "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix, "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix+sdkSystemApiSuffix, "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix+sdkTestApiSuffix, "android_common")
 	ctx.ModuleForTests("foo"+sdkXmlFileSuffix, "android_arm64_armv8-a")
 	ctx.ModuleForTests("foo.api.public.28", "")
 	ctx.ModuleForTests("foo.api.system.28", "")
@@ -1086,6 +1142,13 @@ func TestJavaSdkLibrary(t *testing.T) {
 	if !strings.Contains(bazTestJavac.Args["classpath"], "foo.stubs.test.jar") {
 		t.Errorf("baz-test javac classpath %v does not contain %q", bazTestJavac.Args["classpath"],
 			"foo.stubs.test.jar")
+	}
+
+	baz29Javac := ctx.ModuleForTests("baz-29", "android_common").Rule("javac")
+	// tests if baz-29 is actually linked to the system 29 stubs lib
+	if !strings.Contains(baz29Javac.Args["classpath"], "prebuilts/sdk/29/system/foo.jar") {
+		t.Errorf("baz-29 javac classpath %v does not contain %q", baz29Javac.Args["classpath"],
+			"prebuilts/sdk/29/system/foo.jar")
 	}
 
 	// test if baz has exported SDK lib names foo and bar to qux
