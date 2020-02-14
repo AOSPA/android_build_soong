@@ -424,19 +424,19 @@ func JavadocHostFactory() android.Module {
 
 var _ android.OutputFileProducer = (*Javadoc)(nil)
 
-func (j *Javadoc) sdkVersion() string {
-	return String(j.properties.Sdk_version)
+func (j *Javadoc) sdkVersion() sdkSpec {
+	return sdkSpecFrom(String(j.properties.Sdk_version))
 }
 
 func (j *Javadoc) systemModules() string {
 	return proptools.String(j.properties.System_modules)
 }
 
-func (j *Javadoc) minSdkVersion() string {
+func (j *Javadoc) minSdkVersion() sdkSpec {
 	return j.sdkVersion()
 }
 
-func (j *Javadoc) targetSdkVersion() string {
+func (j *Javadoc) targetSdkVersion() sdkSpec {
 	return j.sdkVersion()
 }
 
@@ -1456,6 +1456,8 @@ func (d *Droidstubs) apiToXmlFlags(ctx android.ModuleContext, cmd *android.RuleB
 
 func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersion javaVersion, srcs android.Paths,
 	srcJarList android.Path, bootclasspath, classpath classpath, sourcepaths android.Paths) *android.RuleBuilderCommand {
+	// Metalava uses lots of memory, restrict the number of metalava jobs that can run in parallel.
+	rule.HighMem()
 	cmd := rule.Command().BuiltTool(ctx, "metalava").
 		Flag(config.JavacVmFlags).
 		FlagWithArg("-encoding ", "UTF-8").

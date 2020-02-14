@@ -35,7 +35,8 @@ import (
 
 var Bool = proptools.Bool
 var String = proptools.String
-var FutureApiLevel = 10000
+
+const FutureApiLevel = 10000
 
 // The configuration file name
 const configFileName = "soong.config"
@@ -815,6 +816,22 @@ func (c *config) UseRBE() bool {
 	return Bool(c.productVariables.UseRBE)
 }
 
+func (c *config) UseRBEJAVAC() bool {
+	return Bool(c.productVariables.UseRBEJAVAC)
+}
+
+func (c *config) UseRBER8() bool {
+	return Bool(c.productVariables.UseRBER8)
+}
+
+func (c *config) UseRBED8() bool {
+	return Bool(c.productVariables.UseRBED8)
+}
+
+func (c *config) UseRemoteBuild() bool {
+	return c.UseGoma() || c.UseRBE()
+}
+
 func (c *config) RunErrorProne() bool {
 	return c.IsEnvTrue("RUN_ERROR_PRONE")
 }
@@ -1012,7 +1029,11 @@ func (c *deviceConfig) DeviceKernelHeaderDirs() []string {
 }
 
 func (c *deviceConfig) NativeCoverageEnabled() bool {
-	return Bool(c.config.productVariables.NativeCoverage)
+	return Bool(c.config.productVariables.Native_coverage)
+}
+
+func (c *deviceConfig) ClangCoverageEnabled() bool {
+	return Bool(c.config.productVariables.ClangCoverage)
 }
 
 func (c *deviceConfig) CoverageEnabledForPath(path string) bool {
@@ -1227,4 +1248,8 @@ func (c *deviceConfig) DeviceSecondaryArch() string {
 
 func (c *deviceConfig) DeviceSecondaryArchVariant() string {
 	return String(c.config.productVariables.DeviceSecondaryArchVariant)
+}
+
+func (c *deviceConfig) BoardUsesRecoveryAsBoot() bool {
+	return Bool(c.config.productVariables.BoardUsesRecoveryAsBoot)
 }
