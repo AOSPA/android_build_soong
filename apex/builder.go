@@ -160,7 +160,7 @@ var (
 			`echo -e "New unexpected files were added to ${apex_module_name}." ` +
 			` "To fix the build run following command:" && ` +
 			`echo "system/apex/tools/update_whitelist.sh ${whitelisted_files_file} ${image_content_file}" && ` +
-			`exit 1)`,
+			`exit 1); touch ${out}`,
 		Description: "Diff ${image_content_file} and ${whitelisted_files_file}",
 	}, "image_content_file", "whitelisted_files_file", "apex_module_name")
 )
@@ -211,7 +211,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 	})
 }
 
-func (a *apexBundle) buildNoticeFile(ctx android.ModuleContext, apexFileName string) android.OptionalPath {
+func (a *apexBundle) buildNoticeFiles(ctx android.ModuleContext, apexFileName string) android.NoticeOutputs {
 	noticeFiles := []android.Path{}
 	for _, f := range a.filesInfo {
 		if f.module != nil {
@@ -227,10 +227,10 @@ func (a *apexBundle) buildNoticeFile(ctx android.ModuleContext, apexFileName str
 	}
 
 	if len(noticeFiles) == 0 {
-		return android.OptionalPath{}
+		return android.NoticeOutputs{}
 	}
 
-	return android.BuildNoticeOutput(ctx, a.installDir, apexFileName, android.FirstUniquePaths(noticeFiles)).HtmlGzOutput
+	return android.BuildNoticeOutput(ctx, a.installDir, apexFileName, android.FirstUniquePaths(noticeFiles))
 }
 
 func (a *apexBundle) buildInstalledFilesFile(ctx android.ModuleContext, builtApex android.Path, imageDir android.Path) android.OutputPath {
@@ -382,21 +382,23 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		}
 
 		targetSdkVersion := ctx.Config().DefaultAppTargetSdk()
-		if targetSdkVersion == ctx.Config().PlatformSdkCodename() &&
-			ctx.Config().UnbundledBuild() &&
-			!ctx.Config().UnbundledBuildUsePrebuiltSdks() &&
-			ctx.Config().IsEnvTrue("UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT") {
-			apiFingerprint := java.ApiFingerprintPath(ctx)
-			targetSdkVersion += fmt.Sprintf(".$$(cat %s)", apiFingerprint.String())
-			implicitInputs = append(implicitInputs, apiFingerprint)
+		minSdkVersion := ctx.Config().DefaultAppTargetSdk()
+		if java.UseApiFingerprint(ctx, targetSdkVersion) {
+			targetSdkVersion += fmt.Sprintf(".$$(cat %s)", java.ApiFingerprintPath(ctx).String())
+			implicitInputs = append(implicitInputs, java.ApiFingerprintPath(ctx))
+		}
+		if java.UseApiFingerprint(ctx, minSdkVersion) {
+			minSdkVersion += fmt.Sprintf(".$$(cat %s)", java.ApiFingerprintPath(ctx).String())
+			implicitInputs = append(implicitInputs, java.ApiFingerprintPath(ctx))
 		}
 		optFlags = append(optFlags, "--target_sdk_version "+targetSdkVersion)
+		optFlags = append(optFlags, "--min_sdk_version "+minSdkVersion)
 
-		noticeFile := a.buildNoticeFile(ctx, a.Name()+suffix)
-		if noticeFile.Valid() {
+		a.mergedNotices = a.buildNoticeFiles(ctx, a.Name()+suffix)
+		if a.mergedNotices.HtmlGzOutput.Valid() {
 			// If there's a NOTICE file, embed it as an asset file in the APEX.
-			implicitInputs = append(implicitInputs, noticeFile.Path())
-			optFlags = append(optFlags, "--assets_dir "+filepath.Dir(noticeFile.String()))
+			implicitInputs = append(implicitInputs, a.mergedNotices.HtmlGzOutput.Path())
+			optFlags = append(optFlags, "--assets_dir "+filepath.Dir(a.mergedNotices.HtmlGzOutput.String()))
 		}
 
 		if ctx.ModuleDir() != "system/apex/apexd/apexd_testdata" && ctx.ModuleDir() != "system/apex/shim/build" && a.testOnlyShouldSkipHashtreeGeneration() {

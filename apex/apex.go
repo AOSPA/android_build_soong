@@ -347,7 +347,7 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 // Mark the direct and transitive dependencies of apex bundles so that they
 // can be built for the apex bundles.
 func apexDepsMutator(mctx android.BottomUpMutatorContext) {
-	if a, ok := mctx.Module().(*apexBundle); ok {
+	if a, ok := mctx.Module().(*apexBundle); ok && !a.vndkApex {
 		apexBundleName := mctx.ModuleName()
 		mctx.WalkDeps(func(child, parent android.Module) bool {
 			depName := mctx.OtherModuleName(child)
@@ -375,7 +375,7 @@ func apexDepsMutator(mctx android.BottomUpMutatorContext) {
 func apexMutator(mctx android.BottomUpMutatorContext) {
 	if am, ok := mctx.Module().(android.ApexModule); ok && am.CanHaveApexVariants() {
 		am.CreateApexVariations(mctx)
-	} else if _, ok := mctx.Module().(*apexBundle); ok {
+	} else if a, ok := mctx.Module().(*apexBundle); ok && !a.vndkApex {
 		// apex bundle itself is mutated so that it and its modules have same
 		// apex variant.
 		apexBundleName := mctx.ModuleName()
@@ -723,7 +723,8 @@ type apexFile struct {
 	targetRequiredModuleNames []string
 	hostRequiredModuleNames   []string
 
-	jacocoReportClassesFile android.Path // only for javalibs and apps
+	jacocoReportClassesFile android.Path     // only for javalibs and apps
+	certificate             java.Certificate // only for apps
 }
 
 func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, moduleName string, installDir string, class apexFileClass, module android.Module) apexFile {
@@ -832,6 +833,9 @@ type apexBundle struct {
 	// Whether to create symlink to the system file instead of having a file
 	// inside the apex or not
 	linkToSystemLib bool
+
+	// Struct holding the merged notice file paths in different formats
+	mergedNotices android.NoticeOutputs
 }
 
 func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext,
@@ -1098,7 +1102,7 @@ func (a *apexBundle) IsSanitizerEnabled(ctx android.BaseModuleContext, sanitizer
 }
 
 func (a *apexBundle) IsNativeCoverageNeeded(ctx android.BaseModuleContext) bool {
-	return ctx.Device() && ctx.DeviceConfig().NativeCoverageEnabled()
+	return ctx.Device() && (ctx.DeviceConfig().NativeCoverageEnabled() || ctx.DeviceConfig().ClangCoverageEnabled())
 }
 
 func (a *apexBundle) PreventInstall() {
@@ -1209,6 +1213,7 @@ func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp interface {
 	Privileged() bool
 	OutputFile() android.Path
 	JacocoReportClassesFile() android.Path
+	Certificate() java.Certificate
 }, pkgName string) apexFile {
 	appDir := "app"
 	if aapp.Privileged() {
@@ -1218,6 +1223,7 @@ func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp interface {
 	fileToCopy := aapp.OutputFile()
 	af := newApexFile(ctx, fileToCopy, aapp.Name(), dirInApex, app, aapp)
 	af.jacocoReportClassesFile = aapp.JacocoReportClassesFile()
+	af.certificate = aapp.Certificate()
 	return af
 }
 
