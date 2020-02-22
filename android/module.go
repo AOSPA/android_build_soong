@@ -204,6 +204,7 @@ type Module interface {
 	DepsMutator(BottomUpMutatorContext)
 
 	base() *ModuleBase
+	Disable()
 	Enabled() bool
 	Target() Target
 	InstallInData() bool
@@ -215,6 +216,8 @@ type Module interface {
 	InstallBypassMake() bool
 	SkipInstall()
 	ExportedToMake() bool
+	InitRc() Paths
+	VintfFragments() Paths
 	NoticeFile() OptionalPath
 
 	AddProperties(props ...interface{})
@@ -291,6 +294,12 @@ type nameProperties struct {
 
 type commonProperties struct {
 	// emit build rules for this module
+	//
+	// Disabling a module should only be done for those modules that cannot be built
+	// in the current environment. Modules that can build in the current environment
+	// but are not usually required (e.g. superceded by a prebuilt) should not be
+	// disabled as that will prevent them from being built by the checkbuild target
+	// and so prevent early detection of changes that have broken those modules.
 	Enabled *bool `android:"arch_variant"`
 
 	// Controls the visibility of this module to other modules. Allowable values are one or more of
@@ -537,16 +546,7 @@ func InitAndroidModule(m Module) {
 		&base.nameProperties,
 		&base.commonProperties)
 
-	// Allow tests to override the default product variables
-	if base.variableProperties == nil {
-		base.variableProperties = zeroProductVariables
-	}
-
-	// Filter the product variables properties to the ones that exist on this module
-	base.variableProperties = createVariableProperties(m.GetProperties(), base.variableProperties)
-	if base.variableProperties != nil {
-		m.AddProperties(base.variableProperties)
-	}
+	initProductVariableModule(m)
 
 	base.generalProperties = m.GetProperties()
 	base.customizableProperties = m.GetProperties()
@@ -661,6 +661,9 @@ type ModuleBase struct {
 	buildParams []BuildParams
 	ruleParams  map[blueprint.Rule]blueprint.RuleParams
 	variables   map[string]string
+
+	initRcPaths         Paths
+	vintfFragmentsPaths Paths
 
 	prefer32 func(ctx BaseModuleContext, base *ModuleBase, class OsClass) bool
 }
@@ -834,6 +837,10 @@ func (m *ModuleBase) Enabled() bool {
 	return *m.commonProperties.Enabled
 }
 
+func (m *ModuleBase) Disable() {
+	m.commonProperties.Enabled = proptools.BoolPtr(false)
+}
+
 func (m *ModuleBase) SkipInstall() {
 	m.commonProperties.SkipInstall = true
 }
@@ -930,6 +937,14 @@ func (m *ModuleBase) HostRequiredModuleNames() []string {
 
 func (m *ModuleBase) TargetRequiredModuleNames() []string {
 	return m.base().commonProperties.Target_required
+}
+
+func (m *ModuleBase) InitRc() Paths {
+	return append(Paths{}, m.initRcPaths...)
+}
+
+func (m *ModuleBase) VintfFragments() Paths {
+	return append(Paths{}, m.vintfFragmentsPaths...)
 }
 
 func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
@@ -1148,6 +1163,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 		m.installFiles = append(m.installFiles, ctx.installFiles...)
 		m.checkbuildFiles = append(m.checkbuildFiles, ctx.checkbuildFiles...)
+		m.initRcPaths = PathsForModuleSrc(ctx, m.commonProperties.Init_rc)
+		m.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments)
 	} else if ctx.Config().AllowMissingDependencies() {
 		// If the module is not enabled it will not create any build rules, nothing will call
 		// ctx.GetMissingDependencies(), and blueprint will consider the missing dependencies to be unhandled

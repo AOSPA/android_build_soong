@@ -70,12 +70,11 @@ var dexpreoptTestGlobalConfigKey = android.NewOnceKey("TestDexpreoptGlobalConfig
 // systemServerClasspath returns the on-device locations of the modules in the system server classpath.  It is computed
 // once the first time it is called for any ctx.Config(), and returns the same slice for all future calls with the same
 // ctx.Config().
-func systemServerClasspath(ctx android.PathContext) []string {
+func systemServerClasspath(ctx android.MakeVarsContext) []string {
 	return ctx.Config().OnceStringSlice(systemServerClasspathKey, func() []string {
 		global := dexpreoptGlobalConfig(ctx)
-
 		var systemServerClasspathLocations []string
-		for _, m := range global.SystemServerJars {
+		for _, m := range *DexpreoptedSystemServerJars(ctx.Config()) {
 			systemServerClasspathLocations = append(systemServerClasspathLocations,
 				filepath.Join("/system/framework", m+".jar"))
 		}
@@ -112,21 +111,10 @@ func stemOf(moduleName string) string {
 	return moduleName
 }
 
-func getJarsFromApexJarPairs(apexJarPairs []string) []string {
-	modules := make([]string, len(apexJarPairs))
-	for i, p := range apexJarPairs {
-		_, jar := dexpreopt.SplitApexJarPair(p)
-		modules[i] = jar
-	}
-	return modules
-}
-
 var (
-	bootImageConfigKey       = android.NewOnceKey("bootImageConfig")
-	artBootImageName         = "art"
-	frameworkBootImageName   = "boot"
-	artJZBootImageName       = "jitzygote-art"
-	frameworkJZBootImageName = "jitzygote-boot"
+	bootImageConfigKey     = android.NewOnceKey("bootImageConfig")
+	artBootImageName       = "art"
+	frameworkBootImageName = "boot"
 )
 
 // Construct the global boot image configs.
@@ -143,7 +131,7 @@ func genBootImageConfigs(ctx android.PathContext) map[string]*bootImageConfig {
 			artModules = append(artModules, "jacocoagent")
 		}
 		frameworkModules := android.RemoveListFromList(global.BootJars,
-			concat(artModules, getJarsFromApexJarPairs(global.UpdatableBootJars)))
+			concat(artModules, dexpreopt.GetJarsFromApexJarPairs(global.UpdatableBootJars)))
 
 		artSubdir := "apex/com.android.art/javalib"
 		frameworkSubdir := "system/framework"
@@ -180,33 +168,9 @@ func genBootImageConfigs(ctx android.PathContext) map[string]*bootImageConfig {
 			dexLocationsDeps: append(artLocations, frameworkLocations...),
 		}
 
-		// ART config for JIT-zygote boot image.
-		artJZCfg := bootImageConfig{
-			extension:        false,
-			name:             artJZBootImageName,
-			stem:             "apex",
-			installSubdir:    artSubdir,
-			modules:          artModules,
-			dexLocations:     artLocations,
-			dexLocationsDeps: artLocations,
-		}
-
-		// Framework config for JIT-zygote boot image extension.
-		frameworkJZCfg := bootImageConfig{
-			extension:        true,
-			name:             frameworkJZBootImageName,
-			stem:             "apex",
-			installSubdir:    frameworkSubdir,
-			modules:          frameworkModules,
-			dexLocations:     frameworkLocations,
-			dexLocationsDeps: append(artLocations, frameworkLocations...),
-		}
-
 		configs := map[string]*bootImageConfig{
-			artBootImageName:         &artCfg,
-			frameworkBootImageName:   &frameworkCfg,
-			artJZBootImageName:       &artJZCfg,
-			frameworkJZBootImageName: &frameworkJZCfg,
+			artBootImageName:       &artCfg,
+			frameworkBootImageName: &frameworkCfg,
 		}
 
 		// common to all configs
@@ -249,11 +213,6 @@ func genBootImageConfigs(ctx android.PathContext) map[string]*bootImageConfig {
 		frameworkCfg.primaryImages = artCfg.images
 		frameworkCfg.imageLocations = append(artCfg.imageLocations, frameworkCfg.imageLocations...)
 
-		// specific to the jitzygote-framework config
-		frameworkJZCfg.dexPathsDeps = append(artJZCfg.dexPathsDeps, frameworkJZCfg.dexPathsDeps...)
-		frameworkJZCfg.primaryImages = artJZCfg.images
-		frameworkJZCfg.imageLocations = append(artJZCfg.imageLocations, frameworkJZCfg.imageLocations...)
-
 		return configs
 	}).(map[string]*bootImageConfig)
 }
@@ -264,14 +223,6 @@ func artBootImageConfig(ctx android.PathContext) bootImageConfig {
 
 func defaultBootImageConfig(ctx android.PathContext) bootImageConfig {
 	return *genBootImageConfigs(ctx)[frameworkBootImageName]
-}
-
-func artJZBootImageConfig(ctx android.PathContext) bootImageConfig {
-	return *genBootImageConfigs(ctx)[artJZBootImageName]
-}
-
-func frameworkJZBootImageConfig(ctx android.PathContext) bootImageConfig {
-	return *genBootImageConfigs(ctx)[frameworkJZBootImageName]
 }
 
 func defaultBootclasspath(ctx android.PathContext) []string {

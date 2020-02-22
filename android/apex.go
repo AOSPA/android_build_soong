@@ -88,8 +88,7 @@ type ApexProperties struct {
 	//
 	// "//apex_available:anyapex" is a pseudo APEX name that matches to any APEX.
 	// "//apex_available:platform" refers to non-APEX partitions like "system.img".
-	// Default is ["//apex_available:platform", "//apex_available:anyapex"].
-	// TODO(b/128708192) change the default to ["//apex_available:platform"]
+	// Default is ["//apex_available:platform"].
 	Apex_available []string
 
 	// Name of the apex variant that this module is mutated into
@@ -180,20 +179,20 @@ func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
 func (m *ApexModuleBase) CreateApexVariations(mctx BottomUpMutatorContext) []Module {
 	if len(m.apexVariations) > 0 {
 		m.checkApexAvailableProperty(mctx)
+
 		sort.Strings(m.apexVariations)
 		variations := []string{}
-		availableForPlatform := mctx.Module().(ApexModule).AvailableFor(AvailableToPlatform) || mctx.Host()
-		if availableForPlatform {
-			variations = append(variations, "") // Original variation for platform
-		}
+		variations = append(variations, "") // Original variation for platform
 		variations = append(variations, m.apexVariations...)
 
 		defaultVariation := ""
 		mctx.SetDefaultDependencyVariation(&defaultVariation)
+
 		modules := mctx.CreateVariations(variations...)
 		for i, m := range modules {
-			if availableForPlatform && i == 0 {
-				continue
+			platformVariation := i == 0
+			if platformVariation && !mctx.Host() && !m.(ApexModule).AvailableFor(AvailableToPlatform) {
+				m.SkipInstall()
 			}
 			m.(ApexModule).setApexName(variations[i])
 		}

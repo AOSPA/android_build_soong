@@ -106,8 +106,10 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 
 	global := dexpreoptGlobalConfig(ctx)
 	bootImage := defaultBootImageConfig(ctx)
-	if global.UseApexImage {
-		bootImage = frameworkJZBootImageConfig(ctx)
+	dexFiles := bootImage.dexPathsDeps.Paths()
+	dexLocations := bootImage.dexLocationsDeps
+	if global.UseArtImage {
+		bootImage = artBootImageConfig(ctx)
 	}
 
 	var archs []android.ArchType
@@ -178,8 +180,8 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		DexPreoptImagesDeps:     imagesDeps,
 		DexPreoptImageLocations: bootImage.imageLocations,
 
-		PreoptBootClassPathDexFiles:     bootImage.dexPathsDeps.Paths(),
-		PreoptBootClassPathDexLocations: bootImage.dexLocationsDeps,
+		PreoptBootClassPathDexFiles:     dexFiles,
+		PreoptBootClassPathDexLocations: dexLocations,
 
 		PreoptExtractedApk: false,
 
