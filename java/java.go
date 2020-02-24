@@ -76,6 +76,10 @@ func RegisterJavaBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("java_host_for_device", HostForDeviceFactory)
 	ctx.RegisterModuleType("dex_import", DexImportFactory)
 
+	ctx.FinalDepsMutators(func(ctx android.RegisterMutatorsContext) {
+		ctx.BottomUp("dexpreopt_tool_deps", dexpreoptToolDepsMutator).Parallel()
+	})
+
 	ctx.RegisterSingletonType("logtags", LogtagsSingleton)
 	ctx.RegisterSingletonType("kythe_java_extract", kytheExtractJavaFactory)
 }
@@ -105,7 +109,7 @@ func DexpreoptedSystemServerJars(config android.Config) *[]string {
 // order (which is partial and non-deterministic). This pass adds additional dependencies between
 // jars, making the order total and deterministic. It also constructs a global ordered list.
 func systemServerJarsDepsMutator(ctx android.BottomUpMutatorContext) {
-	jars := dexpreopt.NonUpdatableSystemServerJars(ctx, dexpreoptGlobalConfig(ctx))
+	jars := dexpreopt.NonUpdatableSystemServerJars(ctx, dexpreopt.GetGlobalConfig(ctx))
 	name := ctx.ModuleName()
 	if android.InList(name, jars) {
 		dexpreoptedSystemServerJarsLock.Lock()
@@ -803,6 +807,7 @@ const (
 	javaSdk
 	javaSystem
 	javaModule
+	javaSystemServer
 	javaPlatform
 )
 
@@ -836,6 +841,10 @@ func (m *Module) getLinkType(name string) (ret linkType, stubs bool) {
 		return javaModule, true
 	case ver.kind == sdkModule:
 		return javaModule, false
+	case name == "services-stubs":
+		return javaSystemServer, true
+	case ver.kind == sdkSystemServer:
+		return javaSystemServer, false
 	case ver.kind == sdkPrivate || ver.kind == sdkNone || ver.kind == sdkCorePlatform:
 		return javaPlatform, false
 	case !ver.valid():
@@ -871,14 +880,20 @@ func checkLinkType(ctx android.ModuleContext, from *Module, to linkTypeContext, 
 		}
 		break
 	case javaSystem:
-		if otherLinkType == javaPlatform || otherLinkType == javaModule {
+		if otherLinkType == javaPlatform || otherLinkType == javaModule || otherLinkType == javaSystemServer {
 			ctx.ModuleErrorf("compiles against system API, but dependency %q is compiling against private API."+commonMessage,
 				ctx.OtherModuleName(to))
 		}
 		break
 	case javaModule:
-		if otherLinkType == javaPlatform {
+		if otherLinkType == javaPlatform || otherLinkType == javaSystemServer {
 			ctx.ModuleErrorf("compiles against module API, but dependency %q is compiling against private API."+commonMessage,
+				ctx.OtherModuleName(to))
+		}
+		break
+	case javaSystemServer:
+		if otherLinkType == javaPlatform {
+			ctx.ModuleErrorf("compiles against system server API, but dependency %q is compiling against private API."+commonMessage,
 				ctx.OtherModuleName(to))
 		}
 		break
@@ -1016,18 +1031,16 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case bootClasspathTag:
 				// If a system modules dependency has been added to the bootclasspath
 				// then add its libs to the bootclasspath.
-				sm := module.(*SystemModules)
-				deps.bootClasspath = append(deps.bootClasspath, sm.headerJars...)
+				sm := module.(SystemModulesProvider)
+				deps.bootClasspath = append(deps.bootClasspath, sm.HeaderJars()...)
 
 			case systemModulesTag:
 				if deps.systemModules != nil {
 					panic("Found two system module dependencies")
 				}
-				sm := module.(*SystemModules)
-				if sm.outputDir == nil || len(sm.outputDeps) == 0 {
-					panic("Missing directory for system module dependency")
-				}
-				deps.systemModules = &systemModules{sm.outputDir, sm.outputDeps}
+				sm := module.(SystemModulesProvider)
+				outputDir, outputDeps := sm.OutputDirAndDeps()
+				deps.systemModules = &systemModules{outputDir, outputDeps}
 			}
 		}
 	})
@@ -1781,6 +1794,10 @@ func (j *Module) JacocoReportClassesFile() android.Path {
 	return j.jacocoReportClassesFile
 }
 
+func (j *Module) IsInstallable() bool {
+	return Bool(j.properties.Installable)
+}
+
 //
 // Java libraries (.jar file)
 //
@@ -1818,7 +1835,6 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.checkSdkVersion(ctx)
 	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar")
 	j.dexpreopter.isSDKLibrary = j.deviceProperties.IsSDKLibrary
-	j.dexpreopter.isInstallable = Bool(j.properties.Installable)
 	j.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &j.dexpreopter)
 	j.deviceProperties.UncompressDex = j.dexpreopter.uncompressedDex
 	j.compile(ctx, nil)
@@ -2575,13 +2591,16 @@ func (j *DexImport) Stem() string {
 	return proptools.StringDefault(j.properties.Stem, j.ModuleBase.Name())
 }
 
+func (j *DexImport) IsInstallable() bool {
+	return true
+}
+
 func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	if len(j.properties.Jars) != 1 {
 		ctx.PropertyErrorf("jars", "exactly one jar must be provided")
 	}
 
 	j.dexpreopter.installPath = android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar")
-	j.dexpreopter.isInstallable = true
 	j.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &j.dexpreopter)
 
 	inputJar := ctx.ExpandSource(j.properties.Jars[0], "jars")

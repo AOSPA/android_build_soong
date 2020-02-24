@@ -95,6 +95,8 @@ type Deps struct {
 	HeaderLibs                                  []string
 	RuntimeLibs                                 []string
 
+	StaticUnwinderIfLegacy bool
+
 	ReexportSharedLibHeaders, ReexportStaticLibHeaders, ReexportHeaderLibHeaders []string
 
 	ObjFiles []string
@@ -389,6 +391,7 @@ var (
 	lateSharedDepTag      = DependencyTag{Name: "late shared", Library: true, Shared: true}
 	staticExportDepTag    = DependencyTag{Name: "static", Library: true, ReexportFlags: true}
 	lateStaticDepTag      = DependencyTag{Name: "late static", Library: true}
+	staticUnwinderDepTag  = DependencyTag{Name: "static unwinder", Library: true}
 	wholeStaticDepTag     = DependencyTag{Name: "whole static", Library: true, ReexportFlags: true}
 	headerDepTag          = DependencyTag{Name: "header", Library: true}
 	headerExportDepTag    = DependencyTag{Name: "header", Library: true, ReexportFlags: true}
@@ -454,7 +457,6 @@ type Module struct {
 	vndkdep   *vndkdep
 	lto       *lto
 	pgo       *pgo
-	xom       *xom
 
 	outputFile android.OptionalPath
 
@@ -737,9 +739,6 @@ func (c *Module) Init() android.Module {
 	}
 	if c.pgo != nil {
 		c.AddProperties(c.pgo.props()...)
-	}
-	if c.xom != nil {
-		c.AddProperties(c.xom.props()...)
 	}
 	for _, feature := range c.features {
 		c.AddProperties(feature.props()...)
@@ -1210,7 +1209,6 @@ func newModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Mo
 	module.vndkdep = &vndkdep{}
 	module.lto = &lto{}
 	module.pgo = &pgo{}
-	module.xom = &xom{}
 	return module
 }
 
@@ -1405,9 +1403,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 	if c.pgo != nil {
 		flags = c.pgo.flags(ctx, flags)
-	}
-	if c.xom != nil {
-		flags = c.xom.flags(ctx, flags)
 	}
 	for _, feature := range c.features {
 		flags = feature.flags(ctx, flags)
@@ -1801,6 +1796,12 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}, depTag, lib)
 	}
 
+	if deps.StaticUnwinderIfLegacy && ctx.Config().UnbundledBuild() {
+		actx.AddVariationDependencies([]blueprint.Variation{
+			{Mutator: "link", Variation: "static"},
+		}, staticUnwinderDepTag, staticUnwinder(actx))
+	}
+
 	for _, lib := range deps.LateStaticLibs {
 		actx.AddVariationDependencies([]blueprint.Variation{
 			{Mutator: "link", Variation: "static"},
@@ -2185,6 +2186,14 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			// staticVariants are a cc.Module specific concept.
 			if _, ok := ccDep.(*Module); ok && ccDep.CcLibraryInterface() {
 				c.staticVariant = ccDep
+				return
+			}
+		}
+
+		if depTag == staticUnwinderDepTag {
+			if c.ApexProperties.Info.LegacyAndroid10Support {
+				depTag = StaticDepTag
+			} else {
 				return
 			}
 		}
@@ -2703,7 +2712,6 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&VndkProperties{},
 		&LTOProperties{},
 		&PgoProperties{},
-		&XomProperties{},
 		&android.ProtoProperties{},
 	)
 

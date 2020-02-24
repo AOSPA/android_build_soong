@@ -195,7 +195,6 @@ bootstrap_go_package {
         "cc/vendor_snapshot.go",
         "cc/vndk.go",
         "cc/vndk_prebuilt.go",
-        "cc/xom.go",
 
         "cc/cflag_artifacts.go",
         "cc/cmakelists.go",
@@ -205,6 +204,7 @@ bootstrap_go_package {
         "cc/linker.go",
 
         "cc/binary.go",
+        "cc/binary_sdk_member.go",
         "cc/fuzz.go",
         "cc/library.go",
         "cc/library_sdk_member.go",
