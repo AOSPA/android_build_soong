@@ -1131,21 +1131,21 @@ func (c *config) IntegerOverflowEnabledForPath(path string) bool {
 	if c.productVariables.IntegerOverflowIncludePaths == nil {
 		return false
 	}
-	return PrefixInList(path, c.productVariables.IntegerOverflowIncludePaths)
+	return HasAnyPrefix(path, c.productVariables.IntegerOverflowIncludePaths)
 }
 
 func (c *config) BoundSanitizerEnabledForPath(path string) bool {
 	if c.productVariables.BoundSanitizerIncludePaths == nil {
 		return false
 	}
-	return PrefixInList(path, c.productVariables.BoundSanitizerIncludePaths)
+	return HasAnyPrefix(path, c.productVariables.BoundSanitizerIncludePaths)
 }
 
 func (c *config) BoundSanitizerDisabledForPath(path string) bool {
 	if c.productVariables.BoundSanitizerExcludePaths == nil {
 		return false
 	}
-	return PrefixInList(path, c.productVariables.BoundSanitizerExcludePaths)
+	return HasAnyPrefix(path, c.productVariables.BoundSanitizerExcludePaths)
 }
 
 func (c *config) CFIDisabledForPath(path string) bool {
