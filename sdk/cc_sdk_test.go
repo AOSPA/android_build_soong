@@ -75,6 +75,7 @@ func TestBasicSdkWithCc(t *testing.T) {
 
 		cc_library_shared {
 			name: "sdkmember",
+			system_shared_libs: [],
 		}
 
 		sdk_snapshot {
@@ -334,6 +335,68 @@ include/Test.h -> include/include/Test.h
 .intermediates/mynativelib/android_arm64_armv8-a_shared/mynativelib.so -> arm64/lib/mynativelib.so
 arm64/include/Arm64Test.h -> arm64/include/arm64/include/Arm64Test.h
 .intermediates/mynativelib/android_arm_armv7-a-neon_shared/mynativelib.so -> arm/lib/mynativelib.so`),
+	)
+}
+
+func TestSnapshotWithCcBinary(t *testing.T) {
+	result := testSdkWithCc(t, `
+		module_exports {
+			name: "mymodule_exports",
+			native_binaries: ["mynativebinary"],
+		}
+
+		cc_binary {
+			name: "mynativebinary",
+			srcs: [
+				"Test.cpp",
+			],
+			compile_multilib: "both",
+			system_shared_libs: [],
+			stl: "none",
+		}
+	`)
+
+	result.CheckSnapshot("mymodule_exports", "android_common", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+cc_prebuilt_binary {
+    name: "mymodule_exports_mynativebinary@current",
+    sdk_member_name: "mynativebinary",
+    compile_multilib: "both",
+    arch: {
+        arm64: {
+            srcs: ["arm64/bin/mynativebinary"],
+        },
+        arm: {
+            srcs: ["arm/bin/mynativebinary"],
+        },
+    },
+}
+
+cc_prebuilt_binary {
+    name: "mynativebinary",
+    prefer: false,
+    compile_multilib: "both",
+    arch: {
+        arm64: {
+            srcs: ["arm64/bin/mynativebinary"],
+        },
+        arm: {
+            srcs: ["arm/bin/mynativebinary"],
+        },
+    },
+}
+
+module_exports_snapshot {
+    name: "mymodule_exports@current",
+    native_binaries: ["mymodule_exports_mynativebinary@current"],
+}
+`),
+		checkAllCopyRules(`
+.intermediates/mynativebinary/android_arm64_armv8-a/mynativebinary -> arm64/bin/mynativebinary
+.intermediates/mynativebinary/android_arm_armv7-a-neon/mynativebinary -> arm/bin/mynativebinary
+`),
 	)
 }
 

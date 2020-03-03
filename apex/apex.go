@@ -94,7 +94,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libcutils",
 		"libcutils_headers",
 		"libdiagnose_usb",
-		"liblog",
 		"liblog_headers",
 		"libmdnssd",
 		"libminijail",
@@ -170,7 +169,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libicuuc_headers",
 		"libicuuc_stubdata",
 		"libjdwp_headers",
-		"liblog",
 		"liblog_headers",
 		"liblz4",
 		"liblzma",
@@ -792,7 +790,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libjemalloc5",
 		"liblinker_main",
 		"liblinker_malloc",
-		"liblog",
 		"liblog_headers",
 		"liblz4",
 		"liblzma",
@@ -825,7 +822,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libcutils_headers",
 		"libgtest_prod",
 		"libjsoncpp",
-		"liblog",
 		"liblog_headers",
 		"libnativehelper_header_only",
 		"libnetd_client_headers",
@@ -866,7 +862,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libhidltransport-impl-internal",
 		"libhwbinder-impl-internal",
 		"libjsoncpp",
-		"liblog",
 		"liblog_headers",
 		"libprocessgroup",
 		"libprocessgroup_headers",
@@ -1029,7 +1024,7 @@ func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
 }
 
 func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("apex_deps", apexDepsMutator)
+	ctx.TopDown("apex_deps", apexDepsMutator)
 	ctx.BottomUp("apex", apexMutator).Parallel()
 	ctx.BottomUp("apex_flattened", apexFlattenedMutator).Parallel()
 	ctx.BottomUp("apex_uses", apexUsesMutator).Parallel()
@@ -1037,24 +1032,29 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 
 // Mark the direct and transitive dependencies of apex bundles so that they
 // can be built for the apex bundles.
-func apexDepsMutator(mctx android.BottomUpMutatorContext) {
+func apexDepsMutator(mctx android.TopDownMutatorContext) {
+	var apexBundles []android.ApexInfo
+	var directDep bool
 	if a, ok := mctx.Module().(*apexBundle); ok && !a.vndkApex {
-		apexBundleName := mctx.ModuleName()
-		mctx.WalkDeps(func(child, parent android.Module) bool {
-			depName := mctx.OtherModuleName(child)
-			// If the parent is apexBundle, this child is directly depended.
-			_, directDep := parent.(*apexBundle)
-			android.UpdateApexDependency(apexBundleName, depName, directDep)
-
-			if am, ok := child.(android.ApexModule); ok && am.CanHaveApexVariants() &&
-				(directDep || am.DepIsInSameApex(mctx, child)) {
-				am.BuildForApex(apexBundleName)
-				return true
-			} else {
-				return false
-			}
-		})
+		apexBundles = []android.ApexInfo{{mctx.ModuleName(), proptools.Bool(a.properties.Legacy_android10_support)}}
+		directDep = true
+	} else if am, ok := mctx.Module().(android.ApexModule); ok {
+		apexBundles = am.ApexVariations()
+		directDep = false
 	}
+
+	if len(apexBundles) == 0 {
+		return
+	}
+
+	mctx.VisitDirectDeps(func(child android.Module) {
+		depName := mctx.OtherModuleName(child)
+		if am, ok := child.(android.ApexModule); ok && am.CanHaveApexVariants() &&
+			(directDep || am.DepIsInSameApex(mctx, child)) {
+			android.UpdateApexDependency(apexBundles, depName, directDep)
+			am.BuildForApexes(apexBundles)
+		}
+	})
 }
 
 // Create apex variations if a module is included in APEX(s).
@@ -1284,6 +1284,11 @@ type apexBundleProperties struct {
 	Legacy_android10_support *bool
 
 	IsCoverageVariant bool `blueprint:"mutated"`
+
+	// Whether this APEX is considered updatable or not. When set to true, this will enforce additional
+	// rules for making sure that the APEX is truely updatable. This will also disable the size optimizations
+	// like symlinking to the system libs. Default is false.
+	Updatable *bool
 }
 
 type apexTargetBundleProperties struct {
@@ -2120,13 +2125,6 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						return false
 					}
 					filesInfo = append(filesInfo, af)
-
-					pf := sdkLib.XmlPermissionsFile()
-					if pf == nil {
-						ctx.PropertyErrorf("java_libs", "%q failed to generate permission XML", depName)
-						return false
-					}
-					filesInfo = append(filesInfo, newApexFile(ctx, pf, pf.Base(), "etc/permissions", etc, nil))
 					return true // track transitive dependencies
 				} else {
 					ctx.PropertyErrorf("java_libs", "%q of type %q is not supported", depName, ctx.OtherModuleType(child))
@@ -2239,6 +2237,10 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					}
 				} else if java.IsJniDepTag(depTag) {
 					return true
+				} else if java.IsXmlPermissionsFileDepTag(depTag) {
+					if prebuilt, ok := child.(android.PrebuiltEtcModule); ok {
+						filesInfo = append(filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, depName))
+					}
 				} else if am.CanHaveApexVariants() && am.IsInstallableToApex() {
 					ctx.ModuleErrorf("unexpected tag %q for indirect dependency %q", depTag, depName)
 				}
@@ -2320,6 +2322,12 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.linkToSystemLib = !ctx.Config().UnbundledBuild() &&
 		a.installable() &&
 		!proptools.Bool(a.properties.Use_vendor)
+
+	// We don't need the optimization for updatable APEXes, as it might give false signal
+	// to the system health when the APEXes are still bundled (b/149805758)
+	if proptools.Bool(a.properties.Updatable) && a.properties.ApexType == imageApex {
+		a.linkToSystemLib = false
+	}
 
 	// prepare apex_manifest.json
 	a.buildManifest(ctx, provideNativeLibs, requireNativeLibs)

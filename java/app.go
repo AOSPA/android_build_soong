@@ -111,6 +111,9 @@ type overridableAppProperties struct {
 
 	// the package name of this app. The package name in the manifest file is used if one was not given.
 	Package_name *string
+
+	// the logging parent of this app.
+	Logging_parent *string
 }
 
 type AndroidApp struct {
@@ -140,6 +143,10 @@ type AndroidApp struct {
 	additionalAaptFlags []string
 
 	noticeOutputs android.NoticeOutputs
+}
+
+func (a *AndroidApp) IsInstallable() bool {
+	return Bool(a.properties.Installable)
 }
 
 func (a *AndroidApp) ExportedProguardFlagFiles() android.Paths {
@@ -269,13 +276,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	aaptLinkFlags := []string{}
 
 	// Add TARGET_AAPT_CHARACTERISTICS values to AAPT link flags if they exist and --product flags were not provided.
-	hasProduct := false
-	for _, f := range a.aaptProperties.Aaptflags {
-		if strings.HasPrefix(f, "--product") {
-			hasProduct = true
-			break
-		}
-	}
+	hasProduct := android.PrefixInList(a.aaptProperties.Aaptflags, "--product")
 	if !hasProduct && len(ctx.Config().ProductAAPTCharacteristics()) > 0 {
 		aaptLinkFlags = append(aaptLinkFlags, "--product", ctx.Config().ProductAAPTCharacteristics())
 	}
@@ -305,7 +306,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 
 	a.aapt.splitNames = a.appProperties.Package_splits
 	a.aapt.sdkLibraries = a.exportedSdkLibs
-
+	a.aapt.LoggingParent = String(a.overridableAppProperties.Logging_parent)
 	a.aapt.buildActions(ctx, sdkContext(a), aaptLinkFlags...)
 
 	// apps manifests are handled by aapt, don't let Module see them
@@ -338,7 +339,6 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) android.Path {
 		installDir = filepath.Join("app", a.installApkName)
 	}
 	a.dexpreopter.installPath = android.PathForModuleInstall(ctx, installDir, a.installApkName+".apk")
-	a.dexpreopter.isInstallable = Bool(a.properties.Installable)
 	a.dexpreopter.uncompressedDex = a.shouldUncompressDex(ctx)
 
 	a.dexpreopter.enforceUsesLibs = a.usesLibrary.enforceUsesLibraries()
@@ -922,6 +922,10 @@ type AndroidAppImportProperties struct {
 	Filename *string
 }
 
+func (a *AndroidAppImport) IsInstallable() bool {
+	return true
+}
+
 // Updates properties with variant-specific values.
 func (a *AndroidAppImport) processVariants(ctx android.LoadHookContext) {
 	config := ctx.Config()
@@ -1064,7 +1068,6 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	}
 
 	a.dexpreopter.installPath = installDir.Join(ctx, a.BaseModuleName()+".apk")
-	a.dexpreopter.isInstallable = true
 	a.dexpreopter.isPresignedPrebuilt = Bool(a.properties.Presigned)
 	a.dexpreopter.uncompressedDex = a.shouldUncompressDex(ctx)
 
