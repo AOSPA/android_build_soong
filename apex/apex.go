@@ -1325,6 +1325,9 @@ type overridableProperties struct {
 	// binaries would be installed by default (in PRODUCT_PACKAGES) the other binary will be removed
 	// from PRODUCT_PACKAGES.
 	Overrides []string
+
+	// Logging Parent value
+	Logging_parent string
 }
 
 type apexPackaging int
@@ -1416,6 +1419,7 @@ type apexFile struct {
 
 	jacocoReportClassesFile android.Path     // only for javalibs and apps
 	certificate             java.Certificate // only for apps
+	overriddenPackageName   string           // only for apps
 }
 
 func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, moduleName string, installDir string, class apexFileClass, module android.Module) apexFile {
@@ -1925,6 +1929,12 @@ func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp interface {
 	af := newApexFile(ctx, fileToCopy, aapp.Name(), dirInApex, app, aapp)
 	af.jacocoReportClassesFile = aapp.JacocoReportClassesFile()
 	af.certificate = aapp.Certificate()
+
+	if app, ok := aapp.(interface {
+		OverriddenManifestPackageName() string
+	}); ok {
+		af.overriddenPackageName = app.OverriddenManifestPackageName()
+	}
 	return af
 }
 
@@ -2236,7 +2246,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						return true // track transitive dependencies
 					}
 				} else if java.IsJniDepTag(depTag) {
-					return true
+					// Because APK-in-APEX embeds jni_libs transitively, we don't need to track transitive deps
+					return false
 				} else if java.IsXmlPermissionsFileDepTag(depTag) {
 					if prebuilt, ok := child.(android.PrebuiltEtcModule); ok {
 						filesInfo = append(filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, depName))
@@ -2326,6 +2337,11 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// We don't need the optimization for updatable APEXes, as it might give false signal
 	// to the system health when the APEXes are still bundled (b/149805758)
 	if proptools.Bool(a.properties.Updatable) && a.properties.ApexType == imageApex {
+		a.linkToSystemLib = false
+	}
+
+	// We also don't want the optimization for host APEXes, because it doesn't make sense.
+	if ctx.Host() {
 		a.linkToSystemLib = false
 	}
 

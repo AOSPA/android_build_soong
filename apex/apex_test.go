@@ -87,6 +87,12 @@ func withTargets(targets map[android.OsType][]android.Target) testCustomizer {
 	}
 }
 
+func withManifestPackageNameOverrides(specs []string) testCustomizer {
+	return func(fs map[string][]byte, config android.Config) {
+		config.TestProductVariables.ManifestPackageNameOverrides = specs
+	}
+}
+
 func withBinder32bit(fs map[string][]byte, config android.Config) {
 	config.TestProductVariables.Binder32bit = proptools.BoolPtr(true)
 }
@@ -2889,9 +2895,19 @@ func TestApexWithApps(t *testing.T) {
 		cc_library_shared {
 			name: "libjni",
 			srcs: ["mylib.cpp"],
+			shared_libs: ["libfoo"],
 			stl: "none",
 			system_shared_libs: [],
 			apex_available: [ "myapex" ],
+			sdk_version: "current",
+		}
+
+		cc_library_shared {
+			name: "libfoo",
+			stl: "none",
+			system_shared_libs: [],
+			apex_available: [ "myapex" ],
+			sdk_version: "current",
 		}
 	`)
 
@@ -2902,16 +2918,19 @@ func TestApexWithApps(t *testing.T) {
 	ensureContains(t, copyCmds, "image.apex/app/AppFoo/AppFoo.apk")
 	ensureContains(t, copyCmds, "image.apex/priv-app/AppFooPriv/AppFooPriv.apk")
 
-	// JNI libraries are embedded inside APK
-	appZipRule := ctx.ModuleForTests("AppFoo", "android_common_myapex").Description("zip jni lib")
-	libjniOutput := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_shared_myapex").Module().(*cc.Module).OutputFile()
-	ensureListContains(t, appZipRule.Implicits.Strings(), libjniOutput.String())
-	// ... uncompressed
+	appZipRule := ctx.ModuleForTests("AppFoo", "android_common_myapex").Description("zip jni libs")
+	// JNI libraries are uncompressed
 	if args := appZipRule.Args["jarArgs"]; !strings.Contains(args, "-L 0") {
-		t.Errorf("jni lib is not uncompressed for AppFoo")
+		t.Errorf("jni libs are not uncompressed for AppFoo")
 	}
-	// ... and not directly inside the APEX
-	ensureNotContains(t, copyCmds, "image.apex/lib64/libjni.so")
+	// JNI libraries including transitive deps are
+	for _, jni := range []string{"libjni", "libfoo"} {
+		jniOutput := ctx.ModuleForTests(jni, "android_arm64_armv8-a_shared_myapex").Module().(*cc.Module).OutputFile()
+		// ... embedded inside APK (jnilibs.zip)
+		ensureListContains(t, appZipRule.Implicits.Strings(), jniOutput.String())
+		// ... and not directly inside the APEX
+		ensureNotContains(t, copyCmds, "image.apex/lib64/"+jni+".so")
+	}
 }
 
 func TestApexWithAppImports(t *testing.T) {
@@ -3230,6 +3249,7 @@ func TestOverrideApex(t *testing.T) {
 			base: "myapex",
 			apps: ["override_app"],
 			overrides: ["unknownapex"],
+			logging_parent: "com.foo.bar",
 		}
 
 		apex_key {
@@ -3274,6 +3294,10 @@ func TestOverrideApex(t *testing.T) {
 	name := apexBundle.Name()
 	if name != "override_myapex" {
 		t.Errorf("name should be \"override_myapex\", but was %q", name)
+	}
+
+	if apexBundle.overridableProperties.Logging_parent != "com.foo.bar" {
+		t.Errorf("override_myapex should have logging parent (com.foo.bar), but was %q.", apexBundle.overridableProperties.Logging_parent)
 	}
 
 	data := android.AndroidMkDataForTest(t, config, "", apexBundle)
@@ -3589,6 +3613,36 @@ func TestSymlinksFromApexToSystem(t *testing.T) {
 	ensureRealfileExists(t, files, "javalib/myjar.jar")
 	ensureRealfileExists(t, files, "lib64/mylib.so")
 	ensureRealfileExists(t, files, "lib64/myotherlib.so") // this is a real file
+}
+
+func TestAppBundle(t *testing.T) {
+	ctx, _ := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			apps: ["AppFoo"],
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		android_app {
+			name: "AppFoo",
+			srcs: ["foo/bar/MyClass.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			apex_available: [ "myapex" ],
+		}
+		`, withManifestPackageNameOverrides([]string{"AppFoo:com.android.foo"}))
+
+	bundleConfigRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Description("Bundle Config")
+	content := bundleConfigRule.Args["content"]
+
+	ensureContains(t, content, `"compression":{"uncompressed_glob":["apex_payload.img","apex_manifest.*"]}`)
+	ensureContains(t, content, `"apex_config":{"apex_embedded_apk_config":[{"package_name":"com.android.foo","path":"app/AppFoo/AppFoo.apk"}]}`)
 }
 
 func TestMain(m *testing.M) {
