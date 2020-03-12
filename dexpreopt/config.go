@@ -48,7 +48,7 @@ type GlobalConfig struct {
 
 	SystemServerJars []string // jars that form the system server
 	SystemServerApps []string // apps that are loaded into system server
-	SpeedApps        []string // apps that should be speed optimized
+	QuickenApps      []string // apps that should be quicken optimized
 
 	PreoptFlags []string // global dex2oat flags that should be used if no module-specific dex2oat flags are specified
 
@@ -295,7 +295,7 @@ func GlobalConfigForTests(ctx android.PathContext) GlobalConfig {
 		ProductUpdatableBootLocations:      nil,
 		SystemServerJars:                   nil,
 		SystemServerApps:                   nil,
-		SpeedApps:                          nil,
+		QuickenApps:                        nil,
 		PreoptFlags:                        nil,
 		DefaultCompilerFilter:              "",
 		SystemServerCompilerFilter:         "",
