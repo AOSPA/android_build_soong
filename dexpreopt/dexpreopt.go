@@ -389,10 +389,8 @@ func dexpreoptCommand(ctx android.PathContext, global GlobalConfig, module Modul
 			} else {
 				compilerFilter = "speed"
 			}
-		} else if contains(global.SpeedApps, module.Name) || contains(global.SystemServerApps, module.Name) {
-			// Apps loaded into system server, and apps the product default to being compiled with the
-			// 'speed' compiler filter.
-			compilerFilter = "speed"
+		} else if contains(global.QuickenApps, module.Name) {
+			compilerFilter = "quicken"
 		} else if profile != nil {
 			// For non system server jars, use speed-profile when we have a profile.
 			compilerFilter = "speed-profile"
@@ -536,7 +534,7 @@ func OdexOnSystemOtherByName(name string, dexLocation string, global GlobalConfi
 		return false
 	}
 
-	if contains(global.SpeedApps, name) || contains(global.SystemServerApps, name) {
+	if contains(global.SystemServerApps, name) {
 		return false
 	}
 
