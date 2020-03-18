@@ -294,6 +294,7 @@ type ModuleContextIntf interface {
 	staticBinary() bool
 	header() bool
 	toolchain() config.Toolchain
+	canUseSdk() bool
 	useSdk() bool
 	sdkVersion() string
 	useVndk() bool
@@ -317,6 +318,7 @@ type ModuleContextIntf interface {
 	useClangLld(actx ModuleContext) bool
 	isForPlatform() bool
 	apexName() string
+	apexSdkVersion() int
 	hasStubsVariants() bool
 	isStubs() bool
 	bootstrap() bool
@@ -633,6 +635,15 @@ func (c *Module) SetStubsVersions(version string) {
 		}
 	}
 	panic(fmt.Errorf("SetStubsVersions called on non-library module: %q", c.BaseModuleName()))
+}
+
+func (c *Module) StubsVersion() string {
+	if c.linker != nil {
+		if library, ok := c.linker.(*libraryDecorator); ok {
+			return library.MutatedProperties.StubsVersion
+		}
+	}
+	panic(fmt.Errorf("StubsVersion called on non-library module: %q", c.BaseModuleName()))
 }
 
 func (c *Module) SetStatic() {
@@ -1040,8 +1051,12 @@ func (ctx *moduleContextImpl) header() bool {
 	return ctx.mod.header()
 }
 
+func (ctx *moduleContextImpl) canUseSdk() bool {
+	return ctx.ctx.Device() && !ctx.useVndk() && !ctx.inRamdisk() && !ctx.inRecovery() && !ctx.ctx.Fuchsia()
+}
+
 func (ctx *moduleContextImpl) useSdk() bool {
-	if ctx.ctx.Device() && !ctx.useVndk() && !ctx.inRamdisk() && !ctx.inRecovery() && !ctx.ctx.Fuchsia() {
+	if ctx.canUseSdk() {
 		return String(ctx.mod.Properties.Sdk_version) != ""
 	}
 	return false
@@ -1172,6 +1187,10 @@ func (ctx *moduleContextImpl) isForPlatform() bool {
 
 func (ctx *moduleContextImpl) apexName() string {
 	return ctx.mod.ApexName()
+}
+
+func (ctx *moduleContextImpl) apexSdkVersion() int {
+	return ctx.mod.ApexProperties.Info.MinSdkVersion
 }
 
 func (ctx *moduleContextImpl) hasStubsVariants() bool {
@@ -1826,16 +1845,17 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 		actx.AddVariationDependencies(variations, depTag, name)
 
-		// If the version is not specified, add dependency to the latest stubs library.
+		// If the version is not specified, add dependency to all stubs libraries.
 		// The stubs library will be used when the depending module is built for APEX and
 		// the dependent module is not in the same APEX.
-		latestVersion := LatestStubsVersionFor(actx.Config(), name)
-		if version == "" && latestVersion != "" && versionVariantAvail {
-			actx.AddVariationDependencies([]blueprint.Variation{
-				{Mutator: "link", Variation: "shared"},
-				{Mutator: "version", Variation: latestVersion},
-			}, depTag, name)
-			// Note that depTag.ExplicitlyVersioned is false in this case.
+		if version == "" && versionVariantAvail {
+			for _, ver := range stubsVersionsFor(actx.Config())[name] {
+				// Note that depTag.ExplicitlyVersioned is false in this case.
+				actx.AddVariationDependencies([]blueprint.Variation{
+					{Mutator: "link", Variation: "shared"},
+					{Mutator: "version", Variation: ver},
+				}, depTag, name)
+			}
 		}
 	}
 
@@ -2198,7 +2218,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if depTag == staticUnwinderDepTag {
-			if c.ApexProperties.Info.LegacyAndroid10Support {
+			// Use static unwinder for legacy (min_sdk_version = 29) apexes  (b/144430859)
+			if c.ShouldSupportAndroid10() {
 				depTag = StaticDepTag
 			} else {
 				return
@@ -2248,6 +2269,19 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					// If building for APEX, use stubs only when it is not from
 					// the same APEX
 					useThisDep = (depInSameApex != depIsStubs)
+				}
+
+				// when to use (unspecified) stubs, check min_sdk_version and choose the right one
+				if useThisDep && depIsStubs && !explicitlyVersioned {
+					useLatest := c.IsForPlatform() || (c.ShouldSupportAndroid10() && !ctx.Config().UnbundledBuild())
+					versionToUse, err := c.ChooseSdkVersion(ccDep.StubsVersions(), useLatest)
+					if err != nil {
+						ctx.OtherModuleErrorf(dep, err.Error())
+						return
+					}
+					if versionToUse != ccDep.StubsVersion() {
+						useThisDep = false
+					}
 				}
 
 				if !useThisDep {
