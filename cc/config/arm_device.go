@@ -151,8 +151,52 @@ var (
 			// better solution comes around. See Bug 27340895
 			"-D__ARM_FEATURE_LPAE=1",
 		},
-                "kryo300": []string{
-                        // Use cortex-a55 because kryo300 is not supported in GCC/clang.
+		"kryo240": []string{
+			// Use cortex-a53 because kryo240 is not supported in GCC/clang.
+			// even though clang does.
+			"-mcpu=cortex-a53",
+			"-mfpu=neon-fp-armv8",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+		},
+		"kryo250": []string{
+			// Use cortex-a53 because kryo250 is not supported in GCC/clang.
+			// even though clang does.
+			"-mcpu=cortex-a53",
+			"-mfpu=neon-fp-armv8",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+		},
+		"kryo260": []string{
+			// Use cortex-a53 because kryo260 is not supported in GCC/clang.
+			// even though clang does.
+			"-mcpu=cortex-a53",
+			"-mfpu=neon-fp-armv8",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+		},
+		"kryo280": []string{
+			// Use cortex-a53 because kryo280 is not supported in GCC/clang.
+			// even though clang does.
+			"-mcpu=cortex-a53",
+			"-mfpu=neon-fp-armv8",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+		},
+                "kryo360": []string{
+                        // Use cortex-a55 because kryo360 is not supported in GCC/clang.
                         "-mcpu=cortex-a55",
                         // Fake an ARM compiler flag as these processors support LPAE which GCC/clang
                         // don't advertise.
@@ -162,6 +206,69 @@ var (
                 },
 		"kryo385": []string{
 			// Use cortex-a55 because kryo385 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+                },
+		"kryo460": []string{
+			// Use cortex-a55 because kryo460 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+                },
+		"kryo465": []string{
+			// Use cortex-a55 because kryo465 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+                },
+		"kryo470": []string{
+			// Use cortex-a55 because kryo470 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+                },
+		"kryo475": []string{
+			// Use cortex-a55 because kryo475 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+                },
+		"kryo485": []string{
+			// Use cortex-a55 because kryo485 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+                },
+		"exynos-m3": []string{
+			// Use cortex-a55 because exynos-m3 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+                },
+		"exynos-m4": []string{
+			// Use cortex-a55 because exynos-m4 is not supported in GCC/clang.
 			"-mcpu=cortex-a55",
 			// Fake an ARM compiler flag as these processors support LPAE which GCC/clang
 			// don't advertise.
@@ -248,10 +355,21 @@ var (
 		"cortex-a76":     "${config.ArmClangCortexA55Cflags}",
 		"krait":          "${config.ArmClangKraitCflags}",
 		"kryo":           "${config.ArmClangKryoCflags}",
-		"kryo300":        "${config.ArmClangCortexA55Cflags}",
+		"kryo240":        "${config.ArmClangCortexA53Cflags}",
+		"kryo250":        "${config.ArmClangCortexA53Cflags}",
+		"kryo260":        "${config.ArmClangCortexA53Cflags}",
+		"kryo280":        "${config.ArmClangCortexA53Cflags}",
+		"kryo360":        "${config.ArmClangCortexA55Cflags}",
 		"kryo385":        "${config.ArmClangCortexA55Cflags}",
+		"kryo460":        "${config.ArmClangCortexA55Cflags}",
+		"kryo465":        "${config.ArmClangCortexA55Cflags}",
+		"kryo470":        "${config.ArmClangCortexA55Cflags}",
+		"kryo475":        "${config.ArmClangCortexA55Cflags}",
+		"kryo485":        "${config.ArmClangCortexA55Cflags}",
 		"exynos-m1":      "${config.ArmClangCortexA53Cflags}",
 		"exynos-m2":      "${config.ArmClangCortexA53Cflags}",
+		"exynos-m3":      "${config.ArmClangCortexA55Cflags}",
+		"exynos-m4":      "${config.ArmClangCortexA55Cflags}",
 	}
 )
 

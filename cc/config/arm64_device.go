@@ -68,12 +68,48 @@ var (
 		"kryo": []string{
 			"-mcpu=kryo",
 		},
-		"kryo300": []string{
-			// Use cortex-a55 because kryo300 is not supported in GCC/clang.
+		"kryo240": []string{
+			// Use cortex-a53 because kryo240 is not supported in GCC/clang.
+			"-mcpu=cortex-a53"
+		},
+		"kryo250": []string{
+			// Use cortex-a53 because kryo250 is not supported in GCC/clang.
+			"-mcpu=cortex-a53"
+		},
+		"kryo260": []string{
+			// Use cortex-a53 because kryo260 is not supported in GCC/clang.
+			"-mcpu=cortex-a53"
+		},
+		"kryo280": []string{
+			// Use cortex-a53 because kryo280 is not supported in GCC/clang.
+			"-mcpu=cortex-a53"
+		},
+		"kryo360": []string{
+			// Use cortex-a55 because kryo360 is not supported in GCC/clang.
 			"-mcpu=cortex-a55",
 		},
 		"kryo385": []string{
 			// Use cortex-a55 because kryo385 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+		},
+		"kryo460": []string{
+			// Use cortex-a55 because kryo460 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+		},
+		"kryo465": []string{
+			// Use cortex-a55 because kryo465 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+		},
+		"kryo470": []string{
+			// Use cortex-a55 because kryo470 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+		},
+		"kryo475": []string{
+			// Use cortex-a55 because kryo475 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+		},
+		"kryo485": []string{
+			// Use cortex-a55 because kryo485 is not supported in GCC/clang.
 			"-mcpu=cortex-a55",
 		},
 		"exynos-m1": []string{
@@ -81,6 +117,14 @@ var (
 		},
 		"exynos-m2": []string{
 			"-mcpu=exynos-m2",
+		},
+		"exynos-m3": []string{
+			// Use cortex-a55 because exynos-m3 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
+		},
+		"exynos-m4": []string{
+			// Use cortex-a55 because exynos-m4 is not supported in GCC/clang.
+			"-mcpu=cortex-a55",
 		},
 	}
 )
@@ -138,10 +182,21 @@ var (
 		"cortex-a75": "${config.Arm64ClangCortexA55Cflags}",
 		"cortex-a76": "${config.Arm64ClangCortexA55Cflags}",
 		"kryo":       "${config.Arm64ClangKryoCflags}",
-		"kryo300":    "${config.Arm64ClangCortexA55Cflags}",
+		"kryo240":    "${config.Arm64ClangCortexA53Cflags}",
+		"kryo250":    "${config.Arm64ClangCortexA53Cflags}",
+		"kryo260":    "${config.Arm64ClangCortexA53Cflags}",
+		"kryo280":    "${config.Arm64ClangCortexA53Cflags}",
+		"kryo360":    "${config.Arm64ClangCortexA55Cflags}",
 		"kryo385":    "${config.Arm64ClangCortexA55Cflags}",
+		"kryo460":    "${config.Arm64ClangCortexA55Cflags}",
+		"kryo465":    "${config.Arm64ClangCortexA55Cflags}",
+		"kryo470":    "${config.Arm64ClangCortexA55Cflags}",
+		"kryo475":    "${config.Arm64ClangCortexA55Cflags}",
+		"kryo485":    "${config.Arm64ClangCortexA55Cflags}",
 		"exynos-m1":  "${config.Arm64ClangExynosM1Cflags}",
 		"exynos-m2":  "${config.Arm64ClangExynosM2Cflags}",
+		"exynos-m3":  "${config.Arm64ClangCortexA55Cflags}",
+		"exynos-m4":  "${config.Arm64ClangCortexA55Cflags}",
 	}
 )
 
