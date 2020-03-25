@@ -19,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -106,7 +107,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libpcre2",
 		"libprocessgroup_headers",
 		"libqemu_pipe",
-		"libselinux",
 		"libsystem_headers",
 		"libutils_headers",
 	}
@@ -502,7 +502,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libprocessgroup",
 		"libprocessgroup_headers",
 		"libprocinfo",
-		"libselinux",
 		"libsonivox",
 		"libspeexresampler",
 		"libspeexresampler",
@@ -1047,8 +1046,8 @@ func apexDepsMutator(mctx android.TopDownMutatorContext) {
 	var directDep bool
 	if a, ok := mctx.Module().(*apexBundle); ok && !a.vndkApex {
 		apexBundles = []android.ApexInfo{android.ApexInfo{
-			ApexName:               mctx.ModuleName(),
-			LegacyAndroid10Support: proptools.Bool(a.properties.Legacy_android10_support),
+			ApexName:      mctx.ModuleName(),
+			MinSdkVersion: a.minSdkVersion(mctx),
 		}}
 		directDep = true
 	} else if am, ok := mctx.Module().(android.ApexModule); ok {
@@ -1296,10 +1295,6 @@ type apexBundleProperties struct {
 	// Should be only used in tests#.
 	Test_only_no_hashtree *bool
 
-	// Whether this APEX should support Android10. Default is false. If this is set true, then apex_manifest.json is bundled as well
-	// because Android10 requires legacy apex_manifest.json instead of apex_manifest.pb
-	Legacy_android10_support *bool
-
 	IsCoverageVariant bool `blueprint:"mutated"`
 
 	// Whether this APEX is considered updatable or not. When set to true, this will enforce additional
@@ -1348,6 +1343,10 @@ type overridableProperties struct {
 
 	// Logging Parent value
 	Logging_parent string
+
+	// Apex Container Package Name.
+	// Override value for attribute package:name in AndroidManifest.xml
+	Package_name string
 }
 
 type apexPackaging int
@@ -1996,6 +1995,18 @@ func (a *apexBundle) walkPayloadDeps(ctx android.ModuleContext,
 		// As soon as the dependency graph crosses the APEX boundary, don't go further.
 		return false
 	})
+}
+
+func (a *apexBundle) minSdkVersion(ctx android.BaseModuleContext) int {
+	ver := proptools.StringDefault(a.properties.Min_sdk_version, "current")
+	if ver != "current" {
+		minSdkVersion, err := strconv.Atoi(ver)
+		if err != nil {
+			ctx.PropertyErrorf("min_sdk_version", "should be \"current\" or <number>, but %q", ver)
+		}
+		return minSdkVersion
+	}
+	return android.FutureApiLevel
 }
 
 // Ensures that the dependencies are marked as available for this APEX
