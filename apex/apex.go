@@ -628,6 +628,7 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"android.hidl.manager-V1.2-java",
 		"vendor.qti.hardware.wifi.hostapd-V1.0-java",
 		"vendor.qti.hardware.wifi.hostapd-V1.1-java",
+		"vendor.qti.hardware.wifi.hostapd-V1.2-java",
 		"vendor.qti.hardware.wifi.supplicant-V2.0-java",
 		"vendor.qti.hardware.wifi.supplicant-V2.1-java",
 		"vendor.qti.hardware.fstman-V1.0-java",
