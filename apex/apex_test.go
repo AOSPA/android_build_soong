@@ -87,6 +87,12 @@ func withTargets(targets map[android.OsType][]android.Target) testCustomizer {
 	}
 }
 
+func withManifestPackageNameOverrides(specs []string) testCustomizer {
+	return func(fs map[string][]byte, config android.Config) {
+		config.TestProductVariables.ManifestPackageNameOverrides = specs
+	}
+}
+
 func withBinder32bit(fs map[string][]byte, config android.Config) {
 	config.TestProductVariables.Binder32bit = proptools.BoolPtr(true)
 }
@@ -796,7 +802,6 @@ func TestApexWithRuntimeLibsDependency(t *testing.T) {
 			stubs: {
 				versions: ["10", "20", "30"],
 			},
-			apex_available: [ "myapex" ],
 		}
 
 		cc_library {
@@ -2826,6 +2831,7 @@ func TestErrorsIfDepsAreNotEnabled(t *testing.T) {
 			stl: "none",
 			system_shared_libs: [],
 			enabled: false,
+			apex_available: ["myapex"],
 		}
 	`)
 	testApexError(t, `module "myapex" .* depends on disabled module "myjar"`, `
@@ -2847,6 +2853,7 @@ func TestErrorsIfDepsAreNotEnabled(t *testing.T) {
 			sdk_version: "none",
 			system_modules: "none",
 			enabled: false,
+			apex_available: ["myapex"],
 		}
 	`)
 }
@@ -2889,9 +2896,19 @@ func TestApexWithApps(t *testing.T) {
 		cc_library_shared {
 			name: "libjni",
 			srcs: ["mylib.cpp"],
+			shared_libs: ["libfoo"],
 			stl: "none",
 			system_shared_libs: [],
 			apex_available: [ "myapex" ],
+			sdk_version: "current",
+		}
+
+		cc_library_shared {
+			name: "libfoo",
+			stl: "none",
+			system_shared_libs: [],
+			apex_available: [ "myapex" ],
+			sdk_version: "current",
 		}
 	`)
 
@@ -2902,16 +2919,19 @@ func TestApexWithApps(t *testing.T) {
 	ensureContains(t, copyCmds, "image.apex/app/AppFoo/AppFoo.apk")
 	ensureContains(t, copyCmds, "image.apex/priv-app/AppFooPriv/AppFooPriv.apk")
 
-	// JNI libraries are embedded inside APK
-	appZipRule := ctx.ModuleForTests("AppFoo", "android_common_myapex").Description("zip jni lib")
-	libjniOutput := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_shared_myapex").Module().(*cc.Module).OutputFile()
-	ensureListContains(t, appZipRule.Implicits.Strings(), libjniOutput.String())
-	// ... uncompressed
+	appZipRule := ctx.ModuleForTests("AppFoo", "android_common_myapex").Description("zip jni libs")
+	// JNI libraries are uncompressed
 	if args := appZipRule.Args["jarArgs"]; !strings.Contains(args, "-L 0") {
-		t.Errorf("jni lib is not uncompressed for AppFoo")
+		t.Errorf("jni libs are not uncompressed for AppFoo")
 	}
-	// ... and not directly inside the APEX
-	ensureNotContains(t, copyCmds, "image.apex/lib64/libjni.so")
+	// JNI libraries including transitive deps are
+	for _, jni := range []string{"libjni", "libfoo"} {
+		jniOutput := ctx.ModuleForTests(jni, "android_arm64_armv8-a_shared_myapex").Module().(*cc.Module).OutputFile()
+		// ... embedded inside APK (jnilibs.zip)
+		ensureListContains(t, appZipRule.Implicits.Strings(), jniOutput.String())
+		// ... and not directly inside the APEX
+		ensureNotContains(t, copyCmds, "image.apex/lib64/"+jni+".so")
+	}
 }
 
 func TestApexWithAppImports(t *testing.T) {
@@ -2992,7 +3012,7 @@ func TestApexWithTestHelperApp(t *testing.T) {
 
 func TestApexPropertiesShouldBeDefaultable(t *testing.T) {
 	// libfoo's apex_available comes from cc_defaults
-	testApexError(t, `"myapex" .*: requires "libfoo" that is not available for the APEX`, `
+	testApexError(t, `requires "libfoo" that is not available for the APEX`, `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -3058,8 +3078,8 @@ func TestApexAvailable(t *testing.T) {
 		apex_available: ["otherapex"],
 	}`)
 
-	// libbar is an indirect dep
-	testApexError(t, "requires \"libbar\" that is not available for the APEX", `
+	// libbbaz is an indirect dep
+	testApexError(t, "requires \"libbaz\" that is not available for the APEX", `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -3072,31 +3092,26 @@ func TestApexAvailable(t *testing.T) {
 		private_key: "testkey.pem",
 	}
 
-	apex {
-		name: "otherapex",
-		key: "otherapex.key",
-		native_shared_libs: ["libfoo"],
-	}
-
-	apex_key {
-		name: "otherapex.key",
-		public_key: "testkey.avbpubkey",
-		private_key: "testkey.pem",
-	}
-
 	cc_library {
 		name: "libfoo",
 		stl: "none",
 		shared_libs: ["libbar"],
 		system_shared_libs: [],
-		apex_available: ["myapex", "otherapex"],
+		apex_available: ["myapex"],
 	}
 
 	cc_library {
 		name: "libbar",
 		stl: "none",
+		shared_libs: ["libbaz"],
 		system_shared_libs: [],
-		apex_available: ["otherapex"],
+		apex_available: ["myapex"],
+	}
+
+	cc_library {
+		name: "libbaz",
+		stl: "none",
+		system_shared_libs: [],
 	}`)
 
 	testApexError(t, "\"otherapex\" is not a valid module name", `
@@ -3136,6 +3151,7 @@ func TestApexAvailable(t *testing.T) {
 		name: "libfoo",
 		stl: "none",
 		system_shared_libs: [],
+		runtime_libs: ["libbaz"],
 		apex_available: ["myapex"],
 	}
 
@@ -3144,6 +3160,15 @@ func TestApexAvailable(t *testing.T) {
 		stl: "none",
 		system_shared_libs: [],
 		apex_available: ["//apex_available:anyapex"],
+	}
+
+	cc_library {
+		name: "libbaz",
+		stl: "none",
+		system_shared_libs: [],
+		stubs: {
+			versions: ["10", "20", "30"],
+		},
 	}`)
 
 	// check that libfoo and libbar are created only for myapex, but not for the platform
@@ -3230,6 +3255,7 @@ func TestOverrideApex(t *testing.T) {
 			base: "myapex",
 			apps: ["override_app"],
 			overrides: ["unknownapex"],
+			logging_parent: "com.foo.bar",
 		}
 
 		apex_key {
@@ -3252,7 +3278,7 @@ func TestOverrideApex(t *testing.T) {
 			base: "app",
 			package_name: "bar",
 		}
-	`)
+	`, withManifestPackageNameOverrides([]string{"myapex:com.android.myapex"}))
 
 	originalVariant := ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().(android.OverridableModule)
 	overriddenVariant := ctx.ModuleForTests("myapex", "android_common_override_myapex_myapex_image").Module().(android.OverridableModule)
@@ -3275,6 +3301,13 @@ func TestOverrideApex(t *testing.T) {
 	if name != "override_myapex" {
 		t.Errorf("name should be \"override_myapex\", but was %q", name)
 	}
+
+	if apexBundle.overridableProperties.Logging_parent != "com.foo.bar" {
+		t.Errorf("override_myapex should have logging parent (com.foo.bar), but was %q.", apexBundle.overridableProperties.Logging_parent)
+	}
+
+	optFlags := apexRule.Args["opt_flags"]
+	ensureContains(t, optFlags, "--override_apk_package_name com.android.myapex")
 
 	data := android.AndroidMkDataForTest(t, config, "", apexBundle)
 	var builder strings.Builder
@@ -3425,6 +3458,7 @@ func TestRejectNonInstallableJavaLibrary(t *testing.T) {
 			sdk_version: "none",
 			system_modules: "none",
 			compile_dex: false,
+			apex_available: ["myapex"],
 		}
 	`)
 }
@@ -3589,6 +3623,36 @@ func TestSymlinksFromApexToSystem(t *testing.T) {
 	ensureRealfileExists(t, files, "javalib/myjar.jar")
 	ensureRealfileExists(t, files, "lib64/mylib.so")
 	ensureRealfileExists(t, files, "lib64/myotherlib.so") // this is a real file
+}
+
+func TestAppBundle(t *testing.T) {
+	ctx, _ := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			apps: ["AppFoo"],
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		android_app {
+			name: "AppFoo",
+			srcs: ["foo/bar/MyClass.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			apex_available: [ "myapex" ],
+		}
+		`, withManifestPackageNameOverrides([]string{"AppFoo:com.android.foo"}))
+
+	bundleConfigRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Description("Bundle Config")
+	content := bundleConfigRule.Args["content"]
+
+	ensureContains(t, content, `"compression":{"uncompressed_glob":["apex_payload.img","apex_manifest.*"]}`)
+	ensureContains(t, content, `"apex_config":{"apex_embedded_apk_config":[{"package_name":"com.android.foo","path":"app/AppFoo/AppFoo.apk"}]}`)
 }
 
 func TestMain(m *testing.M) {

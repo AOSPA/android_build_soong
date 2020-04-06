@@ -1470,6 +1470,13 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			c.Properties.HideFromMake = false // unhide
 			// Note: this is still non-installable
 		}
+
+		// glob exported headers for snapshot, if BOARD_VNDK_VERSION is current.
+		if i, ok := c.linker.(snapshotLibraryInterface); ok && ctx.DeviceConfig().VndkVersion() == "current" {
+			if isSnapshotAware(ctx, c) {
+				i.collectHeadersForSnapshot(ctx)
+			}
+		}
 	}
 
 	if c.installable() {
@@ -2651,9 +2658,15 @@ func (c *Module) AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Write
 func (c *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
 	if depTag, ok := ctx.OtherModuleDependencyTag(dep).(DependencyTag); ok {
 		if cc, ok := dep.(*Module); ok {
-			if cc.HasStubsVariants() && depTag.Shared && depTag.Library {
-				// dynamic dep to a stubs lib crosses APEX boundary
-				return false
+			if cc.HasStubsVariants() {
+				if depTag.Shared && depTag.Library {
+					// dynamic dep to a stubs lib crosses APEX boundary
+					return false
+				}
+				if IsRuntimeDepTag(depTag) {
+					// runtime dep to a stubs lib also crosses APEX boundary
+					return false
+				}
 			}
 			if depTag.FromStatic {
 				// shared_lib dependency from a static lib is considered as crossing
@@ -2754,19 +2767,18 @@ func (m *Module) ImageMutatorBegin(mctx android.BaseModuleContext) {
 
 	if vndkdep := m.vndkdep; vndkdep != nil {
 		if vndkdep.isVndk() {
-			if productSpecific {
-				mctx.PropertyErrorf("product_specific",
-					"product_specific must not be true when `vndk: {enabled: true}`")
-			}
-			if vendorSpecific {
+			if vendorSpecific || productSpecific {
 				if !vndkdep.isVndkExt() {
 					mctx.PropertyErrorf("vndk",
 						"must set `extends: \"...\"` to vndk extension")
+				} else if m.VendorProperties.Vendor_available != nil {
+					mctx.PropertyErrorf("vendor_available",
+						"must not set at the same time as `vndk: {extends: \"...\"}`")
 				}
 			} else {
 				if vndkdep.isVndkExt() {
 					mctx.PropertyErrorf("vndk",
-						"must set `vendor: true` to set `extends: %q`",
+						"must set `vendor: true` or `product_specific: true` to set `extends: %q`",
 						m.getVndkExtendsModuleName())
 				}
 				if m.VendorProperties.Vendor_available == nil {
@@ -2839,7 +2851,7 @@ func (m *Module) ImageMutatorBegin(mctx android.BaseModuleContext) {
 		} else {
 			mctx.ModuleErrorf("version is unknown for snapshot prebuilt")
 		}
-	} else if m.HasVendorVariant() && !vendorSpecific {
+	} else if m.HasVendorVariant() && !m.isVndkExt() {
 		// This will be available in /system, /vendor and /product
 		// or a /system directory that is available to vendor and product.
 		coreVariantNeeded = true

@@ -79,6 +79,10 @@ type appProperties struct {
 	// list of native libraries that will be provided in or alongside the resulting jar
 	Jni_libs []string `android:"arch_variant"`
 
+	// if true, allow JNI libraries that link against platform APIs even if this module sets
+	// sdk_version.
+	Jni_uses_platform_apis *bool
+
 	// STL library to use for JNI libraries.
 	Stl *string `android:"arch_variant"`
 
@@ -143,6 +147,8 @@ type AndroidApp struct {
 	additionalAaptFlags []string
 
 	noticeOutputs android.NoticeOutputs
+
+	overriddenManifestPackageName string
 }
 
 func (a *AndroidApp) IsInstallable() bool {
@@ -267,6 +273,10 @@ func (a *AndroidApp) shouldEmbedJnis(ctx android.BaseModuleContext) bool {
 		!a.IsForPlatform() || a.appProperties.AlwaysPackageNativeLibs
 }
 
+func (a *AndroidApp) OverriddenManifestPackageName() string {
+	return a.overriddenManifestPackageName
+}
+
 func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	a.aapt.usesNonSdkApis = Bool(a.Module.deviceProperties.Platform_apis)
 
@@ -300,6 +310,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 			manifestPackageName = *a.overridableAppProperties.Package_name
 		}
 		aaptLinkFlags = append(aaptLinkFlags, "--rename-manifest-package "+manifestPackageName)
+		a.overriddenManifestPackageName = manifestPackageName
 	}
 
 	aaptLinkFlags = append(aaptLinkFlags, a.additionalAaptFlags...)
