@@ -33,14 +33,14 @@ type Sandbox struct {
 var (
 	noSandbox    = Sandbox{}
 	basicSandbox = Sandbox{
-		Enabled: false,
+		Enabled: true,
 	}
 
 	dumpvarsSandbox = basicSandbox
 	katiSandbox     = basicSandbox
 	soongSandbox    = basicSandbox
 	ninjaSandbox    = Sandbox{
-		Enabled:              false,
+		Enabled:              true,
 		DisableWhenUsingGoma: true,
 
 		AllowBuildBrokenUsesNetwork: true,
@@ -54,6 +54,9 @@ var sandboxConfig struct {
 
 	working bool
 	group   string
+	srcDir  string
+	outDir  string
+	distDir string
 }
 
 func (c *Cmd) sandboxSupported() bool {
@@ -72,15 +75,34 @@ func (c *Cmd) sandboxSupported() bool {
 			sandboxConfig.group = "nobody"
 		}
 
-		cmd := exec.CommandContext(c.ctx.Context, nsjailPath,
+		sandboxConfig.srcDir = absPath(c.ctx, ".")
+		sandboxConfig.outDir = absPath(c.ctx, c.config.OutDir())
+		sandboxConfig.distDir = absPath(c.ctx, c.config.DistDir())
+
+		sandboxArgs := []string{
 			"-H", "android-build",
 			"-e",
 			"-u", "nobody",
 			"-g", sandboxConfig.group,
-			"-B", "/",
+			"-R", "/",
+			"-B", sandboxConfig.srcDir,
+			"-B", "/tmp",
+			"-B", sandboxConfig.outDir,
+		}
+
+		if _, err := os.Stat(sandboxConfig.distDir); !os.IsNotExist(err) {
+			//Mount dist dir as read-write if it already exists
+			sandboxArgs = append(sandboxArgs, "-B",
+				sandboxConfig.distDir)
+		}
+
+		sandboxArgs = append(sandboxArgs,
 			"--disable_clone_newcgroup",
 			"--",
 			"/bin/bash", "-c", `if [ $(hostname) == "android-build" ]; then echo "Android" "Success"; else echo Failure; fi`)
+
+		cmd := exec.CommandContext(c.ctx.Context, nsjailPath, sandboxArgs...)
+
 		cmd.Env = c.config.Environment().Environ()
 
 		c.ctx.Verboseln(cmd.Args)
@@ -147,8 +169,17 @@ func (c *Cmd) wrapSandbox() {
 		"--rlimit_fsize", "soft",
 		"--rlimit_nofile", "soft",
 
-		// For now, just map everything. Eventually we should limit this, especially to make most things readonly.
-		"-B", "/",
+		// For now, just map everything. Make most things readonly.
+		"-R", "/",
+
+		// Mount source are read-write
+		"-B", sandboxConfig.srcDir,
+
+		//Mount out dir as read-write
+		"-B", sandboxConfig.outDir,
+
+		// Mount a writable tmp dir
+		"-B", "/tmp",
 
 		// Disable newcgroup for now, since it may require newer kernels
 		// TODO: try out cgroups
@@ -156,6 +187,11 @@ func (c *Cmd) wrapSandbox() {
 
 		// Only log important warnings / errors
 		"-q",
+	}
+
+	if _, err := os.Stat(sandboxConfig.distDir); !os.IsNotExist(err) {
+		//Mount dist dir as read-write if it already exists
+		sandboxArgs = append(sandboxArgs, "-B", sandboxConfig.distDir)
 	}
 
 	if c.Sandbox.AllowBuildBrokenUsesNetwork && c.config.BuildBrokenUsesNetwork() {
