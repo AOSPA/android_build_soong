@@ -856,7 +856,7 @@ func TestApexDependsOnLLNDKTransitively(t *testing.T) {
 		shouldNotLink []string
 	}{
 		{
-			name:          "should link to test latest",
+			name:          "should link to the latest",
 			minSdkVersion: "current",
 			shouldLink:    "30",
 			shouldNotLink: []string{"29"},
@@ -1106,6 +1106,60 @@ func TestApexUseStubsAccordingToMinSdkVersionInUnbundledBuild(t *testing.T) {
 	expectNoLink("liba", "shared_otherapex", "libz", "shared")
 }
 
+func TestApexMinSdkVersion_SupportsCodeNames(t *testing.T) {
+	ctx, _ := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			native_shared_libs: ["libx"],
+			min_sdk_version: "R",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "libx",
+			shared_libs: ["libz"],
+			system_shared_libs: [],
+			stl: "none",
+			apex_available: [ "myapex" ],
+		}
+
+		cc_library {
+			name: "libz",
+			system_shared_libs: [],
+			stl: "none",
+			stubs: {
+				versions: ["29", "R"],
+			},
+		}
+	`, func(fs map[string][]byte, config android.Config) {
+		config.TestProductVariables.Platform_version_active_codenames = []string{"R"}
+	})
+
+	expectLink := func(from, from_variant, to, to_variant string) {
+		ldArgs := ctx.ModuleForTests(from, "android_arm64_armv8-a_"+from_variant).Rule("ld").Args["libFlags"]
+		ensureContains(t, ldArgs, "android_arm64_armv8-a_"+to_variant+"/"+to+".so")
+	}
+	expectNoLink := func(from, from_variant, to, to_variant string) {
+		ldArgs := ctx.ModuleForTests(from, "android_arm64_armv8-a_"+from_variant).Rule("ld").Args["libFlags"]
+		ensureNotContains(t, ldArgs, "android_arm64_armv8-a_"+to_variant+"/"+to+".so")
+	}
+	// 9000 is quite a magic number.
+	// Finalized SDK codenames are mapped as P(28), Q(29), ...
+	// And, codenames which are not finalized yet(active_codenames + future_codenames) are numbered from 9000, 9001, ...
+	// to distinguish them from finalized and future_api(10000)
+	// In this test, "R" is assumed not finalized yet( listed in Platform_version_active_codenames) and translated into 9000
+	// (refer android/api_levels.go)
+	expectLink("libx", "shared_myapex", "libz", "shared_9000")
+	expectNoLink("libx", "shared_myapex", "libz", "shared_29")
+	expectNoLink("libx", "shared_myapex", "libz", "shared")
+}
+
 func TestApexMinSdkVersionDefaultsToLatest(t *testing.T) {
 	ctx, _ := testApex(t, `
 		apex {
@@ -1196,7 +1250,7 @@ func TestPlatformUsesLatestStubsFromApexes(t *testing.T) {
 	expectNoLink("libz", "shared", "libz", "shared")
 }
 
-func TestQApexesUseLatestStubsInBundledBuilds(t *testing.T) {
+func TestQApexesUseLatestStubsInBundledBuildsAndHWASAN(t *testing.T) {
 	ctx, _ := testApex(t, `
 		apex {
 			name: "myapex",
@@ -1223,16 +1277,18 @@ func TestQApexesUseLatestStubsInBundledBuilds(t *testing.T) {
 				versions: ["29", "30"],
 			},
 		}
-	`)
+	`, func(fs map[string][]byte, config android.Config) {
+		config.TestProductVariables.SanitizeDevice = []string{"hwaddress"}
+	})
 	expectLink := func(from, from_variant, to, to_variant string) {
 		ld := ctx.ModuleForTests(from, "android_arm64_armv8-a_"+from_variant).Rule("ld")
 		libFlags := ld.Args["libFlags"]
 		ensureContains(t, libFlags, "android_arm64_armv8-a_"+to_variant+"/"+to+".so")
 	}
-	expectLink("libx", "shared_myapex", "libbar", "shared_30")
+	expectLink("libx", "shared_hwasan_myapex", "libbar", "shared_30")
 }
 
-func TestQTargetApexUseStaticUnwinder(t *testing.T) {
+func TestQTargetApexUsesStaticUnwinder(t *testing.T) {
 	ctx, _ := testApex(t, `
 		apex {
 			name: "myapex",
@@ -1251,8 +1307,7 @@ func TestQTargetApexUseStaticUnwinder(t *testing.T) {
 			name: "libx",
 			apex_available: [ "myapex" ],
 		}
-
-	`, withUnbundledBuild)
+	`)
 
 	// ensure apex variant of c++ is linked with static unwinder
 	cm := ctx.ModuleForTests("libc++", "android_arm64_armv8-a_shared_myapex").Module().(*cc.Module)
@@ -1263,7 +1318,7 @@ func TestQTargetApexUseStaticUnwinder(t *testing.T) {
 }
 
 func TestInvalidMinSdkVersion(t *testing.T) {
-	testApexError(t, `"libz" .*: min_sdk_version is set 29.*`, `
+	testApexError(t, `"libz" .*: not found a version\(<=29\)`, `
 		apex {
 			name: "myapex",
 			key: "myapex.key",
@@ -1293,13 +1348,13 @@ func TestInvalidMinSdkVersion(t *testing.T) {
 				versions: ["30"],
 			},
 		}
-	`, withUnbundledBuild)
+	`)
 
-	testApexError(t, `"myapex" .*: min_sdk_version: should be .*`, `
+	testApexError(t, `"myapex" .*: min_sdk_version: SDK version should be .*`, `
 		apex {
 			name: "myapex",
 			key: "myapex.key",
-			min_sdk_version: "R",
+			min_sdk_version: "abc",
 		}
 
 		apex_key {
@@ -1758,7 +1813,7 @@ func TestMacro(t *testing.T) {
 	// non-APEX variant does not have __ANDROID_APEX__ defined
 	mylibCFlags := ctx.ModuleForTests("mylib", "android_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
 	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX__")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_SDK_VERSION__=10000")
+	ensureNotContains(t, mylibCFlags, "-D__ANDROID_SDK_VERSION__")
 
 	// APEX variant has __ANDROID_APEX__ and __ANDROID_APEX_SDK__ defined
 	mylibCFlags = ctx.ModuleForTests("mylib", "android_arm64_armv8-a_static_myapex").Rule("cc").Args["cFlags"]
