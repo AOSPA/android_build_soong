@@ -385,7 +385,18 @@ func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, ctx android.ModuleContext
 			TransformJniLibsToJar(ctx, jniJarFile, jniLibs, a.useEmbeddedNativeLibs(ctx))
 			for _, jni := range jniLibs {
 				if jni.coverageFile.Valid() {
-					a.jniCoverageOutputs = append(a.jniCoverageOutputs, jni.coverageFile.Path())
+					// Only collect coverage for the first target arch if this is a multilib target.
+					// TODO(jungjw): Ideally, we want to collect both reports, but that would cause coverage
+					// data file path collisions since the current coverage file path format doesn't contain
+					// arch-related strings. This is fine for now though; the code coverage team doesn't use
+					// multi-arch targets such as test_suite_* for coverage collections yet.
+					//
+					// Work with the team to come up with a new format that handles multilib modules properly
+					// and change this.
+					if len(ctx.Config().Targets[android.Android]) == 1 ||
+						ctx.Config().Targets[android.Android][0].Arch.ArchType == jni.target.Arch.ArchType {
+						a.jniCoverageOutputs = append(a.jniCoverageOutputs, jni.coverageFile.Path())
+					}
 				}
 			}
 		} else {
@@ -1334,6 +1345,12 @@ type RuntimeResourceOverlayProperties struct {
 	// if not blank, set the minimum version of the sdk that the compiled artifacts will run against.
 	// Defaults to sdk_version if not set.
 	Min_sdk_version *string
+
+	// list of android_library modules whose resources are extracted and linked against statically
+	Static_libs []string
+
+	// list of android_app modules whose resources are extracted and linked against
+	Resource_libs []string
 }
 
 func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -1346,6 +1363,9 @@ func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext)
 	if cert != "" {
 		ctx.AddDependency(ctx.Module(), certificateTag, cert)
 	}
+
+	ctx.AddVariationDependencies(nil, staticLibTag, r.properties.Static_libs...)
+	ctx.AddVariationDependencies(nil, libTag, r.properties.Resource_libs...)
 }
 
 func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleContext) {
