@@ -902,6 +902,7 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"vendor.qti.hardware.wifi.hostapd-V1.1-java",
 		"vendor.qti.hardware.wifi.supplicant-V2.0-java",
 		"vendor.qti.hardware.wifi.supplicant-V2.1-java",
+		"vendor.qti.hardware.fstman-V1.0-java",
 		"androidx.annotation_annotation",
 		"androidx.annotation_annotation-nodeps",
 		"bouncycastle-unbundled",
