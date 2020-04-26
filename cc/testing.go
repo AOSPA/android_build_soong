@@ -227,6 +227,11 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			stl: "none",
 			vendor_available: true,
 			recovery_available: true,
+			host_supported: true,
+			apex_available: [
+				"//apex_available:platform",
+				"//apex_available:anyapex",
+			],
 		}
 		cc_library {
 			name: "libc++",
@@ -236,6 +241,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			stl: "none",
 			vendor_available: true,
 			recovery_available: true,
+			host_supported: true,
 			vndk: {
 				enabled: true,
 				support_system_process: true,
@@ -254,6 +260,10 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			host_supported: false,
 			vendor_available: true,
 			recovery_available: true,
+			apex_available: [
+				"//apex_available:platform",
+				"//apex_available:anyapex",
+			],
 		}
 		cc_library {
 			name: "libunwind_llvm",
@@ -265,8 +275,21 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 			recovery_available: true,
 		}
 
+		cc_defaults {
+			name: "crt_defaults",
+			recovery_available: true,
+			vendor_available: true,
+			native_bridge_supported: true,
+			stl: "none",
+			apex_available: [
+				"//apex_available:platform",
+				"//apex_available:anyapex",
+			],
+		}
+
 		cc_object {
 			name: "crtbegin_so",
+			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -275,6 +298,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 
 		cc_object {
 			name: "crtbegin_dynamic",
+			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -283,6 +307,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 
 		cc_object {
 			name: "crtbegin_static",
+			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -291,6 +316,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 
 		cc_object {
 			name: "crtend_so",
+			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -299,6 +325,7 @@ func GatherRequiredDepsForTest(os android.OsType) string {
 
 		cc_object {
 			name: "crtend_android",
+			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
