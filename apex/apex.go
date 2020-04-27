@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -61,7 +62,25 @@ var (
 	usesTag        = dependencyTag{name: "uses"}
 	androidAppTag  = dependencyTag{name: "androidApp", payload: true}
 	apexAvailWl    = makeApexAvailableWhitelist()
+
+	inverseApexAvailWl = invertApexWhiteList(apexAvailWl)
 )
+
+// Transform the map of apex -> modules to module -> apexes.
+func invertApexWhiteList(m map[string][]string) map[string][]string {
+	r := make(map[string][]string)
+	for apex, modules := range m {
+		for _, module := range modules {
+			r[module] = append(r[module], apex)
+		}
+	}
+	return r
+}
+
+// Retrieve the while list of apexes to which the supplied module belongs.
+func WhitelistedApexAvailable(moduleName string) []string {
+	return inverseApexAvailWl[normalizeModuleName(moduleName)]
+}
 
 // This is a map from apex to modules, which overrides the
 // apex_available setting for that particular module to make
@@ -91,7 +110,7 @@ func makeApexAvailableWhitelist() map[string][]string {
 	//
 	// Module separator
 	//
-	m["com.android.art"] = []string{
+	artApexContents := []string{
 		"art_cmdlineparser_headers",
 		"art_disassembler_headers",
 		"art_libartbase_headers",
@@ -103,7 +122,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"crtbegin_dynamic1",
 		"crtbegin_so1",
 		"crtbrand",
-		"conscrypt.module.intra.core.api.stubs",
 		"dex2oat_headers",
 		"dt_fd_forward_export",
 		"icu4c_extra_headers",
@@ -152,6 +170,8 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libziparchive",
 		"perfetto_trace_protos",
 	}
+	m["com.android.art.debug"] = artApexContents
+	m["com.android.art.release"] = artApexContents
 	//
 	// Module separator
 	//
@@ -392,7 +412,6 @@ func makeApexAvailableWhitelist() map[string][]string {
 		"libprocessgroup",
 		"libprocessgroup_headers",
 		"libprocinfo",
-		"libsonivox",
 		"libspeexresampler",
 		"libspeexresampler",
 		"libstagefright_esds",
@@ -778,7 +797,7 @@ func makeApexAvailableWhitelist() map[string][]string {
 	//
 	// Module separator
 	//
-	m["//any"] = []string{
+	m[android.AvailableToAnyApex] = []string{
 		"libatomic",
 		"libclang_rt",
 		"libgcc_stripped",
@@ -830,10 +849,13 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 // Mark the direct and transitive dependencies of apex bundles so that they
 // can be built for the apex bundles.
 func apexDepsMutator(mctx android.TopDownMutatorContext) {
+	if !mctx.Module().Enabled() {
+		return
+	}
 	var apexBundles []android.ApexInfo
 	var directDep bool
 	if a, ok := mctx.Module().(*apexBundle); ok && !a.vndkApex {
-		apexBundles = []android.ApexInfo{android.ApexInfo{
+		apexBundles = []android.ApexInfo{{
 			ApexName:      mctx.ModuleName(),
 			MinSdkVersion: a.minSdkVersion(mctx),
 		}}
@@ -847,22 +869,33 @@ func apexDepsMutator(mctx android.TopDownMutatorContext) {
 		return
 	}
 
-	cur := mctx.Module().(interface {
-		DepIsInSameApex(android.BaseModuleContext, android.Module) bool
-	})
+	cur := mctx.Module().(android.DepIsInSameApex)
 
 	mctx.VisitDirectDeps(func(child android.Module) {
 		depName := mctx.OtherModuleName(child)
 		if am, ok := child.(android.ApexModule); ok && am.CanHaveApexVariants() &&
-			cur.DepIsInSameApex(mctx, child) {
+			(cur.DepIsInSameApex(mctx, child) || inAnySdk(child)) {
 			android.UpdateApexDependency(apexBundles, depName, directDep)
 			am.BuildForApexes(apexBundles)
 		}
 	})
 }
 
+// If a module in an APEX depends on a module from an SDK then it needs an APEX
+// specific variant created for it. Refer to sdk.sdkDepsReplaceMutator.
+func inAnySdk(module android.Module) bool {
+	if sa, ok := module.(android.SdkAware); ok {
+		return sa.IsInAnySdk()
+	}
+
+	return false
+}
+
 // Create apex variations if a module is included in APEX(s).
 func apexMutator(mctx android.BottomUpMutatorContext) {
+	if !mctx.Module().Enabled() {
+		return
+	}
 	if am, ok := mctx.Module().(android.ApexModule); ok && am.CanHaveApexVariants() {
 		am.CreateApexVariations(mctx)
 	} else if a, ok := mctx.Module().(*apexBundle); ok && !a.vndkApex {
@@ -900,6 +933,9 @@ func addFlattenedFileContextsInfos(ctx android.BaseModuleContext, fileContextsIn
 }
 
 func apexFlattenedMutator(mctx android.BottomUpMutatorContext) {
+	if !mctx.Module().Enabled() {
+		return
+	}
 	if ab, ok := mctx.Module().(*apexBundle); ok {
 		var variants []string
 		switch proptools.StringDefault(ab.properties.Payload_type, "image") {
@@ -1723,15 +1759,16 @@ func apexFileForCompatConfig(ctx android.BaseModuleContext, config java.Platform
 func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp interface {
 	android.Module
 	Privileged() bool
+	InstallApkName() string
 	OutputFile() android.Path
 	JacocoReportClassesFile() android.Path
 	Certificate() java.Certificate
-}, pkgName string) apexFile {
+}) apexFile {
 	appDir := "app"
 	if aapp.Privileged() {
 		appDir = "priv-app"
 	}
-	dirInApex := filepath.Join(appDir, pkgName)
+	dirInApex := filepath.Join(appDir, aapp.InstallApkName())
 	fileToCopy := aapp.OutputFile()
 	af := newApexFile(ctx, fileToCopy, aapp.Name(), dirInApex, app, aapp)
 	af.jacocoReportClassesFile = aapp.JacocoReportClassesFile()
@@ -1754,10 +1791,14 @@ func (c *flattenedApexContext) InstallBypassMake() bool {
 	return true
 }
 
+// Function called while walking an APEX's payload dependencies.
+//
+// Return true if the `to` module should be visited, false otherwise.
+type payloadDepsCallback func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool
+
 // Visit dependencies that contributes to the payload of this APEX
-func (a *apexBundle) walkPayloadDeps(ctx android.ModuleContext,
-	do func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool)) {
-	ctx.WalkDepsBlueprint(func(child, parent blueprint.Module) bool {
+func (a *apexBundle) walkPayloadDeps(ctx android.ModuleContext, do payloadDepsCallback) {
+	ctx.WalkDeps(func(child, parent android.Module) bool {
 		am, ok := child.(android.ApexModule)
 		if !ok || !am.CanHaveApexVariants() {
 			return false
@@ -1766,22 +1807,18 @@ func (a *apexBundle) walkPayloadDeps(ctx android.ModuleContext,
 		// Check for the direct dependencies that contribute to the payload
 		if dt, ok := ctx.OtherModuleDependencyTag(child).(dependencyTag); ok {
 			if dt.payload {
-				do(ctx, parent, am, false /* externalDep */)
-				return true
+				return do(ctx, parent, am, false /* externalDep */)
 			}
+			// As soon as the dependency graph crosses the APEX boundary, don't go further.
 			return false
 		}
 
 		// Check for the indirect dependencies if it is considered as part of the APEX
 		if am.ApexName() != "" {
-			do(ctx, parent, am, false /* externalDep */)
-			return true
+			return do(ctx, parent, am, false /* externalDep */)
 		}
 
-		do(ctx, parent, am, true /* externalDep */)
-
-		// As soon as the dependency graph crosses the APEX boundary, don't go further.
-		return false
+		return do(ctx, parent, am, true /* externalDep */)
 	})
 }
 
@@ -1792,6 +1829,24 @@ func (a *apexBundle) minSdkVersion(ctx android.BaseModuleContext) int {
 		ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
 	}
 	return intVer
+}
+
+// A regexp for removing boilerplate from BaseDependencyTag from the string representation of
+// a dependency tag.
+var tagCleaner = regexp.MustCompile(`\QBaseDependencyTag:blueprint.BaseDependencyTag{}\E(, )?`)
+
+func PrettyPrintTag(tag blueprint.DependencyTag) string {
+	// Use tag's custom String() method if available.
+	if stringer, ok := tag.(fmt.Stringer); ok {
+		return stringer.String()
+	}
+
+	// Otherwise, get a default string representation of the tag's struct.
+	tagString := fmt.Sprintf("%#v", tag)
+
+	// Remove the boilerplate from BaseDependencyTag as it adds no value.
+	tagString = tagCleaner.ReplaceAllString(tagString, "")
+	return tagString
 }
 
 // Ensures that the dependencies are marked as available for this APEX
@@ -1808,24 +1863,47 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		return
 	}
 
-	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) {
+	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+		if externalDep {
+			// As soon as the dependency graph crosses the APEX boundary, don't go further.
+			return false
+		}
+
 		apexName := ctx.ModuleName()
 		fromName := ctx.OtherModuleName(from)
 		toName := ctx.OtherModuleName(to)
-		if externalDep || to.AvailableFor(apexName) || whitelistedApexAvailable(apexName, toName) {
-			return
+
+		// If `to` is not actually in the same APEX as `from` then it does not need apex_available and neither
+		// do any of its dependencies.
+		if am, ok := from.(android.DepIsInSameApex); ok && !am.DepIsInSameApex(ctx, to) {
+			// As soon as the dependency graph crosses the APEX boundary, don't go further.
+			return false
 		}
-		ctx.ModuleErrorf("%q requires %q that is not available for the APEX.", fromName, toName)
+
+		if to.AvailableFor(apexName) || whitelistedApexAvailable(apexName, toName) {
+			return true
+		}
+		message := ""
+		tagPath := ctx.GetTagPath()
+		// Skip the first module as that will be added at the start of the error message by ctx.ModuleErrorf().
+		walkPath := ctx.GetWalkPath()[1:]
+		for i, m := range walkPath {
+			message = fmt.Sprintf("%s\n           via tag %s\n    -> %s", message, PrettyPrintTag(tagPath[i]), m.String())
+		}
+		ctx.ModuleErrorf("%q requires %q that is not available for the APEX. Dependency path:%s", fromName, toName, message)
+		// Visit this module's dependencies to check and report any issues with their availability.
+		return true
 	})
 }
 
 // Collects the list of module names that directly or indirectly contributes to the payload of this APEX
 func (a *apexBundle) collectDepsInfo(ctx android.ModuleContext) {
 	a.depInfos = make(map[string]depInfo)
-	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) {
+	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		if from.Name() == to.Name() {
 			// This can happen for cc.reuseObjTag. We are not interested in tracking this.
-			return
+			// As soon as the dependency graph crosses the APEX boundary, don't go further.
+			return !externalDep
 		}
 
 		if info, exists := a.depInfos[to.Name()]; exists {
@@ -1841,6 +1919,9 @@ func (a *apexBundle) collectDepsInfo(ctx android.ModuleContext) {
 				isExternal: externalDep,
 			}
 		}
+
+		// As soon as the dependency graph crosses the APEX boundary, don't go further.
+		return !externalDep
 	})
 }
 
@@ -1917,6 +1998,9 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// TODO(jiyong) do this using walkPayloadDeps
 	ctx.WalkDepsBlueprint(func(child, parent blueprint.Module) bool {
 		depTag := ctx.OtherModuleDependencyTag(child)
+		if _, ok := depTag.(android.ExcludeFromApexContentsTag); ok {
+			return false
+		}
 		depName := ctx.OtherModuleName(child)
 		if _, isDirectDep := parent.(*apexBundle); isDirectDep {
 			switch depTag {
@@ -1965,14 +2049,13 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					ctx.PropertyErrorf("java_libs", "%q of type %q is not supported", depName, ctx.OtherModuleType(child))
 				}
 			case androidAppTag:
-				pkgName := ctx.DeviceConfig().OverridePackageNameFor(depName)
 				if ap, ok := child.(*java.AndroidApp); ok {
-					filesInfo = append(filesInfo, apexFileForAndroidApp(ctx, ap, pkgName))
+					filesInfo = append(filesInfo, apexFileForAndroidApp(ctx, ap))
 					return true // track transitive dependencies
 				} else if ap, ok := child.(*java.AndroidAppImport); ok {
-					filesInfo = append(filesInfo, apexFileForAndroidApp(ctx, ap, pkgName))
+					filesInfo = append(filesInfo, apexFileForAndroidApp(ctx, ap))
 				} else if ap, ok := child.(*java.AndroidTestHelperApp); ok {
-					filesInfo = append(filesInfo, apexFileForAndroidApp(ctx, ap, pkgName))
+					filesInfo = append(filesInfo, apexFileForAndroidApp(ctx, ap))
 				} else {
 					ctx.PropertyErrorf("apps", "%q is not an android_app module", depName)
 				}
@@ -2078,7 +2161,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						filesInfo = append(filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, depName))
 					}
 				} else if am.CanHaveApexVariants() && am.IsInstallableToApex() {
-					ctx.ModuleErrorf("unexpected tag %q for indirect dependency %q", depTag, depName)
+					ctx.ModuleErrorf("unexpected tag %s for indirect dependency %q", PrettyPrintTag(depTag), depName)
 				}
 			}
 		}
@@ -2187,10 +2270,21 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 func whitelistedApexAvailable(apex, moduleName string) bool {
 	key := apex
-	key = strings.Replace(key, "test_", "", 1)
-	key = strings.Replace(key, "com.android.art.debug", "com.android.art", 1)
-	key = strings.Replace(key, "com.android.art.release", "com.android.art", 1)
+	moduleName = normalizeModuleName(moduleName)
 
+	if val, ok := apexAvailWl[key]; ok && android.InList(moduleName, val) {
+		return true
+	}
+
+	key = android.AvailableToAnyApex
+	if val, ok := apexAvailWl[key]; ok && android.InList(moduleName, val) {
+		return true
+	}
+
+	return false
+}
+
+func normalizeModuleName(moduleName string) string {
 	// Prebuilt modules (e.g. java_import, etc.) have "prebuilt_" prefix added by the build
 	// system. Trim the prefix for the check since they are confusing
 	moduleName = strings.TrimPrefix(moduleName, "prebuilt_")
@@ -2199,17 +2293,7 @@ func whitelistedApexAvailable(apex, moduleName string) bool {
 		// We don't want to list them all
 		moduleName = "libclang_rt"
 	}
-
-	if val, ok := apexAvailWl[key]; ok && android.InList(moduleName, val) {
-		return true
-	}
-
-	key = "//any"
-	if val, ok := apexAvailWl[key]; ok && android.InList(moduleName, val) {
-		return true
-	}
-
-	return false
+	return moduleName
 }
 
 func newApexBundle() *apexBundle {

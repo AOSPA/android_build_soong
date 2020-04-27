@@ -141,6 +141,7 @@ func testApexContext(t *testing.T, bp string, handlers ...testCustomizer) (*andr
 		"my_include":                                 nil,
 		"foo/bar/MyClass.java":                       nil,
 		"prebuilt.jar":                               nil,
+		"prebuilt.so":                                nil,
 		"vendor/foo/devkeys/test.x509.pem":           nil,
 		"vendor/foo/devkeys/test.pk8":                nil,
 		"testkey.x509.pem":                           nil,
@@ -342,7 +343,7 @@ func TestBasicApex(t *testing.T) {
 			apex_available: [ "myapex" ],
 		}
 
-		cc_library {
+		cc_library_shared {
 			name: "mylib2",
 			srcs: ["mylib.cpp"],
 			system_shared_libs: [],
@@ -355,6 +356,16 @@ func TestBasicApex(t *testing.T) {
 				"myapex",
 			],
 		}
+
+		cc_prebuilt_library_shared {
+			name: "mylib2",
+			srcs: ["prebuilt.so"],
+			// TODO: remove //apex_available:platform
+			apex_available: [
+				"//apex_available:platform",
+				"myapex",
+			],
+    }
 
 		cc_library_static {
 			name: "libstatic",
@@ -3402,6 +3413,7 @@ func TestApexWithAppImports(t *testing.T) {
 			dex_preopt: {
 				enabled: false,
 			},
+			filename: "AwesomePrebuiltAppFooPriv.apk",
 		}
 	`)
 
@@ -3410,7 +3422,47 @@ func TestApexWithAppImports(t *testing.T) {
 	copyCmds := apexRule.Args["copy_commands"]
 
 	ensureContains(t, copyCmds, "image.apex/app/AppFooPrebuilt/AppFooPrebuilt.apk")
-	ensureContains(t, copyCmds, "image.apex/priv-app/AppFooPrivPrebuilt/AppFooPrivPrebuilt.apk")
+	ensureContains(t, copyCmds, "image.apex/priv-app/AppFooPrivPrebuilt/AwesomePrebuiltAppFooPriv.apk")
+}
+
+func TestApexWithAppImportsPrefer(t *testing.T) {
+	ctx, _ := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			apps: [
+				"AppFoo",
+			],
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		android_app {
+			name: "AppFoo",
+			srcs: ["foo/bar/MyClass.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			apex_available: [ "myapex" ],
+		}
+
+		android_app_import {
+			name: "AppFoo",
+			apk: "AppFooPrebuilt.apk",
+			filename: "AppFooPrebuilt.apk",
+			presigned: true,
+			prefer: true,
+		}
+	`, withFiles(map[string][]byte{
+		"AppFooPrebuilt.apk": nil,
+	}))
+
+	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
+		"app/AppFoo/AppFooPrebuilt.apk",
+	})
 }
 
 func TestApexWithTestHelperApp(t *testing.T) {
@@ -3478,7 +3530,7 @@ func TestApexPropertiesShouldBeDefaultable(t *testing.T) {
 	}`)
 }
 
-func TestApexAvailable(t *testing.T) {
+func TestApexAvailable_DirectDep(t *testing.T) {
 	// libfoo is not available to myapex, but only to otherapex
 	testApexError(t, "requires \"libfoo\" that is not available for the APEX", `
 	apex {
@@ -3511,9 +3563,17 @@ func TestApexAvailable(t *testing.T) {
 		system_shared_libs: [],
 		apex_available: ["otherapex"],
 	}`)
+}
 
+func TestApexAvailable_IndirectDep(t *testing.T) {
 	// libbbaz is an indirect dep
-	testApexError(t, "requires \"libbaz\" that is not available for the APEX", `
+	testApexError(t, `requires "libbaz" that is not available for the APEX. Dependency path:
+.*via tag apex\.dependencyTag.*"sharedLib".*
+.*-> libfoo.*link:shared.*
+.*via tag cc\.DependencyTag.*"shared".*
+.*-> libbar.*link:shared.*
+.*via tag cc\.DependencyTag.*"shared".*
+.*-> libbaz.*link:shared.*`, `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -3547,7 +3607,9 @@ func TestApexAvailable(t *testing.T) {
 		stl: "none",
 		system_shared_libs: [],
 	}`)
+}
 
+func TestApexAvailable_InvalidApexName(t *testing.T) {
 	testApexError(t, "\"otherapex\" is not a valid module name", `
 	apex {
 		name: "myapex",
@@ -3568,7 +3630,7 @@ func TestApexAvailable(t *testing.T) {
 		apex_available: ["otherapex"],
 	}`)
 
-	ctx, _ := testApex(t, `
+	testApex(t, `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -3604,7 +3666,9 @@ func TestApexAvailable(t *testing.T) {
 			versions: ["10", "20", "30"],
 		},
 	}`)
+}
 
+func TestApexAvailable_CreatedForPlatform(t *testing.T) {
 	// check that libfoo and libbar are created only for myapex, but not for the platform
 	// TODO(jiyong) the checks for the platform variant are removed because we now create
 	// the platform variant regardless of the apex_availability. Instead, we will make sure that
@@ -3616,7 +3680,7 @@ func TestApexAvailable(t *testing.T) {
 	//	ensureListContains(t, ctx.ModuleVariantsForTests("libbar"), "android_arm64_armv8-a_shared_myapex")
 	//	ensureListNotContains(t, ctx.ModuleVariantsForTests("libbar"), "android_arm64_armv8-a_shared")
 
-	ctx, _ = testApex(t, `
+	ctx, _ := testApex(t, `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -3638,8 +3702,10 @@ func TestApexAvailable(t *testing.T) {
 	// check that libfoo is created only for the platform
 	ensureListNotContains(t, ctx.ModuleVariantsForTests("libfoo"), "android_arm64_armv8-a_shared_myapex")
 	ensureListContains(t, ctx.ModuleVariantsForTests("libfoo"), "android_arm64_armv8-a_shared")
+}
 
-	ctx, _ = testApex(t, `
+func TestApexAvailable_CreatedForApex(t *testing.T) {
+	testApex(t, `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -3729,7 +3795,7 @@ func TestOverrideApex(t *testing.T) {
 	copyCmds := apexRule.Args["copy_commands"]
 
 	ensureNotContains(t, copyCmds, "image.apex/app/app/app.apk")
-	ensureContains(t, copyCmds, "image.apex/app/app/override_app.apk")
+	ensureContains(t, copyCmds, "image.apex/app/override_app/override_app.apk")
 
 	apexBundle := module.Module().(*apexBundle)
 	name := apexBundle.Name()
@@ -4058,6 +4124,27 @@ func TestSymlinksFromApexToSystem(t *testing.T) {
 	ensureRealfileExists(t, files, "javalib/myjar.jar")
 	ensureRealfileExists(t, files, "lib64/mylib.so")
 	ensureRealfileExists(t, files, "lib64/myotherlib.so") // this is a real file
+}
+
+func TestApexMutatorsDontRunIfDisabled(t *testing.T) {
+	ctx, _ := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`, func(fs map[string][]byte, config android.Config) {
+		delete(config.Targets, android.Android)
+		config.AndroidCommonTarget = android.Target{}
+	})
+
+	if expected, got := []string{""}, ctx.ModuleVariantsForTests("myapex"); !reflect.DeepEqual(expected, got) {
+		t.Errorf("Expected variants: %v, but got: %v", expected, got)
+	}
 }
 
 func TestAppBundle(t *testing.T) {
