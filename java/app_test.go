@@ -2463,6 +2463,7 @@ func TestRuntimeResourceOverlay(t *testing.T) {
 			certificate: "platform",
 			product_specific: true,
 			theme: "faza",
+			overrides: ["foo"],
 		}
 
 		android_library {
@@ -2510,14 +2511,15 @@ func TestRuntimeResourceOverlay(t *testing.T) {
 	if expected != signingFlag {
 		t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected, signingFlag)
 	}
-	path := android.AndroidMkEntriesForTest(t, config, "", m.Module())[0].EntryMap["LOCAL_CERTIFICATE"]
+	androidMkEntries := android.AndroidMkEntriesForTest(t, config, "", m.Module())[0]
+	path := androidMkEntries.EntryMap["LOCAL_CERTIFICATE"]
 	expectedPath := []string{"build/make/target/product/security/platform.x509.pem"}
 	if !reflect.DeepEqual(path, expectedPath) {
 		t.Errorf("Unexpected LOCAL_CERTIFICATE value: %v, expected: %v", path, expectedPath)
 	}
 
 	// Check device location.
-	path = android.AndroidMkEntriesForTest(t, config, "", m.Module())[0].EntryMap["LOCAL_MODULE_PATH"]
+	path = androidMkEntries.EntryMap["LOCAL_MODULE_PATH"]
 	expectedPath = []string{"/tmp/target/product/test_device/product/overlay"}
 	if !reflect.DeepEqual(path, expectedPath) {
 		t.Errorf("Unexpected LOCAL_MODULE_PATH value: %v, expected: %v", path, expectedPath)
@@ -2525,8 +2527,74 @@ func TestRuntimeResourceOverlay(t *testing.T) {
 
 	// A themed module has a different device location
 	m = ctx.ModuleForTests("foo_themed", "android_common")
-	path = android.AndroidMkEntriesForTest(t, config, "", m.Module())[0].EntryMap["LOCAL_MODULE_PATH"]
+	androidMkEntries = android.AndroidMkEntriesForTest(t, config, "", m.Module())[0]
+	path = androidMkEntries.EntryMap["LOCAL_MODULE_PATH"]
 	expectedPath = []string{"/tmp/target/product/test_device/product/overlay/faza"}
+	if !reflect.DeepEqual(path, expectedPath) {
+		t.Errorf("Unexpected LOCAL_MODULE_PATH value: %v, expected: %v", path, expectedPath)
+	}
+
+	overrides := androidMkEntries.EntryMap["LOCAL_OVERRIDES_PACKAGES"]
+	expectedOverrides := []string{"foo"}
+	if !reflect.DeepEqual(overrides, expectedOverrides) {
+		t.Errorf("Unexpected LOCAL_OVERRIDES_PACKAGES value: %v, expected: %v", overrides, expectedOverrides)
+	}
+}
+
+func TestRuntimeResourceOverlay_JavaDefaults(t *testing.T) {
+	ctx, config := testJava(t, `
+		java_defaults {
+			name: "rro_defaults",
+			theme: "default_theme",
+			product_specific: true,
+			aaptflags: ["--keep-raw-values"],
+		}
+
+		runtime_resource_overlay {
+			name: "foo_with_defaults",
+			defaults: ["rro_defaults"],
+		}
+
+		runtime_resource_overlay {
+			name: "foo_barebones",
+		}
+		`)
+
+	//
+	// RRO module with defaults
+	//
+	m := ctx.ModuleForTests("foo_with_defaults", "android_common")
+
+	// Check AAPT2 link flags.
+	aapt2Flags := strings.Split(m.Output("package-res.apk").Args["flags"], " ")
+	expectedFlags := []string{"--keep-raw-values", "--no-resource-deduping", "--no-resource-removal"}
+	absentFlags := android.RemoveListFromList(expectedFlags, aapt2Flags)
+	if len(absentFlags) > 0 {
+		t.Errorf("expected values, %q are missing in aapt2 link flags, %q", absentFlags, aapt2Flags)
+	}
+
+	// Check device location.
+	path := android.AndroidMkEntriesForTest(t, config, "", m.Module())[0].EntryMap["LOCAL_MODULE_PATH"]
+	expectedPath := []string{"/tmp/target/product/test_device/product/overlay/default_theme"}
+	if !reflect.DeepEqual(path, expectedPath) {
+		t.Errorf("Unexpected LOCAL_MODULE_PATH value: %q, expected: %q", path, expectedPath)
+	}
+
+	//
+	// RRO module without defaults
+	//
+	m = ctx.ModuleForTests("foo_barebones", "android_common")
+
+	// Check AAPT2 link flags.
+	aapt2Flags = strings.Split(m.Output("package-res.apk").Args["flags"], " ")
+	unexpectedFlags := "--keep-raw-values"
+	if inList(unexpectedFlags, aapt2Flags) {
+		t.Errorf("unexpected value, %q is present in aapt2 link flags, %q", unexpectedFlags, aapt2Flags)
+	}
+
+	// Check device location.
+	path = android.AndroidMkEntriesForTest(t, config, "", m.Module())[0].EntryMap["LOCAL_MODULE_PATH"]
+	expectedPath = []string{"/tmp/target/product/test_device/system/overlay"}
 	if !reflect.DeepEqual(path, expectedPath) {
 		t.Errorf("Unexpected LOCAL_MODULE_PATH value: %v, expected: %v", path, expectedPath)
 	}
