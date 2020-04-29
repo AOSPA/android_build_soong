@@ -2387,6 +2387,45 @@ func TestStaticLibDepReorderingWithShared(t *testing.T) {
 	}
 }
 
+func checkEquals(t *testing.T, message string, expected, actual interface{}) {
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf(message+
+			"\nactual:   %v"+
+			"\nexpected: %v",
+			actual,
+			expected,
+		)
+	}
+}
+
+func TestLlndkLibrary(t *testing.T) {
+	ctx := testCc(t, `
+	cc_library {
+		name: "libllndk",
+		stubs: { versions: ["1", "2"] },
+	}
+	llndk_library {
+		name: "libllndk",
+	}
+	`)
+	actual := ctx.ModuleVariantsForTests("libllndk.llndk")
+	expected := []string{
+		"android_vendor.VER_arm64_armv8-a_shared",
+		"android_vendor.VER_arm64_armv8-a_shared_1",
+		"android_vendor.VER_arm64_armv8-a_shared_2",
+		"android_vendor.VER_arm_armv7-a-neon_shared",
+		"android_vendor.VER_arm_armv7-a-neon_shared_1",
+		"android_vendor.VER_arm_armv7-a-neon_shared_2",
+	}
+	checkEquals(t, "variants for llndk stubs", expected, actual)
+
+	params := ctx.ModuleForTests("libllndk.llndk", "android_vendor.VER_arm_armv7-a-neon_shared").Description("generate stub")
+	checkEquals(t, "use VNDK version for default stubs", "current", params.Args["apiLevel"])
+
+	params = ctx.ModuleForTests("libllndk.llndk", "android_vendor.VER_arm_armv7-a-neon_shared_1").Description("generate stub")
+	checkEquals(t, "override apiLevel for versioned stubs", "1", params.Args["apiLevel"])
+}
+
 func TestLlndkHeaders(t *testing.T) {
 	ctx := testCc(t, `
 	llndk_headers {
@@ -2530,6 +2569,7 @@ func TestRuntimeLibsNoVndk(t *testing.T) {
 }
 
 func checkStaticLibs(t *testing.T, expected []string, module *Module) {
+	t.Helper()
 	actual := module.Properties.AndroidMkStaticLibs
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("incorrect static_libs"+
@@ -2813,6 +2853,18 @@ func TestVersionedStubs(t *testing.T) {
 	libFoo1VersioningMacro := "-D__LIBFOO_API__=1"
 	if !strings.Contains(cFlags, libFoo1VersioningMacro) {
 		t.Errorf("%q is not found in %q", libFoo1VersioningMacro, cFlags)
+	}
+}
+
+func TestVersioningMacro(t *testing.T) {
+	for _, tc := range []struct{ moduleName, expected string }{
+		{"libc", "__LIBC_API__"},
+		{"libfoo", "__LIBFOO_API__"},
+		{"libfoo@1", "__LIBFOO_1_API__"},
+		{"libfoo-v1", "__LIBFOO_V1_API__"},
+		{"libfoo.v1", "__LIBFOO_V1_API__"},
+	} {
+		checkEquals(t, tc.moduleName, tc.expected, versioningMacroName(tc.moduleName))
 	}
 }
 

@@ -830,6 +830,40 @@ func (m *ModuleBase) SystemExtSpecific() bool {
 	return Bool(m.commonProperties.System_ext_specific)
 }
 
+func (m *ModuleBase) PartitionTag(config DeviceConfig) string {
+	partition := "system"
+	if m.SocSpecific() {
+		// A SoC-specific module could be on the vendor partition at
+		// "vendor" or the system partition at "system/vendor".
+		if config.VendorPath() == "vendor" {
+			partition = "vendor"
+		}
+	} else if m.DeviceSpecific() {
+		// A device-specific module could be on the odm partition at
+		// "odm", the vendor partition at "vendor/odm", or the system
+		// partition at "system/vendor/odm".
+		if config.OdmPath() == "odm" {
+			partition = "odm"
+		} else if strings.HasPrefix(config.OdmPath (), "vendor/") {
+			partition = "vendor"
+		}
+	} else if m.ProductSpecific() {
+		// A product-specific module could be on the product partition
+		// at "product" or the system partition at "system/product".
+		if config.ProductPath() == "product" {
+			partition = "product"
+		}
+	} else if m.SystemExtSpecific() {
+		// A system_ext-specific module could be on the system_ext
+		// partition at "system_ext" or the system partition at
+		// "system/system_ext".
+		if config.SystemExtPath() == "system_ext" {
+			partition = "system_ext"
+		}
+	}
+	return partition
+}
+
 func (m *ModuleBase) Enabled() bool {
 	if m.commonProperties.Enabled == nil {
 		return !m.Os().DefaultDisabled
@@ -1281,7 +1315,7 @@ type baseModuleContext struct {
 func (b *baseModuleContext) OtherModuleName(m blueprint.Module) string { return b.bp.OtherModuleName(m) }
 func (b *baseModuleContext) OtherModuleDir(m blueprint.Module) string  { return b.bp.OtherModuleDir(m) }
 func (b *baseModuleContext) OtherModuleErrorf(m blueprint.Module, fmt string, args ...interface{}) {
-	b.bp.OtherModuleErrorf(m, fmt, args)
+	b.bp.OtherModuleErrorf(m, fmt, args...)
 }
 func (b *baseModuleContext) OtherModuleDependencyTag(m blueprint.Module) blueprint.DependencyTag {
 	return b.bp.OtherModuleDependencyTag(m)

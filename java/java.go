@@ -23,14 +23,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
-	"android/soong/dexpreopt"
 	"android/soong/java/config"
 	"android/soong/tradefed"
 )
@@ -54,8 +52,6 @@ func init() {
 			PropertyName: "java_tests",
 		},
 	})
-
-	android.PostDepsMutators(RegisterPostDepsMutators)
 }
 
 func RegisterJavaBuildComponents(ctx android.RegistrationContext) {
@@ -82,44 +78,6 @@ func RegisterJavaBuildComponents(ctx android.RegistrationContext) {
 
 	ctx.RegisterSingletonType("logtags", LogtagsSingleton)
 	ctx.RegisterSingletonType("kythe_java_extract", kytheExtractJavaFactory)
-}
-
-func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("ordered_system_server_jars", systemServerJarsDepsMutator)
-}
-
-var (
-	dexpreoptedSystemServerJarsKey  = android.NewOnceKey("dexpreoptedSystemServerJars")
-	dexpreoptedSystemServerJarsLock sync.Mutex
-)
-
-func DexpreoptedSystemServerJars(config android.Config) *[]string {
-	return config.Once(dexpreoptedSystemServerJarsKey, func() interface{} {
-		return &[]string{}
-	}).(*[]string)
-}
-
-// A PostDepsMutator pass that enforces total order on non-updatable system server jars. A total
-// order is neededed because such jars must be dexpreopted together (each jar on the list must have
-// all preceding jars in its class loader context). The total order must be compatible with the
-// partial order imposed by genuine dependencies between system server jars (which is not always
-// respected by the PRODUCT_SYSTEM_SERVER_JARS variable).
-//
-// An earlier mutator pass creates genuine dependencies, and this pass traverses the jars in that
-// order (which is partial and non-deterministic). This pass adds additional dependencies between
-// jars, making the order total and deterministic. It also constructs a global ordered list.
-func systemServerJarsDepsMutator(ctx android.BottomUpMutatorContext) {
-	jars := dexpreopt.NonUpdatableSystemServerJars(ctx, dexpreopt.GetGlobalConfig(ctx))
-	name := ctx.ModuleName()
-	if android.InList(name, jars) {
-		dexpreoptedSystemServerJarsLock.Lock()
-		defer dexpreoptedSystemServerJarsLock.Unlock()
-		jars := DexpreoptedSystemServerJars(ctx.Config())
-		for _, dep := range *jars {
-			ctx.AddDependency(ctx.Module(), dexpreopt.SystemServerDepTag, dep)
-		}
-		*jars = append(*jars, name)
-	}
 }
 
 func (j *Module) checkSdkVersion(ctx android.ModuleContext) {
@@ -361,6 +319,10 @@ type CompilerDeviceProperties struct {
 
 	UncompressDex bool `blueprint:"mutated"`
 	IsSDKLibrary  bool `blueprint:"mutated"`
+
+	// If true, generate the signature file of APK Signing Scheme V4, along side the signed APK file.
+	// Defaults to false.
+	V4_signature *bool
 }
 
 func (me *CompilerDeviceProperties) EffectiveOptimizeEnabled() bool {
@@ -457,6 +419,8 @@ type Module struct {
 
 	// list of the xref extraction files
 	kytheFiles android.Paths
+
+	distFile android.Path
 }
 
 func (j *Module) OutputFiles(tag string) (android.Paths, error) {
@@ -576,9 +540,10 @@ func (s sdkDep) hasFrameworkLibs() bool {
 }
 
 type jniLib struct {
-	name   string
-	path   android.Path
-	target android.Target
+	name         string
+	path         android.Path
+	target       android.Target
+	coverageFile android.OptionalPath
 }
 
 func (j *Module) shouldInstrument(ctx android.BaseModuleContext) bool {
@@ -704,11 +669,6 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 		}
 	} else if j.shouldInstrumentStatic(ctx) {
 		ctx.AddVariationDependencies(nil, staticLibTag, "jacocoagent")
-	}
-
-	// services depend on com.android.location.provider, but dependency in not registered in a Blueprint file
-	if ctx.ModuleName() == "services" {
-		ctx.AddDependency(ctx.Module(), dexpreopt.SystemServerForcedDepTag, "com.android.location.provider")
 	}
 }
 
@@ -841,7 +801,7 @@ func (m *Module) getLinkType(name string) (ret linkType, stubs bool) {
 		return javaModule, true
 	case ver.kind == sdkModule:
 		return javaModule, false
-	case name == "services-stubs":
+	case name == "android_system_server_stubs_current":
 		return javaSystemServer, true
 	case ver.kind == sdkSystemServer:
 		return javaSystemServer, false
@@ -1818,8 +1778,17 @@ func (j *Module) IsInstallable() bool {
 // Java libraries (.jar file)
 //
 
+type LibraryProperties struct {
+	Dist struct {
+		// The tag of the output of this module that should be output.
+		Tag *string `android:"arch_variant"`
+	} `android:"arch_variant"`
+}
+
 type Library struct {
 	Module
+
+	libraryProperties LibraryProperties
 
 	InstallMixin func(ctx android.ModuleContext, installPath android.Path) (extraInstallDeps android.Paths)
 }
@@ -1863,6 +1832,15 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		j.installFile = ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),
 			ctx.ModuleName()+".jar", j.outputFile, extraInstallDeps...)
+	}
+
+	// Verify Dist.Tag is set to a supported output
+	if j.libraryProperties.Dist.Tag != nil {
+		distFiles, err := j.OutputFiles(*j.libraryProperties.Dist.Tag)
+		if err != nil {
+			ctx.PropertyErrorf("dist.tag", "%s", err.Error())
+		}
+		j.distFile = distFiles[0]
 	}
 }
 
@@ -1988,7 +1966,8 @@ func LibraryFactory() android.Module {
 		&module.Module.properties,
 		&module.Module.deviceProperties,
 		&module.Module.dexpreoptProperties,
-		&module.Module.protoProperties)
+		&module.Module.protoProperties,
+		&module.libraryProperties)
 
 	android.InitApexModule(module)
 	android.InitSdkAwareModule(module)

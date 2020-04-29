@@ -297,6 +297,9 @@ func processLlndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 	if !Bool(lib.Properties.Vendor_available) {
 		vndkPrivateLibraries(mctx.Config())[name] = filename
 	}
+	if mctx.OtherModuleExists(name) {
+		mctx.AddFarVariationDependencies(m.Target().Variations(), llndkImplDep, name)
+	}
 }
 
 func processVndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
@@ -347,6 +350,15 @@ func IsForVndkApex(mctx android.BottomUpMutatorContext, m *Module) bool {
 	}
 
 	if lib, ok := m.linker.(libraryInterface); ok {
+		// VNDK APEX for VNDK-Lite devices will have VNDK-SP libraries from core variants
+		if mctx.DeviceConfig().VndkVersion() == "" {
+			// b/73296261: filter out libz.so because it is considered as LLNDK for VNDK-lite devices
+			if mctx.ModuleName() == "libz" {
+				return false
+			}
+			return m.ImageVariation().Variation == android.CoreVariation && lib.shared() && m.isVndkSp()
+		}
+
 		useCoreVariant := m.VndkVersion() == mctx.DeviceConfig().PlatformVndkVersion() &&
 			mctx.DeviceConfig().VndkUseCoreVariant() && !m.MustUseVendorVariant()
 		return lib.shared() && m.inVendor() && m.IsVndk() && !m.isVndkExt() && !useCoreVariant

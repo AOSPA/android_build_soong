@@ -22,13 +22,15 @@ import (
 
 func init() {
 	android.RegisterSingletonType("hiddenapi", hiddenAPISingletonFactory)
+	android.RegisterSingletonType("hiddenapi_index", hiddenAPIIndexSingletonFactory)
 	android.RegisterModuleType("hiddenapi_flags", hiddenAPIFlagsFactory)
 }
 
 type hiddenAPISingletonPathsStruct struct {
-	stubFlags android.OutputPath
 	flags     android.OutputPath
+	index     android.OutputPath
 	metadata  android.OutputPath
+	stubFlags android.OutputPath
 }
 
 var hiddenAPISingletonPathsKey = android.NewOnceKey("hiddenAPISingletonPathsKey")
@@ -39,9 +41,10 @@ var hiddenAPISingletonPathsKey = android.NewOnceKey("hiddenAPISingletonPathsKey"
 func hiddenAPISingletonPaths(ctx android.PathContext) hiddenAPISingletonPathsStruct {
 	return ctx.Config().Once(hiddenAPISingletonPathsKey, func() interface{} {
 		return hiddenAPISingletonPathsStruct{
-			stubFlags: android.PathForOutput(ctx, "hiddenapi", "hiddenapi-stub-flags.txt"),
 			flags:     android.PathForOutput(ctx, "hiddenapi", "hiddenapi-flags.csv"),
+			index:     android.PathForOutput(ctx, "hiddenapi", "hiddenapi-index.csv"),
 			metadata:  android.PathForOutput(ctx, "hiddenapi", "hiddenapi-greylist.csv"),
+			stubFlags: android.PathForOutput(ctx, "hiddenapi", "hiddenapi-stub-flags.txt"),
 		}
 	}).(hiddenAPISingletonPathsStruct)
 }
@@ -208,23 +211,30 @@ func stubFlagsRule(ctx android.SingletonContext) {
 // the greylists.
 func flagsRule(ctx android.SingletonContext) android.Path {
 	var flagsCSV android.Paths
-
-	var greylistIgnoreConflicts android.Path
+	var greylistRemovedApis android.Paths
 
 	ctx.VisitAllModules(func(module android.Module) {
 		if h, ok := module.(hiddenAPIIntf); ok {
 			if csv := h.flagsCSV(); csv != nil {
 				flagsCSV = append(flagsCSV, csv)
 			}
-		} else if ds, ok := module.(*Droidstubs); ok && ctx.ModuleName(module) == "hiddenapi-lists-docs" {
-			greylistIgnoreConflicts = ds.removedDexApiFile
+		} else if ds, ok := module.(*Droidstubs); ok {
+			// Track @removed public and system APIs via corresponding droidstubs targets.
+			// These APIs are not present in the stubs, however, we have to keep allowing access
+			// to them at runtime.
+			if m := ctx.ModuleName(module); m == "api-stubs-docs" || m == "system-api-stubs-docs" {
+				greylistRemovedApis = append(greylistRemovedApis, ds.removedDexApiFile)
+			}
 		}
 	})
 
-	if greylistIgnoreConflicts == nil {
-		ctx.Errorf("failed to find removed_dex_api_filename from hiddenapi-lists-docs module")
-		return nil
-	}
+	combinedRemovedApis := android.PathForOutput(ctx, "hiddenapi", "combined-removed-dex.txt")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        android.Cat,
+		Inputs:      greylistRemovedApis,
+		Output:      combinedRemovedApis,
+		Description: "Combine removed apis for " + combinedRemovedApis.String(),
+	})
 
 	rule := android.NewRuleBuilder()
 
@@ -239,8 +249,7 @@ func flagsRule(ctx android.SingletonContext) android.Path {
 		Inputs(flagsCSV).
 		FlagWithInput("--greylist ",
 			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist.txt")).
-		FlagWithInput("--greylist-ignore-conflicts ",
-			greylistIgnoreConflicts).
+		FlagWithInput("--greylist-ignore-conflicts ", combinedRemovedApis).
 		FlagWithInput("--greylist-max-q ",
 			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-max-q.txt")).
 		FlagWithInput("--greylist-max-p ",
@@ -363,4 +372,46 @@ func hiddenAPIFlagsFactory() android.Module {
 	module.AddProperties(&module.properties)
 	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
 	return module
+}
+
+func hiddenAPIIndexSingletonFactory() android.Singleton {
+	return &hiddenAPIIndexSingleton{}
+}
+
+type hiddenAPIIndexSingleton struct {
+	index android.Path
+}
+
+func (h *hiddenAPIIndexSingleton) GenerateBuildActions(ctx android.SingletonContext) {
+	// Don't run any hiddenapi rules if UNSAFE_DISABLE_HIDDENAPI_FLAGS=true
+	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
+		return
+	}
+
+	indexes := android.Paths{}
+	ctx.VisitAllModules(func(module android.Module) {
+		if h, ok := module.(hiddenAPIIntf); ok {
+			if h.indexCSV() != nil {
+				indexes = append(indexes, h.indexCSV())
+			}
+		}
+	})
+
+	rule := android.NewRuleBuilder()
+	rule.Command().
+		BuiltTool(ctx, "merge_csv").
+		FlagWithArg("--header=", "signature,file,startline,startcol,endline,endcol,properties").
+		FlagWithOutput("--output=", hiddenAPISingletonPaths(ctx).index).
+		Inputs(indexes)
+	rule.Build(pctx, ctx, "singleton-merged-hiddenapi-index", "Singleton merged Hidden API index")
+
+	h.index = hiddenAPISingletonPaths(ctx).index
+}
+
+func (h *hiddenAPIIndexSingleton) MakeVars(ctx android.MakeVarsContext) {
+	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
+		return
+	}
+
+	ctx.Strict("INTERNAL_PLATFORM_HIDDENAPI_INDEX", h.index.String())
 }
