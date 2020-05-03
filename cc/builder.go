@@ -514,7 +514,12 @@ func TransformObjToStaticLib(ctx android.ModuleContext, objFiles android.Paths,
 		return
 	}
 
-	arCmd := "${config.ClangBin}/llvm-ar"
+	var arCmd string
+	if flags.sdclang {
+		arCmd = "${config.SDClangBin}/llvm-ar"
+	} else {
+		arCmd = "${config.ClangBin}/llvm-ar"
+	}
 	arFlags := "crsD"
 	if !ctx.Darwin() {
 		arFlags += " -format=gnu"
