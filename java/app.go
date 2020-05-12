@@ -80,9 +80,13 @@ type appProperties struct {
 	// list of native libraries that will be provided in or alongside the resulting jar
 	Jni_libs []string `android:"arch_variant"`
 
-	// if true, allow JNI libraries that link against platform APIs even if this module sets
+	// if true, use JNI libraries that link against platform APIs even if this module sets
 	// sdk_version.
 	Jni_uses_platform_apis *bool
+
+	// if true, use JNI libraries that link against SDK APIs even if this module does not set
+	// sdk_version.
+	Jni_uses_sdk_apis *bool
 
 	// STL library to use for JNI libraries.
 	Stl *string `android:"arch_variant"`
@@ -124,6 +128,9 @@ type overridableAppProperties struct {
 	// The name of a certificate in the default certificate directory, blank to use the default product certificate,
 	// or an android_app_certificate module name in the form ":module".
 	Certificate *string
+
+	// Name of the signing certificate lineage file.
+	Lineage *string
 
 	// the package name of this app. The package name in the manifest file is used if one was not given.
 	Package_name *string
@@ -226,6 +233,16 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 		a.aapt.deps(ctx, sdkDep)
 	}
 
+	usesSDK := a.sdkVersion().specified() && a.sdkVersion().kind != sdkCorePlatform
+
+	if usesSDK && Bool(a.appProperties.Jni_uses_sdk_apis) {
+		ctx.PropertyErrorf("jni_uses_sdk_apis",
+			"can only be set for modules that do not set sdk_version")
+	} else if !usesSDK && Bool(a.appProperties.Jni_uses_platform_apis) {
+		ctx.PropertyErrorf("jni_uses_platform_apis",
+			"can only be set for modules that set sdk_version")
+	}
+
 	tag := &jniDependencyTag{}
 	for _, jniTarget := range ctx.MultiTargets() {
 		variation := append(jniTarget.Variations(),
@@ -233,8 +250,8 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 		// If the app builds against an Android SDK use the SDK variant of JNI dependencies
 		// unless jni_uses_platform_apis is set.
-		if a.sdkVersion().specified() && a.sdkVersion().kind != sdkCorePlatform &&
-			!Bool(a.appProperties.Jni_uses_platform_apis) {
+		if (usesSDK && !Bool(a.appProperties.Jni_uses_platform_apis)) ||
+			Bool(a.appProperties.Jni_uses_sdk_apis) {
 			variation = append(variation, blueprint.Variation{Mutator: "sdk", Variation: "sdk"})
 		}
 		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
@@ -581,7 +598,11 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	if v4SigningRequested {
 		v4SignatureFile = android.PathForModuleOut(ctx, a.installApkName+".apk.idsig")
 	}
-	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, v4SignatureFile)
+	var lineageFile android.Path
+	if lineage := String(a.overridableAppProperties.Lineage); lineage != "" {
+		lineageFile = android.PathForModuleSrc(ctx, lineage)
+	}
+	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, v4SignatureFile, lineageFile)
 	a.outputFile = packageFile
 	if v4SigningRequested {
 		a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
@@ -593,7 +614,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		if v4SigningRequested {
 			v4SignatureFile = android.PathForModuleOut(ctx, a.installApkName+"_"+split.suffix+".apk.idsig")
 		}
-		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, v4SignatureFile)
+		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, v4SignatureFile, lineageFile)
 		a.extraOutputFiles = append(a.extraOutputFiles, packageFile)
 		if v4SigningRequested {
 			a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
@@ -1244,7 +1265,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		}
 		a.certificate = certificates[0]
 		signed := android.PathForModuleOut(ctx, "signed", apkFilename)
-		SignAppPackage(ctx, signed, dexOutput, certificates, nil)
+		SignAppPackage(ctx, signed, dexOutput, certificates, nil, nil)
 		a.outputFile = signed
 	} else {
 		alignedApk := android.PathForModuleOut(ctx, "zip-aligned", apkFilename)
@@ -1389,7 +1410,10 @@ func AndroidTestImportFactory() android.Module {
 		module.processVariants(ctx)
 	})
 
-	InitJavaModule(module, android.DeviceSupported)
+	module.dexpreopter.isTest = true
+
+	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
 	android.InitSingleSourcePrebuiltModule(module, &module.properties, "Apk")
 
 	return module
@@ -1480,7 +1504,7 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 	_, certificates := collectAppDeps(ctx, false, false)
 	certificates = processMainCert(r.ModuleBase, String(r.properties.Certificate), certificates, ctx)
 	signed := android.PathForModuleOut(ctx, "signed", r.Name()+".apk")
-	SignAppPackage(ctx, signed, r.aapt.exportPackage, certificates, nil)
+	SignAppPackage(ctx, signed, r.aapt.exportPackage, certificates, nil, nil)
 	r.certificate = certificates[0]
 
 	r.outputFile = signed
