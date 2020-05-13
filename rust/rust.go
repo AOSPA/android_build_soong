@@ -164,6 +164,10 @@ func (mod *Module) OnlyInRecovery() bool {
 	return false
 }
 
+func (mod *Module) UseSdk() bool {
+	return false
+}
+
 func (mod *Module) UseVndk() bool {
 	return false
 }
@@ -182,6 +186,10 @@ func (mod *Module) HasVendorVariant() bool {
 
 func (mod *Module) SdkVersion() string {
 	return ""
+}
+
+func (mod *Module) AlwaysSdk() bool {
+	return false
 }
 
 func (mod *Module) ToolchainLibrary() bool {
@@ -727,13 +735,14 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	deps := mod.deps(ctx)
 	commonDepVariations := []blueprint.Variation{}
-	commonDepVariations = append(commonDepVariations,
-		blueprint.Variation{Mutator: "version", Variation: ""})
+	if cc.VersionVariantAvailable(mod) {
+		commonDepVariations = append(commonDepVariations,
+			blueprint.Variation{Mutator: "version", Variation: ""})
+	}
 	if !mod.Host() {
 		commonDepVariations = append(commonDepVariations,
 			blueprint.Variation{Mutator: "image", Variation: android.CoreVariation})
 	}
-
 	actx.AddVariationDependencies(
 		append(commonDepVariations, []blueprint.Variation{
 			{Mutator: "rust_libraries", Variation: "rlib"},

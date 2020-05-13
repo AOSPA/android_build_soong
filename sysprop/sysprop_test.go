@@ -15,6 +15,8 @@
 package sysprop
 
 import (
+	"reflect"
+
 	"android/soong/android"
 	"android/soong/cc"
 	"android/soong/java"
@@ -157,10 +159,12 @@ func TestSyspropLibrary(t *testing.T) {
 	ctx := test(t, `
 		sysprop_library {
 			name: "sysprop-platform",
+			apex_available: ["//apex_available:platform"],
 			srcs: ["android/sysprop/PlatformProperties.sysprop"],
 			api_packages: ["android.sysprop"],
 			property_owner: "Platform",
 			vendor_available: true,
+			host_supported: true,
 		}
 
 		sysprop_library {
@@ -244,6 +248,11 @@ func TestSyspropLibrary(t *testing.T) {
 			static_libs: ["sysprop-platform", "sysprop-vendor"],
 		}
 
+		cc_library {
+			name: "libbase",
+			host_supported: true,
+		}
+
 		cc_library_headers {
 			name: "libbase_headers",
 			vendor_available: true,
@@ -256,6 +265,12 @@ func TestSyspropLibrary(t *testing.T) {
 			nocrt: true,
 			system_shared_libs: [],
 			recovery_available: true,
+			host_supported: true,
+		}
+
+		cc_binary_host {
+			name: "hostbin",
+			static_libs: ["sysprop-platform"],
 		}
 
 		llndk_library {
@@ -293,7 +308,12 @@ func TestSyspropLibrary(t *testing.T) {
 		"android_arm64_armv8-a_shared",
 		"android_arm64_armv8-a_static",
 	} {
-		ctx.ModuleForTests("libsysprop-platform", variant)
+		library := ctx.ModuleForTests("libsysprop-platform", variant).Module().(*cc.Module)
+		expectedApexAvailableOnLibrary := []string{"//apex_available:platform"}
+		if !reflect.DeepEqual(library.ApexProperties.Apex_available, expectedApexAvailableOnLibrary) {
+			t.Errorf("apex available property on libsysprop-platform must be %#v, but was %#v.",
+				expectedApexAvailableOnLibrary, library.ApexProperties.Apex_available)
+		}
 
 		// core variant of vendor-owned sysprop_library is for product
 		ctx.ModuleForTests("libsysprop-vendor", variant)

@@ -219,14 +219,18 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 func (a *apexBundle) buildNoticeFiles(ctx android.ModuleContext, apexFileName string) android.NoticeOutputs {
 	var noticeFiles android.Paths
 
-	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) {
+	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		if externalDep {
-			return
+			// As soon as the dependency graph crosses the APEX boundary, don't go further.
+			return false
 		}
+
 		notice := to.NoticeFile()
 		if notice.Valid() {
 			noticeFiles = append(noticeFiles, notice.Path())
 		}
+
+		return true
 	})
 
 	if len(noticeFiles) == 0 {
@@ -480,6 +484,10 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			optFlags = append(optFlags, "--no_hashtree")
 		}
 
+		if a.testOnlyShouldSkipPayloadSign() {
+			optFlags = append(optFlags, "--unsigned_payload")
+		}
+
 		if a.properties.Apex_name != nil {
 			// If apex_name is set, apexer can skip checking if key name matches with apex name.
 			// Note that apex_manifest is also mended.
@@ -583,7 +591,7 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 	apexBundleName := a.Name()
 	a.outputFile = android.PathForModuleInstall(&factx, "apex", apexBundleName)
 
-	if a.installable() && a.GetOverriddenBy() == "" {
+	if a.installable() {
 		installPath := android.PathForModuleInstall(ctx, "apex", apexBundleName)
 		devicePath := android.InstallPathToOnDevicePath(ctx, installPath)
 		addFlattenedFileContextsInfos(ctx, apexBundleName+":"+devicePath+":"+a.fileContexts.String())

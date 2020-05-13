@@ -29,6 +29,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc/config"
+	"android/soong/remoteexec"
 )
 
 const (
@@ -62,7 +63,7 @@ var (
 		},
 		"ccCmd", "cFlags")
 
-	ld = pctx.AndroidStaticRule("ld",
+	ld, ldRE = remoteexec.StaticRules(pctx, "ld",
 		blueprint.RuleParams{
 			Command: "$ldCmd ${crtBegin} @${out}.rsp " +
 				"${libFlags} ${crtEnd} -o ${out} ${ldFlags} ${extraLibFlags}",
@@ -72,16 +73,28 @@ var (
 			// clang -Wl,--out-implib doesn't update its output file if it hasn't changed.
 			Restat: true,
 		},
-		"ldCmd", "crtBegin", "libFlags", "crtEnd", "ldFlags", "extraLibFlags")
+		&remoteexec.REParams{Labels: map[string]string{"type": "link", "tool": "clang"},
+			ExecStrategy:    "${config.RECXXLinksExecStrategy}",
+			Inputs:          []string{"${out}.rsp"},
+			RSPFile:         "${out}.rsp",
+			OutputFiles:     []string{"${out}"},
+			ToolchainInputs: []string{"$ldCmd"},
+			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXLinksPool}"},
+		}, []string{"ldCmd", "crtBegin", "libFlags", "crtEnd", "ldFlags", "extraLibFlags"}, nil)
 
-	partialLd = pctx.AndroidStaticRule("partialLd",
+	partialLd, partialLdRE = remoteexec.StaticRules(pctx, "partialLd",
 		blueprint.RuleParams{
 			// Without -no-pie, clang 7.0 adds -pie to link Android files,
 			// but -r and -pie cannot be used together.
 			Command:     "$ldCmd -fuse-ld=lld -nostdlib -no-pie -Wl,-r ${in} -o ${out} ${ldFlags}",
 			CommandDeps: []string{"$ldCmd"},
-		},
-		"ldCmd", "ldFlags")
+		}, &remoteexec.REParams{
+			Labels:       map[string]string{"type": "link", "tool": "clang"},
+			ExecStrategy: "${config.RECXXLinksExecStrategy}", Inputs: []string{"$inCommaList"},
+			OutputFiles:     []string{"${out}"},
+			ToolchainInputs: []string{"$ldCmd"},
+			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXLinksPool}"},
+		}, []string{"ldCmd", "ldFlags"}, []string{"inCommaList"})
 
 	ar = pctx.AndroidStaticRule("ar",
 		blueprint.RuleParams{
@@ -262,6 +275,7 @@ func init() {
 	}
 
 	pctx.HostBinToolVariable("SoongZipCmd", "soong_zip")
+	pctx.Import("android/soong/remoteexec")
 }
 
 type builderFlags struct {
@@ -294,7 +308,7 @@ type builderFlags struct {
 	toolchain     config.Toolchain
 	sdclang       bool
 	tidy          bool
-	coverage      bool
+	gcovCoverage  bool
 	sAbiDump      bool
 	emitXrefs     bool
 
@@ -356,7 +370,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 		tidyFiles = make(android.Paths, 0, len(srcFiles))
 	}
 	var coverageFiles android.Paths
-	if flags.coverage {
+	if flags.gcovCoverage {
 		coverageFiles = make(android.Paths, 0, len(srcFiles))
 	}
 	var kytheFiles android.Paths
@@ -457,7 +471,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 
 		var ccCmd string
 		tidy := flags.tidy
-		coverage := flags.coverage
+		coverage := flags.gcovCoverage
 		dump := flags.sAbiDump
 		rule := cc
 		emitXref := flags.emitXrefs
@@ -674,8 +688,13 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 		deps = append(deps, crtBegin.Path(), crtEnd.Path())
 	}
 
+	rule := ld
+	if ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
+		rule = ldRE
+	}
+
 	ctx.Build(pctx, android.BuildParams{
-		Rule:            ld,
+		Rule:            rule,
 		Description:     "link " + outputFile.Base(),
 		Output:          outputFile,
 		ImplicitOutputs: implicitOutputs,
@@ -835,16 +854,22 @@ func TransformObjsToObj(ctx android.ModuleContext, objFiles android.Paths,
 		ldCmd = "${config.ClangBin}/clang++"
 	}
 
+	rule := partialLd
+	args := map[string]string{
+		"ldCmd":   ldCmd,
+		"ldFlags": flags.globalLdFlags + " " + flags.localLdFlags + " " + extraFlags,
+	}
+	if ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
+		rule = partialLdRE
+		args["inCommaList"] = strings.Join(objFiles.Strings(), ",")
+	}
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        partialLd,
+		Rule:        rule,
 		Description: "link " + outputFile.Base(),
 		Output:      outputFile,
 		Inputs:      objFiles,
 		Implicits:   deps,
-		Args: map[string]string{
-			"ldCmd":   ldCmd,
-			"ldFlags": flags.globalLdFlags + " " + flags.localLdFlags + " " + extraFlags,
-		},
+		Args:        args,
 	})
 }
 

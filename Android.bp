@@ -130,6 +130,7 @@ bootstrap_go_package {
     pkgPath: "android/soong/cc/config",
     deps: [
         "soong-android",
+        "soong-remoteexec",
     ],
     srcs: [
         "cc/config/clang.go",
@@ -186,6 +187,7 @@ bootstrap_go_package {
         "cc/rs.go",
         "cc/sanitize.go",
         "cc/sabi.go",
+        "cc/sdk.go",
         "cc/snapshot_utils.go",
         "cc/stl.go",
         "cc/strip.go",
@@ -207,6 +209,7 @@ bootstrap_go_package {
         "cc/binary_sdk_member.go",
         "cc/fuzz.go",
         "cc/library.go",
+        "cc/library_headers.go",
         "cc/library_sdk_member.go",
         "cc/object.go",
         "cc/test.go",
@@ -232,6 +235,7 @@ bootstrap_go_package {
         "cc/compiler_test.go",
         "cc/gen_test.go",
         "cc/genrule_test.go",
+        "cc/library_headers_test.go",
         "cc/library_test.go",
         "cc/object_test.go",
         "cc/prebuilt_test.go",
@@ -534,11 +538,28 @@ bootstrap_go_package {
         "sdk/update.go",
     ],
     testSrcs: [
+        "sdk/bp_test.go",
         "sdk/cc_sdk_test.go",
         "sdk/exports_test.go",
         "sdk/java_sdk_test.go",
         "sdk/sdk_test.go",
         "sdk/testing.go",
+    ],
+    pluginFor: ["soong_build"],
+}
+
+bootstrap_go_package {
+    name: "soong-remoteexec",
+    pkgPath: "android/soong/remoteexec",
+    deps: [
+        "blueprint",
+        "soong-android",
+    ],
+    srcs: [
+        "remoteexec/remoteexec.go",
+    ],
+    testSrcs: [
+        "remoteexec/remoteexec_test.go",
     ],
     pluginFor: ["soong_build"],
 }

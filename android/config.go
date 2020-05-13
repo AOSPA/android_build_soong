@@ -359,6 +359,9 @@ func NewConfig(srcDir, buildDir string) (Config, error) {
 		return Config{}, err
 	}
 
+	// Make the CommonOS OsType available for all products.
+	targets[CommonOS] = []Target{commonTargetMap[CommonOS.Name]}
+
 	var archConfig []archConfig
 	if Bool(config.Mega_device) {
 		archConfig = getMegaDeviceConfig()
@@ -570,8 +573,8 @@ func (c *config) BuildId() string {
 	return String(c.productVariables.BuildId)
 }
 
-func (c *config) BuildNumberFromFile() string {
-	return String(c.productVariables.BuildNumberFromFile)
+func (c *config) BuildNumberFile(ctx PathContext) Path {
+	return PathForOutput(ctx, String(c.productVariables.BuildNumberFile))
 }
 
 // DeviceName returns the name of the current device target
@@ -862,6 +865,13 @@ func (c *config) ArtUseReadBarrier() bool {
 
 func (c *config) EnforceRROForModule(name string) bool {
 	enforceList := c.productVariables.EnforceRROTargets
+	// TODO(b/150820813) Some modules depend on static overlay, remove this after eliminating the dependency.
+	exemptedList := c.productVariables.EnforceRROExemptedTargets
+	if exemptedList != nil {
+		if InList(name, exemptedList) {
+			return false
+		}
+	}
 	if enforceList != nil {
 		if InList("*", enforceList) {
 			return true

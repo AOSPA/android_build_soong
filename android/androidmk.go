@@ -29,7 +29,11 @@ import (
 )
 
 func init() {
-	RegisterSingletonType("androidmk", AndroidMkSingleton)
+	RegisterAndroidMkBuildComponents(InitRegistrationContext)
+}
+
+func RegisterAndroidMkBuildComponents(ctx RegistrationContext) {
+	ctx.RegisterSingletonType("androidmk", AndroidMkSingleton)
 }
 
 // Deprecated: consider using AndroidMkEntriesProvider instead, especially if you're not going to
@@ -193,6 +197,10 @@ func (a *AndroidMkEntries) fillInEntries(config Config, bpPath string, mod bluep
 	a.AddStrings("LOCAL_REQUIRED_MODULES", a.Required...)
 	a.AddStrings("LOCAL_HOST_REQUIRED_MODULES", a.Host_required...)
 	a.AddStrings("LOCAL_TARGET_REQUIRED_MODULES", a.Target_required...)
+
+	if am, ok := mod.(ApexModule); ok {
+		a.SetBoolIfTrue("LOCAL_NOT_AVAILABLE_FOR_PLATFORM", am.NotAvailableForPlatform())
+	}
 
 	archStr := amod.Arch().ArchType.String()
 	host := false

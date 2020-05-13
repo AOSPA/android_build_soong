@@ -183,7 +183,6 @@ func RegisterLibraryBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_library", LibraryFactory)
 	ctx.RegisterModuleType("cc_library_host_static", LibraryHostStaticFactory)
 	ctx.RegisterModuleType("cc_library_host_shared", LibraryHostSharedFactory)
-	ctx.RegisterModuleType("cc_library_headers", LibraryHeaderFactory)
 }
 
 // cc_library creates both static and/or shared libraries for a device and/or
@@ -196,6 +195,7 @@ func LibraryFactory() android.Module {
 	module.sdkMemberTypes = []android.SdkMemberType{
 		sharedLibrarySdkMemberType,
 		staticLibrarySdkMemberType,
+		staticAndSharedLibrarySdkMemberType,
 	}
 	return module.Init()
 }
@@ -230,16 +230,6 @@ func LibraryHostSharedFactory() android.Module {
 	module, library := NewLibrary(android.HostSupported)
 	library.BuildOnlyShared()
 	module.sdkMemberTypes = []android.SdkMemberType{sharedLibrarySdkMemberType}
-	return module.Init()
-}
-
-// cc_library_headers contains a set of c/c++ headers which are imported by
-// other soong cc modules using the header_libs property. For best practices,
-// use export_include_dirs property or LOCAL_EXPORT_C_INCLUDE_DIRS for
-// Make.
-func LibraryHeaderFactory() android.Module {
-	module, library := NewLibrary(android.HostAndDeviceSupported)
-	library.HeaderOnly()
 	return module.Init()
 }
 
@@ -828,6 +818,23 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	return deps
 }
 
+func (library *libraryDecorator) linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps {
+	specifiedDeps = library.baseLinker.linkerSpecifiedDeps(specifiedDeps)
+	var properties StaticOrSharedProperties
+	if library.static() {
+		properties = library.StaticProperties.Static
+	} else if library.shared() {
+		properties = library.SharedProperties.Shared
+	}
+
+	specifiedDeps.sharedLibs = append(specifiedDeps.sharedLibs, properties.Shared_libs...)
+	specifiedDeps.systemSharedLibs = append(specifiedDeps.systemSharedLibs, properties.System_shared_libs...)
+
+	specifiedDeps.sharedLibs = android.FirstUniqueStrings(specifiedDeps.sharedLibs)
+	specifiedDeps.systemSharedLibs = android.FirstUniqueStrings(specifiedDeps.systemSharedLibs)
+	return specifiedDeps
+}
+
 func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 	flags Flags, deps PathDeps, objs Objects) android.Path {
 
@@ -1217,7 +1224,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 	if Bool(library.Properties.Static_ndk_lib) && library.static() &&
 		!ctx.useVndk() && !ctx.inRamdisk() && !ctx.inRecovery() && ctx.Device() &&
 		library.baseLinker.sanitize.isUnsanitizedVariant() &&
-		!library.buildStubs() {
+		!library.buildStubs() && ctx.sdkVersion() == "" {
 		installPath := getNdkSysrootBase(ctx).Join(
 			ctx, "usr/lib", config.NDKTriple(ctx.toolchain()), file.Base())
 
@@ -1230,6 +1237,12 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 
 		library.ndkSysrootPath = installPath
 	}
+}
+
+func (library *libraryDecorator) everInstallable() bool {
+	// Only shared and static libraries are installed. Header libraries (which are
+	// neither static or shared) are not installed.
+	return library.shared() || library.static()
 }
 
 func (library *libraryDecorator) static() bool {
@@ -1301,6 +1314,18 @@ func (library *libraryDecorator) availableFor(what string) bool {
 		return false
 	}
 	return android.CheckAvailableForApex(what, list)
+}
+
+func (library *libraryDecorator) skipInstall(mod *Module) {
+	if library.static() && library.buildStatic() && !library.buildStubs() {
+		// If we're asked to skip installation of a static library (in particular
+		// when it's not //apex_available:platform) we still want an AndroidMk entry
+		// for it to ensure we get the relevant NOTICE file targets (cf.
+		// notice_files.mk) that other libraries might depend on. AndroidMkEntries
+		// always sets LOCAL_UNINSTALLABLE_MODULE for these entries.
+		return
+	}
+	mod.ModuleBase.SkipInstall()
 }
 
 var versioningMacroNamesListKey = android.NewOnceKey("versioningMacroNamesList")
@@ -1382,22 +1407,28 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 	if cc_prebuilt {
 		library := mctx.Module().(*Module).linker.(prebuiltLibraryInterface)
 
-		// Always create both the static and shared variants for prebuilt libraries, and then disable the one
-		// that is not being used.  This allows them to share the name of a cc_library module, which requires that
-		// all the variants of the cc_library also exist on the prebuilt.
-		modules := mctx.CreateLocalVariations("static", "shared")
-		static := modules[0].(*Module)
-		shared := modules[1].(*Module)
+		// Differentiate between header only and building an actual static/shared library
+		if library.buildStatic() || library.buildShared() {
+			// Always create both the static and shared variants for prebuilt libraries, and then disable the one
+			// that is not being used.  This allows them to share the name of a cc_library module, which requires that
+			// all the variants of the cc_library also exist on the prebuilt.
+			modules := mctx.CreateLocalVariations("static", "shared")
+			static := modules[0].(*Module)
+			shared := modules[1].(*Module)
 
-		static.linker.(prebuiltLibraryInterface).setStatic()
-		shared.linker.(prebuiltLibraryInterface).setShared()
+			static.linker.(prebuiltLibraryInterface).setStatic()
+			shared.linker.(prebuiltLibraryInterface).setShared()
 
-		if !library.buildStatic() {
-			static.linker.(prebuiltLibraryInterface).disablePrebuilt()
+			if !library.buildStatic() {
+				static.linker.(prebuiltLibraryInterface).disablePrebuilt()
+			}
+			if !library.buildShared() {
+				shared.linker.(prebuiltLibraryInterface).disablePrebuilt()
+			}
+		} else {
+			// Header only
 		}
-		if !library.buildShared() {
-			shared.linker.(prebuiltLibraryInterface).disablePrebuilt()
-		}
+
 	} else if library, ok := mctx.Module().(LinkableInterface); ok && library.CcLibraryInterface() {
 
 		// Non-cc.Modules may need an empty variant for their mutators.
@@ -1486,10 +1517,18 @@ func createVersionVariations(mctx android.BottomUpMutatorContext, versions []str
 	}
 }
 
-// Version mutator splits a module into the mandatory non-stubs variant
+func VersionVariantAvailable(module interface {
+	Host() bool
+	InRamdisk() bool
+	InRecovery() bool
+}) bool {
+	return !module.Host() && !module.InRamdisk() && !module.InRecovery()
+}
+
+// VersionMutator splits a module into the mandatory non-stubs variant
 // (which is unnamed) and zero or more stubs variants.
 func VersionMutator(mctx android.BottomUpMutatorContext) {
-	if library, ok := mctx.Module().(LinkableInterface); ok && !library.InRecovery() {
+	if library, ok := mctx.Module().(LinkableInterface); ok && VersionVariantAvailable(library) {
 		if library.CcLibrary() && library.BuildSharedVariant() && len(library.StubsVersions()) > 0 {
 			versions := library.StubsVersions()
 			normalizeVersions(mctx, versions)
@@ -1525,7 +1564,7 @@ func VersionMutator(mctx android.BottomUpMutatorContext) {
 	}
 	if genrule, ok := mctx.Module().(*genrule.Module); ok {
 		if _, ok := genrule.Extra.(*GenruleExtraProperties); ok {
-			if !genrule.InRecovery() {
+			if VersionVariantAvailable(genrule) {
 				mctx.CreateVariations("")
 				return
 			}

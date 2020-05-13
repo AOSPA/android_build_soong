@@ -39,18 +39,22 @@ type LinkableInterface interface {
 	Shared() bool
 	Toc() android.OptionalPath
 
+	Host() bool
+
 	InRamdisk() bool
 	OnlyInRamdisk() bool
 
 	InRecovery() bool
 	OnlyInRecovery() bool
 
+	UseSdk() bool
 	UseVndk() bool
 	MustUseVendorVariant() bool
 	IsVndk() bool
 	HasVendorVariant() bool
 
 	SdkVersion() string
+	AlwaysSdk() bool
 
 	ToolchainLibrary() bool
 	NdkPrebuiltStl() bool

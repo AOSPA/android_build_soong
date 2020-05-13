@@ -115,6 +115,7 @@ func syspropJavaGenFactory() android.Module {
 
 type syspropLibrary struct {
 	android.ModuleBase
+	android.ApexModuleBase
 
 	properties syspropLibraryProperties
 
@@ -144,8 +145,17 @@ type syspropLibraryProperties struct {
 	// list of .sysprop files which defines the properties.
 	Srcs []string `android:"path"`
 
+	// If set to true, build a variant of the module for the host.  Defaults to false.
+	Host_supported *bool
+
 	// Whether public stub exists or not.
 	Public_stub *bool `blueprint:"mutated"`
+
+	Cpp struct {
+		// Minimum sdk version that the artifact should support when it runs as part of mainline modules(APEX).
+		// Forwarded to cc_library.min_sdk_version
+		Min_sdk_version *string
+	}
 }
 
 var (
@@ -293,6 +303,7 @@ func syspropLibraryFactory() android.Module {
 		&m.properties,
 	)
 	android.InitAndroidModule(m)
+	android.InitApexModule(m)
 	android.AddLoadHook(m, func(ctx android.LoadHookContext) { syspropLibraryHook(ctx, m) })
 	return m
 }
@@ -306,12 +317,22 @@ type ccLibraryProperties struct {
 	Sysprop          struct {
 		Platform *bool
 	}
-	Header_libs        []string
-	Shared_libs        []string
+	Target struct {
+		Android struct {
+			Header_libs []string
+			Shared_libs []string
+		}
+		Host struct {
+			Static_libs []string
+		}
+	}
 	Required           []string
 	Recovery           *bool
 	Recovery_available *bool
 	Vendor_available   *bool
+	Host_supported     *bool
+	Apex_available     []string
+	Min_sdk_version    *string
 }
 
 type javaLibraryProperties struct {
@@ -394,10 +415,14 @@ func syspropLibraryHook(ctx android.LoadHookContext, m *syspropLibrary) {
 	ccProps.Device_specific = proptools.BoolPtr(ctx.DeviceSpecific())
 	ccProps.Product_specific = proptools.BoolPtr(ctx.ProductSpecific())
 	ccProps.Sysprop.Platform = proptools.BoolPtr(isOwnerPlatform)
-	ccProps.Header_libs = []string{"libbase_headers"}
-	ccProps.Shared_libs = []string{"liblog"}
+	ccProps.Target.Android.Header_libs = []string{"libbase_headers"}
+	ccProps.Target.Android.Shared_libs = []string{"liblog"}
+	ccProps.Target.Host.Static_libs = []string{"libbase", "liblog"}
 	ccProps.Recovery_available = m.properties.Recovery_available
 	ccProps.Vendor_available = m.properties.Vendor_available
+	ccProps.Host_supported = m.properties.Host_supported
+	ccProps.Apex_available = m.ApexProperties.Apex_available
+	ccProps.Min_sdk_version = m.properties.Cpp.Min_sdk_version
 	ctx.CreateModule(cc.LibraryFactory, &ccProps)
 
 	scope := "internal"

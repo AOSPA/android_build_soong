@@ -29,6 +29,7 @@ var (
 	vendorSuffix       = ".vendor"
 	ramdiskSuffix      = ".ramdisk"
 	recoverySuffix     = ".recovery"
+	sdkSuffix          = ".sdk"
 )
 
 type AndroidMkContext interface {
@@ -91,6 +92,9 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				if len(c.Properties.AndroidMkWholeStaticLibs) > 0 {
 					entries.AddStrings("LOCAL_WHOLE_STATIC_LIBRARIES", c.Properties.AndroidMkWholeStaticLibs...)
 				}
+				if len(c.Properties.AndroidMkHeaderLibs) > 0 {
+					entries.AddStrings("LOCAL_HEADER_LIBRARIES", c.Properties.AndroidMkHeaderLibs...)
+				}
                                 if lib, ok := c.compiler.(*libraryDecorator); ok {
                                        entries.AddStrings("LOCAL_SRC_FILES", lib.baseCompiler.srcsBeforeGen.Strings()...)
                                 }
@@ -105,6 +109,28 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 							entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
 						}
 					}
+				}
+				if c.Properties.IsSdkVariant && c.Properties.SdkAndPlatformVariantVisibleToMake {
+					// Make the SDK variant uninstallable so that there are not two rules to install
+					// to the same location.
+					entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
+					// Add the unsuffixed name to SOONG_SDK_VARIANT_MODULES so that Make can rewrite
+					// dependencies to the .sdk suffix when building a module that uses the SDK.
+					entries.SetString("SOONG_SDK_VARIANT_MODULES",
+						"$(SOONG_SDK_VARIANT_MODULES) $(patsubst %.sdk,%,$(LOCAL_MODULE))")
+				}
+			},
+		},
+		ExtraFooters: []android.AndroidMkExtraFootersFunc{
+			func(w io.Writer, name, prefix, moduleDir string, entries *android.AndroidMkEntries) {
+				if c.Properties.IsSdkVariant && c.Properties.SdkAndPlatformVariantVisibleToMake &&
+					c.CcLibraryInterface() && c.Shared() {
+					// Using the SDK variant as a JNI library needs a copy of the .so that
+					// is not named .sdk.so so that it can be packaged into the APK with
+					// the right name.
+					fmt.Fprintln(w, "$(eval $(call copy-one-file,",
+						"$(LOCAL_BUILT_MODULE),",
+						"$(patsubst %.sdk.so,%.so,$(LOCAL_BUILT_MODULE))))")
 				}
 			},
 		},
@@ -251,6 +277,10 @@ func (library *libraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries 
 			entries.SubName = "." + library.stubsVersion()
 		}
 		entries.ExtraEntries = append(entries.ExtraEntries, func(entries *android.AndroidMkEntries) {
+			// Note library.skipInstall() has a special case to get here for static
+			// libraries that otherwise would have skipped installation and hence not
+			// have executed AndroidMkEntries at all. The reason is to ensure they get
+			// a NOTICE file make target which other libraries might depend on.
 			entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
 			if library.buildStubs() {
 				entries.SetBool("LOCAL_NO_NOTICE_FILE", true)
@@ -396,6 +426,9 @@ func (library *toolchainLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext,
 }
 
 func (installer *baseInstaller) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
+	if installer.path == (android.InstallPath{}) {
+		return
+	}
 	// Soong installation is only supported for host modules. Have Make
 	// installation trigger Soong installation.
 	if ctx.Target().Os.Class == android.Host {

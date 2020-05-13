@@ -146,7 +146,12 @@ var (
 
 	jarjar = pctx.AndroidStaticRule("jarjar",
 		blueprint.RuleParams{
-			Command:     "${config.JavaCmd} ${config.JavaVmFlags} -jar ${config.JarjarCmd} process $rulesFile $in $out",
+			Command: "${config.JavaCmd} ${config.JavaVmFlags}" +
+				// b/146418363 Enable Android specific jarjar transformer to drop compat annotations
+				// for newly repackaged classes. Dropping @UnsupportedAppUsage on repackaged classes
+				// avoids adding new hiddenapis after jarjar'ing.
+				" -DremoveAndroidCompatAnnotations=true" +
+				" -jar ${config.JarjarCmd} process $rulesFile $in $out",
 			CommandDeps: []string{"${config.JavaCmd}", "${config.JarjarCmd}", "$rulesFile"},
 		},
 		"rulesFile")
@@ -190,7 +195,7 @@ type javaBuilderFlags struct {
 	classpath      classpath
 	java9Classpath classpath
 	processorPath  classpath
-	processor      string
+	processors     []string
 	systemModules  *systemModules
 	aidlFlags      string
 	aidlDeps       android.Paths
@@ -264,8 +269,8 @@ func emitXrefRule(ctx android.ModuleContext, xrefFile android.WritablePath, idx 
 	deps = append(deps, flags.processorPath...)
 
 	processor := "-proc:none"
-	if flags.processor != "" {
-		processor = "-processor " + flags.processor
+	if len(flags.processors) > 0 {
+		processor = "-processor " + strings.Join(flags.processors, ",")
 	}
 
 	intermediatesDir := "xref"
@@ -379,8 +384,8 @@ func transformJavaToClasses(ctx android.ModuleContext, outputFile android.Writab
 	deps = append(deps, flags.processorPath...)
 
 	processor := "-proc:none"
-	if flags.processor != "" {
-		processor = "-processor " + flags.processor
+	if len(flags.processors) > 0 {
+		processor = "-processor " + strings.Join(flags.processors, ",")
 	}
 
 	srcJarDir := "srcjars"

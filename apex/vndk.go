@@ -16,6 +16,7 @@ package apex
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -121,10 +122,13 @@ func makeCompatSymlinks(name string, ctx android.ModuleContext) (symlinks []stri
 	// When all hard-coded references are fixed, remove symbolic links
 	// Note that  we should keep following symlinks for older VNDKs (<=29)
 	// Since prebuilt vndk libs still depend on system/lib/vndk path
-	if strings.HasPrefix(name, vndkApexName) {
-		vndkVersion := ctx.DeviceConfig().PlatformVndkVersion()
-		if strings.HasPrefix(name, vndkApexNamePrefix) {
-			vndkVersion = strings.TrimPrefix(name, vndkApexNamePrefix)
+	if strings.HasPrefix(name, vndkApexNamePrefix) {
+		vndkVersion := strings.TrimPrefix(name, vndkApexNamePrefix)
+		if numVer, err := strconv.Atoi(vndkVersion); err != nil {
+			ctx.ModuleErrorf("apex_vndk should be named as %v<ver:number>: %s", vndkApexNamePrefix, name)
+			return
+		} else if numVer > android.SdkVersion_Android10 {
+			return
 		}
 		// the name of vndk apex is formatted "com.android.vndk.v" + version
 		apexName := vndkApexNamePrefix + vndkVersion
@@ -150,10 +154,12 @@ func makeCompatSymlinks(name string, ctx android.ModuleContext) (symlinks []stri
 
 	// TODO(b/124106384): Clean up compat symlinks for ART binaries.
 	if strings.HasPrefix(name, "com.android.art.") {
-		artBinaries := []string{"dalvikvm", "dex2oat"}
-		for _, b := range artBinaries {
-			addSymlink("/apex/com.android.art/bin/"+b, "$(TARGET_OUT)/bin", b)
+		addSymlink("/apex/com.android.art/bin/dalvikvm", "$(TARGET_OUT)/bin", "dalvikvm")
+		dex2oat := "dex2oat32"
+		if ctx.Config().Android64() {
+			dex2oat = "dex2oat64"
 		}
+		addSymlink("/apex/com.android.art/bin/"+dex2oat, "$(TARGET_OUT)/bin", "dex2oat")
 		return
 	}
 	return
