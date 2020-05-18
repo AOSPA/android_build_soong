@@ -92,6 +92,9 @@ type apiScope struct {
 	// The name of the field in the dynamically created structure.
 	fieldName string
 
+	// The name of the property in the java_sdk_library_import
+	propertyName string
+
 	// The tag to use to depend on the stubs library module.
 	stubsTag scopeDependencyTag
 
@@ -142,7 +145,8 @@ type apiScope struct {
 // Initialize a scope, creating and adding appropriate dependency tags
 func initApiScope(scope *apiScope) *apiScope {
 	name := scope.name
-	scope.fieldName = proptools.FieldNameForProperty(name)
+	scope.propertyName = strings.ReplaceAll(name, "-", "_")
+	scope.fieldName = proptools.FieldNameForProperty(scope.propertyName)
 	scope.stubsTag = scopeDependencyTag{
 		name:             name + "-stubs",
 		apiScope:         scope,
@@ -253,7 +257,7 @@ var (
 		unstable:       true,
 	})
 	apiScopeModuleLib = initApiScope(&apiScope{
-		name:    "module_lib",
+		name:    "module-lib",
 		extends: apiScopeSystem,
 		// Module_lib scope is disabled by default in legacy mode.
 		//
@@ -743,21 +747,17 @@ func (module *SdkLibrary) latestRemovedApiFilegroupName(apiScope *apiScope) stri
 // Creates a static java library that has API stubs
 func (module *SdkLibrary) createStubsLibrary(mctx android.DefaultableHookContext, apiScope *apiScope) {
 	props := struct {
-		Name                *string
-		Visibility          []string
-		Srcs                []string
-		Installable         *bool
-		Sdk_version         *string
-		System_modules      *string
-		Patch_module        *string
-		Libs                []string
-		Soc_specific        *bool
-		Device_specific     *bool
-		Product_specific    *bool
-		System_ext_specific *bool
-		Compile_dex         *bool
-		Java_version        *string
-		Product_variables   struct {
+		Name              *string
+		Visibility        []string
+		Srcs              []string
+		Installable       *bool
+		Sdk_version       *string
+		System_modules    *string
+		Patch_module      *string
+		Libs              []string
+		Compile_dex       *bool
+		Java_version      *string
+		Product_variables struct {
 			Pdk struct {
 				Enabled *bool
 			}
@@ -797,15 +797,6 @@ func (module *SdkLibrary) createStubsLibrary(mctx android.DefaultableHookContext
 		props.Compile_dex = module.Library.Module.deviceProperties.Compile_dex
 	}
 
-	if module.SocSpecific() {
-		props.Soc_specific = proptools.BoolPtr(true)
-	} else if module.DeviceSpecific() {
-		props.Device_specific = proptools.BoolPtr(true)
-	} else if module.ProductSpecific() {
-		props.Product_specific = proptools.BoolPtr(true)
-	} else if module.SystemExtSpecific() {
-		props.System_ext_specific = proptools.BoolPtr(true)
-	}
 	// Dist the class jar artifact for sdk builds.
 	if !Bool(module.sdkLibraryProperties.No_dist) {
 		props.Dist.Targets = []string{"sdk", "win_sdk"}
@@ -980,27 +971,13 @@ func (module *SdkLibrary) DepIsInSameApex(mctx android.BaseModuleContext, dep an
 // Creates the xml file that publicizes the runtime library
 func (module *SdkLibrary) createXmlFile(mctx android.DefaultableHookContext) {
 	props := struct {
-		Name                *string
-		Lib_name            *string
-		Soc_specific        *bool
-		Device_specific     *bool
-		Product_specific    *bool
-		System_ext_specific *bool
-		Apex_available      []string
+		Name           *string
+		Lib_name       *string
+		Apex_available []string
 	}{
 		Name:           proptools.StringPtr(module.xmlFileName()),
 		Lib_name:       proptools.StringPtr(module.BaseModuleName()),
 		Apex_available: module.ApexProperties.Apex_available,
-	}
-
-	if module.SocSpecific() {
-		props.Soc_specific = proptools.BoolPtr(true)
-	} else if module.DeviceSpecific() {
-		props.Device_specific = proptools.BoolPtr(true)
-	} else if module.ProductSpecific() {
-		props.Product_specific = proptools.BoolPtr(true)
-	} else if module.SystemExtSpecific() {
-		props.System_ext_specific = proptools.BoolPtr(true)
 	}
 
 	mctx.CreateModule(sdkLibraryXmlFactory, &props)
@@ -1423,15 +1400,11 @@ func (module *sdkLibraryImport) createInternalModules(mctx android.DefaultableHo
 func (module *sdkLibraryImport) createJavaImportForStubs(mctx android.DefaultableHookContext, apiScope *apiScope, scopeProperties *sdkLibraryScopeProperties) {
 	// Creates a java import for the jar with ".stubs" suffix
 	props := struct {
-		Name                *string
-		Soc_specific        *bool
-		Device_specific     *bool
-		Product_specific    *bool
-		System_ext_specific *bool
-		Sdk_version         *string
-		Libs                []string
-		Jars                []string
-		Prefer              *bool
+		Name        *string
+		Sdk_version *string
+		Libs        []string
+		Jars        []string
+		Prefer      *bool
 	}{}
 	props.Name = proptools.StringPtr(module.stubsLibraryModuleName(apiScope))
 	props.Sdk_version = scopeProperties.Sdk_version
@@ -1439,15 +1412,7 @@ func (module *sdkLibraryImport) createJavaImportForStubs(mctx android.Defaultabl
 	// scopes to avoid having to duplicate them in each scope.
 	props.Libs = append(module.properties.Libs, scopeProperties.Libs...)
 	props.Jars = scopeProperties.Jars
-	if module.SocSpecific() {
-		props.Soc_specific = proptools.BoolPtr(true)
-	} else if module.DeviceSpecific() {
-		props.Device_specific = proptools.BoolPtr(true)
-	} else if module.ProductSpecific() {
-		props.Product_specific = proptools.BoolPtr(true)
-	} else if module.SystemExtSpecific() {
-		props.System_ext_specific = proptools.BoolPtr(true)
-	}
+
 	// The imports are preferred if the java_sdk_library_import is preferred.
 	props.Prefer = proptools.BoolPtr(module.prebuilt.Prefer())
 	mctx.CreateModule(ImportFactory, &props)
@@ -1668,6 +1633,9 @@ type sdkLibrarySdkMemberProperties struct {
 
 	// The Java stubs source files.
 	Stub_srcs []string
+
+	// The naming scheme.
+	Naming_scheme *string
 }
 
 type scopeProperties struct {
@@ -1697,12 +1665,17 @@ func (s *sdkLibrarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMembe
 	}
 
 	s.Libs = sdk.properties.Libs
+	s.Naming_scheme = sdk.commonProperties.Naming_scheme
 }
 
 func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberContext, propertySet android.BpPropertySet) {
+	if s.Naming_scheme != nil {
+		propertySet.AddProperty("naming_scheme", proptools.String(s.Naming_scheme))
+	}
+
 	for _, apiScope := range allApiScopes {
 		if properties, ok := s.Scopes[apiScope]; ok {
-			scopeSet := propertySet.AddPropertySet(apiScope.name)
+			scopeSet := propertySet.AddPropertySet(apiScope.propertyName)
 
 			scopeDir := filepath.Join("sdk_library", s.OsPrefix(), apiScope.name)
 
