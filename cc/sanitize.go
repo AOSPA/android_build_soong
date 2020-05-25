@@ -1056,7 +1056,7 @@ func sanitizerMutator(t sanitizerType) func(android.BottomUpMutatorContext) {
 					}
 
 					// Export the static lib name to make
-					if c.static() {
+					if c.static() && c.ExportedToMake() {
 						if t == cfi {
 							appendStringSync(c.Name(), cfiStaticLibs(mctx.Config()), &cfiStaticLibsMutex)
 						} else if t == hwasan {

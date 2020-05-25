@@ -86,6 +86,14 @@ func RegisterJavaBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterSingletonType("kythe_java_extract", kytheExtractJavaFactory)
 }
 
+func (j *Module) CheckStableSdkVersion() error {
+	sdkVersion := j.sdkVersion()
+	if sdkVersion.stable() {
+		return nil
+	}
+	return fmt.Errorf("non stable SDK %v", sdkVersion)
+}
+
 func (j *Module) checkSdkVersions(ctx android.ModuleContext) {
 	if j.SocSpecific() || j.DeviceSpecific() ||
 		(j.ProductSpecific() && ctx.Config().EnforceProductPartitionInterface()) {
@@ -594,6 +602,10 @@ func (j *Module) targetSdkVersion() sdkSpec {
 		return sdkSpecFrom(*j.deviceProperties.Target_sdk_version)
 	}
 	return j.sdkVersion()
+}
+
+func (j *Module) MinSdkVersion() string {
+	return j.minSdkVersion().version.String()
 }
 
 func (j *Module) AvailableFor(what string) bool {
@@ -2385,6 +2397,10 @@ func (j *Import) sdkVersion() sdkSpec {
 
 func (j *Import) minSdkVersion() sdkSpec {
 	return j.sdkVersion()
+}
+
+func (j *Import) MinSdkVersion() string {
+	return j.minSdkVersion().version.String()
 }
 
 func (j *Import) Prebuilt() *android.Prebuilt {

@@ -1110,12 +1110,107 @@ func TestJNIPackaging(t *testing.T) {
 	}
 }
 
+func TestJNISDK(t *testing.T) {
+	ctx, _ := testJava(t, cc.GatherRequiredDepsForTest(android.Android)+`
+		cc_library {
+			name: "libjni",
+			system_shared_libs: [],
+			stl: "none",
+			sdk_version: "current",
+		}
+
+		android_test {
+			name: "app_platform",
+			jni_libs: ["libjni"],
+			platform_apis: true,
+		}
+
+		android_test {
+			name: "app_sdk",
+			jni_libs: ["libjni"],
+			sdk_version: "current",
+		}
+
+		android_test {
+			name: "app_force_platform",
+			jni_libs: ["libjni"],
+			sdk_version: "current",
+			jni_uses_platform_apis: true,
+		}
+
+		android_test {
+			name: "app_force_sdk",
+			jni_libs: ["libjni"],
+			platform_apis: true,
+			jni_uses_sdk_apis: true,
+		}
+	`)
+
+	testCases := []struct {
+		name   string
+		sdkJNI bool
+	}{
+		{"app_platform", false},
+		{"app_sdk", true},
+		{"app_force_platform", false},
+		{"app_force_sdk", true},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			app := ctx.ModuleForTests(test.name, "android_common")
+			platformJNI := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_shared").
+				Output("libjni.so").Output.String()
+			sdkJNI := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_sdk_shared").
+				Output("libjni.so").Output.String()
+
+			jniLibZip := app.MaybeOutput("jnilibs.zip")
+			if len(jniLibZip.Implicits) != 1 {
+				t.Fatalf("expected exactly one jni library, got %q", jniLibZip.Implicits.Strings())
+			}
+			gotJNI := jniLibZip.Implicits[0].String()
+
+			if test.sdkJNI {
+				if gotJNI != sdkJNI {
+					t.Errorf("expected SDK JNI library %q, got %q", sdkJNI, gotJNI)
+				}
+			} else {
+				if gotJNI != platformJNI {
+					t.Errorf("expected platform JNI library %q, got %q", platformJNI, gotJNI)
+				}
+			}
+		})
+	}
+
+	t.Run("jni_uses_platform_apis_error", func(t *testing.T) {
+		testJavaError(t, `jni_uses_platform_apis: can only be set for modules that set sdk_version`, `
+			android_test {
+				name: "app_platform",
+				platform_apis: true,
+				jni_uses_platform_apis: true,
+			}
+		`)
+	})
+
+	t.Run("jni_uses_sdk_apis_error", func(t *testing.T) {
+		testJavaError(t, `jni_uses_sdk_apis: can only be set for modules that do not set sdk_version`, `
+			android_test {
+				name: "app_sdk",
+				sdk_version: "current",
+				jni_uses_sdk_apis: true,
+			}
+		`)
+	})
+
+}
+
 func TestCertificates(t *testing.T) {
 	testCases := []struct {
 		name                string
 		bp                  string
 		certificateOverride string
-		expected            string
+		expectedLineage     string
+		expectedCertificate string
 	}{
 		{
 			name: "default",
@@ -1127,7 +1222,8 @@ func TestCertificates(t *testing.T) {
 				}
 			`,
 			certificateOverride: "",
-			expected:            "build/make/target/product/security/testkey.x509.pem build/make/target/product/security/testkey.pk8",
+			expectedLineage:     "",
+			expectedCertificate: "build/make/target/product/security/testkey.x509.pem build/make/target/product/security/testkey.pk8",
 		},
 		{
 			name: "module certificate property",
@@ -1141,11 +1237,12 @@ func TestCertificates(t *testing.T) {
 
 				android_app_certificate {
 					name: "new_certificate",
-			    certificate: "cert/new_cert",
+					certificate: "cert/new_cert",
 				}
 			`,
 			certificateOverride: "",
-			expected:            "cert/new_cert.x509.pem cert/new_cert.pk8",
+			expectedLineage:     "",
+			expectedCertificate: "cert/new_cert.x509.pem cert/new_cert.pk8",
 		},
 		{
 			name: "path certificate property",
@@ -1158,7 +1255,8 @@ func TestCertificates(t *testing.T) {
 				}
 			`,
 			certificateOverride: "",
-			expected:            "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
+			expectedLineage:     "",
+			expectedCertificate: "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
 		},
 		{
 			name: "certificate overrides",
@@ -1172,11 +1270,32 @@ func TestCertificates(t *testing.T) {
 
 				android_app_certificate {
 					name: "new_certificate",
-			    certificate: "cert/new_cert",
+					certificate: "cert/new_cert",
 				}
 			`,
 			certificateOverride: "foo:new_certificate",
-			expected:            "cert/new_cert.x509.pem cert/new_cert.pk8",
+			expectedLineage:     "",
+			expectedCertificate: "cert/new_cert.x509.pem cert/new_cert.pk8",
+		},
+		{
+			name: "certificate lineage",
+			bp: `
+				android_app {
+					name: "foo",
+					srcs: ["a.java"],
+					certificate: ":new_certificate",
+					lineage: "lineage.bin",
+					sdk_version: "current",
+				}
+
+				android_app_certificate {
+					name: "new_certificate",
+					certificate: "cert/new_cert",
+				}
+			`,
+			certificateOverride: "",
+			expectedLineage:     "--lineage lineage.bin",
+			expectedCertificate: "cert/new_cert.x509.pem cert/new_cert.pk8",
 		},
 	}
 
@@ -1192,9 +1311,14 @@ func TestCertificates(t *testing.T) {
 			foo := ctx.ModuleForTests("foo", "android_common")
 
 			signapk := foo.Output("foo.apk")
-			signFlags := signapk.Args["certificates"]
-			if test.expected != signFlags {
-				t.Errorf("Incorrect signing flags, expected: %q, got: %q", test.expected, signFlags)
+			signCertificateFlags := signapk.Args["certificates"]
+			if test.expectedCertificate != signCertificateFlags {
+				t.Errorf("Incorrect signing flags, expected: %q, got: %q", test.expectedCertificate, signCertificateFlags)
+			}
+
+			signFlags := signapk.Args["flags"]
+			if test.expectedLineage != signFlags {
+				t.Errorf("Incorrect signing flags, expected: %q, got: %q", test.expectedLineage, signFlags)
 			}
 		})
 	}
@@ -1368,6 +1492,7 @@ func TestOverrideAndroidApp(t *testing.T) {
 			name: "bar",
 			base: "foo",
 			certificate: ":new_certificate",
+			lineage: "lineage.bin",
 			logging_parent: "bah",
 		}
 
@@ -1388,7 +1513,8 @@ func TestOverrideAndroidApp(t *testing.T) {
 		variantName    string
 		apkName        string
 		apkPath        string
-		signFlag       string
+		certFlag       string
+		lineageFlag    string
 		overrides      []string
 		aaptFlag       string
 		logging_parent string
@@ -1397,7 +1523,8 @@ func TestOverrideAndroidApp(t *testing.T) {
 			moduleName:     "foo",
 			variantName:    "android_common",
 			apkPath:        "/target/product/test_device/system/app/foo/foo.apk",
-			signFlag:       "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
+			certFlag:       "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
+			lineageFlag:    "",
 			overrides:      []string{"qux"},
 			aaptFlag:       "",
 			logging_parent: "",
@@ -1406,7 +1533,8 @@ func TestOverrideAndroidApp(t *testing.T) {
 			moduleName:     "bar",
 			variantName:    "android_common_bar",
 			apkPath:        "/target/product/test_device/system/app/bar/bar.apk",
-			signFlag:       "cert/new_cert.x509.pem cert/new_cert.pk8",
+			certFlag:       "cert/new_cert.x509.pem cert/new_cert.pk8",
+			lineageFlag:    "--lineage lineage.bin",
 			overrides:      []string{"qux", "foo"},
 			aaptFlag:       "",
 			logging_parent: "bah",
@@ -1415,7 +1543,8 @@ func TestOverrideAndroidApp(t *testing.T) {
 			moduleName:     "baz",
 			variantName:    "android_common_baz",
 			apkPath:        "/target/product/test_device/system/app/baz/baz.apk",
-			signFlag:       "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
+			certFlag:       "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
+			lineageFlag:    "",
 			overrides:      []string{"qux", "foo"},
 			aaptFlag:       "--rename-manifest-package org.dandroid.bp",
 			logging_parent: "",
@@ -1440,9 +1569,15 @@ func TestOverrideAndroidApp(t *testing.T) {
 
 		// Check the certificate paths
 		signapk := variant.Output(expected.moduleName + ".apk")
-		signFlag := signapk.Args["certificates"]
-		if expected.signFlag != signFlag {
-			t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected.signFlag, signFlag)
+		certFlag := signapk.Args["certificates"]
+		if expected.certFlag != certFlag {
+			t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected.certFlag, certFlag)
+		}
+
+		// Check the lineage flags
+		lineageFlag := signapk.Args["flags"]
+		if expected.lineageFlag != lineageFlag {
+			t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected.lineageFlag, lineageFlag)
 		}
 
 		// Check if the overrides field values are correctly aggregated.
