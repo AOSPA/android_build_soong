@@ -473,6 +473,127 @@ func TestUpdatableApps(t *testing.T) {
 	}
 }
 
+func TestUpdatableApps_JniLibsShouldShouldSupportMinSdkVersion(t *testing.T) {
+	testJava(t, cc.GatherRequiredDepsForTest(android.Android)+`
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			updatable: true,
+			sdk_version: "current",
+			min_sdk_version: "current",
+			jni_libs: ["libjni"],
+		}
+
+		cc_library {
+			name: "libjni",
+			stl: "none",
+			system_shared_libs: [],
+			sdk_version: "current",
+		}
+	`)
+}
+
+func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
+	bp := cc.GatherRequiredDepsForTest(android.Android) + `
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			updatable: true,
+			sdk_version: "current",
+			min_sdk_version: "29",
+			jni_libs: ["libjni"],
+		}
+
+		cc_library {
+			name: "libjni",
+			stl: "none",
+			system_shared_libs: [],
+			sdk_version: "29",
+		}
+
+		ndk_prebuilt_object {
+			name: "ndk_crtbegin_so.29",
+			sdk_version: "29",
+		}
+
+		ndk_prebuilt_object {
+			name: "ndk_crtend_so.29",
+			sdk_version: "29",
+		}
+	`
+	fs := map[string][]byte{
+		"prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtbegin_so.o": nil,
+		"prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtend_so.o":   nil,
+		"prebuilts/ndk/current/platforms/android-29/arch-arm/usr/lib/crtbegin_so.o":   nil,
+		"prebuilts/ndk/current/platforms/android-29/arch-arm/usr/lib/crtend_so.o":     nil,
+	}
+
+	ctx, _ := testJavaWithConfig(t, testConfig(nil, bp, fs))
+
+	inputs := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_sdk_shared").Description("link").Implicits
+	var crtbeginFound, crtendFound bool
+	for _, input := range inputs {
+		switch input.String() {
+		case "prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtbegin_so.o":
+			crtbeginFound = true
+		case "prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtend_so.o":
+			crtendFound = true
+		}
+	}
+	if !crtbeginFound || !crtendFound {
+		t.Error("should link with ndk_crtbegin_so.29 and ndk_crtend_so.29")
+	}
+}
+
+func TestUpdatableApps_ErrorIfJniLibDoesntSupportMinSdkVersion(t *testing.T) {
+	bp := cc.GatherRequiredDepsForTest(android.Android) + `
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			updatable: true,
+			sdk_version: "current",
+			min_sdk_version: "29",  // this APK should support 29
+			jni_libs: ["libjni"],
+		}
+
+		cc_library {
+			name: "libjni",
+			stl: "none",
+			sdk_version: "current",
+		}
+	`
+	testJavaError(t, `"libjni" .*: sdk_version\(current\) is higher than min_sdk_version\(29\)`, bp)
+}
+
+func TestUpdatableApps_ErrorIfDepSdkVersionIsHigher(t *testing.T) {
+	bp := cc.GatherRequiredDepsForTest(android.Android) + `
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			updatable: true,
+			sdk_version: "current",
+			min_sdk_version: "29",  // this APK should support 29
+			jni_libs: ["libjni"],
+		}
+
+		cc_library {
+			name: "libjni",
+			stl: "none",
+			shared_libs: ["libbar"],
+			system_shared_libs: [],
+			sdk_version: "27",
+		}
+
+		cc_library {
+			name: "libbar",
+			stl: "none",
+			system_shared_libs: [],
+			sdk_version: "current",
+		}
+	`
+	testJavaError(t, `"libjni" .*: links "libbar" built against newer API version "current"`, bp)
+}
+
 func TestResourceDirs(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -2308,6 +2429,45 @@ func TestAndroidTestImport_NoJinUncompressForPresigned(t *testing.T) {
 	if jniRule != android.Cp.String() {
 		t.Errorf("Unexpected JNI uncompress rule: " + jniRule)
 	}
+	if variant.MaybeOutput("zip-aligned/foo_presigned.apk").Rule == nil {
+		t.Errorf("Presigned test apk should be aligned")
+	}
+}
+
+func TestAndroidTestImport_Preprocessed(t *testing.T) {
+	ctx, _ := testJava(t, `
+		android_test_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			presigned: true,
+			preprocessed: true,
+		}
+
+		android_test_import {
+			name: "foo_cert",
+			apk: "prebuilts/apk/app.apk",
+			certificate: "cert/new_cert",
+			preprocessed: true,
+		}
+		`)
+
+	testModules := []string{"foo", "foo_cert"}
+	for _, m := range testModules {
+		apkName := m + ".apk"
+		variant := ctx.ModuleForTests(m, "android_common")
+		jniRule := variant.Output("jnis-uncompressed/" + apkName).BuildParams.Rule.String()
+		if jniRule != android.Cp.String() {
+			t.Errorf("Unexpected JNI uncompress rule: " + jniRule)
+		}
+
+		// Make sure signing and aligning were skipped.
+		if variant.MaybeOutput("signed/"+apkName).Rule != nil {
+			t.Errorf("signing rule shouldn't be included for preprocessed.")
+		}
+		if variant.MaybeOutput("zip-aligned/"+apkName).Rule != nil {
+			t.Errorf("aligning rule shouldn't be for preprocessed")
+		}
+	}
 }
 
 func TestStl(t *testing.T) {
@@ -2383,6 +2543,20 @@ func TestUsesLibraries(t *testing.T) {
 		}
 
 		java_sdk_library {
+			name: "qux",
+			srcs: ["a.java"],
+			api_packages: ["qux"],
+			sdk_version: "current",
+		}
+
+		java_sdk_library {
+			name: "quuz",
+			srcs: ["a.java"],
+			api_packages: ["quuz"],
+			sdk_version: "current",
+		}
+
+		java_sdk_library {
 			name: "bar",
 			srcs: ["a.java"],
 			api_packages: ["bar"],
@@ -2392,6 +2566,7 @@ func TestUsesLibraries(t *testing.T) {
 		android_app {
 			name: "app",
 			srcs: ["a.java"],
+			libs: ["qux", "quuz.stubs"],
 			uses_libs: ["foo"],
 			sdk_version: "current",
 			optional_uses_libs: [
@@ -2421,6 +2596,15 @@ func TestUsesLibraries(t *testing.T) {
 
 	app := ctx.ModuleForTests("app", "android_common")
 	prebuilt := ctx.ModuleForTests("prebuilt", "android_common")
+
+	// Test that implicit dependencies on java_sdk_library instances are passed to the manifest.
+	manifestFixerArgs := app.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
+	if w := "--uses-library qux"; !strings.Contains(manifestFixerArgs, w) {
+		t.Errorf("unexpected manifest_fixer args: wanted %q in %q", w, manifestFixerArgs)
+	}
+	if w := "--uses-library quuz"; !strings.Contains(manifestFixerArgs, w) {
+		t.Errorf("unexpected manifest_fixer args: wanted %q in %q", w, manifestFixerArgs)
+	}
 
 	// Test that all libraries are verified
 	cmd := app.Rule("verify_uses_libraries").RuleParams.Command
@@ -2682,6 +2866,32 @@ func TestUncompressDex(t *testing.T) {
 			uncompressedPlatform:  true,
 			uncompressedUnbundled: true,
 		},
+		{
+			name: "normal_uncompress_dex_true",
+			bp: `
+				android_app {
+					name: "foo",
+					srcs: ["a.java"],
+					sdk_version: "current",
+					uncompress_dex: true,
+				}
+			`,
+			uncompressedPlatform:  true,
+			uncompressedUnbundled: true,
+		},
+		{
+			name: "normal_uncompress_dex_false",
+			bp: `
+				android_app {
+					name: "foo",
+					srcs: ["a.java"],
+					sdk_version: "current",
+					uncompress_dex: false,
+				}
+			`,
+			uncompressedPlatform:  false,
+			uncompressedUnbundled: false,
+		},
 	}
 
 	test := func(t *testing.T, bp string, want bool, unbundled bool) {
@@ -2745,6 +2955,7 @@ func TestRuntimeResourceOverlay(t *testing.T) {
 		runtime_resource_overlay {
 			name: "foo",
 			certificate: "platform",
+			lineage: "lineage.bin",
 			product_specific: true,
 			static_libs: ["bar"],
 			resource_libs: ["baz"],
@@ -2799,6 +3010,11 @@ func TestRuntimeResourceOverlay(t *testing.T) {
 
 	// Check cert signing flag.
 	signedApk := m.Output("signed/foo.apk")
+	lineageFlag := signedApk.Args["flags"]
+	expectedLineageFlag := "--lineage lineage.bin"
+	if expectedLineageFlag != lineageFlag {
+		t.Errorf("Incorrect signing lineage flags, expected: %q, got: %q", expectedLineageFlag, lineageFlag)
+	}
 	signingFlag := signedApk.Args["certificates"]
 	expected := "build/make/target/product/security/platform.x509.pem build/make/target/product/security/platform.pk8"
 	if expected != signingFlag {

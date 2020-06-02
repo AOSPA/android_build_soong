@@ -92,66 +92,10 @@ func makeApexAvailableWhitelist() map[string][]string {
 	//
 	// Module separator
 	//
-	artApexContents := []string{
-		"art_cmdlineparser_headers",
-		"art_disassembler_headers",
-		"art_libartbase_headers",
-		"bionic_libc_platform_headers",
-		"core-repackaged-icu4j",
-		"cpp-define-generator-asm-support",
-		"cpp-define-generator-definitions",
-		"crtbegin_dynamic",
-		"crtbegin_dynamic1",
-		"crtbegin_so1",
-		"crtbrand",
-		"dex2oat_headers",
-		"dt_fd_forward_export",
-		"icu4c_extra_headers",
-		"javavm_headers",
-		"jni_platform_headers",
-		"libPlatformProperties",
-		"libadbconnection_client",
-		"libadbconnection_server",
-		"libandroidicuinit",
-		"libart_runtime_headers_ndk",
-		"libartd-disassembler",
-		"libdexfile_all_headers",
-		"libdexfile_external_headers",
-		"libdexfile_support",
-		"libdmabufinfo",
-		"libexpat",
-		"libfdlibm",
-		"libicui18n_headers",
-		"libicuuc",
-		"libicuuc_headers",
-		"libicuuc_stubdata",
-		"libjdwp_headers",
-		"liblz4",
-		"liblzma",
-		"libmeminfo",
-		"libnativebridge-headers",
-		"libnativehelper_header_only",
-		"libnativeloader-headers",
-		"libnpt_headers",
-		"libopenjdkjvmti_headers",
-		"libperfetto_client_experimental",
-		"libprocinfo",
-		"libunwind_llvm",
-		"libunwindstack",
-		"libv8",
-		"libv8base",
-		"libv8gen",
-		"libv8platform",
-		"libv8sampler",
-		"libv8src",
-		"libvixl",
-		"libvixld",
-		"libz",
-		"libziparchive",
-		"perfetto_trace_protos",
+	m["com.android.appsearch"] = []string{
+		"icing-java-proto-lite",
+		"libprotobuf-java-lite",
 	}
-	m["com.android.art.debug"] = artApexContents
-	m["com.android.art.release"] = artApexContents
 	//
 	// Module separator
 	//
@@ -790,6 +734,7 @@ func apexDepsMutator(mctx android.TopDownMutatorContext) {
 		apexBundles = []android.ApexInfo{{
 			ApexName:      mctx.ModuleName(),
 			MinSdkVersion: a.minSdkVersion(mctx),
+			Updatable:     a.Updatable(),
 		}}
 		directDep = true
 	} else if am, ok := mctx.Module().(android.ApexModule); ok {
@@ -1239,6 +1184,7 @@ func (class apexFileClass) NameInMake() string {
 // apexFile represents a file in an APEX bundle
 type apexFile struct {
 	builtFile  android.Path
+	stem       string
 	moduleName string
 	installDir string
 	class      apexFileClass
@@ -1278,9 +1224,17 @@ func (af *apexFile) Ok() bool {
 	return af.builtFile != nil && af.builtFile.String() != ""
 }
 
+func (af *apexFile) apexRelativePath(path string) string {
+	return filepath.Join(af.installDir, path)
+}
+
 // Path() returns path of this apex file relative to the APEX root
 func (af *apexFile) Path() string {
-	return filepath.Join(af.installDir, af.builtFile.Base())
+	stem := af.builtFile.Base()
+	if af.stem != "" {
+		stem = af.stem
+	}
+	return af.apexRelativePath(stem)
 }
 
 // SymlinkPaths() returns paths of the symlinks (if any) relative to the APEX root
@@ -1720,11 +1674,17 @@ func apexFileForShBinary(ctx android.BaseModuleContext, sh *android.ShBinary) ap
 	return af
 }
 
-func apexFileForJavaLibrary(ctx android.BaseModuleContext, lib java.Dependency, module android.Module) apexFile {
+type javaDependency interface {
+	java.Dependency
+	Stem() string
+}
+
+func apexFileForJavaLibrary(ctx android.BaseModuleContext, lib javaDependency, module android.Module) apexFile {
 	dirInApex := "javalib"
 	fileToCopy := lib.DexJar()
 	af := newApexFile(ctx, fileToCopy, module.Name(), dirInApex, javaSharedLib, module)
 	af.jacocoReportClassesFile = lib.JacocoReportClassesFile()
+	af.stem = lib.Stem() + ".jar"
 	return af
 }
 
@@ -1833,6 +1793,12 @@ func PrettyPrintTag(tag blueprint.DependencyTag) string {
 	return tagString
 }
 
+func (a *apexBundle) Updatable() bool {
+	return proptools.Bool(a.properties.Updatable)
+}
+
+var _ android.ApexBundleDepsInfoIntf = (*apexBundle)(nil)
+
 // Ensures that the dependencies are marked as available for this APEX
 func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 	// Let's be practical. Availability for test, host, and the VNDK apex isn't important
@@ -1881,7 +1847,7 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 }
 
 func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
-	if proptools.Bool(a.properties.Updatable) {
+	if a.Updatable() {
 		if String(a.properties.Min_sdk_version) == "" {
 			ctx.PropertyErrorf("updatable", "updatable APEXes should set min_sdk_version as well")
 		}
@@ -2208,7 +2174,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// We don't need the optimization for updatable APEXes, as it might give false signal
 	// to the system health when the APEXes are still bundled (b/149805758)
-	if proptools.Bool(a.properties.Updatable) && a.properties.ApexType == imageApex {
+	if a.Updatable() && a.properties.ApexType == imageApex {
 		a.linkToSystemLib = false
 	}
 
