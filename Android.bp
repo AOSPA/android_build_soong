@@ -289,6 +289,7 @@ bootstrap_go_package {
         "soong-dexpreopt",
         "soong-genrule",
         "soong-java-config",
+        "soong-remoteexec",
         "soong-tradefed",
     ],
     srcs: [
@@ -349,6 +350,7 @@ bootstrap_go_package {
     deps: [
         "blueprint-proptools",
         "soong-android",
+        "soong-remoteexec",
     ],
     srcs: [
         "java/config/config.go",
@@ -489,6 +491,7 @@ bootstrap_go_package {
     srcs: [
         "apex/androidmk.go",
         "apex/apex.go",
+        "apex/apex_singleton.go",
         "apex/builder.go",
         "apex/key.go",
         "apex/prebuilt.go",
