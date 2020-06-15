@@ -140,7 +140,7 @@ func (r packageRule) matches(m qualifiedModuleName) bool {
 }
 
 func (r packageRule) String() string {
-	return fmt.Sprintf("//%s:__pkg__", r.pkg)
+	return fmt.Sprintf("//%s", r.pkg) // :__pkg__ is the default, so skip it.
 }
 
 // A subpackagesRule is a visibility rule that matches modules in a specific package (i.e.
@@ -245,7 +245,7 @@ func checkRules(ctx BaseModuleContext, currentPkg, property string, visibility [
 		return
 	}
 
-	for _, v := range visibility {
+	for i, v := range visibility {
 		ok, pkg, name := splitRule(ctx, v, currentPkg, property)
 		if !ok {
 			continue
@@ -257,11 +257,18 @@ func checkRules(ctx BaseModuleContext, currentPkg, property string, visibility [
 			case "legacy_public":
 				ctx.PropertyErrorf(property, "//visibility:legacy_public must not be used")
 				continue
+			case "override":
+				// This keyword does not create a rule so pretend it does not exist.
+				ruleCount -= 1
 			default:
 				ctx.PropertyErrorf(property, "unrecognized visibility rule %q", v)
 				continue
 			}
-			if ruleCount != 1 {
+			if name == "override" {
+				if i != 0 {
+					ctx.PropertyErrorf(property, `"%v" may only be used at the start of the visibility rules`, v)
+				}
+			} else if ruleCount != 1 {
 				ctx.PropertyErrorf(property, "cannot mix %q with any other visibility rules", v)
 				continue
 			}
@@ -327,6 +334,14 @@ func parseRules(ctx BaseModuleContext, currentPkg, property string, visibility [
 			case "public":
 				r = publicRule{}
 				hasPublicRule = true
+			case "override":
+				// Discard all preceding rules and any state based on them.
+				rules = nil
+				hasPrivateRule = false
+				hasPublicRule = false
+				hasNonPrivateRule = false
+				// This does not actually create a rule so continue onto the next rule.
+				continue
 			}
 		} else {
 			switch name {
@@ -480,6 +495,24 @@ func EffectiveVisibilityRules(ctx BaseModuleContext, module Module) []string {
 	qualified := qualifiedModuleName{dir, moduleName}
 
 	rule := effectiveVisibilityRules(ctx.Config(), qualified)
+
+	// Modules are implicitly visible to other modules in the same package,
+	// without checking the visibility rules. Here we need to add that visibility
+	// explicitly.
+	if rule != nil && !rule.matches(qualified) {
+		if len(rule) == 1 {
+			if _, ok := rule[0].(privateRule); ok {
+				// If the rule is //visibility:private we can't append another
+				// visibility to it. Semantically we need to convert it to a package
+				// visibility rule for the location where the result is used, but since
+				// modules are implicitly visible within the package we get the same
+				// result without any rule at all, so just make it an empty list to be
+				// appended below.
+				rule = compositeRule{}
+			}
+		}
+		rule = append(rule, packageRule{dir})
+	}
 
 	return rule.Strings()
 }

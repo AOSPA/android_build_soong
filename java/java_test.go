@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -575,6 +577,7 @@ func TestJavaSdkLibraryImport(t *testing.T) {
 			},
 			test: {
 				jars: ["c.jar"],
+				stub_srcs: ["c.java"],
 			},
 		}
 		`)
@@ -1152,13 +1155,42 @@ func TestJavaSdkLibrary(t *testing.T) {
 		java_library {
 			name: "baz",
 			srcs: ["c.java"],
-			libs: ["foo", "bar"],
+			libs: ["foo", "bar.stubs"],
 			sdk_version: "system_current",
+		}
+		java_sdk_library {
+			name: "barney",
+			srcs: ["c.java"],
+			api_only: true,
+		}
+		java_sdk_library {
+			name: "betty",
+			srcs: ["c.java"],
+			shared_library: false,
+		}
+		java_sdk_library_import {
+		    name: "quuz",
+				public: {
+					jars: ["c.jar"],
+				},
+		}
+		java_sdk_library_import {
+		    name: "fred",
+				public: {
+					jars: ["b.jar"],
+				},
+		}
+		java_sdk_library_import {
+		    name: "wilma",
+				public: {
+					jars: ["b.jar"],
+				},
+				shared_library: false,
 		}
 		java_library {
 		    name: "qux",
 		    srcs: ["c.java"],
-		    libs: ["baz"],
+		    libs: ["baz", "fred", "quuz.stubs", "wilma", "barney", "betty"],
 		    sdk_version: "system_current",
 		}
 		java_library {
@@ -1177,12 +1209,12 @@ func TestJavaSdkLibrary(t *testing.T) {
 
 	// check the existence of the internal modules
 	ctx.ModuleForTests("foo", "android_common")
-	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix+sdkSystemApiSuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix+sdkTestApiSuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix+sdkSystemApiSuffix, "android_common")
-	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix+sdkTestApiSuffix, "android_common")
+	ctx.ModuleForTests(apiScopePublic.stubsLibraryModuleName("foo"), "android_common")
+	ctx.ModuleForTests(apiScopeSystem.stubsLibraryModuleName("foo"), "android_common")
+	ctx.ModuleForTests(apiScopeTest.stubsLibraryModuleName("foo"), "android_common")
+	ctx.ModuleForTests(apiScopePublic.stubsSourceModuleName("foo"), "android_common")
+	ctx.ModuleForTests(apiScopeSystem.stubsSourceModuleName("foo"), "android_common")
+	ctx.ModuleForTests(apiScopeTest.stubsSourceModuleName("foo"), "android_common")
 	ctx.ModuleForTests("foo"+sdkXmlFileSuffix, "android_common")
 	ctx.ModuleForTests("foo.api.public.28", "")
 	ctx.ModuleForTests("foo.api.system.28", "")
@@ -1223,10 +1255,143 @@ func TestJavaSdkLibrary(t *testing.T) {
 	qux := ctx.ModuleForTests("qux", "android_common")
 	if quxLib, ok := qux.Module().(*Library); ok {
 		sdkLibs := quxLib.ExportedSdkLibs()
-		if len(sdkLibs) != 2 || !android.InList("foo", sdkLibs) || !android.InList("bar", sdkLibs) {
-			t.Errorf("qux should export \"foo\" and \"bar\" but exports %v", sdkLibs)
+		sort.Strings(sdkLibs)
+		if w := []string{"bar", "foo", "fred", "quuz"}; !reflect.DeepEqual(w, sdkLibs) {
+			t.Errorf("qux should export %q but exports %q", w, sdkLibs)
 		}
 	}
+}
+
+func TestJavaSdkLibrary_DoNotAccessImplWhenItIsNotBuilt(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			api_only: true,
+			public: {
+				enabled: true,
+			},
+		}
+
+		java_library {
+			name: "bar",
+			srcs: ["b.java"],
+			libs: ["foo"],
+		}
+		`)
+
+	// The bar library should depend on the stubs jar.
+	barLibrary := ctx.ModuleForTests("bar", "android_common").Rule("javac")
+	if expected, actual := `^-classpath .*:/[^:]*/turbine-combined/foo\.stubs\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+		t.Errorf("expected %q, found %#q", expected, actual)
+	}
+}
+
+func TestJavaSdkLibrary_UseSourcesFromAnotherSdkLibrary(t *testing.T) {
+	testJava(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			api_packages: ["foo"],
+			public: {
+				enabled: true,
+			},
+		}
+
+		java_library {
+			name: "bar",
+			srcs: ["b.java", ":foo{.public.stubs.source}"],
+		}
+		`)
+}
+
+func TestJavaSdkLibrary_AccessOutputFiles_MissingScope(t *testing.T) {
+	testJavaError(t, `"foo" does not provide api scope system`, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			api_packages: ["foo"],
+			public: {
+				enabled: true,
+			},
+		}
+
+		java_library {
+			name: "bar",
+			srcs: ["b.java", ":foo{.system.stubs.source}"],
+		}
+		`)
+}
+
+func TestJavaSdkLibraryImport_AccessOutputFiles(t *testing.T) {
+	testJava(t, `
+		java_sdk_library_import {
+			name: "foo",
+			public: {
+				jars: ["a.jar"],
+				stub_srcs: ["a.java"],
+				current_api: "api/current.txt",
+				removed_api: "api/removed.txt",
+			},
+		}
+
+		java_library {
+			name: "bar",
+			srcs: [":foo{.public.stubs.source}"],
+			java_resources: [
+				":foo{.public.api.txt}",
+				":foo{.public.removed-api.txt}",
+			],
+		}
+		`)
+}
+
+func TestJavaSdkLibraryImport_AccessOutputFiles_Invalid(t *testing.T) {
+	bp := `
+		java_sdk_library_import {
+			name: "foo",
+			public: {
+				jars: ["a.jar"],
+			},
+		}
+		`
+
+	t.Run("stubs.source", func(t *testing.T) {
+		testJavaError(t, `stubs.source not available for api scope public`, bp+`
+		java_library {
+			name: "bar",
+			srcs: [":foo{.public.stubs.source}"],
+			java_resources: [
+				":foo{.public.api.txt}",
+				":foo{.public.removed-api.txt}",
+			],
+		}
+		`)
+	})
+
+	t.Run("api.txt", func(t *testing.T) {
+		testJavaError(t, `api.txt not available for api scope public`, bp+`
+		java_library {
+			name: "bar",
+			srcs: ["a.java"],
+			java_resources: [
+				":foo{.public.api.txt}",
+			],
+		}
+		`)
+	})
+
+	t.Run("removed-api.txt", func(t *testing.T) {
+		testJavaError(t, `removed-api.txt not available for api scope public`, bp+`
+		java_library {
+			name: "bar",
+			srcs: ["a.java"],
+			java_resources: [
+				":foo{.public.removed-api.txt}",
+			],
+		}
+		`)
+	})
 }
 
 func TestJavaSdkLibrary_InvalidScopes(t *testing.T) {
@@ -1245,6 +1410,118 @@ func TestJavaSdkLibrary_InvalidScopes(t *testing.T) {
 			},
 		}
 		`)
+}
+
+func TestJavaSdkLibrary_SdkVersion_ForScope(t *testing.T) {
+	testJava(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java", "b.java"],
+			api_packages: ["foo"],
+			system: {
+				enabled: true,
+				sdk_version: "module_current",
+			},
+		}
+		`)
+}
+
+func TestJavaSdkLibrary_ModuleLib(t *testing.T) {
+	testJava(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java", "b.java"],
+			api_packages: ["foo"],
+			system: {
+				enabled: true,
+			},
+			module_lib: {
+				enabled: true,
+			},
+		}
+		`)
+}
+
+func TestJavaSdkLibrary_SystemServer(t *testing.T) {
+	testJava(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java", "b.java"],
+			api_packages: ["foo"],
+			system: {
+				enabled: true,
+			},
+			system_server: {
+				enabled: true,
+			},
+		}
+		`)
+}
+
+func TestJavaSdkLibrary_MissingScope(t *testing.T) {
+	testJavaError(t, `requires api scope module-lib from foo but it only has \[\] available`, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			public: {
+				enabled: false,
+			},
+		}
+
+		java_library {
+			name: "baz",
+			srcs: ["a.java"],
+			libs: ["foo"],
+			sdk_version: "module_current",
+		}
+		`)
+}
+
+func TestJavaSdkLibrary_FallbackScope(t *testing.T) {
+	testJava(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			system: {
+				enabled: true,
+			},
+		}
+
+		java_library {
+			name: "baz",
+			srcs: ["a.java"],
+			libs: ["foo"],
+			// foo does not have module-lib scope so it should fallback to system
+			sdk_version: "module_current",
+		}
+		`)
+}
+
+func TestJavaSdkLibrary_DefaultToStubs(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			system: {
+				enabled: true,
+			},
+			default_to_stubs: true,
+		}
+
+		java_library {
+			name: "baz",
+			srcs: ["a.java"],
+			libs: ["foo"],
+			// does not have sdk_version set, should fallback to module,
+			// which will then fallback to system because the module scope
+			// is not enabled.
+		}
+		`)
+	// The baz library should depend on the system stubs jar.
+	bazLibrary := ctx.ModuleForTests("baz", "android_common").Rule("javac")
+	if expected, actual := `^-classpath .*:/[^:]*/turbine-combined/foo\.stubs.system\.jar$`, bazLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+		t.Errorf("expected %q, found %#q", expected, actual)
+	}
 }
 
 var compilerFlagsTestCases = []struct {

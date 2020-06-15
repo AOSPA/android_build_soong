@@ -79,7 +79,7 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 	}
 
 	for _, fi := range a.filesInfo {
-		if cc, ok := fi.module.(*cc.Module); ok && cc.Properties.HideFromMake {
+		if ccMod, ok := fi.module.(*cc.Module); ok && ccMod.Properties.HideFromMake {
 			continue
 		}
 
@@ -165,41 +165,49 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 		if fi.jacocoReportClassesFile != nil {
 			fmt.Fprintln(w, "LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR :=", fi.jacocoReportClassesFile.String())
 		}
-		if fi.class == javaSharedLib {
-			javaModule := fi.module.(javaLibrary)
+		switch fi.class {
+		case javaSharedLib:
+			javaModule := fi.module.(java.Dependency)
 			// soong_java_prebuilt.mk sets LOCAL_MODULE_SUFFIX := .jar  Therefore
 			// we need to remove the suffix from LOCAL_MODULE_STEM, otherwise
 			// we will have foo.jar.jar
-			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", strings.TrimSuffix(fi.builtFile.Base(), ".jar"))
+			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", strings.TrimSuffix(fi.Stem(), ".jar"))
 			fmt.Fprintln(w, "LOCAL_SOONG_CLASSES_JAR :=", javaModule.ImplementationAndResourcesJars()[0].String())
 			fmt.Fprintln(w, "LOCAL_SOONG_HEADER_JAR :=", javaModule.HeaderJars()[0].String())
 			fmt.Fprintln(w, "LOCAL_SOONG_DEX_JAR :=", fi.builtFile.String())
 			fmt.Fprintln(w, "LOCAL_DEX_PREOPT := false")
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_java_prebuilt.mk")
-		} else if fi.class == app {
+		case app:
 			fmt.Fprintln(w, "LOCAL_CERTIFICATE :=", fi.certificate.AndroidMkString())
 			// soong_app_prebuilt.mk sets LOCAL_MODULE_SUFFIX := .apk  Therefore
 			// we need to remove the suffix from LOCAL_MODULE_STEM, otherwise
 			// we will have foo.apk.apk
-			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", strings.TrimSuffix(fi.builtFile.Base(), ".apk"))
+			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", strings.TrimSuffix(fi.Stem(), ".apk"))
 			if app, ok := fi.module.(*java.AndroidApp); ok && len(app.JniCoverageOutputs()) > 0 {
 				fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", strings.Join(app.JniCoverageOutputs().Strings(), " "))
 			}
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_app_prebuilt.mk")
-		} else if fi.class == nativeSharedLib || fi.class == nativeExecutable || fi.class == nativeTest {
-			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
-			if cc, ok := fi.module.(*cc.Module); ok {
-				if cc.UnstrippedOutputFile() != nil {
-					fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", cc.UnstrippedOutputFile().String())
+		case appSet:
+			as, ok := fi.module.(*java.AndroidAppSet)
+			if !ok {
+				panic(fmt.Sprintf("Expected %s to be AndroidAppSet", fi.module))
+			}
+			fmt.Fprintln(w, "LOCAL_APK_SET_MASTER_FILE :=", as.MasterFile())
+			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_android_app_set.mk")
+		case nativeSharedLib, nativeExecutable, nativeTest:
+			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.Stem())
+			if ccMod, ok := fi.module.(*cc.Module); ok {
+				if ccMod.UnstrippedOutputFile() != nil {
+					fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", ccMod.UnstrippedOutputFile().String())
 				}
-				cc.AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w)
-				if cc.CoverageOutputFile().Valid() {
-					fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", cc.CoverageOutputFile().String())
+				ccMod.AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w)
+				if ccMod.CoverageOutputFile().Valid() {
+					fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", ccMod.CoverageOutputFile().String())
 				}
 			}
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_prebuilt.mk")
-		} else {
-			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.builtFile.Base())
+		default:
+			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.Stem())
 			if fi.builtFile == a.manifestPbOut && apexType == flattenedApex {
 				if a.primaryApexType {
 					// Make apex_manifest.pb module for this APEX to override all other

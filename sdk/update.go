@@ -87,18 +87,23 @@ func (gc *generatedContents) Dedent() {
 }
 
 func (gc *generatedContents) Printfln(format string, args ...interface{}) {
-	// ninja consumes newline characters in rspfile_content. Prevent it by
-	// escaping the backslash in the newline character. The extra backslash
-	// is removed when the rspfile is written to the actual script file
-	fmt.Fprintf(&(gc.content), strings.Repeat("    ", gc.indentLevel)+format+"\\n", args...)
+	fmt.Fprintf(&(gc.content), strings.Repeat("    ", gc.indentLevel)+format+"\n", args...)
 }
 
 func (gf *generatedFile) build(pctx android.PackageContext, ctx android.BuilderContext, implicits android.Paths) {
 	rb := android.NewRuleBuilder()
-	// convert \\n to \n
+
+	content := gf.content.String()
+
+	// ninja consumes newline characters in rspfile_content. Prevent it by
+	// escaping the backslash in the newline character. The extra backslash
+	// is removed when the rspfile is written to the actual script file
+	content = strings.ReplaceAll(content, "\n", "\\n")
+
 	rb.Command().
 		Implicits(implicits).
-		Text("echo").Text(proptools.ShellEscape(gf.content.String())).
+		Text("echo").Text(proptools.ShellEscape(content)).
+		// convert \\n to \n
 		Text("| sed 's/\\\\n/\\n/g' >").Output(gf.path)
 	rb.Command().
 		Text("chmod a+x").Output(gf.path)
@@ -982,6 +987,13 @@ func (osInfo *osTypeSpecificInfo) addToPropertySet(ctx *memberContext, bpModule 
 	}
 }
 
+func (osInfo *osTypeSpecificInfo) isHostVariant() bool {
+	osClass := osInfo.osType.Class
+	return osClass == android.Host || osClass == android.HostCross
+}
+
+var _ isHostVariant = (*osTypeSpecificInfo)(nil)
+
 func (osInfo *osTypeSpecificInfo) String() string {
 	return fmt.Sprintf("OsType{%s}", osInfo.osType)
 }
@@ -1215,16 +1227,34 @@ func (s *sdk) getPossibleOsTypes() []android.OsType {
 // struct (or one of its embedded structs).
 type fieldAccessorFunc func(structValue reflect.Value) reflect.Value
 
+// Checks the metadata to determine whether the property should be ignored for the
+// purposes of common value extraction or not.
+type extractorMetadataPredicate func(metadata propertiesContainer) bool
+
+// Indicates whether optimizable properties are provided by a host variant or
+// not.
+type isHostVariant interface {
+	isHostVariant() bool
+}
+
 // A property that can be optimized by the commonValueExtractor.
 type extractorProperty struct {
 	// The name of the field for this property.
 	name string
+
+	// Filter that can use metadata associated with the properties being optimized
+	// to determine whether the field should be ignored during common value
+	// optimization.
+	filter extractorMetadataPredicate
 
 	// Retrieves the value on which common value optimization will be performed.
 	getter fieldAccessorFunc
 
 	// The empty value for the field.
 	emptyValue reflect.Value
+
+	// True if the property can support arch variants false otherwise.
+	archVariant bool
 }
 
 func (p extractorProperty) String() string {
@@ -1270,6 +1300,20 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 			continue
 		}
 
+		var filter extractorMetadataPredicate
+
+		// Add a filter
+		if proptools.HasTag(field, "sdk", "ignored-on-host") {
+			filter = func(metadata propertiesContainer) bool {
+				if m, ok := metadata.(isHostVariant); ok {
+					if m.isHostVariant() {
+						return false
+					}
+				}
+				return true
+			}
+		}
+
 		// Save a copy of the field index for use in the function.
 		fieldIndex := f
 
@@ -1301,8 +1345,10 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 		} else {
 			property := extractorProperty{
 				name,
+				filter,
 				fieldGetter,
 				reflect.Zero(field.Type),
+				proptools.HasTag(field, "android", "arch_variant"),
 			}
 			e.properties = append(e.properties, property)
 		}
@@ -1368,16 +1414,37 @@ func (e *commonValueExtractor) extractCommonProperties(commonProperties interfac
 
 	for _, property := range e.properties {
 		fieldGetter := property.getter
+		filter := property.filter
+		if filter == nil {
+			filter = func(metadata propertiesContainer) bool {
+				return true
+			}
+		}
 
 		// Check to see if all the structures have the same value for the field. The commonValue
-		// is nil on entry to the loop and if it is nil on exit then there is no common value,
-		// otherwise it points to the common value.
+		// is nil on entry to the loop and if it is nil on exit then there is no common value or
+		// all the values have been filtered out, otherwise it points to the common value.
 		var commonValue *reflect.Value
+
+		// Assume that all the values will be the same.
+		//
+		// While similar to this is not quite the same as commonValue == nil. If all the values
+		// have been filtered out then this will be false but commonValue == nil will be true.
+		valuesDiffer := false
 
 		for i := 0; i < sliceValue.Len(); i++ {
 			container := sliceValue.Index(i).Interface().(propertiesContainer)
 			itemValue := reflect.ValueOf(container.optimizableProperties())
 			fieldValue := fieldGetter(itemValue)
+
+			if !filter(container) {
+				expectedValue := property.emptyValue.Interface()
+				actualValue := fieldValue.Interface()
+				if !reflect.DeepEqual(expectedValue, actualValue) {
+					return fmt.Errorf("field %q is supposed to be ignored for %q but is set to %#v instead of %#v", property, container, actualValue, expectedValue)
+				}
+				continue
+			}
 
 			if commonValue == nil {
 				// Use the first value as the commonProperties value.
@@ -1387,12 +1454,13 @@ func (e *commonValueExtractor) extractCommonProperties(commonProperties interfac
 				// no value in common so break out.
 				if !reflect.DeepEqual(fieldValue.Interface(), commonValue.Interface()) {
 					commonValue = nil
+					valuesDiffer = true
 					break
 				}
 			}
 		}
 
-		// If the fields all have a common value then store it in the common struct field
+		// If the fields all have common value then store it in the common struct field
 		// and set the input struct's field to the empty value.
 		if commonValue != nil {
 			emptyValue := property.emptyValue
@@ -1403,6 +1471,21 @@ func (e *commonValueExtractor) extractCommonProperties(commonProperties interfac
 				fieldValue := fieldGetter(itemValue)
 				fieldValue.Set(emptyValue)
 			}
+		}
+
+		if valuesDiffer && !property.archVariant {
+			// The values differ but the property does not support arch variants so it
+			// is an error.
+			var details strings.Builder
+			for i := 0; i < sliceValue.Len(); i++ {
+				container := sliceValue.Index(i).Interface().(propertiesContainer)
+				itemValue := reflect.ValueOf(container.optimizableProperties())
+				fieldValue := fieldGetter(itemValue)
+
+				_, _ = fmt.Fprintf(&details, "\n    %q has value %q", container.String(), fieldValue.Interface())
+			}
+
+			return fmt.Errorf("field %q is not tagged as \"arch_variant\" but has arch specific properties:%s", property.String(), details.String())
 		}
 	}
 
