@@ -132,7 +132,7 @@ func (as *AndroidAppSet) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 	// We are assuming here that the master file in the APK
 	// set has `.apk` suffix. If it doesn't the build will fail.
 	// APK sets containing APEX files are handled elsewhere.
-	as.masterFile = ctx.ModuleName() + ".apk"
+	as.masterFile = as.BaseModuleName() + ".apk"
 	screenDensities := "all"
 	if dpis := ctx.Config().ProductAAPTPrebuiltDPI(); len(dpis) > 0 {
 		screenDensities = strings.ToUpper(strings.Join(dpis, ","))
@@ -150,7 +150,7 @@ func (as *AndroidAppSet) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 				"allow-prereleased": strconv.FormatBool(proptools.Bool(as.properties.Prerelease)),
 				"screen-densities":  screenDensities,
 				"sdk-version":       ctx.Config().PlatformSdkVersion(),
-				"stem":              ctx.ModuleName(),
+				"stem":              as.BaseModuleName(),
 			},
 		})
 }
@@ -686,9 +686,9 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
 		if strings.HasPrefix(certPath, systemCertPath) {
 			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
-			whitelist := ctx.Config().EnforceSystemCertificateWhitelist()
+			allowed := ctx.Config().EnforceSystemCertificateAllowList()
 
-			if enforceSystemCert && !inList(m.Name(), whitelist) {
+			if enforceSystemCert && !inList(m.Name(), allowed) {
 				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
 			}
 		}
@@ -736,6 +736,10 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	a.proguardBuildActions(ctx)
+
+	a.linter.mergedManifest = a.aapt.mergedManifestFile
+	a.linter.manifest = a.aapt.manifestPath
+	a.linter.resources = a.aapt.resourceFiles
 
 	dexJarFile := a.dexBuildActions(ctx)
 
@@ -970,11 +974,8 @@ func AndroidAppFactory() android.Module {
 	module.Module.properties.Instrument = true
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
+	module.addHostAndDeviceProperties()
 	module.AddProperties(
-		&module.Module.properties,
-		&module.Module.deviceProperties,
-		&module.Module.dexpreoptProperties,
-		&module.Module.protoProperties,
 		&module.aaptProperties,
 		&module.appProperties,
 		&module.overridableAppProperties,
@@ -1092,12 +1093,10 @@ func AndroidTestFactory() android.Module {
 	module.appProperties.Use_embedded_native_libs = proptools.BoolPtr(true)
 	module.appProperties.AlwaysPackageNativeLibs = true
 	module.Module.dexpreopter.isTest = true
+	module.Module.linter.test = true
 
+	module.addHostAndDeviceProperties()
 	module.AddProperties(
-		&module.Module.properties,
-		&module.Module.deviceProperties,
-		&module.Module.dexpreoptProperties,
-		&module.Module.protoProperties,
 		&module.aaptProperties,
 		&module.appProperties,
 		&module.appTestProperties,
@@ -1144,12 +1143,10 @@ func AndroidTestHelperAppFactory() android.Module {
 	module.appProperties.Use_embedded_native_libs = proptools.BoolPtr(true)
 	module.appProperties.AlwaysPackageNativeLibs = true
 	module.Module.dexpreopter.isTest = true
+	module.Module.linter.test = true
 
+	module.addHostAndDeviceProperties()
 	module.AddProperties(
-		&module.Module.properties,
-		&module.Module.deviceProperties,
-		&module.Module.dexpreoptProperties,
-		&module.Module.protoProperties,
 		&module.aaptProperties,
 		&module.appProperties,
 		&module.appTestHelperAppProperties,
