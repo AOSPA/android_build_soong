@@ -629,6 +629,7 @@ func makeApexAvailableBaseline() map[string][]string {
 		"android.hidl.manager-V1.2-java",
 		"vendor.qti.hardware.wifi.hostapd-V1.0-java",
 		"vendor.qti.hardware.wifi.hostapd-V1.1-java",
+		"vendor.qti.hardware.wifi.hostapd-V1.2-java",
 		"vendor.qti.hardware.wifi.supplicant-V2.0-java",
 		"vendor.qti.hardware.wifi.supplicant-V2.1-java",
 		"vendor.qti.hardware.fstman-V1.0-java",
@@ -1665,7 +1666,7 @@ func (a *apexBundle) IsSanitizerEnabled(ctx android.BaseModuleContext, sanitizer
 }
 
 func (a *apexBundle) IsNativeCoverageNeeded(ctx android.BaseModuleContext) bool {
-	return ctx.Device() && (ctx.DeviceConfig().NativeCoverageEnabled() || ctx.DeviceConfig().ClangCoverageEnabled())
+	return ctx.Device() && ctx.DeviceConfig().NativeCoverageEnabled()
 }
 
 func (a *apexBundle) PreventInstall() {
