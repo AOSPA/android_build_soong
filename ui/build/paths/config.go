@@ -102,6 +102,9 @@ var Configuration = map[string]PathConfig{
 	"tr":      Allowed,
 	"unzip":   Allowed,
 	"zip":     Allowed,
+	"arm-linux-androideabi-as":     Allowed,
+	"arm-linux-androideabi-ld":     Allowed,
+	"arm-linux-androideabi-ld.bfd": Allowed,
 
 	// Host toolchain is removed. In-tree toolchain should be used instead.
 	// GCC also can't find cc1 with this implementation.
