@@ -632,6 +632,7 @@ func makeApexAvailableBaseline() map[string][]string {
 		"vendor.qti.hardware.wifi.hostapd-V1.2-java",
 		"vendor.qti.hardware.wifi.supplicant-V2.0-java",
 		"vendor.qti.hardware.wifi.supplicant-V2.1-java",
+		"vendor.qti.hardware.wifi.supplicant-V2.2-java",
 		"vendor.qti.hardware.fstman-V1.0-java",
 		"bouncycastle-unbundled",
 		"dnsresolver_aidl_interface-V2-java",
