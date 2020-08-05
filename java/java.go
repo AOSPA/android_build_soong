@@ -651,34 +651,38 @@ func (j *Module) AvailableFor(what string) bool {
 	return j.ApexModuleBase.AvailableFor(what)
 }
 
+func sdkDeps(ctx android.BottomUpMutatorContext, sdkContext sdkContext, d dexer) {
+	sdkDep := decodeSdkDep(ctx, sdkContext)
+	if sdkDep.useDefaultLibs {
+		ctx.AddVariationDependencies(nil, bootClasspathTag, config.DefaultBootclasspathLibraries...)
+		ctx.AddVariationDependencies(nil, systemModulesTag, config.DefaultSystemModules)
+		if sdkDep.hasFrameworkLibs() {
+			ctx.AddVariationDependencies(nil, libTag, config.DefaultLibraries...)
+		}
+	} else if sdkDep.useModule {
+		ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.bootclasspath...)
+		ctx.AddVariationDependencies(nil, java9LibTag, sdkDep.java9Classpath...)
+		if d.effectiveOptimizeEnabled() && sdkDep.hasStandardLibs() {
+			ctx.AddVariationDependencies(nil, proguardRaiseTag, config.DefaultBootclasspathLibraries...)
+			ctx.AddVariationDependencies(nil, proguardRaiseTag, config.DefaultLibraries...)
+		}
+	}
+	if sdkDep.systemModules != "" {
+		ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
+	}
+
+	if ctx.ModuleName() == "android_stubs_current" ||
+		ctx.ModuleName() == "android_system_stubs_current" ||
+		ctx.ModuleName() == "android_test_stubs_current" {
+		ctx.AddVariationDependencies(nil, frameworkApkTag, "framework-res")
+	}
+}
+
 func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	if ctx.Device() {
 		j.linter.deps(ctx)
 
-		sdkDep := decodeSdkDep(ctx, sdkContext(j))
-		if sdkDep.useDefaultLibs {
-			ctx.AddVariationDependencies(nil, bootClasspathTag, config.DefaultBootclasspathLibraries...)
-			ctx.AddVariationDependencies(nil, systemModulesTag, config.DefaultSystemModules)
-			if sdkDep.hasFrameworkLibs() {
-				ctx.AddVariationDependencies(nil, libTag, config.DefaultLibraries...)
-			}
-		} else if sdkDep.useModule {
-			ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.bootclasspath...)
-			ctx.AddVariationDependencies(nil, java9LibTag, sdkDep.java9Classpath...)
-			if j.effectiveOptimizeEnabled() && sdkDep.hasStandardLibs() {
-				ctx.AddVariationDependencies(nil, proguardRaiseTag, config.DefaultBootclasspathLibraries...)
-				ctx.AddVariationDependencies(nil, proguardRaiseTag, config.DefaultLibraries...)
-			}
-		}
-		if sdkDep.systemModules != "" {
-			ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
-		}
-
-		if ctx.ModuleName() == "android_stubs_current" ||
-			ctx.ModuleName() == "android_system_stubs_current" ||
-			ctx.ModuleName() == "android_test_stubs_current" {
-			ctx.AddVariationDependencies(nil, frameworkApkTag, "framework-res")
-		}
+		sdkDeps(ctx, sdkContext(j), j.dexer)
 	}
 
 	syspropPublicStubs := syspropPublicStubs(ctx.Config())
@@ -2164,6 +2168,7 @@ type JavaTestImport struct {
 	prebuiltTestProperties prebuiltTestProperties
 
 	testConfig android.Path
+	dexJarFile android.Path
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -2462,7 +2467,13 @@ type Import struct {
 	// Functionality common to Module and Import.
 	embeddableInModuleAndImport
 
+	hiddenAPI
+	dexer
+
 	properties ImportProperties
+
+	// output file containing classes.dex and resources
+	dexJarFile android.Path
 
 	combinedClasspathFile android.Path
 	exportedSdkLibs       []string
@@ -2476,7 +2487,15 @@ func (j *Import) makeSdkVersion() string {
 	return j.sdkVersion().raw
 }
 
+func (j *Import) systemModules() string {
+	return "none"
+}
+
 func (j *Import) minSdkVersion() sdkSpec {
+	return j.sdkVersion()
+}
+
+func (j *Import) targetSdkVersion() sdkSpec {
 	return j.sdkVersion()
 }
 
@@ -2506,6 +2525,10 @@ func (a *Import) JacocoReportClassesFile() android.Path {
 
 func (j *Import) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
+
+	if ctx.Device() && Bool(j.dexProperties.Compile_dex) {
+		sdkDeps(ctx, sdkContext(j), j.dexer)
+	}
 }
 
 func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -2528,6 +2551,8 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// added to the Android manifest.
 	j.exportedSdkLibs = append(j.exportedSdkLibs, j.OptionalImplicitSdkLibrary()...)
 
+	var flags javaBuilderFlags
+
 	ctx.VisitDirectDeps(func(module android.Module) {
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
@@ -2536,12 +2561,16 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		case Dependency:
 			switch tag {
 			case libTag, staticLibTag:
+				flags.classpath = append(flags.classpath, dep.HeaderJars()...)
 				// sdk lib names from dependencies are re-exported
 				j.exportedSdkLibs = append(j.exportedSdkLibs, dep.ExportedSdkLibs()...)
+			case bootClasspathTag:
+				flags.bootClasspath = append(flags.bootClasspath, dep.HeaderJars()...)
 			}
 		case SdkLibraryDependency:
 			switch tag {
 			case libTag:
+				flags.classpath = append(flags.classpath, dep.SdkHeaderJars(ctx, j.sdkVersion())...)
 				// names of sdk libs that are directly depended are exported
 				j.exportedSdkLibs = append(j.exportedSdkLibs, otherName)
 			}
@@ -2552,6 +2581,26 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	if Bool(j.properties.Installable) {
 		ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),
 			jarName, outputFile)
+	}
+
+	if ctx.Device() && Bool(j.dexProperties.Compile_dex) {
+		sdkDep := decodeSdkDep(ctx, sdkContext(j))
+		if sdkDep.invalidVersion {
+			ctx.AddMissingDependencies(sdkDep.bootclasspath)
+			ctx.AddMissingDependencies(sdkDep.java9Classpath)
+		} else if sdkDep.useFiles {
+			// sdkDep.jar is actually equivalent to turbine header.jar.
+			flags.classpath = append(flags.classpath, sdkDep.jars...)
+		}
+
+		// Dex compilation
+		var dexOutputFile android.ModuleOutPath
+		dexOutputFile = j.dexer.compileDex(ctx, flags, j.minSdkVersion(), outputFile, jarName)
+		if ctx.Failed() {
+			return
+		}
+
+		j.dexJarFile = dexOutputFile
 	}
 }
 
@@ -2583,7 +2632,7 @@ func (j *Import) ImplementationAndResourcesJars() android.Paths {
 }
 
 func (j *Import) DexJar() android.Path {
-	return nil
+	return j.dexJarFile
 }
 
 func (j *Import) AidlIncludeDirs() android.Paths {
@@ -2642,9 +2691,14 @@ var _ android.PrebuiltInterface = (*Import)(nil)
 func ImportFactory() android.Module {
 	module := &Import{}
 
-	module.AddProperties(&module.properties)
+	module.AddProperties(
+		&module.properties,
+		&module.dexer.dexProperties,
+	)
 
 	module.initModuleAndImport(&module.ModuleBase)
+
+	module.dexProperties.Optimize.EnabledByDefault = false
 
 	android.InitPrebuiltModule(module, &module.properties.Jars)
 	android.InitApexModule(module)
