@@ -23,26 +23,20 @@ func init() {
 }
 
 type ProcMacroCompilerProperties struct {
-	// path to the source file that is the main entry point of the program (e.g. src/lib.rs)
-	Srcs []string `android:"path,arch_variant"`
-
-	// set name of the procMacro
-	Stem   *string `android:"arch_variant"`
-	Suffix *string `android:"arch_variant"`
 }
 
 type procMacroDecorator struct {
 	*baseCompiler
+	*flagExporter
 
-	Properties           ProcMacroCompilerProperties
-	distFile             android.OptionalPath
-	unstrippedOutputFile android.Path
+	Properties ProcMacroCompilerProperties
 }
 
 type procMacroInterface interface {
 }
 
 var _ compiler = (*procMacroDecorator)(nil)
+var _ exportedFlagsProducer = (*procMacroDecorator)(nil)
 
 func ProcMacroFactory() android.Module {
 	module, _ := NewProcMacro(android.HostSupportedNoCross)
@@ -54,6 +48,7 @@ func NewProcMacro(hod android.HostOrDeviceSupported) (*Module, *procMacroDecorat
 
 	procMacro := &procMacroDecorator{
 		baseCompiler: NewBaseCompiler("lib", "lib64", InstallInSystem),
+		flagExporter: NewFlagExporter(),
 	}
 
 	module.compiler = procMacro
@@ -70,7 +65,7 @@ func (procMacro *procMacroDecorator) compile(ctx ModuleContext, flags Flags, dep
 	fileName := procMacro.getStem(ctx) + ctx.toolchain().ProcMacroSuffix()
 	outputFile := android.PathForModuleOut(ctx, fileName)
 
-	srcPath := srcPathFromModuleSrcs(ctx, procMacro.Properties.Srcs)
+	srcPath, _ := srcPathFromModuleSrcs(ctx, procMacro.baseCompiler.Properties.Srcs)
 
 	procMacro.unstrippedOutputFile = outputFile
 
@@ -83,4 +78,8 @@ func (procMacro *procMacroDecorator) getStem(ctx ModuleContext) string {
 	validateLibraryStem(ctx, stem, procMacro.crateName())
 
 	return stem + String(procMacro.baseCompiler.Properties.Suffix)
+}
+
+func (procMacro *procMacroDecorator) autoDep() autoDep {
+	return rlibAutoDep
 }

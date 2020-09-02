@@ -734,7 +734,11 @@ func (a *AARImport) ImplementationAndResourcesJars() android.Paths {
 	return android.Paths{a.classpathFile}
 }
 
-func (a *AARImport) DexJar() android.Path {
+func (a *AARImport) DexJarBuildPath() android.Path {
+	return nil
+}
+
+func (a *AARImport) DexJarInstallPath() android.Path {
 	return nil
 }
 
@@ -756,6 +760,10 @@ func (a *AARImport) SrcJarArgs() ([]string, android.Paths) {
 
 func (a *AARImport) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
 	return a.depIsInSameApex(ctx, dep)
+}
+
+func (g *AARImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion int) error {
+	return nil
 }
 
 var _ android.PrebuiltInterface = (*Import)(nil)

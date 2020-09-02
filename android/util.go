@@ -141,6 +141,16 @@ func PrefixInList(list []string, prefix string) bool {
 	return false
 }
 
+// Returns true if any string in the given list has the given suffix.
+func SuffixInList(list []string, suffix string) bool {
+	for _, s := range list {
+		if strings.HasSuffix(s, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // IndexListPred returns the index of the element which in the given `list` satisfying the predicate, or -1 if there is no such element.
 func IndexListPred(pred func(s string) bool, list []string) int {
 	for i, l := range list {
@@ -193,6 +203,14 @@ func RemoveFromList(s string, list []string) (bool, []string) {
 // FirstUniqueStrings returns all unique elements of a slice of strings, keeping the first copy of
 // each.  It modifies the slice contents in place, and returns a subslice of the original slice.
 func FirstUniqueStrings(list []string) []string {
+	// 128 was chosen based on BenchmarkFirstUniqueStrings results.
+	if len(list) > 128 {
+		return firstUniqueStringsMap(list)
+	}
+	return firstUniqueStringsList(list)
+}
+
+func firstUniqueStringsList(list []string) []string {
 	k := 0
 outer:
 	for i := 0; i < len(list); i++ {
@@ -201,6 +219,20 @@ outer:
 				continue outer
 			}
 		}
+		list[k] = list[i]
+		k++
+	}
+	return list[:k]
+}
+
+func firstUniqueStringsMap(list []string) []string {
+	k := 0
+	seen := make(map[string]bool, len(list))
+	for i := 0; i < len(list); i++ {
+		if seen[list[i]] {
+			continue
+		}
+		seen[list[i]] = true
 		list[k] = list[i]
 		k++
 	}

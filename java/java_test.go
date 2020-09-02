@@ -85,6 +85,7 @@ func testContext() *android.TestContext {
 	RegisterStubsBuildComponents(ctx)
 	RegisterSdkLibraryBuildComponents(ctx)
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
+	ctx.PreArchMutators(android.RegisterComponentsMutator)
 
 	RegisterPrebuiltApisBuildComponents(ctx)
 
@@ -466,7 +467,41 @@ func TestBinary(t *testing.T) {
 		t.Errorf("expected binary wrapper implicits [%q], got %v",
 			barJar, barWrapperDeps)
 	}
+}
 
+func TestHostBinaryNoJavaDebugInfoOverride(t *testing.T) {
+	bp := `
+		java_library {
+			name: "target_library",
+			srcs: ["a.java"],
+		}
+
+		java_binary_host {
+			name: "host_binary",
+			srcs: ["b.java"],
+		}
+	`
+	config := testConfig(nil, bp, nil)
+	config.TestProductVariables.MinimizeJavaDebugInfo = proptools.BoolPtr(true)
+
+	ctx, _ := testJavaWithConfig(t, config)
+
+	// first, sanity check that the -g flag is added to target modules
+	targetLibrary := ctx.ModuleForTests("target_library", "android_common")
+	targetJavaFlags := targetLibrary.Module().VariablesForTests()["javacFlags"]
+	if !strings.Contains(targetJavaFlags, "-g:source,lines") {
+		t.Errorf("target library javac flags %v should contain "+
+			"-g:source,lines override with MinimizeJavaDebugInfo", targetJavaFlags)
+	}
+
+	// check that -g is not overridden for host modules
+	buildOS := android.BuildOs.String()
+	hostBinary := ctx.ModuleForTests("host_binary", buildOS+"_common")
+	hostJavaFlags := hostBinary.Module().VariablesForTests()["javacFlags"]
+	if strings.Contains(hostJavaFlags, "-g:source,lines") {
+		t.Errorf("java_binary_host javac flags %v should not have "+
+			"-g:source,lines override with MinimizeJavaDebugInfo", hostJavaFlags)
+	}
 }
 
 func TestPrebuilts(t *testing.T) {
@@ -596,6 +631,89 @@ func TestJavaSdkLibraryImport(t *testing.T) {
 			t.Errorf("foo classpath %v does not contain %q", javac.Args["classpath"], sdklibStubsJar.String())
 		}
 	}
+
+	CheckModuleDependencies(t, ctx, "sdklib", "android_common", []string{
+		`prebuilt_sdklib.stubs`,
+		`prebuilt_sdklib.stubs.source.test`,
+		`prebuilt_sdklib.stubs.system`,
+		`prebuilt_sdklib.stubs.test`,
+	})
+}
+
+func TestJavaSdkLibraryImport_WithSource(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_sdk_library {
+			name: "sdklib",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			public: {
+				enabled: true,
+			},
+		}
+
+		java_sdk_library_import {
+			name: "sdklib",
+			public: {
+				jars: ["a.jar"],
+			},
+		}
+		`)
+
+	CheckModuleDependencies(t, ctx, "sdklib", "android_common", []string{
+		`dex2oatd`,
+		`prebuilt_sdklib`,
+		`sdklib.impl`,
+		`sdklib.stubs`,
+		`sdklib.stubs.source`,
+		`sdklib.xml`,
+	})
+
+	CheckModuleDependencies(t, ctx, "prebuilt_sdklib", "android_common", []string{
+		`prebuilt_sdklib.stubs`,
+		`sdklib.impl`,
+		// This should be prebuilt_sdklib.stubs but is set to sdklib.stubs because the
+		// dependency is added after prebuilts may have been renamed and so has to use
+		// the renamed name.
+		`sdklib.xml`,
+	})
+}
+
+func TestJavaSdkLibraryImport_Preferred(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_sdk_library {
+			name: "sdklib",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			public: {
+				enabled: true,
+			},
+		}
+
+		java_sdk_library_import {
+			name: "sdklib",
+			prefer: true,
+			public: {
+				jars: ["a.jar"],
+			},
+		}
+		`)
+
+	CheckModuleDependencies(t, ctx, "sdklib", "android_common", []string{
+		`dex2oatd`,
+		`prebuilt_sdklib`,
+		`sdklib.impl`,
+		`sdklib.stubs`,
+		`sdklib.stubs.source`,
+		`sdklib.xml`,
+	})
+
+	CheckModuleDependencies(t, ctx, "prebuilt_sdklib", "android_common", []string{
+		`prebuilt_sdklib.stubs`,
+		`sdklib.impl`,
+		`sdklib.xml`,
+	})
 }
 
 func TestDefaults(t *testing.T) {
@@ -979,7 +1097,7 @@ func TestDroiddoc(t *testing.T) {
 		    ],
 		    proofread_file: "libcore-proofread.txt",
 		    todo_file: "libcore-docs-todo.html",
-		    args: "-offlinemode -title \"libcore\"",
+		    flags: ["-offlinemode -title \"libcore\""],
 		}
 		`,
 		map[string][]byte{
@@ -1004,6 +1122,42 @@ func TestDroiddoc(t *testing.T) {
 	if g, w := aidl.Implicits.Strings(), []string{"bar-doc/IBar.aidl", "bar-doc/IFoo.aidl"}; !reflect.DeepEqual(w, g) {
 		t.Errorf("aidl inputs must be %q, but was %q", w, g)
 	}
+}
+
+func TestDroiddocArgsAndFlagsCausesError(t *testing.T) {
+	testJavaError(t, "flags is set. Cannot set args", `
+		droiddoc_exported_dir {
+		    name: "droiddoc-templates-sdk",
+		    path: ".",
+		}
+		filegroup {
+		    name: "bar-doc-aidl-srcs",
+		    srcs: ["bar-doc/IBar.aidl"],
+		    path: "bar-doc",
+		}
+		droiddoc {
+		    name: "bar-doc",
+		    srcs: [
+		        "bar-doc/a.java",
+		        "bar-doc/IFoo.aidl",
+		        ":bar-doc-aidl-srcs",
+		    ],
+		    exclude_srcs: [
+		        "bar-doc/b.java"
+		    ],
+		    custom_template: "droiddoc-templates-sdk",
+		    hdf: [
+		        "android.whichdoc offline",
+		    ],
+		    knowntags: [
+		        "bar-doc/known_oj_tags.txt",
+		    ],
+		    proofread_file: "libcore-proofread.txt",
+		    todo_file: "libcore-docs-todo.html",
+		    flags: ["-offlinemode -title \"libcore\""],
+		    args: "-offlinemode -title \"libcore\"",
+		}
+		`)
 }
 
 func TestDroidstubsWithSystemModules(t *testing.T) {
@@ -1343,6 +1497,28 @@ func TestJavaSdkLibrary_AccessOutputFiles_MissingScope(t *testing.T) {
 			srcs: ["b.java", ":foo{.system.stubs.source}"],
 		}
 		`)
+}
+
+func TestJavaSdkLibrary_Deps(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_sdk_library {
+			name: "sdklib",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			public: {
+				enabled: true,
+			},
+		}
+		`)
+
+	CheckModuleDependencies(t, ctx, "sdklib", "android_common", []string{
+		`dex2oatd`,
+		`sdklib.impl`,
+		`sdklib.stubs`,
+		`sdklib.stubs.source`,
+		`sdklib.xml`,
+	})
 }
 
 func TestJavaSdkLibraryImport_AccessOutputFiles(t *testing.T) {
@@ -1806,5 +1982,29 @@ func checkBootClasspathForSystemModule(t *testing.T, ctx *android.TestContext, m
 	bootClasspath := javacRule.Args["bootClasspath"]
 	if strings.HasPrefix(bootClasspath, "--system ") && strings.HasSuffix(bootClasspath, expectedSuffix) {
 		t.Errorf("bootclasspath of %q must start with --system and end with %q, but was %#v.", moduleName, expectedSuffix, bootClasspath)
+	}
+}
+
+func TestAidlExportIncludeDirsFromImports(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_library {
+			name: "foo",
+			srcs: ["aidl/foo/IFoo.aidl"],
+			libs: ["bar"],
+		}
+
+		java_import {
+			name: "bar",
+			jars: ["a.jar"],
+			aidl: {
+				export_include_dirs: ["aidl/bar"],
+			},
+		}
+	`)
+
+	aidlCommand := ctx.ModuleForTests("foo", "android_common").Rule("aidl").RuleParams.Command
+	expectedAidlFlag := "-Iaidl/bar"
+	if !strings.Contains(aidlCommand, expectedAidlFlag) {
+		t.Errorf("aidl command %q does not contain %q", aidlCommand, expectedAidlFlag)
 	}
 }

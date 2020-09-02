@@ -67,6 +67,7 @@ func runKati(ctx Context, config Config, extraSuffix string, args []string, envF
 		"--ninja_dir=" + config.OutDir(),
 		"--ninja_suffix=" + config.KatiSuffix() + extraSuffix,
 		"--no_ninja_prelude",
+		"--use_ninja_phony_output",
 		"--regen",
 		"--ignore_optional_include=" + filepath.Join(config.OutDir(), "%.P"),
 		"--detect_android_echo",
@@ -104,17 +105,20 @@ func runKati(ctx Context, config Config, extraSuffix string, args []string, envF
 	envFunc(cmd.Environment)
 
 	if _, ok := cmd.Environment.Get("BUILD_USERNAME"); !ok {
-		u, err := user.Current()
-		if err != nil {
-			ctx.Println("Failed to get current user")
+		username := "unknown"
+		if u, err := user.Current(); err == nil {
+			username = u.Username
+		} else {
+			ctx.Println("Failed to get current user:", err)
 		}
-		cmd.Environment.Set("BUILD_USERNAME", u.Username)
+		cmd.Environment.Set("BUILD_USERNAME", username)
 	}
 
 	if _, ok := cmd.Environment.Get("BUILD_HOSTNAME"); !ok {
 		hostname, err := os.Hostname()
 		if err != nil {
-			ctx.Println("Failed to read hostname")
+			ctx.Println("Failed to read hostname:", err)
+			hostname = "unknown"
 		}
 		cmd.Environment.Set("BUILD_HOSTNAME", hostname)
 	}
@@ -151,6 +155,8 @@ func runKatiBuild(ctx Context, config Config) {
 		"KATI_PACKAGE_MK_DIR="+config.KatiPackageMkDir())
 
 	runKati(ctx, config, katiBuildSuffix, args, func(env *Environment) {})
+
+	distGzipFile(ctx, config, config.KatiBuildNinjaFile())
 
 	cleanCopyHeaders(ctx, config)
 	cleanOldInstalledFiles(ctx, config)
@@ -247,6 +253,8 @@ func runKatiPackage(ctx Context, config Config) {
 			env.Set("DIST_DIR", config.DistDir())
 		}
 	})
+
+	distGzipFile(ctx, config, config.KatiPackageNinjaFile())
 }
 
 func runKatiCleanSpec(ctx Context, config Config) {

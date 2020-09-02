@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sync"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -161,7 +162,20 @@ type syspropLibraryProperties struct {
 var (
 	pctx         = android.NewPackageContext("android/soong/sysprop")
 	syspropCcTag = dependencyTag{name: "syspropCc"}
+
+	syspropLibrariesKey  = android.NewOnceKey("syspropLibraries")
+	syspropLibrariesLock sync.Mutex
 )
+
+func syspropLibraries(config android.Config) *[]string {
+	return config.Once(syspropLibrariesKey, func() interface{} {
+		return &[]string{}
+	}).(*[]string)
+}
+
+func SyspropLibraries(config android.Config) []string {
+	return append([]string{}, *syspropLibraries(config)...)
+}
 
 func init() {
 	android.RegisterModuleType("sysprop_library", syspropLibraryFactory)
@@ -200,6 +214,10 @@ func (m *syspropLibrary) BaseModuleName() string {
 
 func (m *syspropLibrary) HasPublicStub() bool {
 	return proptools.Bool(m.properties.Public_stub)
+}
+
+func (m *syspropLibrary) CurrentSyspropApiFile() android.Path {
+	return m.currentApiFile
 }
 
 func (m *syspropLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -290,6 +308,10 @@ func (m *syspropLibrary) AndroidMk() android.AndroidMkData {
 			// check API rule
 			fmt.Fprintf(w, "%s-check-api: %s\n\n", name, m.checkApiFileTimeStamp.String())
 		}}
+}
+
+func (m *syspropLibrary) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion int) error {
+	return fmt.Errorf("sysprop_library is not supposed to be part of apex modules")
 }
 
 // sysprop_library creates schematized APIs from sysprop description files (.sysprop).
@@ -474,6 +496,14 @@ func syspropLibraryHook(ctx android.LoadHookContext, m *syspropLibrary) {
 			Libs:        []string{stub},
 			Stem:        proptools.StringPtr(m.BaseModuleName()),
 		})
+	}
+
+	if m.ExportedToMake() {
+		syspropLibrariesLock.Lock()
+		defer syspropLibrariesLock.Unlock()
+
+		libraries := syspropLibraries(ctx.Config())
+		*libraries = append(*libraries, "//"+ctx.ModuleDir()+":"+ctx.ModuleName())
 	}
 }
 

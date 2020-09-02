@@ -35,14 +35,18 @@ func init() {
 	android.RegisterModuleType("prebuilt_usr_share_host", PrebuiltUserShareHostFactory)
 	android.RegisterModuleType("prebuilt_font", PrebuiltFontFactory)
 	android.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
+	android.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
 }
 
 type prebuiltEtcProperties struct {
 	// Source file of this prebuilt.
 	Src *string `android:"path,arch_variant"`
 
-	// optional subdirectory under which this file is installed into
+	// optional subdirectory under which this file is installed into, cannot be specified with relative_install_path, prefer relative_install_path
 	Sub_dir *string `android:"arch_variant"`
+
+	// optional subdirectory under which this file is installed into, cannot be specified with sub_dir
+	Relative_install_path *string `android:"arch_variant"`
 
 	// optional name for the installed file. If unspecified, name of the module is used as the file name
 	Filename *string `android:"arch_variant"`
@@ -59,6 +63,9 @@ type prebuiltEtcProperties struct {
 
 	// Whether this module is directly installable to one of the partitions. Default: true.
 	Installable *bool
+
+	// Install symlinks to the installed file.
+	Symlinks []string `android:"arch_variant"`
 }
 
 type PrebuiltEtcModule interface {
@@ -154,7 +161,10 @@ func (p *PrebuiltEtc) OutputFile() android.OutputPath {
 }
 
 func (p *PrebuiltEtc) SubDir() string {
-	return android.String(p.properties.Sub_dir)
+	if subDir := proptools.String(p.properties.Sub_dir); subDir != "" {
+		return subDir
+	}
+	return proptools.String(p.properties.Relative_install_path)
 }
 
 func (p *PrebuiltEtc) Installable() bool {
@@ -177,13 +187,17 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	p.outputFilePath = android.PathForModuleOut(ctx, filename).OutputPath
 
+	if p.properties.Sub_dir != nil && p.properties.Relative_install_path != nil {
+		ctx.PropertyErrorf("sub_dir", "relative_install_path is set. Cannot set sub_dir")
+	}
+
 	// If soc install dir was specified and SOC specific is set, set the installDirPath to the specified
 	// socInstallDirBase.
 	installBaseDir := p.installDirBase
 	if ctx.SocSpecific() && p.socInstallDirBase != "" {
 		installBaseDir = p.socInstallDirBase
 	}
-	p.installDirPath = android.PathForModuleInstall(ctx, installBaseDir, proptools.String(p.properties.Sub_dir))
+	p.installDirPath = android.PathForModuleInstall(ctx, installBaseDir, p.SubDir())
 
 	// This ensures that outputFilePath has the correct name for others to
 	// use, as the source file may have a different name.
@@ -211,10 +225,13 @@ func (p *PrebuiltEtc) AndroidMkEntries() []android.AndroidMkEntries {
 				entries.SetString("LOCAL_MODULE_TAGS", "optional")
 				entries.SetString("LOCAL_MODULE_PATH", p.installDirPath.ToMakePath().String())
 				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", p.outputFilePath.Base())
+				if len(p.properties.Symlinks) > 0 {
+					entries.AddStrings("LOCAL_MODULE_SYMLINKS", p.properties.Symlinks...)
+				}
 				entries.SetString("LOCAL_UNINSTALLABLE_MODULE", strconv.FormatBool(!p.Installable()))
 				if p.additionalDependencies != nil {
 					for _, path := range *p.additionalDependencies {
-						entries.SetString("LOCAL_ADDITIONAL_DEPENDENCIES", path.String())
+						entries.AddStrings("LOCAL_ADDITIONAL_DEPENDENCIES", path.String())
 					}
 				}
 			},
@@ -283,6 +300,18 @@ func PrebuiltFirmwareFactory() android.Module {
 	module := &PrebuiltEtc{}
 	module.socInstallDirBase = "firmware"
 	InitPrebuiltEtcModule(module, "etc/firmware")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	return module
+}
+
+// prebuilt_dsp installs a DSP related file to <partition>/etc/dsp directory for system image.
+// If soc_specific property is set to true, the DSP related file is installed to the vendor <partition>/dsp
+// directory for vendor image.
+func PrebuiltDSPFactory() android.Module {
+	module := &PrebuiltEtc{}
+	module.socInstallDirBase = "dsp"
+	InitPrebuiltEtcModule(module, "etc/dsp")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	return module

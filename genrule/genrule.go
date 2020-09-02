@@ -83,7 +83,6 @@ type hostToolDependencyTag struct {
 
 type generatorProperties struct {
 	// The command to run on one or more input files. Cmd supports substitution of a few variables
-	// (the actual substitution is implemented in GenerateAndroidBuildActions below)
 	//
 	// Available variables for substitution:
 	//
@@ -94,9 +93,6 @@ type generatorProperties struct {
 	//  $(depfile): a file to which dependencies will be written, if the depfile property is set to true
 	//  $(genDir): the sandbox directory for this tool; contains $(out)
 	//  $$: a literal $
-	//
-	// All files used must be declared as inputs (to ensure proper up-to-date checks).
-	// Use "$(in)" directly in Cmd to ensure that all inputs used are declared.
 	Cmd *string
 
 	// Enable reading a file containing dependencies in gcc format after the command completes
@@ -144,6 +140,9 @@ type Module struct {
 
 	subName string
 	subDir  string
+
+	// Collect the module directory for IDE info in java/jdeps.go.
+	modulePaths []string
 }
 
 type taskFunc func(ctx android.ModuleContext, rawCommand string, srcFiles android.Paths) []generateTask
@@ -189,6 +188,9 @@ func toolDepsMutator(ctx android.BottomUpMutatorContext) {
 
 func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	g.subName = ctx.ModuleSubDir()
+
+	// Collect the module directory for IDE info in java/jdeps.go.
+	g.modulePaths = append(g.modulePaths, ctx.ModuleDir())
 
 	if len(g.properties.Export_include_dirs) > 0 {
 		for _, dir := range g.properties.Export_include_dirs {
@@ -529,6 +531,7 @@ func (g *Module) IDEInfo(dpInfo *android.IdeInfo) {
 			dpInfo.Deps = append(dpInfo.Deps, src)
 		}
 	}
+	dpInfo.Paths = append(dpInfo.Paths, g.modulePaths...)
 }
 
 func (g *Module) AndroidMk() android.AndroidMkData {
@@ -550,6 +553,12 @@ func (g *Module) AndroidMk() android.AndroidMkData {
 			}
 		},
 	}
+}
+
+func (g *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion int) error {
+	// Because generated outputs are checked by client modules(e.g. cc_library, ...)
+	// we can safely ignore the check here.
+	return nil
 }
 
 func generatorFactory(taskGenerator taskFunc, props ...interface{}) *Module {

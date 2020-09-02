@@ -28,10 +28,6 @@ func getEdition(compiler *baseCompiler) string {
 	return proptools.StringDefault(compiler.Properties.Edition, config.DefaultEdition)
 }
 
-func getDenyWarnings(compiler *baseCompiler) bool {
-	return BoolDefault(compiler.Properties.Deny_warnings, config.DefaultDenyWarnings)
-}
-
 func (compiler *baseCompiler) setNoStdlibs() {
 	compiler.Properties.No_stdlibs = proptools.BoolPtr(true)
 }
@@ -50,11 +46,16 @@ type installLocation int
 const (
 	InstallInSystem installLocation = 0
 	InstallInData                   = iota
+
+	incorrectSourcesError = "srcs can only contain one path for a rust file and source providers prefixed by \":\""
 )
 
 type BaseCompilerProperties struct {
-	// whether to pass "-D warnings" to rustc. Defaults to true.
-	Deny_warnings *bool
+	// path to the source file that is the main entry point of the program (e.g. main.rs or lib.rs)
+	Srcs []string `android:"path,arch_variant"`
+
+	// whether to suppress the standard lint flags - default to false
+	No_lint *bool
 
 	// flags to pass to rustc
 	Flags []string `android:"path,arch_variant"`
@@ -67,6 +68,9 @@ type BaseCompilerProperties struct {
 
 	// list of rust dylib crate dependencies
 	Dylibs []string `android:"arch_variant"`
+
+	// list of rust automatic crate dependencies
+	Rustlibs []string `android:"arch_variant"`
 
 	// list of rust proc_macro crate dependencies
 	Proc_macros []string `android:"arch_variant"`
@@ -100,16 +104,8 @@ type BaseCompilerProperties struct {
 }
 
 type baseCompiler struct {
-	Properties    BaseCompilerProperties
-	pathDeps      android.Paths
-	rustFlagsDeps android.Paths
-	linkFlagsDeps android.Paths
-	flags         string
-	linkFlags     string
-	depFlags      []string
-	linkDirs      []string
-	edition       string
-	src           android.Path //rustc takes a single src file
+	Properties   BaseCompilerProperties
+	coverageFile android.Path //rustc generates a single gcno file
 
 	// Install related
 	dir      string
@@ -118,6 +114,14 @@ type baseCompiler struct {
 	relative string
 	path     android.InstallPath
 	location installLocation
+
+	coverageOutputZipFile android.OptionalPath
+	unstrippedOutputFile  android.Path
+	distFile              android.OptionalPath
+}
+
+func (compiler *baseCompiler) coverageOutputZipPath() android.OptionalPath {
+	panic("baseCompiler does not implement coverageOutputZipPath()")
 }
 
 var _ compiler = (*baseCompiler)(nil)
@@ -140,8 +144,8 @@ func (compiler *baseCompiler) featuresToFlags(features []string) []string {
 
 func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flags {
 
-	if getDenyWarnings(compiler) {
-		flags.RustFlags = append(flags.RustFlags, "-D warnings")
+	if !Bool(compiler.Properties.No_lint) {
+		flags.RustFlags = append(flags.RustFlags, config.RustcLintsForDir(ctx.ModuleDir()))
 	}
 	flags.RustFlags = append(flags.RustFlags, compiler.Properties.Flags...)
 	flags.RustFlags = append(flags.RustFlags, compiler.featuresToFlags(compiler.Properties.Features)...)
@@ -177,25 +181,19 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.Rlibs = append(deps.Rlibs, compiler.Properties.Rlibs...)
 	deps.Dylibs = append(deps.Dylibs, compiler.Properties.Dylibs...)
+	deps.Rustlibs = append(deps.Rustlibs, compiler.Properties.Rustlibs...)
 	deps.ProcMacros = append(deps.ProcMacros, compiler.Properties.Proc_macros...)
 	deps.StaticLibs = append(deps.StaticLibs, compiler.Properties.Static_libs...)
 	deps.SharedLibs = append(deps.SharedLibs, compiler.Properties.Shared_libs...)
 
 	if !Bool(compiler.Properties.No_stdlibs) {
 		for _, stdlib := range config.Stdlibs {
-			// If we're building for host, use the compiler's stdlibs
-			if ctx.Host() {
+			// If we're building for the primary host target, use the compiler's stdlibs
+			if ctx.Host() && ctx.TargetPrimary() {
 				stdlib = stdlib + "_" + ctx.toolchain().RustTriple()
 			}
 
-			// This check is technically insufficient - on the host, where
-			// static linking is the default, if one of our static
-			// dependencies uses a dynamic library, we need to dynamically
-			// link the stdlib as well.
-			if (len(deps.Dylibs) > 0) || (!ctx.Host()) {
-				// Dynamically linked stdlib
-				deps.Dylibs = append(deps.Dylibs, stdlib)
-			}
+			deps.Rustlibs = append(deps.Rustlibs, stdlib)
 		}
 	}
 	return deps
@@ -222,11 +220,18 @@ func (compiler *baseCompiler) installDir(ctx ModuleContext) android.InstallPath 
 	if ctx.toolchain().Is64Bit() && compiler.dir64 != "" {
 		dir = compiler.dir64
 	}
-	if !ctx.Host() || ctx.Target().NativeBridge == android.NativeBridgeEnabled {
+	if ctx.Target().NativeBridge == android.NativeBridgeEnabled {
+		dir = filepath.Join(dir, ctx.Target().NativeBridgeRelativePath)
+	}
+	if !ctx.Host() && ctx.Config().HasMultilibConflict(ctx.Arch().ArchType) {
 		dir = filepath.Join(dir, ctx.Arch().ArchType.String())
 	}
 	return android.PathForModuleInstall(ctx, dir, compiler.subDir,
 		compiler.relativeInstallPath(), compiler.relative)
+}
+
+func (compiler *baseCompiler) nativeCoverage() bool {
+	return false
 }
 
 func (compiler *baseCompiler) install(ctx ModuleContext, file android.Path) {
@@ -238,7 +243,7 @@ func (compiler *baseCompiler) getStem(ctx ModuleContext) string {
 }
 
 func (compiler *baseCompiler) getStemWithoutSuffix(ctx BaseModuleContext) string {
-	stem := ctx.baseModuleName()
+	stem := ctx.ModuleName()
 	if String(compiler.Properties.Stem) != "" {
 		stem = String(compiler.Properties.Stem)
 	}
@@ -250,10 +255,25 @@ func (compiler *baseCompiler) relativeInstallPath() string {
 	return String(compiler.Properties.Relative_install_path)
 }
 
-func srcPathFromModuleSrcs(ctx ModuleContext, srcs []string) android.Path {
-	srcPaths := android.PathsForModuleSrc(ctx, srcs)
-	if len(srcPaths) != 1 {
-		ctx.PropertyErrorf("srcs", "srcs can only contain one path for rust modules")
+// Returns the Path for the main source file along with Paths for generated source files from modules listed in srcs.
+func srcPathFromModuleSrcs(ctx ModuleContext, srcs []string) (android.Path, android.Paths) {
+	// The srcs can contain strings with prefix ":".
+	// They are dependent modules of this module, with android.SourceDepTag.
+	// They are not the main source file compiled by rustc.
+	numSrcs := 0
+	srcIndex := 0
+	for i, s := range srcs {
+		if android.SrcIsModule(s) == "" {
+			numSrcs++
+			srcIndex = i
+		}
 	}
-	return srcPaths[0]
+	if numSrcs != 1 {
+		ctx.PropertyErrorf("srcs", incorrectSourcesError)
+	}
+	if srcIndex != 0 {
+		ctx.PropertyErrorf("srcs", "main source file must be the first in srcs")
+	}
+	paths := android.PathsForModuleSrc(ctx, srcs)
+	return paths[srcIndex], paths[1:]
 }

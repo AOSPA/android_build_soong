@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/scanner"
 
@@ -49,6 +50,8 @@ type BuildParams struct {
 	Implicit        Path
 	Implicits       Paths
 	OrderOnly       Paths
+	Validation      Path
+	Validations     Paths
 	Default         bool
 	Args            map[string]string
 }
@@ -103,11 +106,15 @@ type EarlyModuleContext interface {
 type BaseModuleContext interface {
 	EarlyModuleContext
 
+	blueprintBaseModuleContext() blueprint.BaseModuleContext
+
 	OtherModuleName(m blueprint.Module) string
 	OtherModuleDir(m blueprint.Module) string
 	OtherModuleErrorf(m blueprint.Module, fmt string, args ...interface{})
 	OtherModuleDependencyTag(m blueprint.Module) blueprint.DependencyTag
 	OtherModuleExists(name string) bool
+	OtherModuleDependencyVariantExists(variations []blueprint.Variation, name string) bool
+	OtherModuleReverseDependencyVariantExists(name string) bool
 	OtherModuleType(m blueprint.Module) string
 
 	GetDirectDepsWithTag(tag blueprint.DependencyTag) []Module
@@ -134,6 +141,13 @@ type BaseModuleContext interface {
 	// exist between each adjacent pair of modules in the GetWalkPath().
 	// GetTagPath()[i] is the tag between GetWalkPath()[i] and GetWalkPath()[i+1]
 	GetTagPath() []blueprint.DependencyTag
+
+	// GetPathString is supposed to be called in visit function passed in WalkDeps()
+	// and returns a multi-line string showing the modules and dependency tags
+	// among them along the top-down dependency path from a start module to current child module.
+	// skipFirst when set to true, the output doesn't include the start module,
+	// which is already printed when this function is used along with ModuleErrorf().
+	GetPathString(skipFirst bool) string
 
 	AddMissingDependencies(missingDeps []string)
 
@@ -182,6 +196,7 @@ type ModuleContext interface {
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallBypassMake() bool
+	InstallForceOS() *OsType
 
 	RequiredModuleNames() []string
 	HostRequiredModuleNames() []string
@@ -215,6 +230,16 @@ type Module interface {
 	// For more information, see Module.GenerateBuildActions within Blueprint's module_ctx.go
 	GenerateAndroidBuildActions(ModuleContext)
 
+	// Add dependencies to the components of a module, i.e. modules that are created
+	// by the module and which are considered to be part of the creating module.
+	//
+	// This is called before prebuilts are renamed so as to allow a dependency to be
+	// added directly to a prebuilt child module instead of depending on a source module
+	// and relying on prebuilt processing to switch to the prebuilt module if preferred.
+	//
+	// A dependency on a prebuilt must include the "prebuilt_" prefix.
+	ComponentDepsMutator(ctx BottomUpMutatorContext)
+
 	DepsMutator(BottomUpMutatorContext)
 
 	base() *ModuleBase
@@ -229,12 +254,13 @@ type Module interface {
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallBypassMake() bool
+	InstallForceOS() *OsType
 	SkipInstall()
 	IsSkipInstall() bool
 	ExportedToMake() bool
 	InitRc() Paths
 	VintfFragments() Paths
-	NoticeFile() OptionalPath
+	NoticeFiles() Paths
 
 	AddProperties(props ...interface{})
 	GetProperties() []interface{}
@@ -255,6 +281,8 @@ type Module interface {
 	RequiredModuleNames() []string
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
+
+	filesToInstall() InstallPaths
 }
 
 // Qualified id for a module
@@ -298,6 +326,28 @@ func (q qualifiedModuleName) getContainingPackageId() qualifiedModuleName {
 func newPackageId(pkg string) qualifiedModuleName {
 	// A qualified id for a package module has no name.
 	return qualifiedModuleName{pkg: pkg, name: ""}
+}
+
+type Dist struct {
+	// Copy the output of this module to the $DIST_DIR when `dist` is specified on the
+	// command line and any of these targets are also on the command line, or otherwise
+	// built
+	Targets []string `android:"arch_variant"`
+
+	// The name of the output artifact. This defaults to the basename of the output of
+	// the module.
+	Dest *string `android:"arch_variant"`
+
+	// The directory within the dist directory to store the artifact. Defaults to the
+	// top level directory ("").
+	Dir *string `android:"arch_variant"`
+
+	// A suffix to add to the artifact file name (before any extension).
+	Suffix *string `android:"arch_variant"`
+
+	// A string tag to select the OutputFiles associated with the tag. Defaults to the
+	// the empty "" string.
+	Tag *string `android:"arch_variant"`
 }
 
 type nameProperties struct {
@@ -439,23 +489,13 @@ type commonProperties struct {
 	// relative path to a file to include in the list of notices for the device
 	Notice *string `android:"path"`
 
-	Dist struct {
-		// copy the output of this module to the $DIST_DIR when `dist` is specified on the
-		// command line and  any of these targets are also on the command line, or otherwise
-		// built
-		Targets []string `android:"arch_variant"`
+	// configuration to distribute output files from this module to the distribution
+	// directory (default: $OUT/dist, configurable with $DIST_DIR)
+	Dist Dist `android:"arch_variant"`
 
-		// The name of the output artifact. This defaults to the basename of the output of
-		// the module.
-		Dest *string `android:"arch_variant"`
-
-		// The directory within the dist directory to store the artifact. Defaults to the
-		// top level directory ("").
-		Dir *string `android:"arch_variant"`
-
-		// A suffix to add to the artifact file name (before any extension).
-		Suffix *string `android:"arch_variant"`
-	} `android:"arch_variant"`
+	// a list of configurations to distribute output files from this module to the
+	// distribution directory (default: $OUT/dist, configurable with $DIST_DIR)
+	Dists []Dist `android:"arch_variant"`
 
 	// The OsType of artifacts that this module variant is responsible for creating.
 	//
@@ -523,6 +563,14 @@ type commonProperties struct {
 
 	// set by ImageMutator
 	ImageVariation string `blueprint:"mutated"`
+}
+
+// A map of OutputFile tag keys to Paths, for disting purposes.
+type TaggedDistFiles map[string]Paths
+
+func MakeDefaultDistFiles(paths ...Path) TaggedDistFiles {
+	// The default OutputFile tag is the empty "" string.
+	return TaggedDistFiles{"": paths}
 }
 
 type hostAndDeviceProperties struct {
@@ -711,9 +759,9 @@ type ModuleBase struct {
 	primaryVisibilityProperty visibilityProperty
 
 	noAddressSanitizer bool
-	installFiles       Paths
+	installFiles       InstallPaths
 	checkbuildFiles    Paths
-	noticeFile         OptionalPath
+	noticeFiles        Paths
 	phonies            map[string]Paths
 
 	// Used by buildTargetSingleton to create checkbuild and per-directory build targets
@@ -736,6 +784,8 @@ type ModuleBase struct {
 
 	prefer32 func(ctx BaseModuleContext, base *ModuleBase, class OsClass) bool
 }
+
+func (m *ModuleBase) ComponentDepsMutator(BottomUpMutatorContext) {}
 
 func (m *ModuleBase) DepsMutator(BottomUpMutatorContext) {}
 
@@ -801,6 +851,41 @@ func (m *ModuleBase) qualifiedModuleId(ctx BaseModuleContext) qualifiedModuleNam
 
 func (m *ModuleBase) visibilityProperties() []visibilityProperty {
 	return m.visibilityPropertyInfo
+}
+
+func (m *ModuleBase) Dists() []Dist {
+	if len(m.commonProperties.Dist.Targets) > 0 {
+		// Make a copy of the underlying Dists slice to protect against
+		// backing array modifications with repeated calls to this method.
+		distsCopy := append([]Dist(nil), m.commonProperties.Dists...)
+		return append(distsCopy, m.commonProperties.Dist)
+	} else {
+		return m.commonProperties.Dists
+	}
+}
+
+func (m *ModuleBase) GenerateTaggedDistFiles(ctx BaseModuleContext) TaggedDistFiles {
+	distFiles := make(TaggedDistFiles)
+	for _, dist := range m.Dists() {
+		var tag string
+		var distFilesForTag Paths
+		if dist.Tag == nil {
+			tag = ""
+		} else {
+			tag = *dist.Tag
+		}
+		distFilesForTag, err := m.base().module.(OutputFileProducer).OutputFiles(tag)
+		if err != nil {
+			ctx.PropertyErrorf("dist.tag", "%s", err.Error())
+		}
+		for _, distFile := range distFilesForTag {
+			if distFile != nil && !distFiles[tag].containsPath(distFile) {
+				distFiles[tag] = append(distFiles[tag], distFile)
+			}
+		}
+	}
+
+	return distFiles
 }
 
 func (m *ModuleBase) Target() Target {
@@ -966,22 +1051,20 @@ func (m *ModuleBase) ExportedToMake() bool {
 	return m.commonProperties.NamespaceExportedToMake
 }
 
-func (m *ModuleBase) computeInstallDeps(
-	ctx blueprint.ModuleContext) Paths {
+func (m *ModuleBase) computeInstallDeps(ctx blueprint.ModuleContext) InstallPaths {
 
-	result := Paths{}
+	var result InstallPaths
 	// TODO(ccross): we need to use WalkDeps and have some way to know which dependencies require installation
-	ctx.VisitDepsDepthFirstIf(isFileInstaller,
-		func(m blueprint.Module) {
-			fileInstaller := m.(fileInstaller)
-			files := fileInstaller.filesToInstall()
-			result = append(result, files...)
-		})
+	ctx.VisitDepsDepthFirst(func(m blueprint.Module) {
+		if a, ok := m.(Module); ok {
+			result = append(result, a.filesToInstall()...)
+		}
+	})
 
 	return result
 }
 
-func (m *ModuleBase) filesToInstall() Paths {
+func (m *ModuleBase) filesToInstall() InstallPaths {
 	return m.installFiles
 }
 
@@ -1017,12 +1100,16 @@ func (m *ModuleBase) InstallBypassMake() bool {
 	return false
 }
 
+func (m *ModuleBase) InstallForceOS() *OsType {
+	return nil
+}
+
 func (m *ModuleBase) Owner() string {
 	return String(m.commonProperties.Owner)
 }
 
-func (m *ModuleBase) NoticeFile() OptionalPath {
-	return m.noticeFile
+func (m *ModuleBase) NoticeFiles() Paths {
+	return m.noticeFiles
 }
 
 func (m *ModuleBase) setImageVariation(variant string) {
@@ -1075,8 +1162,8 @@ func (m *ModuleBase) VintfFragments() Paths {
 }
 
 func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
-	allInstalledFiles := Paths{}
-	allCheckbuildFiles := Paths{}
+	var allInstalledFiles InstallPaths
+	var allCheckbuildFiles Paths
 	ctx.VisitAllModuleVariants(func(module Module) {
 		a := module.base()
 		allInstalledFiles = append(allInstalledFiles, a.installFiles...)
@@ -1092,7 +1179,7 @@ func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
 
 	if len(allInstalledFiles) > 0 {
 		name := namespacePrefix + ctx.ModuleName() + "-install"
-		ctx.Phony(name, allInstalledFiles...)
+		ctx.Phony(name, allInstalledFiles.Paths()...)
 		m.installTarget = PathForPhony(ctx, name)
 		deps = append(deps, m.installTarget)
 	}
@@ -1267,12 +1354,25 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			}
 		})
 
-		notice := proptools.StringDefault(m.commonProperties.Notice, "NOTICE")
+		m.noticeFiles = make([]Path, 0)
+		optPath := OptionalPath{}
+		notice := proptools.StringDefault(m.commonProperties.Notice, "")
 		if module := SrcIsModule(notice); module != "" {
-			m.noticeFile = ctx.ExpandOptionalSource(&notice, "notice")
-		} else {
+			optPath = ctx.ExpandOptionalSource(&notice, "notice")
+		} else if notice != "" {
 			noticePath := filepath.Join(ctx.ModuleDir(), notice)
-			m.noticeFile = ExistentPathForSource(ctx, noticePath)
+			optPath = ExistentPathForSource(ctx, noticePath)
+		}
+		if optPath.Valid() {
+			m.noticeFiles = append(m.noticeFiles, optPath.Path())
+		} else {
+			for _, notice = range []string{"LICENSE", "LICENCE", "NOTICE"} {
+				noticePath := filepath.Join(ctx.ModuleDir(), notice)
+				optPath = ExistentPathForSource(ctx, noticePath)
+				if optPath.Valid() {
+					m.noticeFiles = append(m.noticeFiles, optPath.Path())
+				}
+			}
 		}
 
 		m.module.GenerateAndroidBuildActions(ctx)
@@ -1409,6 +1509,12 @@ func (b *baseModuleContext) OtherModuleDependencyTag(m blueprint.Module) bluepri
 	return b.bp.OtherModuleDependencyTag(m)
 }
 func (b *baseModuleContext) OtherModuleExists(name string) bool { return b.bp.OtherModuleExists(name) }
+func (b *baseModuleContext) OtherModuleDependencyVariantExists(variations []blueprint.Variation, name string) bool {
+	return b.bp.OtherModuleDependencyVariantExists(variations, name)
+}
+func (b *baseModuleContext) OtherModuleReverseDependencyVariantExists(name string) bool {
+	return b.bp.OtherModuleReverseDependencyVariantExists(name)
+}
 func (b *baseModuleContext) OtherModuleType(m blueprint.Module) string {
 	return b.bp.OtherModuleType(m)
 }
@@ -1417,11 +1523,15 @@ func (b *baseModuleContext) GetDirectDepWithTag(name string, tag blueprint.Depen
 	return b.bp.GetDirectDepWithTag(name, tag)
 }
 
+func (b *baseModuleContext) blueprintBaseModuleContext() blueprint.BaseModuleContext {
+	return b.bp
+}
+
 type moduleContext struct {
 	bp blueprint.ModuleContext
 	baseModuleContext
-	installDeps     Paths
-	installFiles    Paths
+	installDeps     InstallPaths
+	installFiles    InstallPaths
 	checkbuildFiles Paths
 	module          Module
 	phonies         map[string]Paths
@@ -1460,6 +1570,7 @@ func convertBuildParams(params BuildParams) blueprint.BuildParams {
 		Inputs:          params.Inputs.Strings(),
 		Implicits:       params.Implicits.Strings(),
 		OrderOnly:       params.OrderOnly.Strings(),
+		Validations:     params.Validations.Strings(),
 		Args:            params.Args,
 		Optional:        !params.Default,
 	}
@@ -1479,13 +1590,17 @@ func convertBuildParams(params BuildParams) blueprint.BuildParams {
 	if params.Implicit != nil {
 		bparams.Implicits = append(bparams.Implicits, params.Implicit.String())
 	}
+	if params.Validation != nil {
+		bparams.Validations = append(bparams.Validations, params.Validation.String())
+	}
 
 	bparams.Outputs = proptools.NinjaEscapeList(bparams.Outputs)
 	bparams.ImplicitOutputs = proptools.NinjaEscapeList(bparams.ImplicitOutputs)
 	bparams.Inputs = proptools.NinjaEscapeList(bparams.Inputs)
 	bparams.Implicits = proptools.NinjaEscapeList(bparams.Implicits)
 	bparams.OrderOnly = proptools.NinjaEscapeList(bparams.OrderOnly)
-	bparams.Depfile = proptools.NinjaEscapeList([]string{bparams.Depfile})[0]
+	bparams.Validations = proptools.NinjaEscapeList(bparams.Validations)
+	bparams.Depfile = proptools.NinjaEscape(bparams.Depfile)
 
 	return bparams
 }
@@ -1723,6 +1838,41 @@ func (b *baseModuleContext) GetTagPath() []blueprint.DependencyTag {
 	return b.tagPath
 }
 
+// A regexp for removing boilerplate from BaseDependencyTag from the string representation of
+// a dependency tag.
+var tagCleaner = regexp.MustCompile(`\QBaseDependencyTag:blueprint.BaseDependencyTag{}\E(, )?`)
+
+// PrettyPrintTag returns string representation of the tag, but prefers
+// custom String() method if available.
+func PrettyPrintTag(tag blueprint.DependencyTag) string {
+	// Use tag's custom String() method if available.
+	if stringer, ok := tag.(fmt.Stringer); ok {
+		return stringer.String()
+	}
+
+	// Otherwise, get a default string representation of the tag's struct.
+	tagString := fmt.Sprintf("%#v", tag)
+
+	// Remove the boilerplate from BaseDependencyTag as it adds no value.
+	tagString = tagCleaner.ReplaceAllString(tagString, "")
+	return tagString
+}
+
+func (b *baseModuleContext) GetPathString(skipFirst bool) string {
+	sb := strings.Builder{}
+	tagPath := b.GetTagPath()
+	walkPath := b.GetWalkPath()
+	if !skipFirst {
+		sb.WriteString(walkPath[0].String())
+	}
+	for i, m := range walkPath[1:] {
+		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("           via tag %s\n", PrettyPrintTag(tagPath[i])))
+		sb.WriteString(fmt.Sprintf("    -> %s", m.String()))
+	}
+	return sb.String()
+}
+
 func (m *moduleContext) VisitAllModuleVariants(visit func(Module)) {
 	m.bp.VisitAllModuleVariants(func(module blueprint.Module) {
 		visit(module.(Module))
@@ -1847,6 +1997,10 @@ func (m *moduleContext) InstallBypassMake() bool {
 	return m.module.InstallBypassMake()
 }
 
+func (m *moduleContext) InstallForceOS() *OsType {
+	return m.module.InstallForceOS()
+}
+
 func (m *moduleContext) skipInstall(fullInstallPath InstallPath) bool {
 	if m.module.base().commonProperties.SkipInstall {
 		return true
@@ -1886,11 +2040,11 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 	rule blueprint.Rule, deps []Path) InstallPath {
 
 	fullInstallPath := installPath.Join(m, name)
-	m.module.base().hooks.runInstallHooks(m, fullInstallPath, false)
+	m.module.base().hooks.runInstallHooks(m, srcPath, fullInstallPath, false)
 
 	if !m.skipInstall(fullInstallPath) {
 
-		deps = append(deps, m.installDeps...)
+		deps = append(deps, m.installDeps.Paths()...)
 
 		var implicitDeps, orderOnlyDeps Paths
 
@@ -1920,7 +2074,7 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 
 func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, srcPath InstallPath) InstallPath {
 	fullInstallPath := installPath.Join(m, name)
-	m.module.base().hooks.runInstallHooks(m, fullInstallPath, true)
+	m.module.base().hooks.runInstallHooks(m, srcPath, fullInstallPath, true)
 
 	if !m.skipInstall(fullInstallPath) {
 
@@ -1949,7 +2103,7 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 // (e.g. /apex/...)
 func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name string, absPath string) InstallPath {
 	fullInstallPath := installPath.Join(m, name)
-	m.module.base().hooks.runInstallHooks(m, fullInstallPath, true)
+	m.module.base().hooks.runInstallHooks(m, nil, fullInstallPath, true)
 
 	if !m.skipInstall(fullInstallPath) {
 		m.Build(pctx, BuildParams{
@@ -1969,29 +2123,6 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 
 func (m *moduleContext) CheckbuildFile(srcPath Path) {
 	m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
-}
-
-type fileInstaller interface {
-	filesToInstall() Paths
-}
-
-func isFileInstaller(m blueprint.Module) bool {
-	_, ok := m.(fileInstaller)
-	return ok
-}
-
-func isAndroidModule(m blueprint.Module) bool {
-	_, ok := m.(Module)
-	return ok
-}
-
-func findStringInSlice(str string, slice []string) int {
-	for i, s := range slice {
-		if s == str {
-			return i
-		}
-	}
-	return -1
 }
 
 // SrcIsModule decodes module references in the format ":name" into the module name, or empty string if the input
@@ -2299,4 +2430,10 @@ type IdeInfo struct {
 	Classes           []string `json:"class,omitempty"`
 	Installed_paths   []string `json:"installed,omitempty"`
 	SrcJars           []string `json:"srcjars,omitempty"`
+	Paths             []string `json:"path,omitempty"`
+}
+
+func CheckBlueprintSyntax(ctx BaseModuleContext, filename string, contents string) []error {
+	bpctx := ctx.blueprintBaseModuleContext()
+	return blueprint.CheckBlueprintSyntax(bpctx.ModuleFactories(), filename, contents)
 }

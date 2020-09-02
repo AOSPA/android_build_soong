@@ -345,8 +345,8 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
-	// CFI needs gold linker, and mips toolchain does not have one.
-	if !ctx.Config().EnableCFI() || ctx.Arch().ArchType == android.Mips || ctx.Arch().ArchType == android.Mips64 {
+	// Is CFI actually enabled?
+	if !ctx.Config().EnableCFI() {
 		s.Cfi = boolPtr(false)
 		s.Diag.Cfi = boolPtr(false)
 	}
@@ -445,16 +445,6 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 func (sanitize *sanitize) deps(ctx BaseModuleContext, deps Deps) Deps {
 	if !sanitize.Properties.SanitizerEnabled { // || c.static() {
 		return deps
-	}
-
-	if ctx.Device() {
-		if Bool(sanitize.Properties.Sanitize.Address) {
-			// Compiling asan and having libc_scudo in the same
-			// executable will cause the executable to crash.
-			// Remove libc_scudo since it is only used to override
-			// allocation functions which asan already overrides.
-			_, deps.SharedLibs = removeFromList("libc_scudo", deps.SharedLibs)
-		}
 	}
 
 	return deps
@@ -1065,6 +1055,7 @@ type Sanitizeable interface {
 	android.Module
 	IsSanitizerEnabled(ctx android.BaseModuleContext, sanitizerName string) bool
 	EnableSanitizer(sanitizerName string)
+	AddSanitizerDependencies(ctx android.BottomUpMutatorContext, sanitizerName string)
 }
 
 // Create sanitized variants for modules that need them
@@ -1145,6 +1136,7 @@ func sanitizerMutator(t sanitizerType) func(android.BottomUpMutatorContext) {
 			c.sanitize.Properties.SanitizeDep = false
 		} else if sanitizeable, ok := mctx.Module().(Sanitizeable); ok && sanitizeable.IsSanitizerEnabled(mctx, t.name()) {
 			// APEX modules fall here
+			sanitizeable.AddSanitizerDependencies(mctx, t.name())
 			mctx.CreateVariations(t.variationName())
 		} else if c, ok := mctx.Module().(*Module); ok {
 			// Check if it's a snapshot module supporting sanitizer

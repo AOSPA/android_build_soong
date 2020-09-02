@@ -24,15 +24,13 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust/config")
 
 var (
-	RustDefaultVersion = "1.40.0"
+	RustDefaultVersion = "1.44.0"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2018"
 	Stdlibs            = []string{
 		"libstd",
 		"libtest",
 	}
-
-	DefaultDenyWarnings = true
 
 	GlobalRustFlags = []string{
 		"--remap-path-prefix $$(pwd)=",
@@ -56,6 +54,9 @@ var (
 		"-Wl,--pack-dyn-relocs=android+relr",
 		"-Wl,--no-undefined",
 		"-Wl,--hash-style=gnu",
+
+		"-B${ccConfig.ClangBin}",
+		"-fuse-ld=lld",
 	}
 )
 
@@ -82,7 +83,7 @@ func init() {
 
 	pctx.ImportAs("ccConfig", "android/soong/cc/config")
 	pctx.StaticVariable("RustLinker", "${ccConfig.ClangBin}/clang++")
-	pctx.StaticVariable("RustLinkerArgs", "-B ${ccConfig.ClangBin} -fuse-ld=lld")
+	pctx.StaticVariable("RustLinkerArgs", "")
 
 	pctx.StaticVariable("DeviceGlobalLinkFlags", strings.Join(deviceGlobalLinkFlags, " "))
 

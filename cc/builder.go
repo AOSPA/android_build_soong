@@ -38,13 +38,6 @@ const (
 )
 
 var (
-	abiCheckAllowFlags = []string{
-		"-allow-unreferenced-changes",
-		"-allow-unreferenced-elf-symbol-changes",
-	}
-)
-
-var (
 	pctx = android.NewPackageContext("android/soong/cc")
 
 	cc = pctx.AndroidRemoteStaticRule("cc", android.RemoteRuleSupports{Goma: true, RBE: true},
@@ -90,9 +83,8 @@ var (
 			Command:     "$reTemplate$ldCmd -fuse-ld=lld -nostdlib -no-pie -Wl,-r ${in} -o ${out} ${ldFlags}",
 			CommandDeps: []string{"$ldCmd"},
 		}, &remoteexec.REParams{
-			Labels:          map[string]string{"type": "link", "tool": "clang"},
-			ExecStrategy:    "${config.RECXXLinksExecStrategy}",
-			Inputs:          []string{"$inCommaList"},
+			Labels:       map[string]string{"type": "link", "tool": "clang"},
+			ExecStrategy: "${config.RECXXLinksExecStrategy}", Inputs: []string{"$inCommaList"},
 			OutputFiles:     []string{"${out}", "$implicitOutputs"},
 			ToolchainInputs: []string{"$ldCmd"},
 			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXLinksPool}"},
@@ -106,6 +98,15 @@ var (
 			RspfileContent: "${in}",
 		},
 		"arCmd", "arFlags")
+
+	arWithLibs = pctx.AndroidStaticRule("arWithLibs",
+		blueprint.RuleParams{
+			Command:        "rm -f ${out} && $arCmd $arObjFlags $out @${out}.rsp && $arCmd $arLibFlags $out $arLibs",
+			CommandDeps:    []string{"$arCmd"},
+			Rspfile:        "${out}.rsp",
+			RspfileContent: "${arObjs}",
+		},
+		"arCmd", "arObjFlags", "arObjs", "arLibFlags", "arLibs")
 
 	darwinStrip = pctx.AndroidStaticRule("darwinStrip",
 		blueprint.RuleParams{
@@ -215,22 +216,29 @@ var (
 		}, []string{"cFlags", "exportDirs"}, nil)
 
 	_ = pctx.SourcePathVariable("sAbiLinker", "prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/header-abi-linker")
+	_ = pctx.SourcePathVariable("sAbiLinkerLibs", "prebuilts/clang-tools/${config.HostPrebuiltTag}/lib64")
 
-	sAbiLink = pctx.AndroidStaticRule("sAbiLink",
+	sAbiLink, sAbiLinkRE = remoteexec.StaticRules(pctx, "sAbiLink",
 		blueprint.RuleParams{
-			Command:        "$sAbiLinker -o ${out} $symbolFilter -arch $arch  $exportedHeaderFlags @${out}.rsp ",
+			Command:        "$reTemplate$sAbiLinker -o ${out} $symbolFilter -arch $arch  $exportedHeaderFlags @${out}.rsp ",
 			CommandDeps:    []string{"$sAbiLinker"},
 			Rspfile:        "${out}.rsp",
 			RspfileContent: "${in}",
-		},
-		"symbolFilter", "arch", "exportedHeaderFlags")
+		}, &remoteexec.REParams{
+			Labels:          map[string]string{"type": "tool", "name": "abi-linker"},
+			ExecStrategy:    "${config.REAbiLinkerExecStrategy}",
+			Inputs:          []string{"$sAbiLinkerLibs", "${out}.rsp", "$implicits"},
+			RSPFile:         "${out}.rsp",
+			OutputFiles:     []string{"$out"},
+			ToolchainInputs: []string{"$sAbiLinker"},
+			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXPool}"},
+		}, []string{"symbolFilter", "arch", "exportedHeaderFlags"}, []string{"implicits"})
 
 	_ = pctx.SourcePathVariable("sAbiDiffer", "prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/header-abi-diff")
 
 	sAbiDiff = pctx.RuleFunc("sAbiDiff",
 		func(ctx android.PackageRuleContext) blueprint.RuleParams {
-			// TODO(b/78139997): Add -check-all-apis back
-			commandStr := "($sAbiDiffer ${allowFlags} -lib ${libName} -arch ${arch} -o ${out} -new ${in} -old ${referenceDump})"
+			commandStr := "($sAbiDiffer ${extraFlags} -lib ${libName} -arch ${arch} -o ${out} -new ${in} -old ${referenceDump})"
 			commandStr += "|| (echo 'error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py ${createReferenceDumpFlags} -l ${libName}'"
 			commandStr += " && (mkdir -p $$DIST_DIR/abidiffs && cp ${out} $$DIST_DIR/abidiffs/)"
 			commandStr += " && exit 1)"
@@ -239,7 +247,7 @@ var (
 				CommandDeps: []string{"$sAbiDiffer"},
 			}
 		},
-		"allowFlags", "referenceDump", "libName", "arch", "createReferenceDumpFlags")
+		"extraFlags", "referenceDump", "libName", "arch", "createReferenceDumpFlags")
 
 	unzipRefSAbiDump = pctx.AndroidStaticRule("unzipRefSAbiDump",
 		blueprint.RuleParams{
@@ -264,23 +272,30 @@ var (
 	kytheExtract = pctx.StaticRule("kythe",
 		blueprint.RuleParams{
 			Command: `rm -f $out && ` +
-				`KYTHE_CORPUS=${kytheCorpus} KYTHE_OUTPUT_FILE=$out KYTHE_VNAMES=$kytheVnames KYTHE_KZIP_ENCODING=${kytheCuEncoding} ` +
+				`KYTHE_CORPUS=${kytheCorpus} ` +
+				`KYTHE_OUTPUT_FILE=$out ` +
+				`KYTHE_VNAMES=$kytheVnames ` +
+				`KYTHE_KZIP_ENCODING=${kytheCuEncoding} ` +
+				`KYTHE_CANONICALIZE_VNAME_PATHS=prefer-relative ` +
 				`$cxxExtractor $cFlags $in `,
 			CommandDeps: []string{"$cxxExtractor", "$kytheVnames"},
 		},
 		"cFlags")
 )
 
+func PwdPrefix() string {
+	// Darwin doesn't have /proc
+	if runtime.GOOS != "darwin" {
+		return "PWD=/proc/self/cwd"
+	}
+	return ""
+}
+
 func init() {
 	// We run gcc/clang with PWD=/proc/self/cwd to remove $TOP from the
 	// debug output. That way two builds in two different directories will
 	// create the same output.
-	if runtime.GOOS != "darwin" {
-		pctx.StaticVariable("relPwd", "PWD=/proc/self/cwd")
-	} else {
-		// Darwin doesn't have /proc
-		pctx.StaticVariable("relPwd", "")
-	}
+	pctx.StaticVariable("relPwd", PwdPrefix())
 
 	pctx.HostBinToolVariable("SoongZipCmd", "soong_zip")
 	pctx.Import("android/soong/remoteexec")
@@ -613,29 +628,48 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 }
 
 // Generate a rule for compiling multiple .o files to a static library (.a)
-func TransformObjToStaticLib(ctx android.ModuleContext, objFiles android.Paths,
+func TransformObjToStaticLib(ctx android.ModuleContext,
+	objFiles android.Paths, wholeStaticLibs android.Paths,
 	flags builderFlags, outputFile android.ModuleOutPath, deps android.Paths) {
 
 	arCmd := "${config.ClangBin}/llvm-ar"
 	if flags.sdclang {
                 arCmd = "${config.ClangBin}/llvm-ar"
         }
-	arFlags := "crsPD"
+	arFlags := ""
 	if !ctx.Darwin() {
 		arFlags += " -format=gnu"
 	}
 
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        ar,
-		Description: "static link " + outputFile.Base(),
-		Output:      outputFile,
-		Inputs:      objFiles,
-		Implicits:   deps,
-		Args: map[string]string{
-			"arFlags": arFlags,
-			"arCmd":   arCmd,
-		},
-	})
+	if len(wholeStaticLibs) == 0 {
+		ctx.Build(pctx, android.BuildParams{
+			Rule:        ar,
+			Description: "static link " + outputFile.Base(),
+			Output:      outputFile,
+			Inputs:      objFiles,
+			Implicits:   deps,
+			Args: map[string]string{
+				"arFlags": "crsPD" + arFlags,
+				"arCmd":   arCmd,
+			},
+		})
+
+	} else {
+		ctx.Build(pctx, android.BuildParams{
+			Rule:        arWithLibs,
+			Description: "static link " + outputFile.Base(),
+			Output:      outputFile,
+			Inputs:      append(objFiles, wholeStaticLibs...),
+			Implicits:   deps,
+			Args: map[string]string{
+				"arCmd":      arCmd,
+				"arObjFlags": "crsPD" + arFlags,
+				"arObjs":     strings.Join(objFiles.Strings(), " "),
+				"arLibFlags": "cqsL" + arFlags,
+				"arLibs":     strings.Join(wholeStaticLibs.Strings(), " "),
+			},
+		})
+	}
 }
 
 // Generate a rule for compiling multiple .o files, plus static libraries, whole static libraries,
@@ -746,17 +780,30 @@ func TransformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Path
 	for _, tag := range excludedSymbolTags {
 		symbolFilterStr += " --exclude-symbol-tag " + tag
 	}
+	rule := sAbiLink
+	args := map[string]string{
+		"symbolFilter":        symbolFilterStr,
+		"arch":                ctx.Arch().ArchType.Name,
+		"exportedHeaderFlags": exportedHeaderFlags,
+	}
+	if ctx.Config().IsEnvTrue("RBE_ABI_LINKER") {
+		rule = sAbiLinkRE
+		rbeImplicits := implicits.Strings()
+		for _, p := range strings.Split(exportedHeaderFlags, " ") {
+			if len(p) > 2 {
+				// Exclude the -I prefix.
+				rbeImplicits = append(rbeImplicits, p[2:])
+			}
+		}
+		args["implicits"] = strings.Join(rbeImplicits, ",")
+	}
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        sAbiLink,
+		Rule:        rule,
 		Description: "header-abi-linker " + outputFile.Base(),
 		Output:      outputFile,
 		Inputs:      sAbiDumps,
 		Implicits:   implicits,
-		Args: map[string]string{
-			"symbolFilter":        symbolFilterStr,
-			"arch":                ctx.Arch().ArchType.Name,
-			"exportedHeaderFlags": exportedHeaderFlags,
-		},
+		Args:        args,
 	})
 	return android.OptionalPathForPath(outputFile)
 }
@@ -773,27 +820,36 @@ func UnzipRefDump(ctx android.ModuleContext, zippedRefDump android.Path, baseNam
 }
 
 func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceDump android.Path,
-	baseName, exportedHeaderFlags string, isLlndk, isNdk, isVndkExt bool) android.OptionalPath {
+	baseName, exportedHeaderFlags string, checkAllApis, isLlndk, isNdk, isVndkExt bool) android.OptionalPath {
 
 	outputFile := android.PathForModuleOut(ctx, baseName+".abidiff")
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 	createReferenceDumpFlags := ""
 
-	localAbiCheckAllowFlags := append([]string(nil), abiCheckAllowFlags...)
-	if exportedHeaderFlags == "" {
-		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-advice-only")
+	var extraFlags []string
+	if checkAllApis {
+		extraFlags = append(extraFlags, "-check-all-apis")
+	} else {
+		extraFlags = append(extraFlags,
+			"-allow-unreferenced-changes",
+			"-allow-unreferenced-elf-symbol-changes")
 	}
+
+	if exportedHeaderFlags == "" {
+		extraFlags = append(extraFlags, "-advice-only")
+	}
+
 	if isLlndk || isNdk {
 		createReferenceDumpFlags = "--llndk"
 		if isLlndk {
 			// TODO(b/130324828): "-consider-opaque-types-different" should apply to
 			// both LLNDK and NDK shared libs. However, a known issue in header-abi-diff
 			// breaks libaaudio. Remove the if-guard after the issue is fixed.
-			localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-consider-opaque-types-different")
+			extraFlags = append(extraFlags, "-consider-opaque-types-different")
 		}
 	}
 	if isVndkExt {
-		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-allow-extensions")
+		extraFlags = append(extraFlags, "-allow-extensions")
 	}
 	var sdclangAbiCheckIgnoreList = []string{
 		"libbinder",
@@ -804,9 +860,9 @@ func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 		"libvixl-arm64",
 		"libvixl-arm",
 	}
-	if config.SDClang && !inList("-advice-only", localAbiCheckAllowFlags) &&
+	if config.SDClang && !inList("-advice-only", extraFlags) &&
 		inList(ctx.ModuleName(), sdclangAbiCheckIgnoreList) {
-		localAbiCheckAllowFlags = append(localAbiCheckAllowFlags, "-advice-only")
+		extraFlags = append(extraFlags, "-advice-only")
 	}
 
 	ctx.Build(pctx, android.BuildParams{
@@ -819,7 +875,7 @@ func SourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 			"referenceDump":            referenceDump.String(),
 			"libName":                  libName,
 			"arch":                     ctx.Arch().ArchType.Name,
-			"allowFlags":               strings.Join(localAbiCheckAllowFlags, " "),
+			"extraFlags":               strings.Join(extraFlags, " "),
 			"createReferenceDumpFlags": createReferenceDumpFlags,
 		},
 	})

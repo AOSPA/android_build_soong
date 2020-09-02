@@ -34,10 +34,8 @@ type RequiredSdks interface {
 	RequiredSdks() SdkRefs
 }
 
-// SdkAware is the interface that must be supported by any module to become a member of SDK or to be
-// built with SDK
-type SdkAware interface {
-	Module
+// Provided to improve code navigation with the IDE.
+type sdkAwareWithoutModule interface {
 	RequiredSdks
 
 	sdkBase() *SdkBase
@@ -46,6 +44,13 @@ type SdkAware interface {
 	ContainingSdk() SdkRef
 	MemberName() string
 	BuildWithSdks(sdks SdkRefs)
+}
+
+// SdkAware is the interface that must be supported by any module to become a member of SDK or to be
+// built with SDK
+type SdkAware interface {
+	Module
+	sdkAwareWithoutModule
 }
 
 // SdkRef refers to a version of an SDK
@@ -266,6 +271,9 @@ type SdkMemberTypeDependencyTag interface {
 	SdkMemberType() SdkMemberType
 }
 
+var _ SdkMemberTypeDependencyTag = (*sdkMemberDependencyTag)(nil)
+var _ ReplaceSourceWithPrebuilt = (*sdkMemberDependencyTag)(nil)
+
 type sdkMemberDependencyTag struct {
 	blueprint.BaseDependencyTag
 	memberType SdkMemberType
@@ -273,6 +281,12 @@ type sdkMemberDependencyTag struct {
 
 func (t *sdkMemberDependencyTag) SdkMemberType() SdkMemberType {
 	return t.memberType
+}
+
+// Prevent dependencies from the sdk/module_exports onto their members from being
+// replaced with a preferred prebuilt.
+func (t *sdkMemberDependencyTag) ReplaceSourceWithPrebuilt() bool {
+	return false
 }
 
 func DependencyTagForSdkMemberType(memberType SdkMemberType) SdkMemberTypeDependencyTag {
@@ -457,8 +471,7 @@ func RegisterSdkMemberType(memberType SdkMemberType) {
 
 // Base structure for all implementations of SdkMemberProperties.
 //
-// Contains common properties that apply across many different member types. These
-// are not affected by the optimization to extract common values.
+// Contains common properties that apply across many different member types.
 type SdkMemberPropertiesBase struct {
 	// The number of unique os types supported by the member variants.
 	//
@@ -480,9 +493,7 @@ type SdkMemberPropertiesBase struct {
 	Os OsType `sdk:"keep"`
 
 	// The setting to use for the compile_multilib property.
-	//
-	// This property is set after optimization so there is no point in trying to optimize it.
-	Compile_multilib string `sdk:"keep"`
+	Compile_multilib string `android:"arch_variant"`
 }
 
 // The os prefix to use for any file paths in the sdk.

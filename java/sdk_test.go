@@ -49,27 +49,27 @@ func TestClasspath(t *testing.T) {
 	}{
 		{
 			name:           "default",
-			bootclasspath:  config.DefaultBootclasspathLibraries,
-			system:         config.DefaultSystemModules,
-			java8classpath: config.DefaultLibraries,
-			java9classpath: config.DefaultLibraries,
+			bootclasspath:  config.StableCorePlatformBootclasspathLibraries,
+			system:         config.StableCorePlatformSystemModules,
+			java8classpath: config.FrameworkLibraries,
+			java9classpath: config.FrameworkLibraries,
 			aidl:           "-Iframework/aidl",
 		},
 		{
 			name:           `sdk_version:"core_platform"`,
 			properties:     `sdk_version:"core_platform"`,
-			bootclasspath:  config.DefaultBootclasspathLibraries,
-			system:         config.DefaultSystemModules,
+			bootclasspath:  config.StableCorePlatformBootclasspathLibraries,
+			system:         config.StableCorePlatformSystemModules,
 			java8classpath: []string{},
 			aidl:           "",
 		},
 		{
 			name:           "blank sdk version",
 			properties:     `sdk_version: "",`,
-			bootclasspath:  config.DefaultBootclasspathLibraries,
-			system:         config.DefaultSystemModules,
-			java8classpath: config.DefaultLibraries,
-			java9classpath: config.DefaultLibraries,
+			bootclasspath:  config.StableCorePlatformBootclasspathLibraries,
+			system:         config.StableCorePlatformSystemModules,
+			java8classpath: config.FrameworkLibraries,
+			java9classpath: config.FrameworkLibraries,
 			aidl:           "-Iframework/aidl",
 		},
 		{
@@ -139,11 +139,10 @@ func TestClasspath(t *testing.T) {
 		},
 		{
 
-			name:           "core_current",
-			properties:     `sdk_version: "core_current",`,
-			bootclasspath:  []string{"core.current.stubs", "core-lambda-stubs"},
-			system:         "core-current-stubs-system-modules",
-			java9classpath: []string{"core.current.stubs"},
+			name:          "core_current",
+			properties:    `sdk_version: "core_current",`,
+			bootclasspath: []string{"core.current.stubs", "core-lambda-stubs"},
+			system:        "core-current-stubs-system-modules",
 		},
 		{
 
@@ -156,9 +155,9 @@ func TestClasspath(t *testing.T) {
 		{
 
 			name:           "nostdlib system_modules",
-			properties:     `sdk_version: "none", system_modules: "core-platform-api-stubs-system-modules"`,
-			system:         "core-platform-api-stubs-system-modules",
-			bootclasspath:  []string{"core-platform-api-stubs-system-modules-lib"},
+			properties:     `sdk_version: "none", system_modules: "stable-core-platform-api-stubs-system-modules"`,
+			system:         "stable-core-platform-api-stubs-system-modules",
+			bootclasspath:  []string{"stable-core-platform-api-stubs-system-modules-lib"},
 			java8classpath: []string{},
 		},
 		{

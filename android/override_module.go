@@ -28,6 +28,7 @@ package android
 // module based on it.
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/google/blueprint"
@@ -161,6 +162,11 @@ func (b *OverridableModuleBase) addOverride(o OverrideModule) {
 
 // Should NOT be used in the same mutator as addOverride.
 func (b *OverridableModuleBase) getOverrides() []OverrideModule {
+	b.overridesLock.Lock()
+	sort.Slice(b.overrides, func(i, j int) bool {
+		return b.overrides[i].Name() < b.overrides[j].Name()
+	})
+	b.overridesLock.Unlock()
 	return b.overrides
 }
 
@@ -223,6 +229,11 @@ var overrideBaseDepTag overrideBaseDependencyTag
 // next phase.
 func overrideModuleDepsMutator(ctx BottomUpMutatorContext) {
 	if module, ok := ctx.Module().(OverrideModule); ok {
+		base := String(module.getOverrideModuleProperties().Base)
+		if !ctx.OtherModuleExists(base) {
+			ctx.PropertyErrorf("base", "%q is not a valid module name", base)
+			return
+		}
 		// See if there's a prebuilt module that overrides this override module with prefer flag,
 		// in which case we call SkipInstall on the corresponding variant later.
 		ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(dep Module) {
