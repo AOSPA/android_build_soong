@@ -61,9 +61,7 @@ var (
 	cfiAsflags = []string{"-flto", "-fvisibility=default"}
 	cfiLdflags = []string{"-flto", "-fsanitize-cfi-cross-dso", "-fsanitize=cfi",
 		"-Wl,-plugin-opt,O1"}
-	cfiExportsMapPath     = "build/soong/cc/config/cfi_exports.map"
-	cfiStaticLibsMutex    sync.Mutex
-	hwasanStaticLibsMutex sync.Mutex
+	cfiExportsMapPath = "build/soong/cc/config/cfi_exports.map"
 
 	intOverflowCflags = []string{"-fsanitize-blacklist=build/soong/cc/config/integer_overflow_blacklist.txt"}
 
@@ -318,6 +316,20 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
+    // Disable integer-overflow in exclude path
+	if ctx.Config().IntegerOverflowDisabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
+		indx := indexList("signed-integer-overflow", s.Misc_undefined)
+		if (indexList("signed-integer-overflow", s.Misc_undefined) != -1) {
+			s.Misc_undefined = append(s.Misc_undefined[0:indx], s.Misc_undefined[indx+1:]...)
+		}
+
+		indx = indexList("unsigned-integer-overflow", s.Misc_undefined)
+		if (indexList("unsigned-integer-overflow", s.Misc_undefined) != -1) {
+			s.Misc_undefined = append(s.Misc_undefined[0:indx], s.Misc_undefined[indx+1:]...)
+		}
+        s.Integer_overflow = nil
+	}
+
 	// Enable CFI for all components in the include paths (for Aarch64 only)
 	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
 		s.Cfi = boolPtr(true)
@@ -325,17 +337,24 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 			s.Diag.Cfi = boolPtr(true)
 		}
 	}
+        // Disable CFI for all component in the exclude path (for Aarch64 only)
+	if ctx.Config().CFIDisabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
+		s.Cfi = nil
+		if inList("cfi", ctx.Config().SanitizeDeviceDiag()) {
+			s.Diag.Cfi = nil
+		}
+	}
 
 	// CFI needs gold linker, and mips toolchain does not have one.
 	if !ctx.Config().EnableCFI() || ctx.Arch().ArchType == android.Mips || ctx.Arch().ArchType == android.Mips64 {
-		s.Cfi = nil
-		s.Diag.Cfi = nil
+		s.Cfi = boolPtr(false)
+		s.Diag.Cfi = boolPtr(false)
 	}
 
 	// Also disable CFI for arm32 until b/35157333 is fixed.
 	if ctx.Arch().ArchType == android.Arm {
-		s.Cfi = nil
-		s.Diag.Cfi = nil
+		s.Cfi = boolPtr(false)
+		s.Diag.Cfi = boolPtr(false)
 	}
 
 	// HWASan requires AArch64 hardware feature (top-byte-ignore).
@@ -350,14 +369,14 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	// Also disable CFI if ASAN is enabled.
 	if Bool(s.Address) || Bool(s.Hwaddress) {
-		s.Cfi = nil
-		s.Diag.Cfi = nil
+		s.Cfi = boolPtr(false)
+		s.Diag.Cfi = boolPtr(false)
 	}
 
 	// Disable sanitizers that depend on the UBSan runtime for windows/darwin builds.
 	if !ctx.Os().Linux() {
-		s.Cfi = nil
-		s.Diag.Cfi = nil
+		s.Cfi = boolPtr(false)
+		s.Diag.Cfi = boolPtr(false)
 		s.Misc_undefined = nil
 		s.Undefined = nil
 		s.All_undefined = nil
@@ -366,14 +385,15 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	// Also disable CFI for VNDK variants of components
 	if ctx.isVndk() && ctx.useVndk() {
-		s.Cfi = nil
-		s.Diag.Cfi = nil
-	}
-
-	// Also disable CFI if building against snapshot.
-	vndkVersion := ctx.DeviceConfig().VndkVersion()
-	if ctx.useVndk() && vndkVersion != "current" && vndkVersion != "" {
-		s.Cfi = nil
+		if ctx.static() {
+			// Cfi variant for static vndk should be captured as vendor snapshot,
+			// so don't strictly disable Cfi.
+			s.Cfi = nil
+			s.Diag.Cfi = nil
+		} else {
+			s.Cfi = boolPtr(false)
+			s.Diag.Cfi = boolPtr(false)
+		}
 	}
 
 	// HWASan ramdisk (which is built from recovery) goes over some bootloader limit.
@@ -418,7 +438,7 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 	// TODO(b/131771163): CFI transiently depends on LTO, and thus Fuzzer is
 	// mutually incompatible.
 	if Bool(s.Fuzzer) {
-		s.Cfi = nil
+		s.Cfi = boolPtr(false)
 	}
 }
 
@@ -739,27 +759,64 @@ func isSanitizableDependencyTag(tag blueprint.DependencyTag) bool {
 	return ok && t.Library || t == reuseObjTag || t == objDepTag
 }
 
+// Determines if the current module is a static library going to be captured
+// as vendor snapshot. Such modules must create both cfi and non-cfi variants,
+// except for ones which explicitly disable cfi.
+func needsCfiForVendorSnapshot(mctx android.TopDownMutatorContext) bool {
+	if isVendorProprietaryPath(mctx.ModuleDir()) {
+		return false
+	}
+
+	c := mctx.Module().(*Module)
+
+	if !c.inVendor() {
+		return false
+	}
+
+	if !c.static() {
+		return false
+	}
+
+	if c.Prebuilt() != nil {
+		return false
+	}
+
+	return c.sanitize != nil &&
+		!Bool(c.sanitize.Properties.Sanitize.Never) &&
+		!c.sanitize.isSanitizerExplicitlyDisabled(cfi)
+}
+
 // Propagate sanitizer requirements down from binaries
 func sanitizerDepsMutator(t sanitizerType) func(android.TopDownMutatorContext) {
 	return func(mctx android.TopDownMutatorContext) {
-		if c, ok := mctx.Module().(*Module); ok && c.sanitize.isSanitizerEnabled(t) {
-			mctx.WalkDeps(func(child, parent android.Module) bool {
-				if !isSanitizableDependencyTag(mctx.OtherModuleDependencyTag(child)) {
-					return false
-				}
-				if d, ok := child.(*Module); ok && d.sanitize != nil &&
-					!Bool(d.sanitize.Properties.Sanitize.Never) &&
-					!d.sanitize.isSanitizerExplicitlyDisabled(t) {
-					if t == cfi || t == hwasan || t == scs {
-						if d.static() {
+		if c, ok := mctx.Module().(*Module); ok {
+			enabled := c.sanitize.isSanitizerEnabled(t)
+			if t == cfi && needsCfiForVendorSnapshot(mctx) {
+				// We shouldn't change the result of isSanitizerEnabled(cfi) to correctly
+				// determine defaultVariation in sanitizerMutator below.
+				// Instead, just mark SanitizeDep to forcefully create cfi variant.
+				enabled = true
+				c.sanitize.Properties.SanitizeDep = true
+			}
+			if enabled {
+				mctx.WalkDeps(func(child, parent android.Module) bool {
+					if !isSanitizableDependencyTag(mctx.OtherModuleDependencyTag(child)) {
+						return false
+					}
+					if d, ok := child.(*Module); ok && d.sanitize != nil &&
+						!Bool(d.sanitize.Properties.Sanitize.Never) &&
+						!d.sanitize.isSanitizerExplicitlyDisabled(t) {
+						if t == cfi || t == hwasan || t == scs {
+							if d.static() {
+								d.sanitize.Properties.SanitizeDep = true
+							}
+						} else {
 							d.sanitize.Properties.SanitizeDep = true
 						}
-					} else {
-						d.sanitize.Properties.SanitizeDep = true
 					}
-				}
-				return true
-			})
+					return true
+				})
+			}
 		} else if sanitizeable, ok := mctx.Module().(Sanitizeable); ok {
 			// If an APEX module includes a lib which is enabled for a sanitizer T, then
 			// the APEX module is also enabled for the same sanitizer type.
@@ -1062,15 +1119,9 @@ func sanitizerMutator(t sanitizerType) func(android.BottomUpMutatorContext) {
 					// Export the static lib name to make
 					if c.static() && c.ExportedToMake() {
 						if t == cfi {
-							appendStringSync(c.Name(), cfiStaticLibs(mctx.Config()), &cfiStaticLibsMutex)
+							cfiStaticLibs(mctx.Config()).add(c, c.Name())
 						} else if t == hwasan {
-							if c.UseVndk() {
-								appendStringSync(c.Name(), hwasanVendorStaticLibs(mctx.Config()),
-									&hwasanStaticLibsMutex)
-							} else {
-								appendStringSync(c.Name(), hwasanStaticLibs(mctx.Config()),
-									&hwasanStaticLibsMutex)
-							}
+							hwasanStaticLibs(mctx.Config()).add(c, c.Name())
 						}
 					}
 				} else {
@@ -1095,38 +1146,96 @@ func sanitizerMutator(t sanitizerType) func(android.BottomUpMutatorContext) {
 		} else if sanitizeable, ok := mctx.Module().(Sanitizeable); ok && sanitizeable.IsSanitizerEnabled(mctx, t.name()) {
 			// APEX modules fall here
 			mctx.CreateVariations(t.variationName())
+		} else if c, ok := mctx.Module().(*Module); ok {
+			// Check if it's a snapshot module supporting sanitizer
+			if s, ok := c.linker.(snapshotSanitizer); ok && s.isSanitizerEnabled(t) {
+				// Set default variation as above.
+				defaultVariation := t.variationName()
+				mctx.SetDefaultDependencyVariation(&defaultVariation)
+				modules := mctx.CreateVariations("", t.variationName())
+				modules[0].(*Module).linker.(snapshotSanitizer).setSanitizerVariation(t, false)
+				modules[1].(*Module).linker.(snapshotSanitizer).setSanitizerVariation(t, true)
+
+				// Export the static lib name to make
+				if c.static() && c.ExportedToMake() {
+					if t == cfi {
+						// use BaseModuleName which is the name for Make.
+						cfiStaticLibs(mctx.Config()).add(c, c.BaseModuleName())
+					}
+				}
+			}
+		}
+	}
+}
+
+type sanitizerStaticLibsMap struct {
+	// libsMap contains one list of modules per each image and each arch.
+	// e.g. libs[vendor]["arm"] contains arm modules installed to vendor
+	libsMap       map[imageVariantType]map[string][]string
+	libsMapLock   sync.Mutex
+	sanitizerType sanitizerType
+}
+
+func newSanitizerStaticLibsMap(t sanitizerType) *sanitizerStaticLibsMap {
+	return &sanitizerStaticLibsMap{
+		sanitizerType: t,
+		libsMap:       make(map[imageVariantType]map[string][]string),
+	}
+}
+
+// Add the current module to sanitizer static libs maps
+// Each module should pass its exported name as names of Make and Soong can differ.
+func (s *sanitizerStaticLibsMap) add(c *Module, name string) {
+	image := c.getImageVariantType()
+	arch := c.Arch().ArchType.String()
+
+	s.libsMapLock.Lock()
+	defer s.libsMapLock.Unlock()
+
+	if _, ok := s.libsMap[image]; !ok {
+		s.libsMap[image] = make(map[string][]string)
+	}
+
+	s.libsMap[image][arch] = append(s.libsMap[image][arch], name)
+}
+
+// Exports makefile variables in the following format:
+// SOONG_{sanitizer}_{image}_{arch}_STATIC_LIBRARIES
+// e.g. SOONG_cfi_core_x86_STATIC_LIBRARIES
+// These are to be used by use_soong_sanitized_static_libraries.
+// See build/make/core/binary.mk for more details.
+func (s *sanitizerStaticLibsMap) exportToMake(ctx android.MakeVarsContext) {
+	for _, image := range android.SortedStringKeys(s.libsMap) {
+		archMap := s.libsMap[imageVariantType(image)]
+		for _, arch := range android.SortedStringKeys(archMap) {
+			libs := archMap[arch]
+			sort.Strings(libs)
+
+			key := fmt.Sprintf(
+				"SOONG_%s_%s_%s_STATIC_LIBRARIES",
+				s.sanitizerType.variationName(),
+				image, // already upper
+				arch)
+
+			ctx.Strict(key, strings.Join(libs, " "))
 		}
 	}
 }
 
 var cfiStaticLibsKey = android.NewOnceKey("cfiStaticLibs")
 
-func cfiStaticLibs(config android.Config) *[]string {
+func cfiStaticLibs(config android.Config) *sanitizerStaticLibsMap {
 	return config.Once(cfiStaticLibsKey, func() interface{} {
-		return &[]string{}
-	}).(*[]string)
+		return newSanitizerStaticLibsMap(cfi)
+	}).(*sanitizerStaticLibsMap)
 }
 
 var hwasanStaticLibsKey = android.NewOnceKey("hwasanStaticLibs")
 
-func hwasanStaticLibs(config android.Config) *[]string {
+func hwasanStaticLibs(config android.Config) *sanitizerStaticLibsMap {
 	return config.Once(hwasanStaticLibsKey, func() interface{} {
-		return &[]string{}
-	}).(*[]string)
-}
-
-var hwasanVendorStaticLibsKey = android.NewOnceKey("hwasanVendorStaticLibs")
-
-func hwasanVendorStaticLibs(config android.Config) *[]string {
-	return config.Once(hwasanVendorStaticLibsKey, func() interface{} {
-		return &[]string{}
-	}).(*[]string)
-}
-
-func appendStringSync(item string, list *[]string, mutex *sync.Mutex) {
-	mutex.Lock()
-	*list = append(*list, item)
-	mutex.Unlock()
+		return newSanitizerStaticLibsMap(hwasan)
+	}).(*sanitizerStaticLibsMap)
 }
 
 func enableMinimalRuntime(sanitize *sanitize) bool {
@@ -1156,17 +1265,9 @@ func enableUbsanRuntime(sanitize *sanitize) bool {
 }
 
 func cfiMakeVarsProvider(ctx android.MakeVarsContext) {
-	cfiStaticLibs := cfiStaticLibs(ctx.Config())
-	sort.Strings(*cfiStaticLibs)
-	ctx.Strict("SOONG_CFI_STATIC_LIBRARIES", strings.Join(*cfiStaticLibs, " "))
+	cfiStaticLibs(ctx.Config()).exportToMake(ctx)
 }
 
 func hwasanMakeVarsProvider(ctx android.MakeVarsContext) {
-	hwasanStaticLibs := hwasanStaticLibs(ctx.Config())
-	sort.Strings(*hwasanStaticLibs)
-	ctx.Strict("SOONG_HWASAN_STATIC_LIBRARIES", strings.Join(*hwasanStaticLibs, " "))
-
-	hwasanVendorStaticLibs := hwasanVendorStaticLibs(ctx.Config())
-	sort.Strings(*hwasanVendorStaticLibs)
-	ctx.Strict("SOONG_HWASAN_VENDOR_STATIC_LIBRARIES", strings.Join(*hwasanVendorStaticLibs, " "))
+	hwasanStaticLibs(ctx.Config()).exportToMake(ctx)
 }
