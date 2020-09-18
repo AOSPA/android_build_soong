@@ -96,6 +96,9 @@ type Deps struct {
 	HeaderLibs                                  []string
 	RuntimeLibs                                 []string
 
+	// Used for data dependencies adjacent to tests
+	DataLibs []string
+
 	StaticUnwinderIfLegacy bool
 
 	ReexportSharedLibHeaders, ReexportStaticLibHeaders, ReexportHeaderLibHeaders []string
@@ -113,6 +116,8 @@ type Deps struct {
 	// Used for host bionic
 	LinkerFlagsFile string
 	DynamicLinker   string
+
+	Tools []string
 }
 
 type PathDeps struct {
@@ -124,13 +129,18 @@ type PathDeps struct {
 	StaticLibs, LateStaticLibs, WholeStaticLibs android.Paths
 
 	// Paths to .o files
-	Objs               Objects
+	Objs Objects
+	// Paths to .o files in dependencies that provide them. Note that these lists
+	// aren't complete since prebuilt modules don't provide the .o files.
 	StaticLibObjs      Objects
 	WholeStaticLibObjs Objects
 
+	// Paths to .a files in prebuilts. Complements WholeStaticLibObjs to contain
+	// the libs from all whole_static_lib dependencies.
+	WholeStaticLibsFromPrebuilts android.Paths
+
 	// Paths to generated source files
 	GeneratedSources android.Paths
-	GeneratedHeaders android.Paths
 	GeneratedDeps    android.Paths
 
 	Flags                      []string
@@ -150,6 +160,8 @@ type PathDeps struct {
 
 	// Path to the dynamic linker binary
 	DynamicLinker android.OptionalPath
+
+	Tools map[string]android.Path
 }
 
 // LocalOrGlobalFlags contains flags that need to have values set globally by the build system or locally by the module
@@ -428,7 +440,14 @@ type xref interface {
 	XrefCcFiles() android.Paths
 }
 
+type ToolDependencyTag struct {
+	blueprint.BaseDependencyTag
+
+	Name string
+}
+
 var (
+	dataLibDepTag         = DependencyTag{Name: "data_lib", Library: true, Shared: true}
 	sharedExportDepTag    = DependencyTag{Name: "shared", Library: true, Shared: true, ReexportFlags: true}
 	earlySharedDepTag     = DependencyTag{Name: "early_shared", Library: true, Shared: true}
 	lateSharedDepTag      = DependencyTag{Name: "late shared", Library: true, Shared: true}
@@ -450,7 +469,6 @@ var (
 	ndkLateStubDepTag     = DependencyTag{Name: "ndk late stub", Library: true}
 	vndkExtDepTag         = DependencyTag{Name: "vndk extends", Library: true}
 	runtimeDepTag         = DependencyTag{Name: "runtime lib"}
-	coverageDepTag        = DependencyTag{Name: "coverage"}
 	testPerSrcDepTag      = DependencyTag{Name: "test_per_src"}
 )
 
@@ -758,6 +776,15 @@ func (c *Module) OutputFile() android.OptionalPath {
 	return c.outputFile
 }
 
+func (c *Module) CoverageFiles() android.Paths {
+	if c.linker != nil {
+		if library, ok := c.linker.(libraryInterface); ok {
+			return library.objs().coverageFiles
+		}
+	}
+	panic(fmt.Errorf("CoverageFiles called on non-library module: %q", c.BaseModuleName()))
+}
+
 var _ LinkableInterface = (*Module)(nil)
 
 func (c *Module) UnstrippedOutputFile() android.Path {
@@ -822,15 +849,8 @@ func (c *Module) Init() android.Module {
 	}
 
 	c.Prefer32(func(ctx android.BaseModuleContext, base *android.ModuleBase, class android.OsClass) bool {
-		switch class {
-		case android.Device:
-			return ctx.Config().DevicePrefer32BitExecutables()
-		case android.HostCross:
-			// Windows builds always prefer 32-bit
-			return true
-		default:
-			return false
-		}
+		// Windows builds always prefer 32-bit
+		return class == android.HostCross
 	})
 	android.InitAndroidArchModule(c, c.hod, c.multilib)
 	android.InitApexModule(c)
@@ -877,7 +897,7 @@ func (c *Module) isCoverageVariant() bool {
 }
 
 func (c *Module) IsNdk() bool {
-	return inList(c.Name(), ndkMigratedLibs)
+	return inList(c.Name(), ndkKnownLibs)
 }
 
 func (c *Module) isLlndk(config android.Config) bool {
@@ -1029,7 +1049,7 @@ func isBionic(name string) bool {
 
 func InstallToBootstrap(name string, config android.Config) bool {
 	if name == "libclang_rt.hwasan-aarch64-android" {
-		return inList("hwaddress", config.SanitizeDevice())
+		return true
 	}
 	return isBionic(name)
 }
@@ -1151,6 +1171,11 @@ func (ctx *moduleContextImpl) mustUseVendorVariant() bool {
 // Check whether ABI dumps should be created for this module.
 func (ctx *moduleContextImpl) shouldCreateSourceAbiDump() bool {
 	if ctx.ctx.Config().IsEnvTrue("SKIP_ABI_CHECKS") {
+		return false
+	}
+
+	// Coverage builds have extra symbols.
+	if ctx.mod.isCoverageVariant() {
 		return false
 	}
 
@@ -1331,6 +1356,15 @@ func orderStaticModuleDeps(module LinkableInterface, staticDeps []LinkableInterf
 func (c *Module) IsTestPerSrcAllTestsVariation() bool {
 	test, ok := c.linker.(testPerSrc)
 	return ok && test.isAllTestsVariation()
+}
+
+func (c *Module) DataPaths() []android.DataPath {
+	if p, ok := c.installer.(interface {
+		dataPaths() []android.DataPath
+	}); ok {
+		return p.dataPaths()
+	}
+	return nil
 }
 
 func (c *Module) getNameSuffixWithVndkVersion(ctx android.ModuleContext) string {
@@ -1618,6 +1652,7 @@ func (c *Module) deps(ctx DepsContext) Deps {
 	deps.LateSharedLibs = android.LastUniqueStrings(deps.LateSharedLibs)
 	deps.HeaderLibs = android.LastUniqueStrings(deps.HeaderLibs)
 	deps.RuntimeLibs = android.LastUniqueStrings(deps.RuntimeLibs)
+	deps.Tools = android.LastUniqueStrings(deps.Tools)
 
 	for _, lib := range deps.ReexportSharedLibHeaders {
 		if !inList(lib, deps.SharedLibs) {
@@ -1686,8 +1721,6 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	variantNdkLibs := []string{}
 	variantLateNdkLibs := []string{}
 	if ctx.Os() == android.Android {
-		version := ctx.sdkVersion()
-
 		// rewriteLibs takes a list of names of shared libraries and scans it for three types
 		// of names:
 		//
@@ -1729,12 +1762,8 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 			for _, entry := range list {
 				// strip #version suffix out
 				name, _ := StubsLibNameAndVersion(entry)
-				if ctx.useSdk() && inList(name, ndkPrebuiltSharedLibraries) {
-					if !inList(name, ndkMigratedLibs) {
-						nonvariantLibs = append(nonvariantLibs, name+".ndk."+version)
-					} else {
-						variantLibs = append(variantLibs, name+ndkLibrarySuffix)
-					}
+				if ctx.useSdk() && inList(name, ndkKnownLibs) {
+					variantLibs = append(variantLibs, name+ndkLibrarySuffix)
 				} else if ctx.useVndk() {
 					nonvariantLibs = append(nonvariantLibs, rewriteVendorLibs(entry))
 				} else if (ctx.Platform() || ctx.ProductSpecific()) && inList(name, *vendorPublicLibraries) {
@@ -1916,6 +1945,10 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	actx.AddVariationDependencies([]blueprint.Variation{
 		{Mutator: "link", Variation: "shared"},
+	}, dataLibDepTag, deps.DataLibs...)
+
+	actx.AddVariationDependencies([]blueprint.Variation{
+		{Mutator: "link", Variation: "shared"},
 	}, runtimeDepTag, deps.RuntimeLibs...)
 
 	actx.AddDependency(c, genSourceDepTag, deps.GeneratedSources...)
@@ -1962,6 +1995,11 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 				{Mutator: "link", Variation: "shared"},
 			}, vndkExtDepTag, vndkdep.getVndkExtendsModuleName())
 		}
+	}
+
+	for _, tool := range deps.Tools {
+		actx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(),
+			ToolDependencyTag{Name: tool}, tool)
 	}
 }
 
@@ -2156,9 +2194,37 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		depPaths.ReexportedGeneratedHeaders = append(depPaths.ReexportedGeneratedHeaders, exporter.exportedGeneratedHeaders()...)
 	}
 
+	// For the dependency from platform to apex, use the latest stubs
+	c.apexSdkVersion = android.FutureApiLevel
+	if !c.IsForPlatform() {
+		c.apexSdkVersion = c.ApexProperties.Info.MinSdkVersion
+	}
+
+	if android.InList("hwaddress", ctx.Config().SanitizeDevice()) {
+		// In hwasan build, we override apexSdkVersion to the FutureApiLevel(10000)
+		// so that even Q(29/Android10) apexes could use the dynamic unwinder by linking the newer stubs(e.g libc(R+)).
+		// (b/144430859)
+		c.apexSdkVersion = android.FutureApiLevel
+	}
+
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depName := ctx.OtherModuleName(dep)
 		depTag := ctx.OtherModuleDependencyTag(dep)
+
+		if toolDep, ok := depTag.(ToolDependencyTag); ok {
+			if toolMod, ok := dep.(android.HostToolProvider); ok {
+				if depPaths.Tools == nil {
+					depPaths.Tools = make(map[string]android.Path)
+				}
+				toolPath := toolMod.HostToolPath()
+				if !toolPath.Valid() {
+					ctx.ModuleErrorf("Failed to find path for host tool %q", toolDep.Name)
+				}
+				depPaths.Tools[toolDep.Name] = toolPath.Path()
+			} else {
+				ctx.ModuleErrorf("Found module, but not host tool for %q", toolDep.Name)
+			}
+		}
 
 		ccDep, ok := dep.(LinkableInterface)
 		if !ok {
@@ -2176,8 +2242,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				fallthrough
 			case genHeaderDepTag, genHeaderExportDepTag:
 				if genRule, ok := dep.(genrule.SourceFileGenerator); ok {
-					depPaths.GeneratedHeaders = append(depPaths.GeneratedHeaders,
-						genRule.GeneratedSourceFiles()...)
 					depPaths.GeneratedDeps = append(depPaths.GeneratedDeps,
 						genRule.GeneratedDeps()...)
 					dirs := genRule.GeneratedHeaderDirs()
@@ -2244,19 +2308,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				c.staticVariant = ccDep
 				return
 			}
-		}
-
-		// For the dependency from platform to apex, use the latest stubs
-		c.apexSdkVersion = android.FutureApiLevel
-		if !c.IsForPlatform() {
-			c.apexSdkVersion = c.ApexProperties.Info.MinSdkVersion
-		}
-
-		if android.InList("hwaddress", ctx.Config().SanitizeDevice()) {
-			// In hwasan build, we override apexSdkVersion to the FutureApiLevel(10000)
-			// so that even Q(29/Android10) apexes could use the dynamic unwinder by linking the newer stubs(e.g libc(R+)).
-			// (b/144430859)
-			c.apexSdkVersion = android.FutureApiLevel
 		}
 
 		if depTag == staticUnwinderDepTag {
@@ -2365,7 +2416,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			if _, ok := ccDep.(*Module); ok {
 				if i, ok := ccDep.(*Module).linker.(exportedFlagsProducer); ok {
 					depPaths.SystemIncludeDirs = append(depPaths.SystemIncludeDirs, i.exportedSystemDirs()...)
-					depPaths.GeneratedHeaders = append(depPaths.GeneratedHeaders, i.exportedGeneratedHeaders()...)
 					depPaths.GeneratedDeps = append(depPaths.GeneratedDeps, i.exportedDeps()...)
 					depPaths.Flags = append(depPaths.Flags, i.exportedFlags()...)
 
@@ -2429,7 +2479,11 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					}
 					ctx.AddMissingDependencies(missingDeps)
 				}
-				depPaths.WholeStaticLibObjs = depPaths.WholeStaticLibObjs.Append(staticLib.objs())
+				if _, ok := ccWholeStaticLib.linker.(prebuiltLinkerInterface); ok {
+					depPaths.WholeStaticLibsFromPrebuilts = append(depPaths.WholeStaticLibsFromPrebuilts, linkFile.Path())
+				} else {
+					depPaths.WholeStaticLibObjs = depPaths.WholeStaticLibObjs.Append(staticLib.objs())
+				}
 			} else {
 				ctx.ModuleErrorf(
 					"non-cc.Modules cannot be included as whole static libraries.", depName)
@@ -2457,13 +2511,16 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			// When combining coverage files for shared libraries and executables, coverage files
 			// in static libraries act as if they were whole static libraries. The same goes for
 			// source based Abi dump files.
-			// This should only be done for cc.Modules
 			if c, ok := ccDep.(*Module); ok {
 				staticLib := c.linker.(libraryInterface)
 				depPaths.StaticLibObjs.coverageFiles = append(depPaths.StaticLibObjs.coverageFiles,
 					staticLib.objs().coverageFiles...)
 				depPaths.StaticLibObjs.sAbiDumpFiles = append(depPaths.StaticLibObjs.sAbiDumpFiles,
 					staticLib.objs().sAbiDumpFiles...)
+			} else if c, ok := ccDep.(LinkableInterface); ok {
+				// Handle non-CC modules here
+				depPaths.StaticLibObjs.coverageFiles = append(depPaths.StaticLibObjs.coverageFiles,
+					c.CoverageFiles()...)
 			}
 		}
 
@@ -2588,7 +2645,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	depPaths.Flags = android.FirstUniqueStrings(depPaths.Flags)
 	depPaths.IncludeDirs = android.FirstUniquePaths(depPaths.IncludeDirs)
 	depPaths.SystemIncludeDirs = android.FirstUniquePaths(depPaths.SystemIncludeDirs)
-	depPaths.GeneratedHeaders = android.FirstUniquePaths(depPaths.GeneratedHeaders)
 	depPaths.GeneratedDeps = android.FirstUniquePaths(depPaths.GeneratedDeps)
 	depPaths.ReexportedDirs = android.FirstUniquePaths(depPaths.ReexportedDirs)
 	depPaths.ReexportedSystemDirs = android.FirstUniquePaths(depPaths.ReexportedSystemDirs)
@@ -2833,8 +2889,59 @@ func (c *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 				return false
 			}
 		}
+	} else if ctx.OtherModuleDependencyTag(dep) == llndkImplDep {
+		// We don't track beyond LLNDK
+		return false
 	}
 	return true
+}
+
+// b/154667674: refactor this to handle "current" in a consistent way
+func decodeSdkVersionString(ctx android.BaseModuleContext, versionString string) (int, error) {
+	if versionString == "" {
+		return 0, fmt.Errorf("not specified")
+	}
+	if versionString == "current" {
+		if ctx.Config().PlatformSdkCodename() == "REL" {
+			return ctx.Config().PlatformSdkVersionInt(), nil
+		}
+		return android.FutureApiLevel, nil
+	}
+	return android.ApiStrToNum(ctx, versionString)
+}
+
+func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion int) error {
+	// We ignore libclang_rt.* prebuilt libs since they declare sdk_version: 14(b/121358700)
+	if strings.HasPrefix(ctx.OtherModuleName(c), "libclang_rt") {
+		return nil
+	}
+	// b/154569636: set min_sdk_version correctly for toolchain_libraries
+	if c.ToolchainLibrary() {
+		return nil
+	}
+	// We don't check for prebuilt modules
+	if _, ok := c.linker.(prebuiltLinkerInterface); ok {
+		return nil
+	}
+	minSdkVersion := c.MinSdkVersion()
+	if minSdkVersion == "apex_inherit" {
+		return nil
+	}
+	if minSdkVersion == "" {
+		// JNI libs within APK-in-APEX fall into here
+		// Those are okay to set sdk_version instead
+		// We don't have to check if this is a SDK variant because
+		// non-SDK variant resets sdk_version, which works too.
+		minSdkVersion = c.SdkVersion()
+	}
+	ver, err := decodeSdkVersionString(ctx, minSdkVersion)
+	if err != nil {
+		return err
+	}
+	if ver > sdkVersion {
+		return fmt.Errorf("newer SDK(%v)", ver)
+	}
+	return nil
 }
 
 //
@@ -2872,6 +2979,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&BinaryLinkerProperties{},
 		&TestProperties{},
 		&TestBinaryProperties{},
+		&BenchmarkProperties{},
 		&FuzzProperties{},
 		&StlProperties{},
 		&SanitizeProperties{},
@@ -2898,6 +3006,9 @@ func squashVendorSrcs(m *Module) {
 
 		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs,
 			lib.baseCompiler.Properties.Target.Vendor.Exclude_srcs...)
+
+		lib.baseCompiler.Properties.Exclude_generated_sources = append(lib.baseCompiler.Properties.Exclude_generated_sources,
+			lib.baseCompiler.Properties.Target.Vendor.Exclude_generated_sources...)
 	}
 }
 
@@ -2908,7 +3019,14 @@ func squashRecoverySrcs(m *Module) {
 
 		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs,
 			lib.baseCompiler.Properties.Target.Recovery.Exclude_srcs...)
+
+		lib.baseCompiler.Properties.Exclude_generated_sources = append(lib.baseCompiler.Properties.Exclude_generated_sources,
+			lib.baseCompiler.Properties.Target.Recovery.Exclude_generated_sources...)
 	}
+}
+
+func (c *Module) IsSdkVariant() bool {
+	return c.Properties.IsSdkVariant
 }
 
 func getCurrentNdkPrebuiltVersion(ctx DepsContext) string {

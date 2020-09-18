@@ -408,6 +408,8 @@ func rewriteTestModuleTypes(f *Fixer) error {
 			switch mod.Type {
 			case "android_app":
 				mod.Type = "android_test"
+			case "android_app_import":
+				mod.Type = "android_test_import"
 			case "java_library", "java_library_installable":
 				mod.Type = "java_test"
 			case "java_library_host":
@@ -531,7 +533,7 @@ func (f etcPrebuiltModuleUpdate) update(m *parser.Module, path string) bool {
 		updated = true
 	} else if trimmedPath := strings.TrimPrefix(path, f.prefix+"/"); trimmedPath != path {
 		m.Properties = append(m.Properties, &parser.Property{
-			Name:  "sub_dir",
+			Name:  "relative_install_path",
 			Value: &parser.String{Value: trimmedPath},
 		})
 		updated = true
@@ -578,6 +580,8 @@ func rewriteAndroidmkPrebuiltEtc(f *Fixer) error {
 
 		// 'srcs' --> 'src' conversion
 		convertToSingleSource(mod, "src")
+
+		renameProperty(mod, "sub_dir", "relative_install_dir")
 
 		// The rewriter converts LOCAL_MODULE_PATH attribute into a struct attribute
 		// 'local_module_path'. Analyze its contents and create the correct sub_dir:,
@@ -951,7 +955,8 @@ func removeTags(mod *parser.Module, buf []byte, patchlist *parser.PatchList) err
 			case strings.Contains(mod.Type, "cc_test"),
 				strings.Contains(mod.Type, "cc_library_static"),
 				strings.Contains(mod.Type, "java_test"),
-				mod.Type == "android_test":
+				mod.Type == "android_test",
+				mod.Type == "android_test_import":
 				continue
 			case strings.Contains(mod.Type, "cc_lib"):
 				replaceStr += `// WARNING: Module tags are not supported in Soong.

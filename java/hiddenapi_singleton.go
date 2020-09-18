@@ -116,7 +116,7 @@ func stubFlagsRule(ctx android.SingletonContext) {
 
 	// Core Platform API stubs
 	corePlatformStubModules := []string{
-		"core.platform.api.stubs",
+		"legacy.core.platform.api.stubs",
 	}
 
 	// Allow products to define their own stubs for custom product jars that apps can use.
@@ -147,7 +147,7 @@ func stubFlagsRule(ctx android.SingletonContext) {
 			name := ctx.ModuleName(module)
 			for moduleList, pathList := range moduleListToPathList {
 				if i := android.IndexList(name, *moduleList); i != -1 {
-					pathList[i] = j.DexJar()
+					pathList[i] = j.DexJarBuildPath()
 				}
 			}
 		}

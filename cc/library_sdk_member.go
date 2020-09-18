@@ -124,6 +124,14 @@ func (mt *librarySdkMemberType) AddPrebuiltModule(ctx android.SdkMemberContext, 
 	if stl != nil {
 		pbm.AddProperty("stl", proptools.String(stl))
 	}
+
+	if lib, ok := ccModule.linker.(*libraryDecorator); ok {
+		uhs := lib.Properties.Unique_host_soname
+		if uhs != nil {
+			pbm.AddProperty("unique_host_soname", proptools.Bool(uhs))
+		}
+	}
+
 	return pbm
 }
 
@@ -226,7 +234,7 @@ func addPossiblyArchSpecificProperties(sdkModuleContext android.ModuleContext, b
 	for _, propertyInfo := range includeDirProperties {
 		// Calculate the base directory in the snapshot into which the files will be copied.
 		// lib.ArchType is "" for common properties.
-		targetDir := filepath.Join(libInfo.archType, propertyInfo.snapshotDir)
+		targetDir := filepath.Join(libInfo.OsPrefix(), libInfo.archType, propertyInfo.snapshotDir)
 
 		propertyName := propertyInfo.propertyName
 
@@ -372,7 +380,11 @@ func (p *nativeLibInfoProperties) PopulateFromVariant(ctx android.SdkMemberConte
 	// Make sure that the include directories are unique.
 	p.ExportedIncludeDirs = android.FirstUniquePaths(exportedIncludeDirs)
 	p.exportedGeneratedIncludeDirs = android.FirstUniquePaths(exportedGeneratedIncludeDirs)
-	p.ExportedSystemIncludeDirs = android.FirstUniquePaths(ccModule.ExportedSystemIncludeDirs())
+
+	// Take a copy before filtering out duplicates to avoid changing the slice owned by the
+	// ccModule.
+	dirs := append(android.Paths(nil), ccModule.ExportedSystemIncludeDirs()...)
+	p.ExportedSystemIncludeDirs = android.FirstUniquePaths(dirs)
 
 	p.ExportedFlags = ccModule.ExportedFlags()
 	if ccModule.linker != nil {

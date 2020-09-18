@@ -29,7 +29,9 @@ import (
 	"android/soong/java"
 )
 
-func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, android.Config) {
+func testSdkContext(bp string, fs map[string][]byte, extraOsTypes []android.OsType) (*android.TestContext, android.Config) {
+	extraOsTypes = append(extraOsTypes, android.Android, android.Windows)
+
 	bp = bp + `
 		apex_key {
 			name: "myapex.key",
@@ -41,17 +43,18 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 			name: "myapex.cert",
 			certificate: "myapex",
 		}
-	` + cc.GatherRequiredDepsForTest(android.Android, android.Windows)
+	` + cc.GatherRequiredDepsForTest(extraOsTypes...)
 
 	mockFS := map[string][]byte{
-		"build/make/target/product/security":         nil,
-		"apex_manifest.json":                         nil,
-		"system/sepolicy/apex/myapex-file_contexts":  nil,
-		"system/sepolicy/apex/myapex2-file_contexts": nil,
-		"myapex.avbpubkey":                           nil,
-		"myapex.pem":                                 nil,
-		"myapex.x509.pem":                            nil,
-		"myapex.pk8":                                 nil,
+		"build/make/target/product/security":           nil,
+		"apex_manifest.json":                           nil,
+		"system/sepolicy/apex/myapex-file_contexts":    nil,
+		"system/sepolicy/apex/myapex2-file_contexts":   nil,
+		"system/sepolicy/apex/mysdkapex-file_contexts": nil,
+		"myapex.avbpubkey":                             nil,
+		"myapex.pem":                                   nil,
+		"myapex.x509.pem":                              nil,
+		"myapex.pk8":                                   nil,
 	}
 
 	cc.GatherRequiredFilesForTest(mockFS)
@@ -66,6 +69,15 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 	// are disabled.
 	config.Targets[android.Windows] = []android.Target{
 		{android.Windows, android.Arch{ArchType: android.X86_64}, android.NativeBridgeDisabled, "", ""},
+	}
+
+	for _, extraOsType := range extraOsTypes {
+		switch extraOsType {
+		case android.LinuxBionic:
+			config.Targets[android.LinuxBionic] = []android.Target{
+				{android.LinuxBionic, android.Arch{ArchType: android.X86_64}, android.NativeBridgeDisabled, "", ""},
+			}
+		}
 	}
 
 	ctx := android.NewTestArchContext()
@@ -84,6 +96,7 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 	android.RegisterPackageBuildComponents(ctx)
 	ctx.PreArchMutators(android.RegisterVisibilityRuleChecker)
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
+	ctx.PreArchMutators(android.RegisterComponentsMutator)
 	ctx.PreArchMutators(android.RegisterVisibilityRuleGatherer)
 	ctx.PostDepsMutators(android.RegisterVisibilityRuleEnforcer)
 
@@ -115,9 +128,8 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 	return ctx, config
 }
 
-func testSdkWithFs(t *testing.T, bp string, fs map[string][]byte) *testSdkResult {
+func runTests(t *testing.T, ctx *android.TestContext, config android.Config) *testSdkResult {
 	t.Helper()
-	ctx, config := testSdkContext(bp, fs)
 	_, errs := ctx.ParseBlueprintsFiles(".")
 	android.FailIfErrored(t, errs)
 	_, errs = ctx.PrepareBuildActions(config)
@@ -129,9 +141,15 @@ func testSdkWithFs(t *testing.T, bp string, fs map[string][]byte) *testSdkResult
 	}
 }
 
+func testSdkWithFs(t *testing.T, bp string, fs map[string][]byte) *testSdkResult {
+	t.Helper()
+	ctx, config := testSdkContext(bp, fs, nil)
+	return runTests(t, ctx, config)
+}
+
 func testSdkError(t *testing.T, pattern, bp string) {
 	t.Helper()
-	ctx, config := testSdkContext(bp, nil)
+	ctx, config := testSdkContext(bp, nil, nil)
 	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
 	if len(errs) > 0 {
 		android.FailIfNoMatchingErrors(t, pattern, errs)
@@ -419,11 +437,4 @@ func runTestWithBuildDir(m *testing.M) {
 	}
 
 	os.Exit(run())
-}
-
-func SkipIfNotLinux(t *testing.T) {
-	t.Helper()
-	if android.BuildOs != android.Linux {
-		t.Skipf("Skipping as sdk snapshot generation is only supported on %s not %s", android.Linux, android.BuildOs)
-	}
 }

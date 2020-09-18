@@ -93,8 +93,9 @@ type config struct {
 
 	deviceConfig *deviceConfig
 
-	srcDir   string // the path of the root source directory
-	buildDir string // the path of the build output directory
+	srcDir         string // the path of the root source directory
+	buildDir       string // the path of the build output directory
+	moduleListFile string // the path to the file which lists blueprint files to parse.
 
 	env       map[string]string
 	envLock   sync.Mutex
@@ -316,7 +317,7 @@ func TestArchConfig(buildDir string, env map[string]string, bp string, fs map[st
 
 // New creates a new Config object.  The srcDir argument specifies the path to
 // the root source directory. It also loads the config file, if found.
-func NewConfig(srcDir, buildDir string) (Config, error) {
+func NewConfig(srcDir, buildDir string, moduleListFile string) (Config, error) {
 	// Make a config with default options
 	config := &config{
 		ConfigFileName:           filepath.Join(buildDir, configFileName),
@@ -328,7 +329,8 @@ func NewConfig(srcDir, buildDir string) (Config, error) {
 		buildDir:          buildDir,
 		multilibConflicts: make(map[ArchType]bool),
 
-		fs: pathtools.NewOsFs(absSrcDir),
+		moduleListFile: moduleListFile,
+		fs:             pathtools.NewOsFs(absSrcDir),
 	}
 
 	config.deviceConfig = &deviceConfig{
@@ -720,8 +722,15 @@ func (c *config) AllowMissingDependencies() bool {
 	return Bool(c.productVariables.Allow_missing_dependencies)
 }
 
+// Returns true if building without full platform sources.
 func (c *config) UnbundledBuild() bool {
 	return Bool(c.productVariables.Unbundled_build)
+}
+
+// Returns true if building apps that aren't bundled with the platform.
+// UnbundledBuild() is always true when this is true.
+func (c *config) UnbundledBuildApps() bool {
+	return Bool(c.productVariables.Unbundled_build_apps)
 }
 
 func (c *config) UnbundledBuildUsePrebuiltSdks() bool {
@@ -746,14 +755,6 @@ func (c *config) Debuggable() bool {
 
 func (c *config) Eng() bool {
 	return Bool(c.productVariables.Eng)
-}
-
-func (c *config) DevicePrefer32BitApps() bool {
-	return Bool(c.productVariables.DevicePrefer32BitApps)
-}
-
-func (c *config) DevicePrefer32BitExecutables() bool {
-	return Bool(c.productVariables.DevicePrefer32BitExecutables)
 }
 
 func (c *config) DevicePrimaryArchType() ArchType {
@@ -863,16 +864,7 @@ func (c *config) LibartImgHostBaseAddress() string {
 }
 
 func (c *config) LibartImgDeviceBaseAddress() string {
-	archType := Common
-	if len(c.Targets[Android]) > 0 {
-		archType = c.Targets[Android][0].Arch.ArchType
-	}
-	switch archType {
-	default:
-		return "0x70000000"
-	case Mips, Mips64:
-		return "0x5C000000"
-	}
+	return "0x70000000"
 }
 
 func (c *config) ArtUseReadBarrier() bool {
@@ -883,12 +875,12 @@ func (c *config) EnforceRROForModule(name string) bool {
 	enforceList := c.productVariables.EnforceRROTargets
 	// TODO(b/150820813) Some modules depend on static overlay, remove this after eliminating the dependency.
 	exemptedList := c.productVariables.EnforceRROExemptedTargets
-	if exemptedList != nil {
+	if len(exemptedList) > 0 {
 		if InList(name, exemptedList) {
 			return false
 		}
 	}
-	if enforceList != nil {
+	if len(enforceList) > 0 {
 		if InList("*", enforceList) {
 			return true
 		}
@@ -899,7 +891,7 @@ func (c *config) EnforceRROForModule(name string) bool {
 
 func (c *config) EnforceRROExcludedOverlay(path string) bool {
 	excluded := c.productVariables.EnforceRROExcludedOverlays
-	if excluded != nil {
+	if len(excluded) > 0 {
 		return HasAnyPrefix(path, excluded)
 	}
 	return false
@@ -922,22 +914,31 @@ func (c *config) ModulesLoadedByPrivilegedModules() []string {
 }
 
 // Expected format for apexJarValue = <apex name>:<jar name>
-func SplitApexJarPair(apexJarValue string) (string, string) {
-	var apexJarPair []string = strings.SplitN(apexJarValue, ":", 2)
-	if apexJarPair == nil || len(apexJarPair) != 2 {
-		panic(fmt.Errorf("malformed apexJarValue: %q, expected format: <apex>:<jar>",
-			apexJarValue))
+func SplitApexJarPair(ctx PathContext, str string) (string, string) {
+	pair := strings.SplitN(str, ":", 2)
+	if len(pair) == 2 {
+		return pair[0], pair[1]
+	} else {
+		reportPathErrorf(ctx, "malformed (apex, jar) pair: '%s', expected format: <apex>:<jar>", str)
+		return "error-apex", "error-jar"
 	}
-	return apexJarPair[0], apexJarPair[1]
+}
+
+func GetJarsFromApexJarPairs(ctx PathContext, apexJarPairs []string) []string {
+	modules := make([]string, len(apexJarPairs))
+	for i, p := range apexJarPairs {
+		_, jar := SplitApexJarPair(ctx, p)
+		modules[i] = jar
+	}
+	return modules
 }
 
 func (c *config) BootJars() []string {
-	jars := c.productVariables.BootJars
-	for _, p := range c.productVariables.UpdatableBootJars {
-		_, jar := SplitApexJarPair(p)
-		jars = append(jars, jar)
-	}
-	return jars
+	ctx := NullPathContext{Config{
+		config: c,
+	}}
+	return append(GetJarsFromApexJarPairs(ctx, c.productVariables.BootJars),
+		GetJarsFromApexJarPairs(ctx, c.productVariables.UpdatableBootJars)...)
 }
 
 func (c *config) DexpreoptGlobalConfig(ctx PathContext) ([]byte, error) {
@@ -1058,7 +1059,7 @@ func (c *deviceConfig) JavaCoverageEnabledForPath(path string) bool {
 		HasAnyPrefix(path, c.config.productVariables.JavaCoveragePaths) {
 		coverage = true
 	}
-	if coverage && c.config.productVariables.JavaCoverageExcludePaths != nil {
+	if coverage && len(c.config.productVariables.JavaCoverageExcludePaths) > 0 {
 		if HasAnyPrefix(path, c.config.productVariables.JavaCoverageExcludePaths) {
 			coverage = false
 		}
@@ -1087,12 +1088,12 @@ func (c *deviceConfig) GcovCoverageEnabled() bool {
 // NativeCoveragePaths represents any path.
 func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 	coverage := false
-	if c.config.productVariables.NativeCoveragePaths != nil {
+	if len(c.config.productVariables.NativeCoveragePaths) > 0 {
 		if InList("*", c.config.productVariables.NativeCoveragePaths) || HasAnyPrefix(path, c.config.productVariables.NativeCoveragePaths) {
 			coverage = true
 		}
 	}
-	if coverage && c.config.productVariables.NativeCoverageExcludePaths != nil {
+	if coverage && len(c.config.productVariables.NativeCoverageExcludePaths) > 0 {
 		if HasAnyPrefix(path, c.config.productVariables.NativeCoverageExcludePaths) {
 			coverage = false
 		}
@@ -1163,7 +1164,7 @@ func findOverrideValue(overrides []string, name string, errorMsg string) (newVal
 }
 
 func (c *config) IntegerOverflowDisabledForPath(path string) bool {
-	if c.productVariables.IntegerOverflowExcludePaths == nil {
+	if len(c.productVariables.IntegerOverflowExcludePaths) == 0 {
 		return false
 	}
 	return HasAnyPrefix(path, c.productVariables.IntegerOverflowExcludePaths)
@@ -1191,14 +1192,14 @@ func (c *config) BoundSanitizerDisabledForPath(path string) bool {
 }
 
 func (c *config) CFIDisabledForPath(path string) bool {
-	if c.productVariables.CFIExcludePaths == nil {
+	if len(c.productVariables.CFIExcludePaths) == 0 {
 		return false
 	}
 	return HasAnyPrefix(path, c.productVariables.CFIExcludePaths)
 }
 
 func (c *config) CFIEnabledForPath(path string) bool {
-	if c.productVariables.CFIIncludePaths == nil {
+	if len(c.productVariables.CFIIncludePaths) == 0 {
 		return false
 	}
 	return HasAnyPrefix(path, c.productVariables.CFIIncludePaths)
@@ -1270,10 +1271,6 @@ func (c *config) ProductCompatibleProperty() bool {
 
 func (c *config) MissingUsesLibraries() []string {
 	return c.productVariables.MissingUsesLibraries
-}
-
-func (c *deviceConfig) BoardVndkRuntimeDisable() bool {
-	return Bool(c.config.productVariables.BoardVndkRuntimeDisable)
 }
 
 func (c *deviceConfig) DeviceArch() string {

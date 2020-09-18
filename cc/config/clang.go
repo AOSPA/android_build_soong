@@ -51,7 +51,7 @@ var ClangUnknownCflags = sorted([]string{
 	// http://b/153759688
 	"-fuse-init-array",
 
-	// arm + arm64 + mips + mips64
+	// arm + arm64
 	"-fgcse-after-reload",
 	"-frerun-cse-after-loop",
 	"-frename-registers",
@@ -70,11 +70,6 @@ var ClangUnknownCflags = sorted([]string{
 	"-fno-tree-copy-prop",
 	"-fno-tree-loop-optimize",
 
-	// mips + mips64
-	"-msynci",
-	"-mno-synci",
-	"-mno-fused-madd",
-
 	// x86 + x86_64
 	"-finline-limit=300",
 	"-fno-inline-functions-called-once",
@@ -87,10 +82,8 @@ var ClangUnknownCflags = sorted([]string{
 
 // Ldflags that should be filtered out when linking with clang lld
 var ClangUnknownLldflags = sorted([]string{
-	"-fuse-ld=gold",
 	"-Wl,--fix-cortex-a8",
 	"-Wl,--no-fix-cortex-a8",
-	"-Wl,-m,aarch64_elf64_le_vec",
 })
 
 var ClangLibToolingUnknownCflags = sorted([]string{})

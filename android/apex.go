@@ -65,9 +65,9 @@ type ApexModule interface {
 
 	apexModuleBase() *ApexModuleBase
 
-	// Marks that this module should be built for the specified APEXes.
+	// Marks that this module should be built for the specified APEX.
 	// Call this before apex.apexMutator is run.
-	BuildForApexes(apexes []ApexInfo)
+	BuildForApex(apex ApexInfo)
 
 	// Returns the APEXes that this module will be built for
 	ApexVariations() []ApexInfo
@@ -96,7 +96,7 @@ type ApexModule interface {
 	IsInstallableToApex() bool
 
 	// Mutate this module into one or more variants each of which is built
-	// for an APEX marked via BuildForApexes().
+	// for an APEX marked via BuildForApex().
 	CreateApexVariations(mctx BottomUpMutatorContext) []Module
 
 	// Tests if this module is available for the specified APEX or ":platform"
@@ -124,6 +124,10 @@ type ApexModule interface {
 	// the private part of the listed APEXes even when it is not included in the
 	// APEXes.
 	TestFor() []string
+
+	// Returns nil if this module supports sdkVersion
+	// Otherwise, returns error with reason
+	ShouldSupportSdkVersion(ctx BaseModuleContext, sdkVersion int) error
 }
 
 type ApexProperties struct {
@@ -174,18 +178,15 @@ func (m *ApexModuleBase) TestFor() []string {
 	return nil
 }
 
-func (m *ApexModuleBase) BuildForApexes(apexes []ApexInfo) {
+func (m *ApexModuleBase) BuildForApex(apex ApexInfo) {
 	m.apexVariationsLock.Lock()
 	defer m.apexVariationsLock.Unlock()
-nextApex:
-	for _, apex := range apexes {
-		for _, v := range m.apexVariations {
-			if v.ApexName == apex.ApexName {
-				continue nextApex
-			}
+	for _, v := range m.apexVariations {
+		if v.ApexName == apex.ApexName {
+			return
 		}
-		m.apexVariations = append(m.apexVariations, apex)
 	}
+	m.apexVariations = append(m.apexVariations, apex)
 }
 
 func (m *ApexModuleBase) ApexVariations() []ApexInfo {
@@ -323,17 +324,15 @@ func apexNamesMap() map[string]map[string]bool {
 // depended on by the specified APEXes. Directly depending means that a module
 // is explicitly listed in the build definition of the APEX via properties like
 // native_shared_libs, java_libs, etc.
-func UpdateApexDependency(apexes []ApexInfo, moduleName string, directDep bool) {
+func UpdateApexDependency(apex ApexInfo, moduleName string, directDep bool) {
 	apexNamesMapMutex.Lock()
 	defer apexNamesMapMutex.Unlock()
-	for _, apex := range apexes {
-		apexesForModule, ok := apexNamesMap()[moduleName]
-		if !ok {
-			apexesForModule = make(map[string]bool)
-			apexNamesMap()[moduleName] = apexesForModule
-		}
-		apexesForModule[apex.ApexName] = apexesForModule[apex.ApexName] || directDep
+	apexesForModule, ok := apexNamesMap()[moduleName]
+	if !ok {
+		apexesForModule = make(map[string]bool)
+		apexNamesMap()[moduleName] = apexesForModule
 	}
+	apexesForModule[apex.ApexName] = apexesForModule[apex.ApexName] || directDep
 }
 
 // TODO(b/146393795): remove this when b/146393795 is fixed
@@ -446,15 +445,15 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 	var fullContent strings.Builder
 	var flatContent strings.Builder
 
-	fmt.Fprintf(&flatContent, "%s(minSdkVersion:%s):\\n", ctx.ModuleName(), minSdkVersion)
+	fmt.Fprintf(&fullContent, "%s(minSdkVersion:%s):\\n", ctx.ModuleName(), minSdkVersion)
 	for _, key := range FirstUniqueStrings(SortedStringKeys(depInfos)) {
 		info := depInfos[key]
 		toName := fmt.Sprintf("%s(minSdkVersion:%s)", info.To, info.MinSdkVersion)
 		if info.IsExternal {
 			toName = toName + " (external)"
 		}
-		fmt.Fprintf(&fullContent, "%s <- %s\\n", toName, strings.Join(SortedUniqueStrings(info.From), ", "))
-		fmt.Fprintf(&flatContent, "  %s\\n", toName)
+		fmt.Fprintf(&fullContent, "  %s <- %s\\n", toName, strings.Join(SortedUniqueStrings(info.From), ", "))
+		fmt.Fprintf(&flatContent, "%s\\n", toName)
 	}
 
 	d.fullListPath = PathForModuleOut(ctx, "depsinfo", "fulllist.txt").OutputPath
@@ -475,5 +474,127 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 		Args: map[string]string{
 			"content": flatContent.String(),
 		},
+	})
+}
+
+// TODO(b/158059172): remove minSdkVersion allowlist
+var minSdkVersionAllowlist = map[string]int{
+	"adbd":                  30,
+	"android.net.ipsec.ike": 30,
+	"androidx-constraintlayout_constraintlayout-solver": 30,
+	"androidx.annotation_annotation":                    28,
+	"androidx.arch.core_core-common":                    28,
+	"androidx.collection_collection":                    28,
+	"androidx.lifecycle_lifecycle-common":               28,
+	"apache-commons-compress":                           29,
+	"bouncycastle_ike_digests":                          30,
+	"brotli-java":                                       29,
+	"captiveportal-lib":                                 28,
+	"flatbuffer_headers":                                30,
+	"framework-permission":                              30,
+	"framework-statsd":                                  30,
+	"gemmlowp_headers":                                  30,
+	"ike-internals":                                     30,
+	"kotlinx-coroutines-android":                        28,
+	"kotlinx-coroutines-core":                           28,
+	"libadb_crypto":                                     30,
+	"libadb_pairing_auth":                               30,
+	"libadb_pairing_connection":                         30,
+	"libadb_pairing_server":                             30,
+	"libadb_protos":                                     30,
+	"libadb_tls_connection":                             30,
+	"libadbconnection_client":                           30,
+	"libadbconnection_server":                           30,
+	"libadbd_core":                                      30,
+	"libadbd_services":                                  30,
+	"libadbd":                                           30,
+	"libapp_processes_protos_lite":                      30,
+	"libasyncio":                                        30,
+	"libbrotli":                                         30,
+	"libbuildversion":                                   30,
+	"libcrypto_static":                                  30,
+	"libcrypto_utils":                                   30,
+	"libdiagnose_usb":                                   30,
+	"libeigen":                                          30,
+	"liblz4":                                            30,
+	"libmdnssd":                                         30,
+	"libneuralnetworks_common":                          30,
+	"libneuralnetworks_headers":                         30,
+	"libneuralnetworks":                                 30,
+	"libprocpartition":                                  30,
+	"libprotobuf-java-lite":                             30,
+	"libprotoutil":                                      30,
+	"libqemu_pipe":                                      30,
+	"libstats_jni":                                      30,
+	"libstatslog_statsd":                                30,
+	"libstatsmetadata":                                  30,
+	"libstatspull":                                      30,
+	"libstatssocket":                                    30,
+	"libsync":                                           30,
+	"libtextclassifier_hash_headers":                    30,
+	"libtextclassifier_hash_static":                     30,
+	"libtflite_kernel_utils":                            30,
+	"libwatchdog":                                       29,
+	"libzstd":                                           30,
+	"metrics-constants-protos":                          28,
+	"net-utils-framework-common":                        29,
+	"permissioncontroller-statsd":                       28,
+	"philox_random_headers":                             30,
+	"philox_random":                                     30,
+	"service-permission":                                30,
+	"service-statsd":                                    30,
+	"statsd-aidl-ndk_platform":                          30,
+	"statsd":                                            30,
+	"tensorflow_headers":                                30,
+	"xz-java":                                           29,
+}
+
+// Function called while walking an APEX's payload dependencies.
+//
+// Return true if the `to` module should be visited, false otherwise.
+type PayloadDepsCallback func(ctx ModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool
+
+// UpdatableModule represents updatable APEX/APK
+type UpdatableModule interface {
+	Module
+	WalkPayloadDeps(ctx ModuleContext, do PayloadDepsCallback)
+}
+
+// CheckMinSdkVersion checks if every dependency of an updatable module sets min_sdk_version accordingly
+func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion int) {
+	// do not enforce min_sdk_version for host
+	if ctx.Host() {
+		return
+	}
+
+	// do not enforce for coverage build
+	if ctx.Config().IsEnvTrue("EMMA_INSTRUMENT") || ctx.DeviceConfig().NativeCoverageEnabled() || ctx.DeviceConfig().ClangCoverageEnabled() {
+		return
+	}
+
+	// do not enforce deps.min_sdk_version if APEX/APK doesn't set min_sdk_version or
+	// min_sdk_version is not finalized (e.g. current or codenames)
+	if minSdkVersion == FutureApiLevel {
+		return
+	}
+
+	m.WalkPayloadDeps(ctx, func(ctx ModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool {
+		if externalDep {
+			// external deps are outside the payload boundary, which is "stable" interface.
+			// We don't have to check min_sdk_version for external dependencies.
+			return false
+		}
+		if am, ok := from.(DepIsInSameApex); ok && !am.DepIsInSameApex(ctx, to) {
+			return false
+		}
+		if err := to.ShouldSupportSdkVersion(ctx, minSdkVersion); err != nil {
+			toName := ctx.OtherModuleName(to)
+			if ver, ok := minSdkVersionAllowlist[toName]; !ok || ver > minSdkVersion {
+				ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v. Dependency path: %s",
+					minSdkVersion, ctx.ModuleName(), err.Error(), ctx.GetPathString(false))
+				return false
+			}
+		}
+		return true
 	})
 }

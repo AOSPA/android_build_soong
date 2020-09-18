@@ -351,6 +351,9 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 	bp = newGeneratedFile(ctx, "snapshot", "Android.bp")
 	generateBpContents(&bp.generatedContents, bpFile)
 
+	contents := bp.content.String()
+	syntaxCheckSnapshotBpFile(ctx, contents)
+
 	bp.build(pctx, ctx, nil)
 
 	filesToZip := builder.filesToZip
@@ -393,6 +396,36 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 	}
 
 	return outputZipFile
+}
+
+// Check the syntax of the generated Android.bp file contents and if they are
+// invalid then log an error with the contents (tagged with line numbers) and the
+// errors that were found so that it is easy to see where the problem lies.
+func syntaxCheckSnapshotBpFile(ctx android.ModuleContext, contents string) {
+	errs := android.CheckBlueprintSyntax(ctx, "Android.bp", contents)
+	if len(errs) != 0 {
+		message := &strings.Builder{}
+		_, _ = fmt.Fprint(message, `errors in generated Android.bp snapshot:
+
+Generated Android.bp contents
+========================================================================
+`)
+		for i, line := range strings.Split(contents, "\n") {
+			_, _ = fmt.Fprintf(message, "%6d:    %s\n", i+1, line)
+		}
+
+		_, _ = fmt.Fprint(message, `
+========================================================================
+
+Errors found:
+`)
+
+		for _, err := range errs {
+			_, _ = fmt.Fprintf(message, "%s\n", err.Error())
+		}
+
+		ctx.ModuleErrorf("%s", message.String())
+	}
 }
 
 func extractCommonProperties(ctx android.ModuleContext, extractor *commonValueExtractor, commonProperties interface{}, inputPropertiesSlice interface{}) {
@@ -761,6 +794,17 @@ func (s *snapshotBuilder) isInternalMember(memberName string) bool {
 	return !ok
 }
 
+// Add the properties from the given SdkMemberProperties to the blueprint
+// property set. This handles common properties in SdkMemberPropertiesBase and
+// calls the member-specific AddToPropertySet for the rest.
+func addSdkMemberPropertiesToSet(ctx *memberContext, memberProperties android.SdkMemberProperties, targetPropertySet android.BpPropertySet) {
+	if memberProperties.Base().Compile_multilib != "" {
+		targetPropertySet.AddProperty("compile_multilib", memberProperties.Base().Compile_multilib)
+	}
+
+	memberProperties.AddToPropertySet(ctx, targetPropertySet)
+}
+
 type sdkMemberRef struct {
 	memberType android.SdkMemberType
 	variant    android.SdkAware
@@ -878,7 +922,7 @@ func newOsTypeSpecificInfo(ctx android.SdkMemberContext, osType android.OsType, 
 
 	if commonVariants, ok := variantsByArchName["common"]; ok {
 		if len(osTypeVariants) != 1 {
-			panic("Expected to only have 1 variant when arch type is common but found " + string(len(osTypeVariants)))
+			panic(fmt.Errorf("Expected to only have 1 variant when arch type is common but found %d", len(osTypeVariants)))
 		}
 
 		// A common arch type only has one variant and its properties should be treated
@@ -976,7 +1020,7 @@ func (osInfo *osTypeSpecificInfo) addToPropertySet(ctx *memberContext, bpModule 
 	}
 
 	// Add the os specific but arch independent properties to the module.
-	osInfo.Properties.AddToPropertySet(ctx, osPropertySet)
+	addSdkMemberPropertiesToSet(ctx, osInfo.Properties, osPropertySet)
 
 	// Add arch (and possibly os) specific sections for each set of arch (and possibly
 	// os) specific properties.
@@ -1078,11 +1122,11 @@ func (archInfo *archTypeSpecificInfo) optimizeProperties(ctx *memberContext, com
 func (archInfo *archTypeSpecificInfo) addToPropertySet(ctx *memberContext, archPropertySet android.BpPropertySet, archOsPrefix string) {
 	archTypeName := archInfo.archType.Name
 	archTypePropertySet := archPropertySet.AddPropertySet(archOsPrefix + archTypeName)
-	archInfo.Properties.AddToPropertySet(ctx, archTypePropertySet)
+	addSdkMemberPropertiesToSet(ctx, archInfo.Properties, archTypePropertySet)
 
 	for _, linkInfo := range archInfo.linkInfos {
 		linkPropertySet := archTypePropertySet.AddPropertySet(linkInfo.linkType)
-		linkInfo.Properties.AddToPropertySet(ctx, linkPropertySet)
+		addSdkMemberPropertiesToSet(ctx, linkInfo.Properties, linkPropertySet)
 	}
 }
 
@@ -1188,7 +1232,7 @@ func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModu
 	extractCommonProperties(ctx.sdkMemberContext, commonValueExtractor, commonProperties, osSpecificPropertiesContainers)
 
 	// Add the common properties to the module.
-	commonProperties.AddToPropertySet(ctx, bpModule)
+	addSdkMemberPropertiesToSet(ctx, commonProperties, bpModule)
 
 	// Create a target property set into which target specific properties can be
 	// added.

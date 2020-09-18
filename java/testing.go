@@ -16,9 +16,13 @@ package java
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
+	"testing"
 
 	"android/soong/android"
 	"android/soong/cc"
+	"github.com/google/blueprint"
 )
 
 func TestConfig(buildDir string, env map[string]string, bp string, fs map[string][]byte) android.Config {
@@ -82,11 +86,10 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 		"prebuilts/sdk/Android.bp":                                 []byte(`prebuilt_apis { name: "sdk", api_dirs: ["14", "28", "30", "current"],}`),
 
 		// For java_sdk_library
-		"api/module-lib-current.txt":                        nil,
-		"api/module-lib-removed.txt":                        nil,
-		"api/system-server-current.txt":                     nil,
-		"api/system-server-removed.txt":                     nil,
-		"build/soong/scripts/gen-java-current-api-files.sh": nil,
+		"api/module-lib-current.txt":    nil,
+		"api/module-lib-removed.txt":    nil,
+		"api/system-server-current.txt": nil,
+		"api/system-server-removed.txt": nil,
 	}
 
 	cc.GatherRequiredFilesForTest(mockFS)
@@ -118,7 +121,8 @@ func GatherRequiredDepsForTest() string {
 		"android_module_lib_stubs_current",
 		"android_system_server_stubs_current",
 		"core.current.stubs",
-		"core.platform.api.stubs",
+		"legacy.core.platform.api.stubs",
+		"stable.core.platform.api.stubs",
 		"kotlin-stdlib",
 		"kotlin-stdlib-jdk7",
 		"kotlin-stdlib-jdk8",
@@ -131,7 +135,7 @@ func GatherRequiredDepsForTest() string {
 				name: "%s",
 				srcs: ["a.java"],
 				sdk_version: "none",
-				system_modules: "core-platform-api-stubs-system-modules",
+				system_modules: "stable-core-platform-api-stubs-system-modules",
 			}
 		`, extra)
 	}
@@ -141,7 +145,7 @@ func GatherRequiredDepsForTest() string {
 			name: "framework",
 			srcs: ["a.java"],
 			sdk_version: "none",
-			system_modules: "core-platform-api-stubs-system-modules",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
 			aidl: {
 				export_include_dirs: ["framework/aidl"],
 			},
@@ -156,7 +160,7 @@ func GatherRequiredDepsForTest() string {
 			name: "android.hidl.base-V1.0-java",
 			srcs: ["a.java"],
 			sdk_version: "none",
-			system_modules: "core-platform-api-stubs-system-modules",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
 			installable: true,
 		}
 
@@ -164,7 +168,7 @@ func GatherRequiredDepsForTest() string {
 			name: "android.hidl.manager-V1.0-java",
 			srcs: ["a.java"],
 			sdk_version: "none",
-			system_modules: "core-platform-api-stubs-system-modules",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
 			installable: true,
 		}
 
@@ -172,14 +176,31 @@ func GatherRequiredDepsForTest() string {
 			name: "org.apache.http.legacy",
 			srcs: ["a.java"],
 			sdk_version: "none",
-			system_modules: "core-platform-api-stubs-system-modules",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
+			installable: true,
+		}
+
+		java_library {
+			name: "android.test.base",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
+			installable: true,
+		}
+  
+		java_library {
+			name: "android.test.mock",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
 			installable: true,
 		}
 	`
 
 	systemModules := []string{
 		"core-current-stubs-system-modules",
-		"core-platform-api-stubs-system-modules",
+		"legacy-core-platform-api-stubs-system-modules",
+		"stable-core-platform-api-stubs-system-modules",
 	}
 
 	for _, extra := range systemModules {
@@ -197,4 +218,18 @@ func GatherRequiredDepsForTest() string {
 	}
 
 	return bp
+}
+
+func CheckModuleDependencies(t *testing.T, ctx *android.TestContext, name, variant string, expected []string) {
+	t.Helper()
+	module := ctx.ModuleForTests(name, variant).Module()
+	deps := []string{}
+	ctx.VisitDirectDeps(module, func(m blueprint.Module) {
+		deps = append(deps, m.Name())
+	})
+	sort.Strings(deps)
+
+	if actual := deps; !reflect.DeepEqual(expected, actual) {
+		t.Errorf("expected %#q, found %#q", expected, actual)
+	}
 }

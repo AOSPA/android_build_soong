@@ -55,8 +55,9 @@ func parsePathDir(dir string) []string {
 }
 
 // A "lite" version of SetupPath used for dumpvars, or other places that need
-// minimal overhead (but at the expense of logging).
-func SetupLitePath(ctx Context, config Config) {
+// minimal overhead (but at the expense of logging). If tmpDir is empty, the
+// default TMPDIR is used from config.
+func SetupLitePath(ctx Context, config Config, tmpDir string) {
 	if config.pathReplaced {
 		return
 	}
@@ -65,8 +66,11 @@ func SetupLitePath(ctx Context, config Config) {
 	defer ctx.EndTrace()
 
 	origPath, _ := config.Environment().Get("PATH")
-	myPath, _ := config.Environment().Get("TMPDIR")
-	myPath = filepath.Join(myPath, "path")
+
+	if tmpDir == "" {
+		tmpDir, _ = config.Environment().Get("TMPDIR")
+	}
+	myPath := filepath.Join(tmpDir, "path")
 	ensureEmptyDirectoriesExist(ctx, myPath)
 
 	os.Setenv("PATH", origPath)
@@ -177,9 +181,12 @@ func SetupPath(ctx Context, config Config) {
 		execs = append(execs, parsePathDir(pathEntry)...)
 	}
 
-	allowAllSymlinks := config.Environment().IsEnvTrue("TEMPORARY_DISABLE_PATH_RESTRICTIONS")
+	if config.Environment().IsEnvTrue("TEMPORARY_DISABLE_PATH_RESTRICTIONS") {
+		ctx.Fatalln("TEMPORARY_DISABLE_PATH_RESTRICTIONS was a temporary migration method, and is now obsolete.")
+	}
+
 	for _, name := range execs {
-		if !paths.GetConfig(name).Symlink && !allowAllSymlinks {
+		if !paths.GetConfig(name).Symlink {
 			continue
 		}
 

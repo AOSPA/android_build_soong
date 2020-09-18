@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -205,6 +206,7 @@ type moduleInstallPathContextImpl struct {
 	inRamdisk      bool
 	inRecovery     bool
 	inRoot         bool
+	forceOS        *OsType
 }
 
 func (m moduleInstallPathContextImpl) Config() Config {
@@ -239,6 +241,10 @@ func (m moduleInstallPathContextImpl) InstallInRoot() bool {
 
 func (m moduleInstallPathContextImpl) InstallBypassMake() bool {
 	return false
+}
+
+func (m moduleInstallPathContextImpl) InstallForceOS() *OsType {
+	return m.forceOS
 }
 
 func pathTestConfig(buildDir string) Config {
@@ -598,6 +604,40 @@ func TestPathForModuleInstall(t *testing.T) {
 			},
 			in:  []string{"nativetest", "my_test"},
 			out: "target/product/test_device/data/asan/data/nativetest/my_test",
+		}, {
+			name: "device testcases",
+			ctx: &moduleInstallPathContextImpl{
+				baseModuleContext: baseModuleContext{
+					os:     deviceTarget.Os,
+					target: deviceTarget,
+				},
+				inTestcases: true,
+			},
+			in:  []string{"my_test", "my_test_bin"},
+			out: "target/product/test_device/testcases/my_test/my_test_bin",
+		}, {
+			name: "host testcases",
+			ctx: &moduleInstallPathContextImpl{
+				baseModuleContext: baseModuleContext{
+					os:     hostTarget.Os,
+					target: hostTarget,
+				},
+				inTestcases: true,
+			},
+			in:  []string{"my_test", "my_test_bin"},
+			out: "host/linux-x86/testcases/my_test/my_test_bin",
+		}, {
+			name: "forced host testcases",
+			ctx: &moduleInstallPathContextImpl{
+				baseModuleContext: baseModuleContext{
+					os:     deviceTarget.Os,
+					target: deviceTarget,
+				},
+				inTestcases: true,
+				forceOS:     &Linux,
+			},
+			in:  []string{"my_test", "my_test_bin"},
+			out: "host/linux-x86/testcases/my_test/my_test_bin",
 		},
 	}
 
@@ -1051,6 +1091,21 @@ func TestPathsForModuleSrc(t *testing.T) {
 			rels: []string{"gen/c"},
 		},
 		{
+			name: "output file provider with exclude",
+			bp: `
+			test {
+				name: "foo",
+				srcs: [":b", ":c"],
+				exclude_srcs: [":c"]
+			}
+			output_file_provider {
+				name: "c",
+				outs: ["gen/c"],
+			}`,
+			srcs: []string{buildDir + "/.intermediates/ofp/b/gen/b"},
+			rels: []string{"gen/b"},
+		},
+		{
 			name: "special characters glob",
 			bp: `
 			test {
@@ -1215,4 +1270,52 @@ func ExampleOutputPath_FileInSameDir() {
 	// Output:
 	// out/system/framework/boot.art out/system/framework/oat/arm/boot.vdex
 	// boot.art oat/arm/boot.vdex
+}
+
+func BenchmarkFirstUniquePaths(b *testing.B) {
+	implementations := []struct {
+		name string
+		f    func(Paths) Paths
+	}{
+		{
+			name: "list",
+			f:    firstUniquePathsList,
+		},
+		{
+			name: "map",
+			f:    firstUniquePathsMap,
+		},
+	}
+	const maxSize = 1024
+	uniquePaths := make(Paths, maxSize)
+	for i := range uniquePaths {
+		uniquePaths[i] = PathForTesting(strconv.Itoa(i))
+	}
+	samePath := make(Paths, maxSize)
+	for i := range samePath {
+		samePath[i] = uniquePaths[0]
+	}
+
+	f := func(b *testing.B, imp func(Paths) Paths, paths Paths) {
+		for i := 0; i < b.N; i++ {
+			b.ReportAllocs()
+			paths = append(Paths(nil), paths...)
+			imp(paths)
+		}
+	}
+
+	for n := 1; n <= maxSize; n <<= 1 {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			for _, implementation := range implementations {
+				b.Run(implementation.name, func(b *testing.B) {
+					b.Run("same", func(b *testing.B) {
+						f(b, implementation.f, samePath[:n])
+					})
+					b.Run("unique", func(b *testing.B) {
+						f(b, implementation.f, uniquePaths[:n])
+					})
+				})
+			}
+		})
+	}
 }

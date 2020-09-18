@@ -310,7 +310,13 @@ func processVndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 		panic(err)
 	}
 
-	if m.HasStubsVariants() {
+	if m.HasStubsVariants() && name != "libz" {
+		// b/155456180 libz is the ONLY exception here. We don't want to make
+		// libz an LLNDK library because we in general can't guarantee that
+		// libz will behave consistently especially about the compression.
+		// i.e. the compressed output might be different across releases.
+		// As the library is an external one, it's risky to keep the compatibility
+		// promise if it becomes an LLNDK.
 		mctx.PropertyErrorf("vndk.enabled", "This library provides stubs. Shouldn't be VNDK. Consider making it as LLNDK")
 	}
 
@@ -553,10 +559,6 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		return
 	}
 
-	if ctx.DeviceConfig().BoardVndkRuntimeDisable() {
-		return
-	}
-
 	var snapshotOutputs android.Paths
 
 	/*
@@ -666,13 +668,13 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		moduleNames[stem] = ctx.ModuleName(m)
 		modulePaths[stem] = ctx.ModuleDir(m)
 
-		if m.NoticeFile().Valid() {
+		if len(m.NoticeFiles()) > 0 {
 			noticeName := stem + ".txt"
 			// skip already copied notice file
 			if _, ok := noticeBuilt[noticeName]; !ok {
 				noticeBuilt[noticeName] = true
-				snapshotOutputs = append(snapshotOutputs, copyFile(
-					ctx, m.NoticeFile().Path(), filepath.Join(noticeDir, noticeName)))
+				snapshotOutputs = append(snapshotOutputs, combineNotices(
+					ctx, m.NoticeFiles(), filepath.Join(noticeDir, noticeName)))
 			}
 		}
 

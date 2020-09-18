@@ -184,7 +184,8 @@ func NewConfig(ctx Context, args ...string) Config {
 	// Tell python not to spam the source tree with .pyc files.
 	ret.environ.Set("PYTHONDONTWRITEBYTECODE", "1")
 
-	ret.environ.Set("TMPDIR", absPath(ctx, ret.TempDir()))
+	tmpDir := absPath(ctx, ret.TempDir())
+	ret.environ.Set("TMPDIR", tmpDir)
 
 	// Always set ASAN_SYMBOLIZER_PATH so that ASAN-based tools can symbolize any crashes
 	symbolizerPath := filepath.Join("prebuilts/clang/host", ret.HostPrebuiltTag(),
@@ -256,10 +257,13 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.buildDateTime = strconv.FormatInt(time.Now().Unix(), 10)
 	}
 
-	if ctx.Metrics != nil {
-		ctx.Metrics.SetBuildDateTime(ret.buildDateTime)
-	}
 	ret.environ.Set("BUILD_DATETIME_FILE", buildDateTimeFile)
+
+	if ret.UseRBE() {
+		for k, v := range getRBEVars(ctx, tmpDir) {
+			ret.environ.Set(k, v)
+		}
+	}
 
 	return Config{ret}
 }
@@ -517,6 +521,9 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 				ctx.Fatalln("Unknown option:", arg)
 			}
 		} else if k, v, ok := decodeKeyValue(arg); ok && len(k) > 0 {
+			if k == "OUT_DIR" {
+				ctx.Fatalln("OUT_DIR may only be set in the environment, not as a command line option.")
+			}
 			c.environ.Set(k, v)
 		} else if arg == "dist" {
 			c.dist = true
@@ -589,6 +596,7 @@ func (c *configImpl) Lunch(ctx Context, product, variant string) {
 	c.environ.Set("TARGET_BUILD_VARIANT", variant)
 	c.environ.Set("TARGET_BUILD_TYPE", "release")
 	c.environ.Unset("TARGET_BUILD_APPS")
+	c.environ.Unset("TARGET_BUILD_UNBUNDLED")
 }
 
 // Tapas configures the environment to build one or more unbundled apps,
@@ -611,10 +619,6 @@ func (c *configImpl) Tapas(ctx Context, apps []string, arch, variant string) {
 		product = "aosp_arm"
 	case "arm64":
 		product = "aosm_arm64"
-	case "mips":
-		product = "aosp_mips"
-	case "mips64":
-		product = "aosp_mips64"
 	case "x86":
 		product = "aosp_x86"
 	case "x86_64":
@@ -804,6 +808,15 @@ func (c *configImpl) StartRBE() bool {
 	return true
 }
 
+func (c *configImpl) RBEStatsOutputDir() string {
+	for _, f := range []string{"RBE_output_dir", "FLAG_output_dir"} {
+		if v, ok := c.environ.Get(f); ok {
+			return v
+		}
+	}
+	return ""
+}
+
 func (c *configImpl) UseRemoteBuild() bool {
 	return c.UseGoma() || c.UseRBE()
 }
@@ -961,4 +974,15 @@ func (c *configImpl) SetPdkBuild(pdk bool) {
 
 func (c *configImpl) IsPdkBuild() bool {
 	return c.pdkBuild
+}
+
+func (c *configImpl) BuildDateTime() string {
+	return c.buildDateTime
+}
+
+func (c *configImpl) MetricsUploaderApp() string {
+	if p, ok := c.environ.Get("ANDROID_ENABLE_METRICS_UPLOAD"); ok {
+		return p
+	}
+	return ""
 }

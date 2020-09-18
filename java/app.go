@@ -28,6 +28,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc"
+	"android/soong/dexpreopt"
 	"android/soong/tradefed"
 )
 
@@ -267,6 +268,9 @@ type overridableAppProperties struct {
 
 	// the logging parent of this app.
 	Logging_parent *string
+
+	// Whether to rename the package in resources to the override name rather than the base name. Defaults to true.
+	Rename_resources_package *bool
 }
 
 // runtime_resource_overlay properties that can be overridden by override_runtime_resource_overlay
@@ -431,8 +435,10 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 		if String(a.deviceProperties.Min_sdk_version) == "" {
 			ctx.PropertyErrorf("updatable", "updatable apps must set min_sdk_version.")
 		}
+
 		if minSdkVersion, err := a.minSdkVersion().effectiveVersion(ctx); err == nil {
 			a.checkJniLibsSdkVersion(ctx, minSdkVersion)
+			android.CheckMinSdkVersion(a, ctx, int(minSdkVersion))
 		} else {
 			ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
 		}
@@ -504,8 +510,21 @@ func (a *AndroidApp) shouldEmbedJnis(ctx android.BaseModuleContext) bool {
 		!a.IsForPlatform() || a.appProperties.AlwaysPackageNativeLibs
 }
 
+func generateAaptRenamePackageFlags(packageName string, renameResourcesPackage bool) []string {
+	aaptFlags := []string{"--rename-manifest-package " + packageName}
+	if renameResourcesPackage {
+		// Required to rename the package name in the resources table.
+		aaptFlags = append(aaptFlags, "--rename-resources-package "+packageName)
+	}
+	return aaptFlags
+}
+
 func (a *AndroidApp) OverriddenManifestPackageName() string {
 	return a.overriddenManifestPackageName
+}
+
+func (a *AndroidApp) renameResourcesPackage() bool {
+	return proptools.BoolDefault(a.overridableAppProperties.Rename_resources_package, true)
 }
 
 func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
@@ -540,7 +559,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 		if !overridden {
 			manifestPackageName = *a.overridableAppProperties.Package_name
 		}
-		aaptLinkFlags = append(aaptLinkFlags, "--rename-manifest-package "+manifestPackageName)
+		aaptLinkFlags = append(aaptLinkFlags, generateAaptRenamePackageFlags(manifestPackageName, a.renameResourcesPackage())...)
 		a.overriddenManifestPackageName = manifestPackageName
 	}
 
@@ -663,16 +682,20 @@ func (a *AndroidApp) noticeBuildActions(ctx android.ModuleContext) {
 			return false
 		}
 
-		path := child.(android.Module).NoticeFile()
-		if path.Valid() {
-			noticePathSet[path.Path()] = true
+		paths := child.(android.Module).NoticeFiles()
+		if len(paths) > 0 {
+			for _, path := range paths {
+				noticePathSet[path] = true
+			}
 		}
 		return true
 	})
 
 	// If the app has one, add it too.
-	if a.NoticeFile().Valid() {
-		noticePathSet[a.NoticeFile().Path()] = true
+	if len(a.NoticeFiles()) > 0 {
+		for _, path := range a.NoticeFiles() {
+			noticePathSet[path] = true
+		}
 	}
 
 	if len(noticePathSet) == 0 {
@@ -769,7 +792,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.linter.mergedManifest = a.aapt.mergedManifestFile
 	a.linter.manifest = a.aapt.manifestPath
 	a.linter.resources = a.aapt.resourceFiles
-	a.linter.buildModuleReportZip = ctx.Config().UnbundledBuild()
+	a.linter.buildModuleReportZip = ctx.Config().UnbundledBuildApps()
 
 	dexJarFile := a.dexBuildActions(ctx)
 
@@ -902,13 +925,13 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 	return jniLibs, certificates
 }
 
-func (a *AndroidApp) walkPayloadDeps(ctx android.ModuleContext,
-	do func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool)) {
-
+func (a *AndroidApp) WalkPayloadDeps(ctx android.ModuleContext, do android.PayloadDepsCallback) {
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		isExternal := !a.DepIsInSameApex(ctx, child)
 		if am, ok := child.(android.ApexModule); ok {
-			do(ctx, parent, am, isExternal)
+			if !do(ctx, parent, am, isExternal) {
+				return false
+			}
 		}
 		return !isExternal
 	})
@@ -920,7 +943,7 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 	}
 
 	depsInfo := android.DepNameToDepInfoMap{}
-	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) {
+	a.WalkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		depName := to.Name()
 		if info, exist := depsInfo[depName]; exist {
 			info.From = append(info.From, from.Name())
@@ -940,6 +963,7 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 				MinSdkVersion: toMinSdkVersion,
 			}
 		}
+		return true
 	})
 
 	a.ApexBundleDepsInfo.BuildDepsInfoLists(ctx, a.MinSdkVersion(), depsInfo)
@@ -993,6 +1017,8 @@ func (a *AndroidApp) MarkAsCoverageVariant(coverage bool) {
 	a.appProperties.IsCoverageVariant = coverage
 }
 
+func (a *AndroidApp) EnableCoverageIfNeeded() {}
+
 var _ cc.Coverage = (*AndroidApp)(nil)
 
 // android_app compiles sources and Android resources into an Android application package `.apk` file.
@@ -1012,10 +1038,6 @@ func AndroidAppFactory() android.Module {
 		&module.overridableAppProperties,
 		&module.usesLibrary.usesLibraryProperties)
 
-	module.Prefer32(func(ctx android.BaseModuleContext, base *android.ModuleBase, class android.OsClass) bool {
-		return class == android.Device && ctx.Config().DevicePrefer32BitApps()
-	})
-
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	android.InitOverridableModule(module, &module.appProperties.Overrides)
@@ -1025,6 +1047,7 @@ func AndroidAppFactory() android.Module {
 }
 
 type appTestProperties struct {
+	// The name of the android_app module that the tests will run against.
 	Instrumentation_for *string
 
 	// if specified, the instrumentation target package name in the manifest is overwritten by it.
@@ -1285,6 +1308,7 @@ func OverrideRuntimeResourceOverlayModuleFactory() android.Module {
 type AndroidAppImport struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	android.ApexModuleBase
 	prebuilt android.Prebuilt
 
 	properties   AndroidAppImportProperties
@@ -1535,7 +1559,9 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 
 	// TODO: Optionally compress the output apk.
 
-	a.installPath = ctx.InstallFile(installDir, apkFilename, a.outputFile)
+	if a.IsForPlatform() {
+		a.installPath = ctx.InstallFile(installDir, apkFilename, a.outputFile)
+	}
 
 	// TODO: androidmk converter jni libs
 }
@@ -1586,12 +1612,24 @@ func (a *AndroidAppImport) Privileged() bool {
 	return Bool(a.properties.Privileged)
 }
 
+func (a *AndroidAppImport) DepIsInSameApex(_ android.BaseModuleContext, _ android.Module) bool {
+	// android_app_import might have extra dependencies via uses_libs property.
+	// Don't track the dependency as we don't automatically add those libraries
+	// to the classpath. It should be explicitly added to java_libs property of APEX
+	return false
+}
+
 func (a *AndroidAppImport) sdkVersion() sdkSpec {
 	return sdkSpecFrom("")
 }
 
 func (a *AndroidAppImport) minSdkVersion() sdkSpec {
 	return sdkSpecFrom("")
+}
+
+func (j *AndroidAppImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion int) error {
+	// Do not check for prebuilts against the min_sdk_version of enclosing APEX
+	return nil
 }
 
 func createVariantGroupType(variants []string, variantGroupName string) reflect.Type {
@@ -1640,6 +1678,7 @@ func AndroidAppImportFactory() android.Module {
 		module.processVariants(ctx)
 	})
 
+	android.InitApexModule(module)
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	android.InitSingleSourcePrebuiltModule(module, &module.properties, "Apk")
@@ -1690,6 +1729,7 @@ func AndroidTestImportFactory() android.Module {
 
 	module.dexpreopter.isTest = true
 
+	android.InitApexModule(module)
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	android.InitSingleSourcePrebuiltModule(module, &module.properties, "Apk")
@@ -1746,6 +1786,15 @@ type RuntimeResourceOverlayProperties struct {
 	Overrides []string
 }
 
+// RuntimeResourceOverlayModule interface is used by the apex package to gather information from
+// a RuntimeResourceOverlay module.
+type RuntimeResourceOverlayModule interface {
+	android.Module
+	OutputFile() android.Path
+	Certificate() Certificate
+	Theme() string
+}
+
 func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext) {
 	sdkDep := decodeSdkDep(ctx, sdkContext(r))
 	if sdkDep.hasFrameworkLibs() {
@@ -1773,7 +1822,7 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 		if !overridden {
 			manifestPackageName = *r.overridableProperties.Package_name
 		}
-		aaptLinkFlags = append(aaptLinkFlags, "--rename-manifest-package "+manifestPackageName)
+		aaptLinkFlags = append(aaptLinkFlags, generateAaptRenamePackageFlags(manifestPackageName, false)...)
 	}
 	if r.overridableProperties.Target_package_name != nil {
 		aaptLinkFlags = append(aaptLinkFlags,
@@ -1814,6 +1863,18 @@ func (r *RuntimeResourceOverlay) minSdkVersion() sdkSpec {
 
 func (r *RuntimeResourceOverlay) targetSdkVersion() sdkSpec {
 	return r.sdkVersion()
+}
+
+func (r *RuntimeResourceOverlay) Certificate() Certificate {
+	return r.certificate
+}
+
+func (r *RuntimeResourceOverlay) OutputFile() android.Path {
+	return r.outputFile
+}
+
+func (r *RuntimeResourceOverlay) Theme() string {
+	return String(r.properties.Theme)
 }
 
 // runtime_resource_overlay generates a resource-only apk file that can overlay application and
@@ -1860,13 +1921,13 @@ func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, hasFrameworkLibs 
 		// creating a cyclic dependency:
 		//     e.g. framework-res -> org.apache.http.legacy -> ... -> framework-res.
 		if hasFrameworkLibs {
-			// dexpreopt/dexpreopt.go needs the paths to the dex jars of these libraries in case construct_context.sh needs
-			// to pass them to dex2oat.  Add them as a dependency so we can determine the path to the dex jar of each
-			// library to dexpreopt.
+			// Dexpreopt needs paths to the dex jars of these libraries in order to construct
+			// class loader context for dex2oat. Add them as a dependency with a special tag.
 			ctx.AddVariationDependencies(nil, usesLibTag,
 				"org.apache.http.legacy",
 				"android.hidl.base-V1.0-java",
 				"android.hidl.manager-V1.0-java")
+			ctx.AddVariationDependencies(nil, usesLibTag, optionalUsesLibs...)
 		}
 	}
 }
@@ -1878,24 +1939,36 @@ func (u *usesLibrary) presentOptionalUsesLibs(ctx android.BaseModuleContext) []s
 	return optionalUsesLibs
 }
 
-// usesLibraryPaths returns a map of module names of shared library dependencies to the paths to their dex jars.
-func (u *usesLibrary) usesLibraryPaths(ctx android.ModuleContext) map[string]android.Path {
-	usesLibPaths := make(map[string]android.Path)
+// usesLibraryPaths returns a map of module names of shared library dependencies to the paths
+// to their dex jars on host and on device.
+func (u *usesLibrary) usesLibraryPaths(ctx android.ModuleContext) dexpreopt.LibraryPaths {
+	usesLibPaths := make(dexpreopt.LibraryPaths)
 
 	if !ctx.Config().UnbundledBuild() {
 		ctx.VisitDirectDepsWithTag(usesLibTag, func(m android.Module) {
+			dep := ctx.OtherModuleName(m)
 			if lib, ok := m.(Dependency); ok {
-				if dexJar := lib.DexJar(); dexJar != nil {
-					usesLibPaths[ctx.OtherModuleName(m)] = dexJar
-				} else {
-					ctx.ModuleErrorf("module %q in uses_libs or optional_uses_libs must produce a dex jar, does it have installable: true?",
-						ctx.OtherModuleName(m))
+				buildPath := lib.DexJarBuildPath()
+				if buildPath == nil {
+					ctx.ModuleErrorf("module %q in uses_libs or optional_uses_libs must"+
+						" produce a dex jar, does it have installable: true?", dep)
+					return
 				}
+
+				var devicePath string
+				installPath := lib.DexJarInstallPath()
+				if installPath == nil {
+					devicePath = filepath.Join("/system/framework", dep+".jar")
+				} else {
+					devicePath = android.InstallPathToOnDevicePath(ctx, installPath.(android.InstallPath))
+				}
+
+				usesLibPaths[dep] = &dexpreopt.LibraryPath{buildPath, devicePath}
 			} else if ctx.Config().AllowMissingDependencies() {
-				ctx.AddMissingDependencies([]string{ctx.OtherModuleName(m)})
+				ctx.AddMissingDependencies([]string{dep})
 			} else {
-				ctx.ModuleErrorf("module %q in uses_libs or optional_uses_libs must be a java library",
-					ctx.OtherModuleName(m))
+				ctx.ModuleErrorf("module %q in uses_libs or optional_uses_libs must be "+
+					"a java library", dep)
 			}
 		})
 	}
