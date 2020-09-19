@@ -105,6 +105,8 @@ var Configuration = map[string]PathConfig{
 	"zip":     Allowed,
 
 	// CAF
+	"cpio":    Allowed,
+	"nproc":   Allowed,
 	"make":    Log,
 
 	// Host toolchain is removed. In-tree toolchain should be used instead.
