@@ -22,8 +22,10 @@ bootstrap_go_package {
     srcs: [
         "fs.go",
         "readdir.go",
+        "test.go",
     ],
     testSrcs: [
+        "fs_test.go",
         "readdir_test.go",
     ],
     darwin: {
@@ -37,4 +39,3 @@ bootstrap_go_package {
         ],
     },
 }
-

@@ -102,6 +102,10 @@ type LibraryProperties struct {
 
 		// Symbol tags that should be ignored from the symbol file
 		Exclude_symbol_tags []string
+
+		// Run checks on all APIs (in addition to the ones referred by
+		// one of exported ELF symbols.)
+		Check_all_apis *bool
 	}
 
 	// Order symbols in .bss section by their sizes.  Only useful for shared libraries.
@@ -365,7 +369,7 @@ type libraryDecorator struct {
 	unstrippedOutputFile android.Path
 
 	// Location of the file that should be copied to dist dir when requested
-	distFile android.OptionalPath
+	distFile android.Path
 
 	versionScriptPath android.ModuleGenPath
 
@@ -890,12 +894,12 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
 		} else {
 			versionedOutputFile := android.PathForModuleOut(ctx, "versioned", fileName)
-			library.distFile = android.OptionalPathForPath(versionedOutputFile)
+			library.distFile = versionedOutputFile
 			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
 		}
 	}
 
-	TransformObjToStaticLib(ctx, library.objects.objFiles, builderFlags, outputFile, objs.tidyFiles)
+	TransformObjToStaticLib(ctx, library.objects.objFiles, deps.WholeStaticLibsFromPrebuilts, builderFlags, outputFile, objs.tidyFiles)
 
 	library.coverageOutputFile = TransformCoverageFilesToZip(ctx, library.objects, ctx.ModuleName())
 
@@ -984,11 +988,11 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
 		} else {
 			versionedOutputFile := android.PathForModuleOut(ctx, "versioned", fileName)
-			library.distFile = android.OptionalPathForPath(versionedOutputFile)
+			library.distFile = versionedOutputFile
 
 			if library.stripper.needsStrip(ctx) {
 				out := android.PathForModuleOut(ctx, "versioned-stripped", fileName)
-				library.distFile = android.OptionalPathForPath(out)
+				library.distFile = out
 				library.stripper.stripExecutableOrSharedLib(ctx, versionedOutputFile, out, builderFlags)
 			}
 
@@ -1102,7 +1106,9 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		refAbiDumpFile := getRefAbiDumpFile(ctx, vndkVersion, fileName)
 		if refAbiDumpFile != nil {
 			library.sAbiDiff = SourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
-				refAbiDumpFile, fileName, exportedHeaderFlags, ctx.isLlndk(ctx.Config()), ctx.isNdk(), ctx.isVndkExt())
+				refAbiDumpFile, fileName, exportedHeaderFlags,
+				Bool(library.Properties.Header_abi_checker.Check_all_apis),
+				ctx.isLlndk(ctx.Config()), ctx.isNdk(), ctx.isVndkExt())
 		}
 	}
 }
@@ -1574,7 +1580,8 @@ func VersionVariantAvailable(module interface {
 // (which is unnamed) and zero or more stubs variants.
 func VersionMutator(mctx android.BottomUpMutatorContext) {
 	if library, ok := mctx.Module().(LinkableInterface); ok && VersionVariantAvailable(library) {
-		if library.CcLibrary() && library.BuildSharedVariant() && len(library.StubsVersions()) > 0 {
+		if library.CcLibrary() && library.BuildSharedVariant() && len(library.StubsVersions()) > 0 &&
+			!library.IsSdkVariant() {
 			versions := library.StubsVersions()
 			normalizeVersions(mctx, versions)
 			if mctx.Failed() {

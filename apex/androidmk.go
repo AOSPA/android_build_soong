@@ -33,14 +33,7 @@ func (a *apexBundle) AndroidMk() android.AndroidMkData {
 			Disabled: true,
 		}
 	}
-	writers := []android.AndroidMkData{}
-	writers = append(writers, a.androidMkForType())
-	return android.AndroidMkData{
-		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
-			for _, data := range writers {
-				data.Custom(w, name, prefix, moduleDir, data)
-			}
-		}}
+	return a.androidMkForType()
 }
 
 func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, moduleDir string) []string {
@@ -77,6 +70,8 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 			postInstallCommands = append(postInstallCommands, mkdirCmd, linkCmd)
 		}
 	}
+
+	seenDataOutPaths := make(map[string]bool)
 
 	for _, fi := range a.filesInfo {
 		if ccMod, ok := fi.module.(*cc.Module); ok && ccMod.Properties.HideFromMake {
@@ -124,9 +119,20 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 			if len(fi.symlinks) > 0 {
 				fmt.Fprintln(w, "LOCAL_MODULE_SYMLINKS :=", strings.Join(fi.symlinks, " "))
 			}
+			newDataPaths := []android.DataPath{}
+			for _, path := range fi.dataPaths {
+				dataOutPath := modulePath + ":" + path.SrcPath.Rel()
+				if ok := seenDataOutPaths[dataOutPath]; !ok {
+					newDataPaths = append(newDataPaths, path)
+					seenDataOutPaths[dataOutPath] = true
+				}
+			}
+			if len(newDataPaths) > 0 {
+				fmt.Fprintln(w, "LOCAL_TEST_DATA :=", strings.Join(cc.AndroidMkDataPaths(newDataPaths), " "))
+			}
 
-			if fi.module != nil && fi.module.NoticeFile().Valid() {
-				fmt.Fprintln(w, "LOCAL_NOTICE_FILE :=", fi.module.NoticeFile().Path().String())
+			if fi.module != nil && len(fi.module.NoticeFiles()) > 0 {
+				fmt.Fprintln(w, "LOCAL_NOTICE_FILE :=", strings.Join(fi.module.NoticeFiles().Strings(), " "))
 			}
 		} else {
 			modulePath = pathWhenActivated
@@ -231,8 +237,9 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 					for _, o := range a.overridableProperties.Overrides {
 						patterns = append(patterns, "%."+o+a.suffix)
 					}
-					fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES :=", strings.Join(patterns, " "))
-
+					if len(patterns) > 0 {
+						fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES :=", strings.Join(patterns, " "))
+					}
 					if len(a.compatSymlinks) > 0 {
 						// For flattened apexes, compat symlinks are attached to apex_manifest.json which is guaranteed for every apex
 						postInstallCommands = append(postInstallCommands, a.compatSymlinks...)
@@ -305,7 +312,23 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", a.installDir.ToMakePath().String())
 				fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", name+apexType.suffix())
 				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !a.installable())
-				fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES :=", strings.Join(a.overridableProperties.Overrides, " "))
+
+				// Because apex writes .mk with Custom(), we need to write manually some common properties
+				// which are available via data.Entries
+				commonProperties := []string{
+					"LOCAL_INIT_RC", "LOCAL_VINTF_FRAGMENTS",
+					"LOCAL_PROPRIETARY_MODULE", "LOCAL_VENDOR_MODULE", "LOCAL_ODM_MODULE", "LOCAL_PRODUCT_MODULE", "LOCAL_SYSTEM_EXT_MODULE",
+					"LOCAL_MODULE_OWNER",
+				}
+				for _, name := range commonProperties {
+					if value, ok := data.Entries.EntryMap[name]; ok {
+						fmt.Fprintln(w, name+" := "+strings.Join(value, " "))
+					}
+				}
+
+				if len(a.overridableProperties.Overrides) > 0 {
+					fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES :=", strings.Join(a.overridableProperties.Overrides, " "))
+				}
 				if len(moduleNames) > 0 {
 					fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(moduleNames, " "))
 				}
@@ -331,7 +354,11 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
 
 				if apexType == imageApex {
-					fmt.Fprintln(w, "ALL_MODULES.$(LOCAL_MODULE).BUNDLE :=", a.bundleModuleFile.String())
+					fmt.Fprintln(w, "ALL_MODULES.$(my_register_name).BUNDLE :=", a.bundleModuleFile.String())
+				}
+				if len(a.lintReports) > 0 {
+					fmt.Fprintln(w, "ALL_MODULES.$(my_register_name).LINT_REPORTS :=",
+						strings.Join(a.lintReports.Strings(), " "))
 				}
 
 				if a.installedFilesFile != nil {

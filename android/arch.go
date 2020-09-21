@@ -33,8 +33,6 @@ var (
 
 	Arm    = newArch("arm", "lib32")
 	Arm64  = newArch("arm64", "lib64")
-	Mips   = newArch("mips", "lib32")
-	Mips64 = newArch("mips64", "lib64")
 	X86    = newArch("x86", "lib32")
 	X86_64 = newArch("x86_64", "lib64")
 
@@ -46,8 +44,6 @@ var (
 var archTypeMap = map[string]ArchType{
 	"arm":    Arm,
 	"arm64":  Arm64,
-	"mips":   Mips,
-	"mips64": Mips64,
 	"x86":    X86,
 	"x86_64": X86_64,
 }
@@ -63,12 +59,6 @@ module {
         },
         arm64: {
             // Host or device variants with arm64 architecture
-        },
-        mips: {
-            // Host or device variants with mips architecture
-        },
-        mips64: {
-            // Host or device variants with mips64 architecture
         },
         x86: {
             // Host or device variants with x86 architecture
@@ -147,18 +137,6 @@ var archVariants = map[ArchType][]string{
 		"exynos-m1",
 		"exynos-m2",
 	},
-	Mips: {
-		"mips32_fp",
-		"mips32r2_fp",
-		"mips32r2_fp_xburst",
-		"mips32r2dsp_fp",
-		"mips32r2dspr2_fp",
-		"mips32r6",
-	},
-	Mips64: {
-		"mips64r2",
-		"mips64r6",
-	},
 	X86: {
 		"amberlake",
 		"atom",
@@ -195,15 +173,6 @@ var archFeatures = map[ArchType][]string{
 	Arm: {
 		"neon",
 	},
-	Mips: {
-		"dspr2",
-		"rev6",
-		"msa",
-	},
-	Mips64: {
-		"rev6",
-		"msa",
-	},
 	X86: {
 		"ssse3",
 		"sse4",
@@ -239,19 +208,6 @@ var archFeatureMap = map[ArchType]map[string][]string{
 		},
 		"armv8-2a": {
 			"neon",
-		},
-	},
-	Mips: {
-		"mips32r2dspr2_fp": {
-			"dspr2",
-		},
-		"mips32r6": {
-			"rev6",
-		},
-	},
-	Mips64: {
-		"mips64r6": {
-			"rev6",
 		},
 	},
 	X86: {
@@ -618,7 +574,7 @@ var (
 		LinuxBionic: []ArchType{X86_64},
 		Darwin:      []ArchType{X86_64},
 		Windows:     []ArchType{X86, X86_64},
-		Android:     []ArchType{Arm, Arm64, Mips, Mips64, X86, X86_64},
+		Android:     []ArchType{Arm, Arm64, X86, X86_64},
 		Fuchsia:     []ArchType{Arm64, X86_64},
 	}
 )
@@ -856,7 +812,7 @@ func GetOsSpecificVariantsOfCommonOSVariant(mctx BaseModuleContext) []Module {
 // Valid multilib values include:
 //    "both": compile for all Targets supported by the OsClass (generally x86_64 and x86, or arm64 and arm).
 //    "first": compile for only a single preferred Target supported by the OsClass.  This is generally x86_64 or arm64,
-//        but may be arm for a 32-bit only build or a build with TARGET_PREFER_32_BIT=true set.
+//        but may be arm for a 32-bit only build.
 //    "32": compile for only a single 32-bit Target supported by the OsClass.
 //    "64": compile for only a single 64-bit Target supported by the OsClass.
 //    "common": compile a for a single Target that will work on all Targets suported by the OsClass (for example Java).
@@ -1666,15 +1622,6 @@ func getMegaDeviceConfig() []archConfig {
 		{"arm64", "armv8-2a", "cortex-a76", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "kryo300", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "kryo385", []string{"arm64-v8a"}},
-		{"mips", "mips32-fp", "", []string{"mips"}},
-		{"mips", "mips32r2-fp", "", []string{"mips"}},
-		{"mips", "mips32r2-fp-xburst", "", []string{"mips"}},
-		//{"mips", "mips32r6", "", []string{"mips"}},
-		{"mips", "mips32r2dsp-fp", "", []string{"mips"}},
-		{"mips", "mips32r2dspr2-fp", "", []string{"mips"}},
-		// mips64r2 is mismatching 64r2 and 64r6 libraries during linking to libgcc
-		//{"mips64", "mips64r2", "", []string{"mips64"}},
-		{"mips64", "mips64r6", "", []string{"mips64"}},
 		{"x86", "", "", []string{"x86"}},
 		{"x86", "atom", "", []string{"x86"}},
 		{"x86", "haswell", "", []string{"x86"}},

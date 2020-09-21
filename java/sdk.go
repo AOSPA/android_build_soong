@@ -94,9 +94,9 @@ func (k sdkKind) String() string {
 	case sdkCorePlatform:
 		return "core_platform"
 	case sdkModule:
-		return "module"
+		return "module-lib"
 	case sdkSystemServer:
-		return "system_server"
+		return "system-server"
 	default:
 		return "invalid"
 	}
@@ -321,6 +321,28 @@ func sdkSpecFrom(str string) sdkSpec {
 	}
 }
 
+func (s sdkSpec) validateSystemSdk(ctx android.EarlyModuleContext) bool {
+	// Ensures that the specified system SDK version is one of BOARD_SYSTEMSDK_VERSIONS (for vendor/product Java module)
+	// Assuming that BOARD_SYSTEMSDK_VERSIONS := 28 29,
+	// sdk_version of the modules in vendor/product that use system sdk must be either system_28, system_29 or system_current
+	if s.kind != sdkSystem || !s.version.isNumbered() {
+		return true
+	}
+	allowedVersions := ctx.DeviceConfig().PlatformSystemSdkVersions()
+	if ctx.DeviceSpecific() || ctx.SocSpecific() || (ctx.ProductSpecific() && ctx.Config().EnforceProductPartitionInterface()) {
+		systemSdkVersions := ctx.DeviceConfig().SystemSdkVersions()
+		if len(systemSdkVersions) > 0 {
+			allowedVersions = systemSdkVersions
+		}
+	}
+	if len(allowedVersions) > 0 && !android.InList(s.version.String(), allowedVersions) {
+		ctx.PropertyErrorf("sdk_version", "incompatible sdk version %q. System SDK version should be one of %q",
+			s.raw, allowedVersions)
+		return false
+	}
+	return true
+}
+
 func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep {
 	sdkVersion := sdkContext.sdkVersion()
 	if !sdkVersion.valid() {
@@ -330,6 +352,9 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep 
 
 	if ctx.Config().IsPdkBuild() {
 		sdkVersion = sdkVersion.forPdkBuild(ctx)
+	}
+	if !sdkVersion.validateSystemSdk(ctx) {
+		return sdkDep{}
 	}
 
 	if sdkVersion.usePrebuilt(ctx) {
@@ -384,25 +409,13 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep 
 		}
 	}
 
-	// Ensures that the specificed system SDK version is one of BOARD_SYSTEMSDK_VERSIONS (for vendor apks)
-	// or PRODUCT_SYSTEMSDK_VERSIONS (for other apks or when BOARD_SYSTEMSDK_VERSIONS is not set)
-	if sdkVersion.kind == sdkSystem && sdkVersion.version.isNumbered() {
-		allowed_versions := ctx.DeviceConfig().PlatformSystemSdkVersions()
-		if ctx.DeviceSpecific() || ctx.SocSpecific() {
-			if len(ctx.DeviceConfig().SystemSdkVersions()) > 0 {
-				allowed_versions = ctx.DeviceConfig().SystemSdkVersions()
-			}
-		}
-		if len(allowed_versions) > 0 && !android.InList(sdkVersion.version.String(), allowed_versions) {
-			ctx.PropertyErrorf("sdk_version", "incompatible sdk version %q. System SDK version should be one of %q",
-				sdkVersion.raw, allowed_versions)
-		}
-	}
-
 	switch sdkVersion.kind {
 	case sdkPrivate:
 		return sdkDep{
-			useDefaultLibs:     true,
+			useModule:          true,
+			systemModules:      corePlatformSystemModules(ctx),
+			bootclasspath:      corePlatformBootclasspathLibraries(ctx),
+			classpath:          config.FrameworkLibraries,
 			frameworkResModule: "framework-res",
 		}
 	case sdkNone:
@@ -424,9 +437,10 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep 
 		}
 	case sdkCorePlatform:
 		return sdkDep{
-			useDefaultLibs:     true,
-			frameworkResModule: "framework-res",
-			noFrameworksLibs:   true,
+			useModule:        true,
+			systemModules:    corePlatformSystemModules(ctx),
+			bootclasspath:    corePlatformBootclasspathLibraries(ctx),
+			noFrameworksLibs: true,
 		}
 	case sdkPublic:
 		return toModule([]string{"android_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
@@ -435,7 +449,12 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep 
 	case sdkTest:
 		return toModule([]string{"android_test_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
 	case sdkCore:
-		return toModule([]string{"core.current.stubs"}, "", nil)
+		return sdkDep{
+			useModule:        true,
+			bootclasspath:    []string{"core.current.stubs", config.DefaultLambdaStubsLibrary},
+			systemModules:    "core-current-stubs-system-modules",
+			noFrameworksLibs: true,
+		}
 	case sdkModule:
 		// TODO(146757305): provide .apk and .aidl that have more APIs for modules
 		return toModule([]string{"android_module_lib_stubs_current"}, "framework-res", nonUpdatableFrameworkAidlPath(ctx))

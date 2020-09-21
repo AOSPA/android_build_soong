@@ -24,9 +24,6 @@ func init() {
 }
 
 type BinaryCompilerProperties struct {
-	// path to the main source file that contains the program entry point (e.g. src/main.rs)
-	Srcs []string `android:"path,arch_variant"`
-
 	// passes -C prefer-dynamic to rustc, which tells it to dynamically link the stdlib
 	// (assuming it has no dylib dependencies already)
 	Prefer_dynamic *bool
@@ -35,9 +32,7 @@ type BinaryCompilerProperties struct {
 type binaryDecorator struct {
 	*baseCompiler
 
-	Properties           BinaryCompilerProperties
-	distFile             android.OptionalPath
-	unstrippedOutputFile android.Path
+	Properties BinaryCompilerProperties
 }
 
 var _ compiler = (*binaryDecorator)(nil)
@@ -104,17 +99,43 @@ func (binary *binaryDecorator) compilerProps() []interface{} {
 		&binary.Properties)
 }
 
+func (binary *binaryDecorator) nativeCoverage() bool {
+	return true
+}
+
 func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) android.Path {
 	fileName := binary.getStem(ctx) + ctx.toolchain().ExecutableSuffix()
 
-	srcPath := srcPathFromModuleSrcs(ctx, binary.Properties.Srcs)
+	srcPath, _ := srcPathFromModuleSrcs(ctx, binary.baseCompiler.Properties.Srcs)
 
 	outputFile := android.PathForModuleOut(ctx, fileName)
 	binary.unstrippedOutputFile = outputFile
 
 	flags.RustFlags = append(flags.RustFlags, deps.depFlags...)
 
-	TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
+	outputs := TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
+	binary.coverageFile = outputs.coverageFile
+
+	var coverageFiles android.Paths
+	if outputs.coverageFile != nil {
+		coverageFiles = append(coverageFiles, binary.coverageFile)
+	}
+	if len(deps.coverageFiles) > 0 {
+		coverageFiles = append(coverageFiles, deps.coverageFiles...)
+	}
+	binary.coverageOutputZipFile = TransformCoverageFilesToZip(ctx, coverageFiles, binary.getStem(ctx))
 
 	return outputFile
+}
+
+func (binary *binaryDecorator) coverageOutputZipPath() android.OptionalPath {
+	return binary.coverageOutputZipFile
+}
+
+func (binary *binaryDecorator) autoDep() autoDep {
+	if binary.preferDynamic() {
+		return dylibAutoDep
+	} else {
+		return rlibAutoDep
+	}
 }

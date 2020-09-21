@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/blueprint/proptools"
+
 	"android/soong/android"
 	"android/soong/cc"
 )
@@ -57,7 +59,9 @@ func testConfig(bp string) android.Config {
 
 	fs := map[string][]byte{
 		"foo.rs":     nil,
+		"foo.c":      nil,
 		"src/bar.rs": nil,
+		"src/any.h":  nil,
 		"liby.so":    nil,
 		"libz.so":    nil,
 	}
@@ -68,6 +72,14 @@ func testConfig(bp string) android.Config {
 }
 
 func testRust(t *testing.T, bp string) *android.TestContext {
+	return testRustContext(t, bp, false)
+}
+
+func testRustCov(t *testing.T, bp string) *android.TestContext {
+	return testRustContext(t, bp, true)
+}
+
+func testRustContext(t *testing.T, bp string, coverage bool) *android.TestContext {
 	// TODO (b/140435149)
 	if runtime.GOOS != "linux" {
 		t.Skip("Only the Linux toolchain is supported for Rust")
@@ -76,7 +88,12 @@ func testRust(t *testing.T, bp string) *android.TestContext {
 	t.Helper()
 	config := testConfig(bp)
 
-	t.Helper()
+	if coverage {
+		config.TestProductVariables.GcovCoverage = proptools.BoolPtr(true)
+		config.TestProductVariables.Native_coverage = proptools.BoolPtr(true)
+		config.TestProductVariables.NativeCoveragePaths = []string{"*"}
+	}
+
 	ctx := CreateTestContext()
 	ctx.Register(config)
 
@@ -148,12 +165,12 @@ func TestLinkPathFromFilePath(t *testing.T) {
 // Test to make sure dependencies are being picked up correctly.
 func TestDepsTracking(t *testing.T) {
 	ctx := testRust(t, `
-		rust_library_host_static {
+		rust_ffi_host_static {
 			name: "libstatic",
 			srcs: ["foo.rs"],
 			crate_name: "static",
 		}
-		rust_library_host_shared {
+		rust_ffi_host_shared {
 			name: "libshared",
 			srcs: ["foo.rs"],
 			crate_name: "shared",
@@ -207,6 +224,93 @@ func TestDepsTracking(t *testing.T) {
 	}
 }
 
+func TestSourceProviderDeps(t *testing.T) {
+	ctx := testRust(t, `
+		rust_binary {
+			name: "fizz-buzz-dep",
+			srcs: [
+				"foo.rs",
+				":my_generator",
+				":libbindings",
+			],
+		}
+		rust_proc_macro {
+			name: "libprocmacro",
+			srcs: [
+				"foo.rs",
+				":my_generator",
+				":libbindings",
+			],
+			crate_name: "procmacro",
+		}
+		rust_library {
+			name: "libfoo",
+			srcs: [
+				"foo.rs",
+				":my_generator",
+				":libbindings"],
+			crate_name: "foo",
+		}
+		genrule {
+			name: "my_generator",
+			tools: ["any_rust_binary"],
+			cmd: "$(location) -o $(out) $(in)",
+			srcs: ["src/any.h"],
+			out: ["src/any.rs"],
+		}
+		rust_bindgen {
+			name: "libbindings",
+			stem: "bindings",
+			host_supported: true,
+			wrapper_src: "src/any.h",
+        }
+	`)
+
+	libfoo := ctx.ModuleForTests("libfoo", "android_arm64_armv8-a_rlib").Rule("rustc")
+	if !android.SuffixInList(libfoo.Implicits.Strings(), "/out/bindings.rs") {
+		t.Errorf("rust_bindgen generated source not included as implicit input for libfoo; Implicits %#v", libfoo.Implicits.Strings())
+	}
+	if !android.SuffixInList(libfoo.Implicits.Strings(), "/out/any.rs") {
+		t.Errorf("genrule generated source not included as implicit input for libfoo; Implicits %#v", libfoo.Implicits.Strings())
+	}
+
+	fizzBuzz := ctx.ModuleForTests("fizz-buzz-dep", "android_arm64_armv8-a").Rule("rustc")
+	if !android.SuffixInList(fizzBuzz.Implicits.Strings(), "/out/bindings.rs") {
+		t.Errorf("rust_bindgen generated source not included as implicit input for fizz-buzz-dep; Implicits %#v", libfoo.Implicits.Strings())
+	}
+	if !android.SuffixInList(fizzBuzz.Implicits.Strings(), "/out/any.rs") {
+		t.Errorf("genrule generated source not included as implicit input for fizz-buzz-dep; Implicits %#v", libfoo.Implicits.Strings())
+	}
+
+	libprocmacro := ctx.ModuleForTests("libprocmacro", "linux_glibc_x86_64").Rule("rustc")
+	if !android.SuffixInList(libprocmacro.Implicits.Strings(), "/out/bindings.rs") {
+		t.Errorf("rust_bindgen generated source not included as implicit input for libprocmacro; Implicits %#v", libfoo.Implicits.Strings())
+	}
+	if !android.SuffixInList(libprocmacro.Implicits.Strings(), "/out/any.rs") {
+		t.Errorf("genrule generated source not included as implicit input for libprocmacro; Implicits %#v", libfoo.Implicits.Strings())
+	}
+}
+
+func TestSourceProviderTargetMismatch(t *testing.T) {
+	// This might error while building the dependency tree or when calling depsToPaths() depending on the lunched
+	// target, which results in two different errors. So don't check the error, just confirm there is one.
+	testRustError(t, ".*", `
+		rust_proc_macro {
+			name: "libprocmacro",
+			srcs: [
+				"foo.rs",
+				":libbindings",
+			],
+			crate_name: "procmacro",
+		}
+		rust_bindgen {
+			name: "libbindings",
+			stem: "bindings",
+			wrapper_src: "src/any.h",
+		}
+	`)
+}
+
 // Test to make sure proc_macros use host variants when building device modules.
 func TestProcMacroDeviceDeps(t *testing.T) {
 	ctx := testRust(t, `
@@ -214,25 +318,6 @@ func TestProcMacroDeviceDeps(t *testing.T) {
 			name: "libbar",
 			srcs: ["foo.rs"],
 			crate_name: "bar",
-		}
-		// Make a dummy libstd to let resolution go through
-		rust_library_dylib {
-			name: "libstd",
-			crate_name: "std",
-			srcs: ["foo.rs"],
-			no_stdlibs: true,
-		}
-		rust_library_dylib {
-			name: "libterm",
-			crate_name: "term",
-			srcs: ["foo.rs"],
-			no_stdlibs: true,
-		}
-		rust_library_dylib {
-			name: "libtest",
-			crate_name: "test",
-			srcs: ["foo.rs"],
-			no_stdlibs: true,
 		}
 		rust_proc_macro {
 			name: "libpm",
@@ -259,11 +344,24 @@ func TestNoStdlibs(t *testing.T) {
 		rust_binary {
 			name: "fizz-buzz",
 			srcs: ["foo.rs"],
-                        no_stdlibs: true,
+			no_stdlibs: true,
 		}`)
 	module := ctx.ModuleForTests("fizz-buzz", "android_arm64_armv8-a").Module().(*Module)
 
 	if android.InList("libstd", module.Properties.AndroidMkDylibs) {
 		t.Errorf("no_stdlibs did not suppress dependency on libstd")
 	}
+}
+
+// Test that libraries provide both 32-bit and 64-bit variants.
+func TestMultilib(t *testing.T) {
+	ctx := testRust(t, `
+		rust_library_rlib {
+			name: "libfoo",
+			srcs: ["foo.rs"],
+			crate_name: "foo",
+		}`)
+
+	_ = ctx.ModuleForTests("libfoo", "android_arm64_armv8-a_rlib")
+	_ = ctx.ModuleForTests("libfoo", "android_arm_armv7-a-neon_rlib")
 }

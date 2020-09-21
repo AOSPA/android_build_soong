@@ -40,6 +40,8 @@ type TestProperties struct {
 type TestOptions struct {
 	// The UID that you want to run the test as on a device.
 	Run_test_as *string
+	// A list of free-formed strings without spaces that categorize the test.
+	Test_suite_tag []string
 }
 
 type TestBinaryProperties struct {
@@ -55,6 +57,9 @@ type TestBinaryProperties struct {
 	// list of files or filegroup modules that provide data that should be installed alongside
 	// the test
 	Data []string `android:"path,arch_variant"`
+
+	// list of shared library modules that should be installed alongside the test
+	Data_libs []string `android:"arch_variant"`
 
 	// list of compatibility suites (for example "cts", "vts") that the module should be
 	// installed into.
@@ -158,6 +163,10 @@ func (test *testBinary) testPerSrc() bool {
 
 func (test *testBinary) srcs() []string {
 	return test.baseCompiler.Properties.Srcs
+}
+
+func (test *testBinary) dataPaths() []android.DataPath {
+	return test.data
 }
 
 func (test *testBinary) isAllTestsVariation() bool {
@@ -301,7 +310,7 @@ type testBinary struct {
 	*binaryDecorator
 	*baseCompiler
 	Properties TestBinaryProperties
-	data       android.Paths
+	data       []android.DataPath
 	testConfig android.Path
 }
 
@@ -319,6 +328,7 @@ func (test *testBinary) linkerInit(ctx BaseModuleContext) {
 func (test *testBinary) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	deps = test.testDecorator.linkerDeps(ctx, deps)
 	deps = test.binaryDecorator.linkerDeps(ctx, deps)
+	deps.DataLibs = append(deps.DataLibs, test.Properties.Data_libs...)
 	return deps
 }
 
@@ -329,7 +339,30 @@ func (test *testBinary) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 }
 
 func (test *testBinary) install(ctx ModuleContext, file android.Path) {
-	test.data = android.PathsForModuleSrc(ctx, test.Properties.Data)
+	dataSrcPaths := android.PathsForModuleSrc(ctx, test.Properties.Data)
+
+	for _, dataSrcPath := range dataSrcPaths {
+		test.data = append(test.data, android.DataPath{SrcPath: dataSrcPath})
+	}
+
+	ctx.VisitDirectDepsWithTag(dataLibDepTag, func(dep android.Module) {
+		depName := ctx.OtherModuleName(dep)
+		ccDep, ok := dep.(LinkableInterface)
+
+		if !ok {
+			ctx.ModuleErrorf("data_lib %q is not a linkable cc module", depName)
+		}
+		ccModule, ok := dep.(*Module)
+		if !ok {
+			ctx.ModuleErrorf("data_lib %q is not a cc module", depName)
+		}
+		if ccDep.OutputFile().Valid() {
+			test.data = append(test.data,
+				android.DataPath{SrcPath: ccDep.OutputFile().Path(),
+					RelativeInstallPath: ccModule.installer.relativeInstallPath()})
+		}
+	})
+
 	var api_level_prop string
 	var configs []tradefed.Config
 	var min_level string
@@ -352,6 +385,9 @@ func (test *testBinary) install(ctx ModuleContext, file android.Path) {
 	}
 	if test.Properties.Test_options.Run_test_as != nil {
 		configs = append(configs, tradefed.Option{Name: "run-test-as", Value: String(test.Properties.Test_options.Run_test_as)})
+	}
+	for _, tag := range test.Properties.Test_options.Test_suite_tag {
+		configs = append(configs, tradefed.Option{Name: "test-suite-tag", Value: tag})
 	}
 	if test.Properties.Test_min_api_level != nil && test.Properties.Test_min_sdk_version != nil {
 		ctx.PropertyErrorf("test_min_api_level", "'test_min_api_level' and 'test_min_sdk_version' should not be set at the same time.")
@@ -498,6 +534,7 @@ func (benchmark *benchmarkDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps
 
 func (benchmark *benchmarkDecorator) install(ctx ModuleContext, file android.Path) {
 	benchmark.data = android.PathsForModuleSrc(ctx, benchmark.Properties.Data)
+
 	var configs []tradefed.Config
 	if Bool(benchmark.Properties.Require_root) {
 		configs = append(configs, tradefed.Object{"target_preparer", "com.android.tradefed.targetprep.RootTargetPreparer", nil})

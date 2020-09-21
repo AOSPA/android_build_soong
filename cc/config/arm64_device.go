@@ -32,15 +32,13 @@ var (
 			"-march=armv8-a",
 		},
 		"armv8-2a": []string{
-			"-march=armv8.2a",
+			"-march=armv8.2-a",
 		},
 	}
 
 	arm64Ldflags = []string{
-		"-Wl,-m,aarch64_elf64_le_vec",
 		"-Wl,--hash-style=gnu",
 		"-Wl,-z,separate-code",
-		"-fuse-ld=gold",
 		"-Wl,--icf=safe",
 	}
 
@@ -94,7 +92,6 @@ func init() {
 
 	pctx.StaticVariable("Arm64Ldflags", strings.Join(arm64Ldflags, " "))
 	pctx.StaticVariable("Arm64Lldflags", strings.Join(arm64Lldflags, " "))
-	pctx.StaticVariable("Arm64IncludeFlags", bionicHeaders("arm64"))
 
 	pctx.StaticVariable("Arm64ClangCflags", strings.Join(ClangFilterUnknownCflags(arm64Cflags), " "))
 	pctx.StaticVariable("Arm64ClangLdflags", strings.Join(ClangFilterUnknownCflags(arm64Ldflags), " "))
@@ -166,7 +163,7 @@ func (t *toolchainArm64) GccVersion() string {
 }
 
 func (t *toolchainArm64) IncludeFlags() string {
-	return "${config.Arm64IncludeFlags}"
+	return ""
 }
 
 func (t *toolchainArm64) ClangTriple() string {

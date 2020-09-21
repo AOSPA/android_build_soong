@@ -43,6 +43,14 @@ type PathGlobContext interface {
 var _ PathContext = SingletonContext(nil)
 var _ PathContext = ModuleContext(nil)
 
+// "Null" path context is a minimal path context for a given config.
+type NullPathContext struct {
+	config Config
+}
+
+func (NullPathContext) AddNinjaFileDeps(...string) {}
+func (ctx NullPathContext) Config() Config         { return ctx.config }
+
 type ModuleInstallPathContext interface {
 	BaseModuleContext
 
@@ -53,6 +61,7 @@ type ModuleInstallPathContext interface {
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallBypassMake() bool
+	InstallForceOS() *OsType
 }
 
 var _ ModuleInstallPathContext = ModuleContext(nil)
@@ -211,6 +220,15 @@ func (p OptionalPath) String() string {
 // Paths is a slice of Path objects, with helpers to operate on the collection.
 type Paths []Path
 
+func (paths Paths) containsPath(path Path) bool {
+	for _, p := range paths {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
 // PathsForSource returns Paths rooted from SrcDir
 func PathsForSource(ctx PathContext, paths []string) Paths {
 	ret := make(Paths, len(paths))
@@ -362,6 +380,18 @@ func (e missingDependencyError) Error() string {
 }
 
 func expandOneSrcPath(ctx ModuleContext, s string, expandedExcludes []string) (Paths, error) {
+	excludePaths := func(paths Paths) Paths {
+		if len(expandedExcludes) == 0 {
+			return paths
+		}
+		remainder := make(Paths, 0, len(paths))
+		for _, p := range paths {
+			if !InList(p.String(), expandedExcludes) {
+				remainder = append(remainder, p)
+			}
+		}
+		return remainder
+	}
 	if m, t := SrcIsModuleWithTag(s); m != "" {
 		module := ctx.GetDirectDepWithTag(m, sourceOrOutputDepTag(t))
 		if module == nil {
@@ -372,20 +402,11 @@ func expandOneSrcPath(ctx ModuleContext, s string, expandedExcludes []string) (P
 			if err != nil {
 				return nil, fmt.Errorf("path dependency %q: %s", s, err)
 			}
-			return outputFiles, nil
+			return excludePaths(outputFiles), nil
 		} else if t != "" {
 			return nil, fmt.Errorf("path dependency %q is not an output file producing module", s)
 		} else if srcProducer, ok := module.(SourceFileProducer); ok {
-			moduleSrcs := srcProducer.Srcs()
-			for _, e := range expandedExcludes {
-				for j := 0; j < len(moduleSrcs); j++ {
-					if moduleSrcs[j].String() == e {
-						moduleSrcs = append(moduleSrcs[:j], moduleSrcs[j+1:]...)
-						j--
-					}
-				}
-			}
-			return moduleSrcs, nil
+			return excludePaths(srcProducer.Srcs()), nil
 		} else {
 			return nil, fmt.Errorf("path dependency %q is not a source file producing module", s)
 		}
@@ -400,8 +421,7 @@ func expandOneSrcPath(ctx ModuleContext, s string, expandedExcludes []string) (P
 			reportPathErrorf(ctx, "module source path %q does not exist", p)
 		}
 
-		j := findStringInSlice(p.String(), expandedExcludes)
-		if j >= 0 {
+		if InList(p.String(), expandedExcludes) {
 			return nil, nil
 		}
 		return Paths{p}, nil
@@ -473,6 +493,24 @@ func CopyOfPaths(paths Paths) Paths {
 // FirstUniquePaths returns all unique elements of a Paths, keeping the first copy of each.  It
 // modifies the Paths slice contents in place, and returns a subslice of the original slice.
 func FirstUniquePaths(list Paths) Paths {
+	// 128 was chosen based on BenchmarkFirstUniquePaths results.
+	if len(list) > 128 {
+		return firstUniquePathsMap(list)
+	}
+	return firstUniquePathsList(list)
+}
+
+// SortedUniquePaths returns all unique elements of a Paths in sorted order.  It modifies the
+// Paths slice contents in place, and returns a subslice of the original slice.
+func SortedUniquePaths(list Paths) Paths {
+	unique := FirstUniquePaths(list)
+	sort.Slice(unique, func(i, j int) bool {
+		return unique[i].String() < unique[j].String()
+	})
+	return unique
+}
+
+func firstUniquePathsList(list Paths) Paths {
 	k := 0
 outer:
 	for i := 0; i < len(list); i++ {
@@ -487,13 +525,18 @@ outer:
 	return list[:k]
 }
 
-// SortedUniquePaths returns what its name says
-func SortedUniquePaths(list Paths) Paths {
-	unique := FirstUniquePaths(list)
-	sort.Slice(unique, func(i, j int) bool {
-		return unique[i].String() < unique[j].String()
-	})
-	return unique
+func firstUniquePathsMap(list Paths) Paths {
+	k := 0
+	seen := make(map[Path]bool, len(list))
+	for i := 0; i < len(list); i++ {
+		if seen[list[i]] {
+			continue
+		}
+		seen[list[i]] = true
+		list[k] = list[i]
+		k++
+	}
+	return list[:k]
 }
 
 // LastUniquePaths returns all unique elements of a Paths, keeping the last copy of each.  It
@@ -877,6 +920,22 @@ func (p OutputPath) buildDir() string {
 var _ Path = OutputPath{}
 var _ WritablePath = OutputPath{}
 
+// toolDepPath is a Path representing a dependency of the build tool.
+type toolDepPath struct {
+	basePath
+}
+
+var _ Path = toolDepPath{}
+
+// pathForBuildToolDep returns a toolDepPath representing the given path string.
+// There is no validation for the path, as it is "trusted": It may fail
+// normal validation checks. For example, it may be an absolute path.
+// Only use this function to construct paths for dependencies of the build
+// tool invocation.
+func pathForBuildToolDep(ctx PathContext, path string) toolDepPath {
+	return toolDepPath{basePath{path, ctx.Config(), ""}}
+}
+
 // PathForOutput joins the provided paths and returns an OutputPath that is
 // validated to not escape the build dir.
 // On error, it will return a usable, but invalid OutputPath, and report a ModuleError.
@@ -1218,22 +1277,40 @@ func (p InstallPath) ToMakePath() InstallPath {
 // PathForModuleInstall returns a Path representing the install path for the
 // module appended with paths...
 func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string) InstallPath {
+	os := ctx.Os()
+	if forceOS := ctx.InstallForceOS(); forceOS != nil {
+		os = *forceOS
+	}
+	partition := modulePartition(ctx, os)
+
+	ret := pathForInstall(ctx, os, partition, ctx.Debug(), pathComponents...)
+
+	if ctx.InstallBypassMake() && ctx.Config().EmbeddedInMake() {
+		ret = ret.ToMakePath()
+	}
+
+	return ret
+}
+
+func pathForInstall(ctx PathContext, os OsType, partition string, debug bool,
+	pathComponents ...string) InstallPath {
+
 	var outPaths []string
-	if ctx.Device() {
-		partition := modulePartition(ctx)
+
+	if os.Class == Device {
 		outPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
 	} else {
-		switch ctx.Os() {
+		switch os {
 		case Linux:
-			outPaths = []string{"host", "linux-x86"}
+			outPaths = []string{"host", "linux-x86", partition}
 		case LinuxBionic:
 			// TODO: should this be a separate top level, or shared with linux-x86?
-			outPaths = []string{"host", "linux_bionic-x86"}
+			outPaths = []string{"host", "linux_bionic-x86", partition}
 		default:
-			outPaths = []string{"host", ctx.Os().String() + "-x86"}
+			outPaths = []string{"host", os.String() + "-x86", partition}
 		}
 	}
-	if ctx.Debug() {
+	if debug {
 		outPaths = append([]string{"debug"}, outPaths...)
 	}
 	outPaths = append(outPaths, pathComponents...)
@@ -1244,9 +1321,6 @@ func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string
 	}
 
 	ret := InstallPath{basePath{path, ctx.Config(), ""}, ""}
-	if ctx.InstallBypassMake() && ctx.Config().EmbeddedInMake() {
-		ret = ret.ToMakePath()
-	}
 
 	return ret
 }
@@ -1274,45 +1348,74 @@ func InstallPathToOnDevicePath(ctx PathContext, path InstallPath) string {
 	return "/" + rel
 }
 
-func modulePartition(ctx ModuleInstallPathContext) string {
+func modulePartition(ctx ModuleInstallPathContext, os OsType) string {
 	var partition string
-	if ctx.InstallInData() {
-		partition = "data"
-	} else if ctx.InstallInTestcases() {
+	if ctx.InstallInTestcases() {
+		// "testcases" install directory can be used for host or device modules.
 		partition = "testcases"
-	} else if ctx.InstallInRamdisk() {
-		if ctx.DeviceConfig().BoardUsesRecoveryAsBoot() {
-			partition = "recovery/root/first_stage_ramdisk"
+	} else if os.Class == Device {
+		if ctx.InstallInData() {
+			partition = "data"
+		} else if ctx.InstallInRamdisk() {
+			if ctx.DeviceConfig().BoardUsesRecoveryAsBoot() {
+				partition = "recovery/root/first_stage_ramdisk"
+			} else {
+				partition = "ramdisk"
+			}
+			if !ctx.InstallInRoot() {
+				partition += "/system"
+			}
+		} else if ctx.InstallInRecovery() {
+			if ctx.InstallInRoot() {
+				partition = "recovery/root"
+			} else {
+				// the layout of recovery partion is the same as that of system partition
+				partition = "recovery/root/system"
+			}
+		} else if ctx.SocSpecific() {
+			partition = ctx.DeviceConfig().VendorPath()
+		} else if ctx.DeviceSpecific() {
+			partition = ctx.DeviceConfig().OdmPath()
+		} else if ctx.ProductSpecific() {
+			partition = ctx.DeviceConfig().ProductPath()
+		} else if ctx.SystemExtSpecific() {
+			partition = ctx.DeviceConfig().SystemExtPath()
+		} else if ctx.InstallInRoot() {
+			partition = "root"
 		} else {
-			partition = "ramdisk"
+			partition = "system"
 		}
-		if !ctx.InstallInRoot() {
-			partition += "/system"
+		if ctx.InstallInSanitizerDir() {
+			partition = "data/asan/" + partition
 		}
-	} else if ctx.InstallInRecovery() {
-		if ctx.InstallInRoot() {
-			partition = "recovery/root"
-		} else {
-			// the layout of recovery partion is the same as that of system partition
-			partition = "recovery/root/system"
-		}
-	} else if ctx.SocSpecific() {
-		partition = ctx.DeviceConfig().VendorPath()
-	} else if ctx.DeviceSpecific() {
-		partition = ctx.DeviceConfig().OdmPath()
-	} else if ctx.ProductSpecific() {
-		partition = ctx.DeviceConfig().ProductPath()
-	} else if ctx.SystemExtSpecific() {
-		partition = ctx.DeviceConfig().SystemExtPath()
-	} else if ctx.InstallInRoot() {
-		partition = "root"
-	} else {
-		partition = "system"
-	}
-	if ctx.InstallInSanitizerDir() {
-		partition = "data/asan/" + partition
 	}
 	return partition
+}
+
+type InstallPaths []InstallPath
+
+// Paths returns the InstallPaths as a Paths
+func (p InstallPaths) Paths() Paths {
+	if p == nil {
+		return nil
+	}
+	ret := make(Paths, len(p))
+	for i, path := range p {
+		ret[i] = path
+	}
+	return ret
+}
+
+// Strings returns the string forms of the install paths.
+func (p InstallPaths) Strings() []string {
+	if p == nil {
+		return nil
+	}
+	ret := make([]string, len(p))
+	for i, path := range p {
+		ret[i] = path.String()
+	}
+	return ret
 }
 
 // validateSafePath validates a path that we trust (may contain ninja variables).
@@ -1451,4 +1554,16 @@ func absolutePath(path string) string {
 		return path
 	}
 	return filepath.Join(absSrcDir, path)
+}
+
+// A DataPath represents the path of a file to be used as data, for example
+// a test library to be installed alongside a test.
+// The data file should be installed (copied from `<SrcPath>`) to
+// `<install_root>/<RelativeInstallPath>/<filename>`, or
+// `<install_root>/<filename>` if RelativeInstallPath is empty.
+type DataPath struct {
+	// The path of the data file that should be copied into the data directory
+	SrcPath Path
+	// The install path of the data file, relative to the install root.
+	RelativeInstallPath string
 }

@@ -37,7 +37,7 @@ type dexpreopter struct {
 	usesLibs         []string
 	optionalUsesLibs []string
 	enforceUsesLibs  bool
-	libraryPaths     map[string]android.Path
+	libraryPaths     dexpreopt.LibraryPaths
 
 	builtInstalled string
 }
@@ -74,10 +74,6 @@ func (d *dexpreopter) dexpreoptDisabled(ctx android.BaseModuleContext) bool {
 	}
 
 	if inList(ctx.ModuleName(), global.DisablePreoptModules) {
-		return true
-	}
-
-	if ctx.Config().UnbundledBuild() {
 		return true
 	}
 
@@ -131,7 +127,8 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 	global := dexpreopt.GetGlobalConfig(ctx)
 	bootImage := defaultBootImageConfig(ctx)
 	dexFiles := bootImage.dexPathsDeps.Paths()
-	dexLocations := bootImage.dexLocationsDeps
+	// The dex locations for all Android variants are identical.
+	dexLocations := bootImage.getAnyAndroidVariant().dexLocationsDeps
 	if global.UseArtImage {
 		bootImage = artBootImageConfig(ctx)
 	}
@@ -159,6 +156,8 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		images = append(images, variant.images)
 		imagesDeps = append(imagesDeps, variant.imagesDeps)
 	}
+	// The image locations for all Android variants are identical.
+	imageLocations := bootImage.getAnyAndroidVariant().imageLocations()
 
 	dexLocation := android.InstallPathToOnDevicePath(ctx, d.installPath)
 
@@ -174,7 +173,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 			profileBootListing = android.ExistentPathForSource(ctx,
 				ctx.ModuleDir(), String(d.dexpreoptProperties.Dex_preopt.Profile)+"-boot")
 			profileIsTextListing = true
-		} else {
+		} else if global.ProfileDir != "" {
 			profileClassListing = android.ExistentPathForSource(ctx,
 				global.ProfileDir, ctx.ModuleName()+".prof")
 		}
@@ -194,15 +193,15 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		ProfileIsTextListing: profileIsTextListing,
 		ProfileBootListing:   profileBootListing,
 
-		EnforceUsesLibraries:         d.enforceUsesLibs,
-		PresentOptionalUsesLibraries: d.optionalUsesLibs,
-		UsesLibraries:                d.usesLibs,
-		LibraryPaths:                 d.libraryPaths,
+		EnforceUsesLibraries:  d.enforceUsesLibs,
+		OptionalUsesLibraries: d.optionalUsesLibs,
+		UsesLibraries:         d.usesLibs,
+		LibraryPaths:          d.libraryPaths,
 
 		Archs:                   archs,
 		DexPreoptImages:         images,
 		DexPreoptImagesDeps:     imagesDeps,
-		DexPreoptImageLocations: bootImage.imageLocations,
+		DexPreoptImageLocations: imageLocations,
 
 		PreoptBootClassPathDexFiles:     dexFiles,
 		PreoptBootClassPathDexLocations: dexLocations,
