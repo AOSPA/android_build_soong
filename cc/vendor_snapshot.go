@@ -485,6 +485,17 @@ var (
 		"hardware/libhardware_legacy",
 		"hardware/ril",
 	}
+
+	// TODO(b/165705527) Revert this change when bug is resolved.
+	// Since the vendor may modify some vendor-image-targeting files that
+	// are normally considered AOSP, we have exceptional cases that treat
+	// convert what would be considered an AOSP directory back to a vendor
+	// proprietary dir.
+	vendorProprietaryDirsUnderAosp = []string{
+		"hardware/interfaces/camera/device/1.0/default",
+		"hardware/interfaces/camera/provider/2.4/default",
+		"hardware/interfaces/camera/provider/2.5/default",
+	}
 )
 
 // Determine if a dir under source tree is an SoC-owned proprietary directory, such as
@@ -496,6 +507,12 @@ func isVendorProprietaryPath(dir string) bool {
 			aosp := false
 			for _, p := range aospDirsUnderProprietary {
 				if strings.HasPrefix(dir, p) {
+					// TODO(b/165705527) Revert this change when bug is resolved.
+					for _, p := range vendorProprietaryDirsUnderAosp {
+						if strings.HasPrefix(dir, p) {
+							return true
+						}
+					}
 					aosp = true
 					break
 				}
