@@ -62,6 +62,7 @@ func testConfig(bp string) android.Config {
 		"foo.c":      nil,
 		"src/bar.rs": nil,
 		"src/any.h":  nil,
+		"buf.proto":  nil,
 		"liby.so":    nil,
 		"libz.so":    nil,
 	}
@@ -130,25 +131,6 @@ func testRustError(t *testing.T, pattern string, bp string) {
 	}
 
 	t.Fatalf("missing expected error %q (0 errors are returned)", pattern)
-}
-
-// Test that we can extract the lib name from a lib path.
-func TestLibNameFromFilePath(t *testing.T) {
-	libBarPath := android.PathForTesting("out/soong/.intermediates/external/libbar/libbar/linux_glibc_x86_64_shared/libbar.so.so")
-	libLibPath := android.PathForTesting("out/soong/.intermediates/external/libbar/libbar/linux_glibc_x86_64_shared/liblib.dylib.so")
-
-	libBarName := libNameFromFilePath(libBarPath)
-	libLibName := libNameFromFilePath(libLibPath)
-
-	expectedResult := "bar.so"
-	if libBarName != expectedResult {
-		t.Errorf("libNameFromFilePath returned the wrong name; expected '%#v', got '%#v'", expectedResult, libBarName)
-	}
-
-	expectedResult = "lib.dylib"
-	if libLibName != expectedResult {
-		t.Errorf("libNameFromFilePath returned the wrong name; expected '%#v', got '%#v'", expectedResult, libLibPath)
-	}
 }
 
 // Test that we can extract the link path from a lib path.
@@ -233,6 +215,7 @@ func TestSourceProviderDeps(t *testing.T) {
 				":my_generator",
 				":libbindings",
 			],
+			rlibs: ["libbindings"],
 		}
 		rust_proc_macro {
 			name: "libprocmacro",
@@ -241,6 +224,7 @@ func TestSourceProviderDeps(t *testing.T) {
 				":my_generator",
 				":libbindings",
 			],
+			rlibs: ["libbindings"],
 			crate_name: "procmacro",
 		}
 		rust_library {
@@ -248,7 +232,9 @@ func TestSourceProviderDeps(t *testing.T) {
 			srcs: [
 				"foo.rs",
 				":my_generator",
-				":libbindings"],
+				":libbindings",
+			],
+			rlibs: ["libbindings"],
 			crate_name: "foo",
 		}
 		genrule {
@@ -260,7 +246,8 @@ func TestSourceProviderDeps(t *testing.T) {
 		}
 		rust_bindgen {
 			name: "libbindings",
-			stem: "bindings",
+			crate_name: "bindings",
+			source_stem: "bindings",
 			host_supported: true,
 			wrapper_src: "src/any.h",
         }
@@ -289,6 +276,21 @@ func TestSourceProviderDeps(t *testing.T) {
 	if !android.SuffixInList(libprocmacro.Implicits.Strings(), "/out/any.rs") {
 		t.Errorf("genrule generated source not included as implicit input for libprocmacro; Implicits %#v", libfoo.Implicits.Strings())
 	}
+
+	// Check that our bindings are picked up as crate dependencies as well
+	libfooMod := ctx.ModuleForTests("libfoo", "android_arm64_armv8-a_dylib").Module().(*Module)
+	if !android.InList("libbindings", libfooMod.Properties.AndroidMkRlibs) {
+		t.Errorf("bindgen dependency not detected as a rlib dependency (dependency missing from AndroidMkRlibs)")
+	}
+	fizzBuzzMod := ctx.ModuleForTests("fizz-buzz-dep", "android_arm64_armv8-a").Module().(*Module)
+	if !android.InList("libbindings", fizzBuzzMod.Properties.AndroidMkRlibs) {
+		t.Errorf("bindgen dependency not detected as a rlib dependency (dependency missing from AndroidMkRlibs)")
+	}
+	libprocmacroMod := ctx.ModuleForTests("libprocmacro", "linux_glibc_x86_64").Module().(*Module)
+	if !android.InList("libbindings", libprocmacroMod.Properties.AndroidMkRlibs) {
+		t.Errorf("bindgen dependency not detected as a rlib dependency (dependency missing from AndroidMkRlibs)")
+	}
+
 }
 
 func TestSourceProviderTargetMismatch(t *testing.T) {
@@ -305,7 +307,8 @@ func TestSourceProviderTargetMismatch(t *testing.T) {
 		}
 		rust_bindgen {
 			name: "libbindings",
-			stem: "bindings",
+			crate_name: "bindings",
+			source_stem: "bindings",
 			wrapper_src: "src/any.h",
 		}
 	`)

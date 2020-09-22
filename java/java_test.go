@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,6 +30,7 @@ import (
 	"android/soong/cc"
 	"android/soong/dexpreopt"
 	"android/soong/genrule"
+	"android/soong/python"
 )
 
 var buildDir string
@@ -81,6 +81,7 @@ func testContext() *android.TestContext {
 	ctx.RegisterModuleType("java_plugin", PluginFactory)
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("genrule", genrule.GenRuleFactory)
+	ctx.RegisterModuleType("python_binary_host", python.PythonBinaryHostFactory)
 	RegisterDocsBuildComponents(ctx)
 	RegisterStubsBuildComponents(ctx)
 	RegisterSdkLibraryBuildComponents(ctx)
@@ -89,9 +90,12 @@ func testContext() *android.TestContext {
 
 	RegisterPrebuiltApisBuildComponents(ctx)
 
+	ctx.PreDepsMutators(python.RegisterPythonPreDepsMutators)
 	ctx.PostDepsMutators(android.RegisterOverridePostDepsMutators)
 	ctx.RegisterPreSingletonType("overlay", android.SingletonFactoryAdaptor(OverlaySingletonFactory))
 	ctx.RegisterPreSingletonType("sdk_versions", android.SingletonFactoryAdaptor(sdkPreSingletonFactory))
+
+	android.RegisterPrebuiltMutators(ctx)
 
 	// Register module types and mutators from cc needed for JNI testing
 	cc.RegisterRequiredBuildComponentsForTest(ctx)
@@ -486,7 +490,7 @@ func TestHostBinaryNoJavaDebugInfoOverride(t *testing.T) {
 
 	ctx, _ := testJavaWithConfig(t, config)
 
-	// first, sanity check that the -g flag is added to target modules
+	// first, check that the -g flag is added to target modules
 	targetLibrary := ctx.ModuleForTests("target_library", "android_common")
 	targetJavaFlags := targetLibrary.Module().VariablesForTests()["javacFlags"]
 	if !strings.Contains(targetJavaFlags, "-g:source,lines") {
@@ -521,6 +525,8 @@ func TestPrebuilts(t *testing.T) {
 		java_import {
 			name: "baz",
 			jars: ["b.jar"],
+			sdk_version: "current",
+			compile_dex: true,
 		}
 
 		dex_import {
@@ -551,8 +557,10 @@ func TestPrebuilts(t *testing.T) {
 	fooModule := ctx.ModuleForTests("foo", "android_common")
 	javac := fooModule.Rule("javac")
 	combineJar := ctx.ModuleForTests("foo", "android_common").Description("for javac")
-	barJar := ctx.ModuleForTests("bar", "android_common").Rule("combineJar").Output
-	bazJar := ctx.ModuleForTests("baz", "android_common").Rule("combineJar").Output
+	barModule := ctx.ModuleForTests("bar", "android_common")
+	barJar := barModule.Rule("combineJar").Output
+	bazModule := ctx.ModuleForTests("baz", "android_common")
+	bazJar := bazModule.Rule("combineJar").Output
 	sdklibStubsJar := ctx.ModuleForTests("sdklib.stubs", "android_common").Rule("combineJar").Output
 
 	fooLibrary := fooModule.Module().(*Library)
@@ -567,12 +575,23 @@ func TestPrebuilts(t *testing.T) {
 		t.Errorf("foo classpath %v does not contain %q", javac.Args["classpath"], barJar.String())
 	}
 
+	barDexJar := barModule.Module().(*Import).DexJarBuildPath()
+	if barDexJar != nil {
+		t.Errorf("bar dex jar build path expected to be nil, got %q", barDexJar)
+	}
+
 	if !strings.Contains(javac.Args["classpath"], sdklibStubsJar.String()) {
 		t.Errorf("foo classpath %v does not contain %q", javac.Args["classpath"], sdklibStubsJar.String())
 	}
 
 	if len(combineJar.Inputs) != 2 || combineJar.Inputs[1].String() != bazJar.String() {
 		t.Errorf("foo combineJar inputs %v does not contain %q", combineJar.Inputs, bazJar.String())
+	}
+
+	bazDexJar := bazModule.Module().(*Import).DexJarBuildPath().String()
+	expectedDexJar := buildDir + "/.intermediates/baz/android_common/dex/baz.jar"
+	if bazDexJar != expectedDexJar {
+		t.Errorf("baz dex jar build path expected %q, got %q", expectedDexJar, bazDexJar)
 	}
 
 	ctx.ModuleForTests("qux", "android_common").Rule("Cp")
@@ -1078,15 +1097,25 @@ func TestDroiddoc(t *testing.T) {
 		    srcs: ["bar-doc/IBar.aidl"],
 		    path: "bar-doc",
 		}
-		droiddoc {
-		    name: "bar-doc",
+		droidstubs {
+		    name: "bar-stubs",
 		    srcs: [
 		        "bar-doc/a.java",
-		        "bar-doc/IFoo.aidl",
-		        ":bar-doc-aidl-srcs",
 		    ],
 		    exclude_srcs: [
 		        "bar-doc/b.java"
+		    ],
+		    api_levels_annotations_dirs: [
+		      "droiddoc-templates-sdk",
+		    ],
+		    api_levels_annotations_enabled: true,
+		}
+		droiddoc {
+		    name: "bar-doc",
+		    srcs: [
+		        ":bar-stubs",
+		        "bar-doc/IFoo.aidl",
+		        ":bar-doc-aidl-srcs",
 		    ],
 		    custom_template: "droiddoc-templates-sdk",
 		    hdf: [
@@ -1104,18 +1133,29 @@ func TestDroiddoc(t *testing.T) {
 			"bar-doc/a.java": nil,
 			"bar-doc/b.java": nil,
 		})
-
-	barDoc := ctx.ModuleForTests("bar-doc", "android_common").Rule("javadoc")
-	var javaSrcs []string
-	for _, i := range barDoc.Inputs {
-		javaSrcs = append(javaSrcs, i.Base())
+	barStubs := ctx.ModuleForTests("bar-stubs", "android_common")
+	barStubsOutputs, err := barStubs.Module().(*Droidstubs).OutputFiles("")
+	if err != nil {
+		t.Errorf("Unexpected error %q retrieving \"bar-stubs\" output file", err)
 	}
-	if len(javaSrcs) != 1 || javaSrcs[0] != "a.java" {
-		t.Errorf("inputs of bar-doc must be []string{\"a.java\"}, but was %#v.", javaSrcs)
+	if len(barStubsOutputs) != 1 {
+		t.Errorf("Expected one output from \"bar-stubs\" got %s", barStubsOutputs)
 	}
 
-	aidl := ctx.ModuleForTests("bar-doc", "android_common").Rule("aidl")
-	if g, w := barDoc.Implicits.Strings(), aidl.Output.String(); !inList(w, g) {
+	barStubsOutput := barStubsOutputs[0]
+	barDoc := ctx.ModuleForTests("bar-doc", "android_common")
+	javaDoc := barDoc.Rule("javadoc")
+	if g, w := javaDoc.Implicits.Strings(), barStubsOutput.String(); !inList(w, g) {
+		t.Errorf("implicits of bar-doc must contain %q, but was %q.", w, g)
+	}
+
+	expected := "-sourcepath " + buildDir + "/.intermediates/bar-doc/android_common/srcjars "
+	if !strings.Contains(javaDoc.RuleParams.Command, expected) {
+		t.Errorf("bar-doc command does not contain flag %q, but should\n%q", expected, javaDoc.RuleParams.Command)
+	}
+
+	aidl := barDoc.Rule("aidl")
+	if g, w := javaDoc.Implicits.Strings(), aidl.Output.String(); !inList(w, g) {
 		t.Errorf("implicits of bar-doc must contain %q, but was %q.", w, g)
 	}
 
@@ -1135,15 +1175,25 @@ func TestDroiddocArgsAndFlagsCausesError(t *testing.T) {
 		    srcs: ["bar-doc/IBar.aidl"],
 		    path: "bar-doc",
 		}
-		droiddoc {
-		    name: "bar-doc",
+		droidstubs {
+		    name: "bar-stubs",
 		    srcs: [
 		        "bar-doc/a.java",
-		        "bar-doc/IFoo.aidl",
-		        ":bar-doc-aidl-srcs",
 		    ],
 		    exclude_srcs: [
 		        "bar-doc/b.java"
+		    ],
+		    api_levels_annotations_dirs: [
+		      "droiddoc-templates-sdk",
+		    ],
+		    api_levels_annotations_enabled: true,
+		}
+		droiddoc {
+		    name: "bar-doc",
+		    srcs: [
+		        ":bar-stubs",
+		        "bar-doc/IFoo.aidl",
+		        ":bar-doc-aidl-srcs",
 		    ],
 		    custom_template: "droiddoc-templates-sdk",
 		    hdf: [
@@ -1158,6 +1208,62 @@ func TestDroiddocArgsAndFlagsCausesError(t *testing.T) {
 		    args: "-offlinemode -title \"libcore\"",
 		}
 		`)
+}
+
+func TestDroidstubs(t *testing.T) {
+	ctx, _ := testJavaWithFS(t, `
+		droiddoc_exported_dir {
+		    name: "droiddoc-templates-sdk",
+		    path: ".",
+		}
+
+		droidstubs {
+		    name: "bar-stubs",
+		    srcs: [
+		        "bar-doc/a.java",
+				],
+				api_levels_annotations_dirs: [
+					"droiddoc-templates-sdk",
+				],
+				api_levels_annotations_enabled: true,
+		}
+
+		droidstubs {
+		    name: "bar-stubs-other",
+		    srcs: [
+		        "bar-doc/a.java",
+				],
+				api_levels_annotations_dirs: [
+					"droiddoc-templates-sdk",
+				],
+				api_levels_annotations_enabled: true,
+				api_levels_jar_filename: "android.other.jar",
+		}
+		`,
+		map[string][]byte{
+			"bar-doc/a.java": nil,
+		})
+	testcases := []struct {
+		moduleName          string
+		expectedJarFilename string
+	}{
+		{
+			moduleName:          "bar-stubs",
+			expectedJarFilename: "android.jar",
+		},
+		{
+			moduleName:          "bar-stubs-other",
+			expectedJarFilename: "android.other.jar",
+		},
+	}
+	for _, c := range testcases {
+		m := ctx.ModuleForTests(c.moduleName, "android_common")
+		metalava := m.Rule("metalava")
+		expected := "--android-jar-pattern ./%/public/" + c.expectedJarFilename
+		if actual := metalava.RuleParams.Command; !strings.Contains(actual, expected) {
+			t.Errorf("For %q, expected metalava argument %q, but was not found %q", c.moduleName, expected, actual)
+		}
+	}
 }
 
 func TestDroidstubsWithSystemModules(t *testing.T) {
@@ -1430,8 +1536,7 @@ func TestJavaSdkLibrary(t *testing.T) {
 	// test if baz has exported SDK lib names foo and bar to qux
 	qux := ctx.ModuleForTests("qux", "android_common")
 	if quxLib, ok := qux.Module().(*Library); ok {
-		sdkLibs := quxLib.ExportedSdkLibs()
-		sort.Strings(sdkLibs)
+		sdkLibs := android.SortedStringKeys(quxLib.ExportedSdkLibs())
 		if w := []string{"bar", "foo", "fred", "quuz"}; !reflect.DeepEqual(w, sdkLibs) {
 			t.Errorf("qux should export %q but exports %q", w, sdkLibs)
 		}
@@ -2006,5 +2111,30 @@ func TestAidlExportIncludeDirsFromImports(t *testing.T) {
 	expectedAidlFlag := "-Iaidl/bar"
 	if !strings.Contains(aidlCommand, expectedAidlFlag) {
 		t.Errorf("aidl command %q does not contain %q", aidlCommand, expectedAidlFlag)
+	}
+}
+
+func TestDataNativeBinaries(t *testing.T) {
+	ctx, config := testJava(t, `
+		java_test_host {
+			name: "foo",
+			srcs: ["a.java"],
+			data_native_bins: ["bin"]
+		}
+
+		python_binary_host {
+			name: "bin",
+			srcs: ["bin.py"],
+		}
+	`)
+
+	buildOS := android.BuildOs.String()
+
+	test := ctx.ModuleForTests("foo", buildOS+"_common").Module().(*TestHost)
+	entries := android.AndroidMkEntriesForTest(t, config, "", test)[0]
+	expected := []string{buildDir + "/.intermediates/bin/" + buildOS + "_x86_64_PY3/bin:bin"}
+	actual := entries.EntryMap["LOCAL_COMPATIBILITY_SUPPORT_FILES"]
+	if !reflect.DeepEqual(expected, actual) {
+		t.Errorf("Unexpected test data - expected: %q, actual: %q", expected, actual)
 	}
 }

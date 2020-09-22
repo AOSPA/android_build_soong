@@ -66,9 +66,6 @@ func (procMacro *procMacroDecorator) compile(ctx ModuleContext, flags Flags, dep
 	outputFile := android.PathForModuleOut(ctx, fileName)
 
 	srcPath, _ := srcPathFromModuleSrcs(ctx, procMacro.baseCompiler.Properties.Srcs)
-
-	procMacro.unstrippedOutputFile = outputFile
-
 	TransformSrctoProcMacro(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	return outputFile
 }
@@ -80,6 +77,6 @@ func (procMacro *procMacroDecorator) getStem(ctx ModuleContext) string {
 	return stem + String(procMacro.baseCompiler.Properties.Suffix)
 }
 
-func (procMacro *procMacroDecorator) autoDep() autoDep {
+func (procMacro *procMacroDecorator) autoDep(ctx BaseModuleContext) autoDep {
 	return rlibAutoDep
 }

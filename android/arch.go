@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -553,6 +554,15 @@ var BuildOs = func() OsType {
 	}
 }()
 
+var BuildArch = func() ArchType {
+	switch runtime.GOARCH {
+	case "amd64":
+		return X86_64
+	default:
+		panic(fmt.Sprintf("unsupported Arch: %s", runtime.GOARCH))
+	}
+}()
+
 var (
 	OsTypeList      []OsType
 	commonTargetMap = make(map[string]Target)
@@ -571,7 +581,7 @@ var (
 
 	osArchTypeMap = map[OsType][]ArchType{
 		Linux:       []ArchType{X86, X86_64},
-		LinuxBionic: []ArchType{X86_64},
+		LinuxBionic: []ArchType{Arm64, X86_64},
 		Darwin:      []ArchType{X86_64},
 		Windows:     []ArchType{X86, X86_64},
 		Android:     []ArchType{Arm, Arm64, X86, X86_64},
@@ -691,12 +701,30 @@ func (target Target) Variations() []blueprint.Variation {
 	}
 }
 
-func osMutator(mctx BottomUpMutatorContext) {
+func osMutator(bpctx blueprint.BottomUpMutatorContext) {
 	var module Module
 	var ok bool
-	if module, ok = mctx.Module().(Module); !ok {
+	if module, ok = bpctx.Module().(Module); !ok {
+		if bootstrap.IsBootstrapModule(bpctx.Module()) {
+			// Bootstrap Go modules are always the build OS or linux bionic.
+			config := bpctx.Config().(Config)
+			osNames := []string{config.BuildOSTarget.OsVariation()}
+			for _, hostCrossTarget := range config.Targets[LinuxBionic] {
+				if hostCrossTarget.Arch.ArchType == config.BuildOSTarget.Arch.ArchType {
+					osNames = append(osNames, hostCrossTarget.OsVariation())
+				}
+			}
+			osNames = FirstUniqueStrings(osNames)
+			bpctx.CreateVariations(osNames...)
+		}
 		return
 	}
+
+	// Bootstrap Go module support above requires this mutator to be a
+	// blueprint.BottomUpMutatorContext because android.BottomUpMutatorContext
+	// filters out non-Soong modules.  Now that we've handled them, create a
+	// normal android.BottomUpMutatorContext.
+	mctx := bottomUpMutatorContextFactory(bpctx, module, false)
 
 	base := module.base()
 
@@ -821,12 +849,22 @@ func GetOsSpecificVariantsOfCommonOSVariant(mctx BaseModuleContext) []Module {
 //
 // Modules can be initialized with InitAndroidMultiTargetsArchModule, in which case they will be split by OsClass,
 // but will have a common Target that is expected to handle all other selected Targets via ctx.MultiTargets().
-func archMutator(mctx BottomUpMutatorContext) {
+func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	var module Module
 	var ok bool
-	if module, ok = mctx.Module().(Module); !ok {
+	if module, ok = bpctx.Module().(Module); !ok {
+		if bootstrap.IsBootstrapModule(bpctx.Module()) {
+			// Bootstrap Go modules are always the build architecture.
+			bpctx.CreateVariations(bpctx.Config().(Config).BuildOSTarget.ArchVariation())
+		}
 		return
 	}
+
+	// Bootstrap Go module support above requires this mutator to be a
+	// blueprint.BottomUpMutatorContext because android.BottomUpMutatorContext
+	// filters out non-Soong modules.  Now that we've handled them, create a
+	// normal android.BottomUpMutatorContext.
+	mctx := bottomUpMutatorContextFactory(bpctx, module, false)
 
 	base := module.base()
 
@@ -905,7 +943,7 @@ func archMutator(mctx BottomUpMutatorContext) {
 	modules := mctx.CreateVariations(targetNames...)
 	for i, m := range modules {
 		addTargetProperties(m, targets[i], multiTargets, i == 0)
-		m.(Module).base().setArchProperties(mctx)
+		m.base().setArchProperties(mctx)
 	}
 }
 
@@ -1398,20 +1436,15 @@ func (m *ModuleBase) setArchProperties(ctx BottomUpMutatorContext) {
 			//         key: value,
 			//     },
 			// },
-			// TODO(ccross): is this still necessary with native bridge?
 			if os.Class == Device {
-				if (arch.ArchType == X86 && (hasArmAbi(arch) ||
-					hasArmAndroidArch(ctx.Config().Targets[Android]))) ||
-					(arch.ArchType == Arm &&
-						hasX86AndroidArch(ctx.Config().Targets[Android])) {
+				if arch.ArchType == X86 && (hasArmAbi(arch) ||
+					hasArmAndroidArch(ctx.Config().Targets[Android])) {
 					field := "Arm_on_x86"
 					prefix := "target.arm_on_x86"
 					m.appendProperties(ctx, genProps, targetProp, field, prefix)
 				}
-				if (arch.ArchType == X86_64 && (hasArmAbi(arch) ||
-					hasArmAndroidArch(ctx.Config().Targets[Android]))) ||
-					(arch.ArchType == Arm &&
-						hasX8664AndroidArch(ctx.Config().Targets[Android])) {
+				if arch.ArchType == X86_64 && (hasArmAbi(arch) ||
+					hasArmAndroidArch(ctx.Config().Targets[Android])) {
 					field := "Arm_on_x86_64"
 					prefix := "target.arm_on_x86_64"
 					m.appendProperties(ctx, genProps, targetProp, field, prefix)
@@ -1558,27 +1591,7 @@ func hasArmAbi(arch Arch) bool {
 // hasArmArch returns true if targets has at least non-native_bridge arm Android arch
 func hasArmAndroidArch(targets []Target) bool {
 	for _, target := range targets {
-		if target.Os == Android && target.Arch.ArchType == Arm && target.NativeBridge == NativeBridgeDisabled {
-			return true
-		}
-	}
-	return false
-}
-
-// hasX86Arch returns true if targets has at least x86 Android arch
-func hasX86AndroidArch(targets []Target) bool {
-	for _, target := range targets {
-		if target.Os == Android && target.Arch.ArchType == X86 {
-			return true
-		}
-	}
-	return false
-}
-
-// hasX8664Arch returns true if targets has at least x86_64 Android arch
-func hasX8664AndroidArch(targets []Target) bool {
-	for _, target := range targets {
-		if target.Os == Android && target.Arch.ArchType == X86_64 {
+		if target.Os == Android && target.Arch.ArchType == Arm {
 			return true
 		}
 	}

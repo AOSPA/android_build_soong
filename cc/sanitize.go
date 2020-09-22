@@ -55,7 +55,7 @@ var (
 	}
 
 	cfiCflags = []string{"-flto", "-fsanitize-cfi-cross-dso",
-		"-fsanitize-blacklist=external/compiler-rt/lib/cfi/cfi_blacklist.txt"}
+		"-fsanitize-blacklist=external/compiler-rt/lib/cfi/cfi_blocklist.txt"}
 	// -flto and -fvisibility are required by clang when -fsanitize=cfi is
 	// used, but have no effect on assembly files
 	cfiAsflags = []string{"-flto", "-fvisibility=default"}
@@ -63,7 +63,7 @@ var (
 		"-Wl,-plugin-opt,O1"}
 	cfiExportsMapPath = "build/soong/cc/config/cfi_exports.map"
 
-	intOverflowCflags = []string{"-fsanitize-blacklist=build/soong/cc/config/integer_overflow_blacklist.txt"}
+	intOverflowCflags = []string{"-fsanitize-blacklist=build/soong/cc/config/integer_overflow_blocklist.txt"}
 
 	minimalRuntimeFlags = []string{"-fsanitize-minimal-runtime", "-fno-sanitize-trap=integer,undefined",
 		"-fno-sanitize-recover=integer,undefined"}
@@ -160,6 +160,9 @@ type SanitizeProperties struct {
 		Scudo            *bool    `android:"arch_variant"`
 		Scs              *bool    `android:"arch_variant"`
 
+		// A modifier for ASAN and HWASAN for write only instrumentation
+		Writeonly *bool `android:"arch_variant"`
+
 		// Sanitizers to run in the diagnostic mode (as opposed to the release mode).
 		// Replaces abort() on error with a human-readable error message.
 		// Address and Thread sanitizers always run in diagnostic mode.
@@ -175,7 +178,7 @@ type SanitizeProperties struct {
 		Recover []string
 
 		// value to pass to -fsanitize-blacklist
-		Blacklist *string
+		Blocklist *string
 	} `android:"arch_variant"`
 
 	SanitizerEnabled  bool     `blueprint:"mutated"`
@@ -279,6 +282,15 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 		if found, globalSanitizers = removeFromList("hwaddress", globalSanitizers); found && s.Hwaddress == nil {
 			s.Hwaddress = boolPtr(true)
+		}
+
+		if found, globalSanitizers = removeFromList("writeonly", globalSanitizers); found && s.Writeonly == nil {
+			// Hwaddress and Address are set before, so we can check them here
+			// If they aren't explicitly set in the blueprint/SANITIZE_(HOST|TARGET), they would be nil instead of false
+			if s.Address == nil && s.Hwaddress == nil {
+				ctx.ModuleErrorf("writeonly modifier cannot be used without 'address' or 'hwaddress'")
+			}
+			s.Writeonly = boolPtr(true)
 		}
 
 		if len(globalSanitizers) > 0 {
@@ -495,6 +507,10 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		flags.Local.CFlags = append(flags.Local.CFlags, asanCflags...)
 		flags.Local.LdFlags = append(flags.Local.LdFlags, asanLdflags...)
 
+		if Bool(sanitize.Properties.Sanitize.Writeonly) {
+			flags.Local.CFlags = append(flags.Local.CFlags, "-mllvm", "-asan-instrument-reads=0")
+		}
+
 		if ctx.Host() {
 			// -nodefaultlibs (provided with libc++) prevents the driver from linking
 			// libraries needed with -fsanitize=address. http://b/18650275 (WAI)
@@ -514,6 +530,9 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 	if Bool(sanitize.Properties.Sanitize.Hwaddress) {
 		flags.Local.CFlags = append(flags.Local.CFlags, hwasanCflags...)
+		if Bool(sanitize.Properties.Sanitize.Writeonly) {
+			flags.Local.CFlags = append(flags.Local.CFlags, "-mllvm", "-hwasan-instrument-reads=0")
+		}
 	}
 
 	if Bool(sanitize.Properties.Sanitize.Fuzzer) {
@@ -629,10 +648,10 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			strings.Join(sanitize.Properties.Sanitize.Diag.No_recover, ","))
 	}
 
-	blacklist := android.OptionalPathForModuleSrc(ctx, sanitize.Properties.Sanitize.Blacklist)
-	if blacklist.Valid() {
-		flags.Local.CFlags = append(flags.Local.CFlags, "-fsanitize-blacklist="+blacklist.String())
-		flags.CFlagsDeps = append(flags.CFlagsDeps, blacklist.Path())
+	blocklist := android.OptionalPathForModuleSrc(ctx, sanitize.Properties.Sanitize.Blocklist)
+	if blocklist.Valid() {
+		flags.Local.CFlags = append(flags.Local.CFlags, "-fsanitize-blacklist="+blocklist.String())
+		flags.CFlagsDeps = append(flags.CFlagsDeps, blocklist.Path())
 	}
 
 	return flags
@@ -745,8 +764,14 @@ func (sanitize *sanitize) isSanitizerEnabled(t sanitizerType) bool {
 }
 
 func isSanitizableDependencyTag(tag blueprint.DependencyTag) bool {
-	t, ok := tag.(DependencyTag)
-	return ok && t.Library || t == reuseObjTag || t == objDepTag
+	switch t := tag.(type) {
+	case dependencyTag:
+		return t == reuseObjTag || t == objDepTag
+	case libraryDependencyTag:
+		return true
+	default:
+		return false
+	}
 }
 
 // Determines if the current module is a static library going to be captured
@@ -1025,10 +1050,13 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 				}
 
 				// static executable gets static runtime libs
-				mctx.AddFarVariationDependencies(append(mctx.Target().Variations(), []blueprint.Variation{
-					{Mutator: "link", Variation: "static"},
-					c.ImageVariation(),
-				}...), StaticDepTag, deps...)
+				depTag := libraryDependencyTag{Kind: staticLibraryDependency}
+				variations := append(mctx.Target().Variations(),
+					blueprint.Variation{Mutator: "link", Variation: "static"})
+				if c.Device() {
+					variations = append(variations, c.ImageVariation())
+				}
+				mctx.AddFarVariationDependencies(variations, depTag, deps...)
 			} else if !c.static() && !c.header() {
 				// If we're using snapshots and in vendor, redirect to snapshot whenever possible
 				if c.VndkVersion() == mctx.DeviceConfig().VndkVersion() {
@@ -1039,10 +1067,13 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 				}
 
 				// dynamic executable and shared libs get shared runtime libs
-				mctx.AddFarVariationDependencies(append(mctx.Target().Variations(), []blueprint.Variation{
-					{Mutator: "link", Variation: "shared"},
-					c.ImageVariation(),
-				}...), earlySharedDepTag, runtimeLibrary)
+				depTag := libraryDependencyTag{Kind: sharedLibraryDependency, Order: earlyLibraryDependency}
+				variations := append(mctx.Target().Variations(),
+					blueprint.Variation{Mutator: "link", Variation: "shared"})
+				if c.Device() {
+					variations = append(variations, c.ImageVariation())
+				}
+				mctx.AddFarVariationDependencies(variations, depTag, runtimeLibrary)
 			}
 			// static lib does not have dependency to the runtime library. The
 			// dependency will be added to the executables or shared libs using

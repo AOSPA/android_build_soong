@@ -40,15 +40,15 @@ type GlobalConfig struct {
 	DisableGenerateProfile bool   // don't generate profiles
 	ProfileDir             string // directory to find profiles in
 
-	BootJars          []string // modules for jars that form the boot class path
-	UpdatableBootJars []string // jars within apex that form the boot class path
+	BootJars          android.ConfiguredJarList // modules for jars that form the boot class path
+	UpdatableBootJars android.ConfiguredJarList // jars within apex that form the boot class path
 
-	ArtApexJars []string // modules for jars that are in the ART APEX
+	ArtApexJars android.ConfiguredJarList // modules for jars that are in the ART APEX
 
-	SystemServerJars          []string // jars that form the system server
-	SystemServerApps          []string // apps that are loaded into system server
-	UpdatableSystemServerJars []string // jars within apex that are loaded into system server
-	SpeedApps                 []string // apps that should be speed optimized
+	SystemServerJars          []string                  // jars that form the system server
+	SystemServerApps          []string                  // apps that are loaded into system server
+	UpdatableSystemServerJars android.ConfiguredJarList // jars within apex that are loaded into system server
+	SpeedApps                 []string                  // apps that should be speed optimized
 
 	BrokenSuboptimalOrderOfSystemServerJars bool // if true, sub-optimal order does not cause a build error
 
@@ -100,6 +100,23 @@ type GlobalSoongConfig struct {
 	ConstructContext android.Path
 }
 
+// These libs are added as optional dependencies (<uses-library> with android:required set to false).
+// This is because they haven't existed prior to certain SDK version, but classes in them were in
+// bootclasspath jars, etc. So making them hard dependencies (android:required=true) would prevent
+// apps from being installed to such legacy devices.
+var OptionalCompatUsesLibs = []string{
+	"org.apache.http.legacy",
+	"android.test.base",
+	"android.test.mock",
+}
+
+var CompatUsesLibs = []string{
+	"android.hidl.base-V1.0-java",
+	"android.hidl.manager-V1.0-java",
+}
+
+const UnknownInstallLibraryPath = "error"
+
 // LibraryPath contains paths to the library DEX jar on host and on device.
 type LibraryPath struct {
 	Host   android.Path
@@ -108,6 +125,68 @@ type LibraryPath struct {
 
 // LibraryPaths is a map from library name to on-host and on-device paths to its DEX jar.
 type LibraryPaths map[string]*LibraryPath
+
+// Add a new library path to the map, unless a path for this library already exists.
+// If necessary, check that the build and install paths exist.
+func (libPaths LibraryPaths) addLibraryPath(ctx android.ModuleContext, lib string,
+	hostPath, installPath android.Path, strict bool) {
+
+	// If missing dependencies are allowed, the build shouldn't fail when a <uses-library> is
+	// not found. However, this is likely to result is disabling dexpreopt, as it won't be
+	// possible to construct class loader context without on-host and on-device library paths.
+	strict = strict && !ctx.Config().AllowMissingDependencies()
+
+	if hostPath == nil && strict {
+		android.ReportPathErrorf(ctx, "unknown build path to <uses-library> '%s'", lib)
+	}
+
+	if installPath == nil {
+		if android.InList(lib, CompatUsesLibs) || android.InList(lib, OptionalCompatUsesLibs) {
+			// Assume that compatibility libraries are installed in /system/framework.
+			installPath = android.PathForModuleInstall(ctx, "framework", lib+".jar")
+		} else if strict {
+			android.ReportPathErrorf(ctx, "unknown install path to <uses-library> '%s'", lib)
+		}
+	}
+
+	// Add a library only if the build and install path to it is known.
+	if _, present := libPaths[lib]; !present {
+		var devicePath string
+		if installPath != nil {
+			devicePath = android.InstallPathToOnDevicePath(ctx, installPath.(android.InstallPath))
+		} else {
+			// For some stub libraries the only known thing is the name of their implementation
+			// library, but the library itself is unavailable (missing or part of a prebuilt). In
+			// such cases we still need to add the library to <uses-library> tags in the manifest,
+			// but we cannot use if for dexpreopt.
+			devicePath = UnknownInstallLibraryPath
+		}
+		libPaths[lib] = &LibraryPath{hostPath, devicePath}
+	}
+}
+
+// Add a new library path to the map. Enforce checks that the library paths exist.
+func (libPaths LibraryPaths) AddLibraryPath(ctx android.ModuleContext, lib string, hostPath, installPath android.Path) {
+	libPaths.addLibraryPath(ctx, lib, hostPath, installPath, true)
+}
+
+// Add a new library path to the map, if the library exists (name is not nil).
+// Don't enforce checks that the library paths exist. Some libraries may be missing from the build,
+// but their names still need to be added to <uses-library> tags in the manifest.
+func (libPaths LibraryPaths) MaybeAddLibraryPath(ctx android.ModuleContext, lib *string, hostPath, installPath android.Path) {
+	if lib != nil {
+		libPaths.addLibraryPath(ctx, *lib, hostPath, installPath, false)
+	}
+}
+
+// Add library paths from the second map to the first map (do not override existing entries).
+func (libPaths LibraryPaths) AddLibraryPaths(otherPaths LibraryPaths) {
+	for lib, path := range otherPaths {
+		if _, present := libPaths[lib]; !present {
+			libPaths[lib] = path
+		}
+	}
+}
 
 type ModuleConfig struct {
 	Name            string
@@ -189,8 +268,12 @@ func ParseGlobalConfig(ctx android.PathContext, data []byte) (*GlobalConfig, err
 
 		// Copies of entries in GlobalConfig that are not constructable without extra parameters.  They will be
 		// used to construct the real value manually below.
-		DirtyImageObjects string
-		BootImageProfiles []string
+		BootJars                  []string
+		UpdatableBootJars         []string
+		ArtApexJars               []string
+		UpdatableSystemServerJars []string
+		DirtyImageObjects         string
+		BootImageProfiles         []string
 	}
 
 	config := GlobalJSONConfig{}
@@ -200,6 +283,10 @@ func ParseGlobalConfig(ctx android.PathContext, data []byte) (*GlobalConfig, err
 	}
 
 	// Construct paths that require a PathContext.
+	config.GlobalConfig.BootJars = android.CreateConfiguredJarList(ctx, config.BootJars)
+	config.GlobalConfig.UpdatableBootJars = android.CreateConfiguredJarList(ctx, config.UpdatableBootJars)
+	config.GlobalConfig.ArtApexJars = android.CreateConfiguredJarList(ctx, config.ArtApexJars)
+	config.GlobalConfig.UpdatableSystemServerJars = android.CreateConfiguredJarList(ctx, config.UpdatableSystemServerJars)
 	config.GlobalConfig.DirtyImageObjects = android.OptionalPathForPath(constructPath(ctx, config.DirtyImageObjects))
 	config.GlobalConfig.BootImageProfiles = constructPaths(ctx, config.BootImageProfiles)
 
@@ -352,7 +439,33 @@ func RegisterToolDeps(ctx android.BottomUpMutatorContext) {
 func dex2oatPathFromDep(ctx android.ModuleContext) android.Path {
 	dex2oatBin := dex2oatModuleName(ctx.Config())
 
-	dex2oatModule := ctx.GetDirectDepWithTag(dex2oatBin, dex2oatDepTag)
+	// Find the right dex2oat module, trying to follow PrebuiltDepTag from source
+	// to prebuilt if there is one. We wouldn't have to do this if the
+	// prebuilt_postdeps mutator that replaces source deps with prebuilt deps was
+	// run after RegisterToolDeps above, but changing that leads to ordering
+	// problems between mutators (RegisterToolDeps needs to run late to act on
+	// final variants, while prebuilt_postdeps needs to run before many of the
+	// PostDeps mutators, like the APEX mutators). Hence we need to dig out the
+	// prebuilt explicitly here instead.
+	var dex2oatModule android.Module
+	ctx.WalkDeps(func(child, parent android.Module) bool {
+		if parent == ctx.Module() && ctx.OtherModuleDependencyTag(child) == dex2oatDepTag {
+			// Found the source module, or prebuilt module that has replaced the source.
+			dex2oatModule = child
+			if p, ok := child.(android.PrebuiltInterface); ok && p.Prebuilt() != nil {
+				return false // If it's the prebuilt we're done.
+			} else {
+				return true // Recurse to check if the source has a prebuilt dependency.
+			}
+		}
+		if parent == dex2oatModule && ctx.OtherModuleDependencyTag(child) == android.PrebuiltDepTag {
+			if p, ok := child.(android.PrebuiltInterface); ok && p.Prebuilt() != nil && p.Prebuilt().UsePrebuilt() {
+				dex2oatModule = child // Found a prebuilt that should be used.
+			}
+		}
+		return false
+	})
+
 	if dex2oatModule == nil {
 		// If this happens there's probably a missing call to AddToolDeps in DepsMutator.
 		panic(fmt.Sprintf("Failed to lookup %s dependency", dex2oatBin))
@@ -530,12 +643,12 @@ func GlobalConfigForTests(ctx android.PathContext) *GlobalConfig {
 		PatternsOnSystemOther:              nil,
 		DisableGenerateProfile:             false,
 		ProfileDir:                         "",
-		BootJars:                           nil,
-		UpdatableBootJars:                  nil,
-		ArtApexJars:                        nil,
+		BootJars:                           android.EmptyConfiguredJarList(),
+		UpdatableBootJars:                  android.EmptyConfiguredJarList(),
+		ArtApexJars:                        android.EmptyConfiguredJarList(),
 		SystemServerJars:                   nil,
 		SystemServerApps:                   nil,
-		UpdatableSystemServerJars:          nil,
+		UpdatableSystemServerJars:          android.EmptyConfiguredJarList(),
 		SpeedApps:                          nil,
 		PreoptFlags:                        nil,
 		DefaultCompilerFilter:              "",

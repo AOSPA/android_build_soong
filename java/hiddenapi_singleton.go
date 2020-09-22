@@ -43,7 +43,7 @@ func hiddenAPISingletonPaths(ctx android.PathContext) hiddenAPISingletonPathsStr
 		return hiddenAPISingletonPathsStruct{
 			flags:     android.PathForOutput(ctx, "hiddenapi", "hiddenapi-flags.csv"),
 			index:     android.PathForOutput(ctx, "hiddenapi", "hiddenapi-index.csv"),
-			metadata:  android.PathForOutput(ctx, "hiddenapi", "hiddenapi-greylist.csv"),
+			metadata:  android.PathForOutput(ctx, "hiddenapi", "hiddenapi-unsupported.csv"),
 			stubFlags: android.PathForOutput(ctx, "hiddenapi", "hiddenapi-stub-flags.txt"),
 		}
 	}).(hiddenAPISingletonPathsStruct)
@@ -100,7 +100,7 @@ func stubFlagsRule(ctx android.SingletonContext) {
 	// Add the android.test.base to the set of stubs only if the android.test.base module is on
 	// the boot jars list as the runtime will only enforce hiddenapi access against modules on
 	// that list.
-	if inList("android.test.base", ctx.Config().BootJars()) && !ctx.Config().UnbundledBuildUsePrebuiltSdks() {
+	if inList("android.test.base", ctx.Config().BootJars()) && !ctx.Config().AlwaysUsePrebuiltSdks() {
 		publicStubModules = append(publicStubModules, "android.test.base.stubs")
 	}
 
@@ -163,6 +163,7 @@ func stubFlagsRule(ctx android.SingletonContext) {
 						return
 					}
 				}
+
 				bootDexJars = append(bootDexJars, jar)
 			}
 		}
@@ -217,7 +218,7 @@ func moduleForGreyListRemovedApis(ctx android.SingletonContext, module android.M
 }
 
 // flagsRule creates a rule to build hiddenapi-flags.csv out of flags.csv files generated for boot image modules and
-// the greylists.
+// the unsupported API.
 func flagsRule(ctx android.SingletonContext) android.Path {
 	var flagsCSV android.Paths
 	var greylistRemovedApis android.Paths
@@ -256,19 +257,19 @@ func flagsRule(ctx android.SingletonContext) android.Path {
 		Tool(android.PathForSource(ctx, "frameworks/base/tools/hiddenapi/generate_hiddenapi_lists.py")).
 		FlagWithInput("--csv ", stubFlags).
 		Inputs(flagsCSV).
-		FlagWithInput("--greylist ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist.txt")).
-		FlagWithInput("--greylist-ignore-conflicts ", combinedRemovedApis).
-		FlagWithInput("--greylist-max-q ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-max-q.txt")).
-		FlagWithInput("--greylist-max-p ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-max-p.txt")).
-		FlagWithInput("--greylist-max-o-ignore-conflicts ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-max-o.txt")).
-		FlagWithInput("--blacklist ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-force-blacklist.txt")).
-		FlagWithInput("--greylist-packages ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-packages.txt")).
+		FlagWithInput("--unsupported ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-unsupported.txt")).
+		FlagWithInput("--unsupported-ignore-conflicts ", combinedRemovedApis).
+		FlagWithInput("--max-target-q ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-max-target-q.txt")).
+		FlagWithInput("--max-target-p ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-max-target-p.txt")).
+		FlagWithInput("--max-target-o-ignore-conflicts ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-max-target-o.txt")).
+		FlagWithInput("--blocked ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-force-blocked.txt")).
+		FlagWithInput("--unsupported-packages ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-unsupported-packages.txt")).
 		FlagWithOutput("--output ", tempPath)
 
 	commitChangeForRestat(rule, tempPath, outputPath)
@@ -293,7 +294,7 @@ func emptyFlagsRule(ctx android.SingletonContext) android.Path {
 	return outputPath
 }
 
-// metadataRule creates a rule to build hiddenapi-greylist.csv out of the metadata.csv files generated for boot image
+// metadataRule creates a rule to build hiddenapi-unsupported.csv out of the metadata.csv files generated for boot image
 // modules.
 func metadataRule(ctx android.SingletonContext) android.Path {
 	var metadataCSV android.Paths

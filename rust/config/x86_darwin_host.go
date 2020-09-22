@@ -23,7 +23,7 @@ import (
 var (
 	DarwinRustFlags     = []string{}
 	DarwinRustLinkFlags = []string{
-		"-B${ccConfig.MacToolPath}",
+		"-B${cc_config.MacToolPath}",
 	}
 	darwinX8664Rustflags = []string{}
 	darwinX8664Linkflags = []string{}
@@ -77,7 +77,8 @@ func (t *toolchainDarwin) ProcMacroSuffix() string {
 }
 
 func (t *toolchainDarwinX8664) ToolchainLinkFlags() string {
-	return "${config.DarwinToolchainLinkFlags} ${config.DarwinToolchainX8664LinkFlags}"
+	// Prepend the lld flags from cc_config so we stay in sync with cc
+	return "${cc_config.DarwinClangLldflags} ${config.DarwinToolchainLinkFlags} ${config.DarwinToolchainX8664LinkFlags}"
 }
 
 func (t *toolchainDarwinX8664) ToolchainRustFlags() string {
