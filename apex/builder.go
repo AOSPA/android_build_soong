@@ -63,6 +63,8 @@ func init() {
 	pctx.HostBinToolVariable("jsonmodify", "jsonmodify")
 	pctx.HostBinToolVariable("conv_apex_manifest", "conv_apex_manifest")
 	pctx.HostBinToolVariable("extract_apks", "extract_apks")
+	pctx.HostBinToolVariable("make_f2fs", "make_f2fs")
+	pctx.HostBinToolVariable("sload_f2fs", "sload_f2fs")
 }
 
 var (
@@ -116,12 +118,12 @@ var (
 			`--payload_type image ` +
 			`--key ${key} ${opt_flags} ${image_dir} ${out} `,
 		CommandDeps: []string{"${apexer}", "${avbtool}", "${e2fsdroid}", "${merge_zips}",
-			"${mke2fs}", "${resize2fs}", "${sefcontext_compile}",
+			"${mke2fs}", "${resize2fs}", "${sefcontext_compile}", "${make_f2fs}", "${sload_f2fs}",
 			"${soong_zip}", "${zipalign}", "${aapt2}", "prebuilts/sdk/current/public/android.jar"},
 		Rspfile:        "${out}.copy_commands",
 		RspfileContent: "${copy_commands}",
 		Description:    "APEX ${image_dir} => ${out}",
-	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key", "opt_flags", "manifest")
+	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key", "opt_flags", "manifest", "payload_fs_type")
 
 	zipApexRule = pctx.StaticRule("zipApexRule", blueprint.RuleParams{
 		Command: `rm -rf ${image_dir} && mkdir -p ${image_dir} && ` +
@@ -193,7 +195,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 	// collect jniLibs. Notice that a.filesInfo is already sorted
 	var jniLibs []string
 	for _, fi := range a.filesInfo {
-		if fi.isJniLib {
+		if fi.isJniLib && !android.InList(fi.Stem(), jniLibs) {
 			jniLibs = append(jniLibs, fi.Stem())
 		}
 	}
@@ -283,6 +285,10 @@ func (a *apexBundle) buildNoticeFiles(ctx android.ModuleContext, apexFileName st
 
 		return true
 	})
+
+	for _, fi := range a.filesInfo {
+		noticeFiles = append(noticeFiles, fi.noticeFiles...)
+	}
 
 	if len(noticeFiles) == 0 {
 		return android.NoticeOutputs{}
@@ -582,6 +588,8 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			optFlags = append(optFlags, "--manifest_json "+a.manifestJsonOut.String())
 		}
 
+		optFlags = append(optFlags, "--payload_fs_type "+a.payloadFsType.string())
+
 		ctx.Build(pctx, android.BuildParams{
 			Rule:        apexRule,
 			Implicits:   implicitInputs,
@@ -648,7 +656,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		a.container_certificate_file,
 		a.container_private_key_file,
 	}
-	if ctx.Config().IsEnvTrue("RBE_SIGNAPK") {
+	if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_SIGNAPK") {
 		rule = java.SignapkRE
 		args["implicits"] = strings.Join(implicits.Strings(), ",")
 		args["outCommaList"] = a.outputFile.String()

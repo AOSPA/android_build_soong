@@ -24,13 +24,11 @@ func init() {
 }
 
 type BinaryCompilerProperties struct {
-	// passes -C prefer-dynamic to rustc, which tells it to dynamically link the stdlib
-	// (assuming it has no dylib dependencies already)
-	Prefer_dynamic *bool
 }
 
 type binaryDecorator struct {
 	*baseCompiler
+	stripper Stripper
 
 	Properties BinaryCompilerProperties
 }
@@ -60,10 +58,6 @@ func NewRustBinary(hod android.HostOrDeviceSupported) (*Module, *binaryDecorator
 	return module, binary
 }
 
-func (binary *binaryDecorator) preferDynamic() bool {
-	return Bool(binary.Properties.Prefer_dynamic)
-}
-
 func (binary *binaryDecorator) compilerFlags(ctx ModuleContext, flags Flags) Flags {
 	flags = binary.baseCompiler.compilerFlags(ctx, flags)
 
@@ -76,9 +70,6 @@ func (binary *binaryDecorator) compilerFlags(ctx ModuleContext, flags Flags) Fla
 			"-Wl,--no-undefined-version")
 	}
 
-	if binary.preferDynamic() {
-		flags.RustFlags = append(flags.RustFlags, "-C prefer-dynamic")
-	}
 	return flags
 }
 
@@ -86,7 +77,7 @@ func (binary *binaryDecorator) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps = binary.baseCompiler.compilerDeps(ctx, deps)
 
 	if ctx.toolchain().Bionic() {
-		deps = binary.baseCompiler.bionicDeps(ctx, deps)
+		deps = bionicDeps(deps)
 		deps.CrtBegin = "crtbegin_dynamic"
 		deps.CrtEnd = "crtend_android"
 	}
@@ -96,7 +87,8 @@ func (binary *binaryDecorator) compilerDeps(ctx DepsContext, deps Deps) Deps {
 
 func (binary *binaryDecorator) compilerProps() []interface{} {
 	return append(binary.baseCompiler.compilerProps(),
-		&binary.Properties)
+		&binary.Properties,
+		&binary.stripper.StripProperties)
 }
 
 func (binary *binaryDecorator) nativeCoverage() bool {
@@ -105,15 +97,20 @@ func (binary *binaryDecorator) nativeCoverage() bool {
 
 func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) android.Path {
 	fileName := binary.getStem(ctx) + ctx.toolchain().ExecutableSuffix()
-
 	srcPath, _ := srcPathFromModuleSrcs(ctx, binary.baseCompiler.Properties.Srcs)
-
 	outputFile := android.PathForModuleOut(ctx, fileName)
-	binary.unstrippedOutputFile = outputFile
 
 	flags.RustFlags = append(flags.RustFlags, deps.depFlags...)
+	flags.LinkFlags = append(flags.LinkFlags, deps.linkObjects...)
 
 	outputs := TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
+
+	if binary.stripper.NeedsStrip(ctx) {
+		strippedOutputFile := android.PathForModuleOut(ctx, "stripped", fileName)
+		binary.stripper.StripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile)
+		binary.strippedOutputFile = android.OptionalPathForPath(strippedOutputFile)
+	}
+
 	binary.coverageFile = outputs.coverageFile
 
 	var coverageFiles android.Paths
@@ -132,8 +129,9 @@ func (binary *binaryDecorator) coverageOutputZipPath() android.OptionalPath {
 	return binary.coverageOutputZipFile
 }
 
-func (binary *binaryDecorator) autoDep() autoDep {
-	if binary.preferDynamic() {
+func (binary *binaryDecorator) autoDep(ctx BaseModuleContext) autoDep {
+	// Binaries default to dylib dependencies for device, rlib for host.
+	if ctx.Device() {
 		return dylibAutoDep
 	} else {
 		return rlibAutoDep

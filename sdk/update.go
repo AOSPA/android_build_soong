@@ -43,7 +43,7 @@ var (
 
 	zipFiles = pctx.AndroidStaticRule("SnapshotZipFiles",
 		blueprint.RuleParams{
-			Command: `${config.SoongZipCmd} -C $basedir -l $out.rsp -o $out`,
+			Command: `${config.SoongZipCmd} -C $basedir -r $out.rsp -o $out`,
 			CommandDeps: []string{
 				"${config.SoongZipCmd}",
 			},
@@ -262,7 +262,7 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 		memberCtx := &memberContext{ctx, builder, memberType, member.name}
 
 		prebuiltModule := memberType.AddPrebuiltModule(memberCtx, member)
-		s.createMemberSnapshot(memberCtx, member, prebuiltModule)
+		s.createMemberSnapshot(memberCtx, member, prebuiltModule.(*bpModule))
 	}
 
 	// Create a transformer that will transform an unversioned module into a versioned module.
@@ -323,19 +323,62 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 	// Add properties common to all os types.
 	s.addMemberPropertiesToPropertySet(builder, snapshotModule, commonDynamicMemberProperties)
 
-	// Iterate over the os types in a fixed order.
+	// Optimize other per-variant properties, besides the dynamic member lists.
+	type variantProperties struct {
+		Compile_multilib string `android:"arch_variant"`
+	}
+	var variantPropertiesContainers []propertiesContainer
+	variantToProperties := make(map[*sdk]*variantProperties)
+	for _, sdkVariant := range sdkVariants {
+		props := &variantProperties{
+			Compile_multilib: sdkVariant.multilibUsages.String(),
+		}
+		variantPropertiesContainers = append(variantPropertiesContainers, &dynamicMemberPropertiesContainer{sdkVariant, props})
+		variantToProperties[sdkVariant] = props
+	}
+	commonVariantProperties := variantProperties{}
+	extractor = newCommonValueExtractor(commonVariantProperties)
+	extractCommonProperties(ctx, extractor, &commonVariantProperties, variantPropertiesContainers)
+	if commonVariantProperties.Compile_multilib != "" && commonVariantProperties.Compile_multilib != "both" {
+		// Compile_multilib defaults to both so only needs to be set when it's
+		// specified and not both.
+		snapshotModule.AddProperty("compile_multilib", commonVariantProperties.Compile_multilib)
+	}
+
 	targetPropertySet := snapshotModule.AddPropertySet("target")
+
+	// If host is supported and any member is host OS dependent then disable host
+	// by default, so that we can enable each host OS variant explicitly. This
+	// avoids problems with implicitly enabled OS variants when the snapshot is
+	// used, which might be different from this run (e.g. different build OS).
+	hasHostOsDependentMember := false
+	if s.HostSupported() {
+		for _, memberRef := range memberRefs {
+			if memberRef.memberType.IsHostOsDependent() {
+				hasHostOsDependentMember = true
+				break
+			}
+		}
+		if hasHostOsDependentMember {
+			hostPropertySet := targetPropertySet.AddPropertySet("host")
+			hostPropertySet.AddProperty("enabled", false)
+		}
+	}
+
+	// Iterate over the os types in a fixed order.
 	for _, osType := range s.getPossibleOsTypes() {
 		if sdkVariant, ok := osTypeToMemberProperties[osType]; ok {
 			osPropertySet := targetPropertySet.AddPropertySet(sdkVariant.Target().Os.Name)
 
-			// Compile_multilib defaults to both and must always be set to both on the
-			// device and so only needs to be set when targeted at the host and is neither
-			// unspecified or both.
-			multilib := sdkVariant.multilibUsages
-			if (osType.Class == android.Host || osType.Class == android.HostCross) &&
-				multilib != multilibNone && multilib != multilibBoth {
-				osPropertySet.AddProperty("compile_multilib", multilib.String())
+			// Enable the variant explicitly when we've disabled it by default on host.
+			if hasHostOsDependentMember &&
+				(osType.Class == android.Host || osType.Class == android.HostCross) {
+				osPropertySet.AddProperty("enabled", true)
+			}
+
+			variantProps := variantToProperties[sdkVariant]
+			if variantProps.Compile_multilib != "" && variantProps.Compile_multilib != "both" {
+				osPropertySet.AddProperty("compile_multilib", variantProps.Compile_multilib)
 			}
 
 			s.addMemberPropertiesToPropertySet(builder, osPropertySet, sdkVariant.dynamicMemberTypeListProperties)
@@ -975,9 +1018,12 @@ func (osInfo *osTypeSpecificInfo) addToPropertySet(ctx *memberContext, bpModule 
 	var osPropertySet android.BpPropertySet
 	var archPropertySet android.BpPropertySet
 	var archOsPrefix string
-	if osInfo.Properties.Base().Os_count == 1 {
-		// There is only one os type present in the variants so don't bother
-		// with adding target specific properties.
+	if osInfo.Properties.Base().Os_count == 1 &&
+		(osInfo.osType.Class == android.Device || !ctx.memberType.IsHostOsDependent()) {
+		// There is only one OS type present in the variants and it shouldn't have a
+		// variant-specific target. The latter is the case if it's either for device
+		// where there is only one OS (android), or for host and the member type
+		// isn't host OS dependent.
 
 		// Create a structure that looks like:
 		// module_type {
@@ -1013,6 +1059,12 @@ func (osInfo *osTypeSpecificInfo) addToPropertySet(ctx *memberContext, bpModule 
 		osType := osInfo.osType
 		osPropertySet = targetPropertySet.AddPropertySet(osType.Name)
 		archPropertySet = targetPropertySet
+
+		// Enable the variant explicitly when we've disabled it by default on host.
+		if ctx.memberType.IsHostOsDependent() &&
+			(osType.Class == android.Host || osType.Class == android.HostCross) {
+			osPropertySet.AddProperty("enabled", true)
+		}
 
 		// Arch specific properties need to be added to an os and arch specific
 		// section prefixed with <os>_.
@@ -1184,7 +1236,7 @@ func (m *memberContext) Name() string {
 	return m.name
 }
 
-func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModule android.BpModule) {
+func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModule *bpModule) {
 
 	memberType := member.memberType
 
@@ -1237,6 +1289,18 @@ func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModu
 	// Create a target property set into which target specific properties can be
 	// added.
 	targetPropertySet := bpModule.AddPropertySet("target")
+
+	// If the member is host OS dependent and has host_supported then disable by
+	// default and enable each host OS variant explicitly. This avoids problems
+	// with implicitly enabled OS variants when the snapshot is used, which might
+	// be different from this run (e.g. different build OS).
+	if ctx.memberType.IsHostOsDependent() {
+		hostSupported := bpModule.getValue("host_supported") == true // Missing means false.
+		if hostSupported {
+			hostPropertySet := targetPropertySet.AddPropertySet("host")
+			hostPropertySet.AddProperty("enabled", false)
+		}
+	}
 
 	// Iterate over the os types in a fixed order.
 	for _, osType := range s.getPossibleOsTypes() {

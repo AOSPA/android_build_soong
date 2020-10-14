@@ -24,7 +24,7 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust/config")
 
 var (
-	RustDefaultVersion = "1.44.0"
+	RustDefaultVersion = "1.45.2"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2018"
 	Stdlibs            = []string{
@@ -42,21 +42,18 @@ var (
 	deviceGlobalRustFlags = []string{}
 
 	deviceGlobalLinkFlags = []string{
+		// Prepend the lld flags from cc_config so we stay in sync with cc
+		"${cc_config.DeviceGlobalLldflags}",
+
+		// Override cc's --no-undefined-version to allow rustc's generated alloc functions
+		"-Wl,--undefined-version",
+
 		"-Bdynamic",
 		"-nostdlib",
-		"-Wl,-z,noexecstack",
-		"-Wl,-z,relro",
-		"-Wl,-z,now",
-		"-Wl,--build-id=md5",
-		"-Wl,--warn-shared-textrel",
-		"-Wl,--fatal-warnings",
-
 		"-Wl,--pack-dyn-relocs=android+relr",
+		"-Wl,--use-android-relr-tags",
 		"-Wl,--no-undefined",
-		"-Wl,--hash-style=gnu",
-
-		"-B${ccConfig.ClangBin}",
-		"-fuse-ld=lld",
+		"-B${cc_config.ClangBin}",
 	}
 )
 
@@ -81,8 +78,8 @@ func init() {
 	pctx.StaticVariable("RustPath", "${RustBase}/${HostPrebuiltTag}/${RustVersion}")
 	pctx.StaticVariable("RustBin", "${RustPath}/bin")
 
-	pctx.ImportAs("ccConfig", "android/soong/cc/config")
-	pctx.StaticVariable("RustLinker", "${ccConfig.ClangBin}/clang++")
+	pctx.ImportAs("cc_config", "android/soong/cc/config")
+	pctx.StaticVariable("RustLinker", "${cc_config.ClangBin}/clang++")
 	pctx.StaticVariable("RustLinkerArgs", "")
 
 	pctx.StaticVariable("DeviceGlobalLinkFlags", strings.Join(deviceGlobalLinkFlags, " "))

@@ -194,13 +194,14 @@ type productVariables struct {
 	Platform_min_supported_target_sdk_version *string  `json:",omitempty"`
 	Platform_base_os                          *string  `json:",omitempty"`
 
-	DeviceName              *string  `json:",omitempty"`
-	DeviceArch              *string  `json:",omitempty"`
-	DeviceArchVariant       *string  `json:",omitempty"`
-	DeviceCpuVariant        *string  `json:",omitempty"`
-	DeviceAbi               []string `json:",omitempty"`
-	DeviceVndkVersion       *string  `json:",omitempty"`
-	DeviceSystemSdkVersions []string `json:",omitempty"`
+	DeviceName                            *string  `json:",omitempty"`
+	DeviceArch                            *string  `json:",omitempty"`
+	DeviceArchVariant                     *string  `json:",omitempty"`
+	DeviceCpuVariant                      *string  `json:",omitempty"`
+	DeviceAbi                             []string `json:",omitempty"`
+	DeviceVndkVersion                     *string  `json:",omitempty"`
+	DeviceCurrentApiLevelForVendorModules *string  `json:",omitempty"`
+	DeviceSystemSdkVersions               []string `json:",omitempty"`
 
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
@@ -250,6 +251,7 @@ type productVariables struct {
 	Unbundled_build                  *bool `json:",omitempty"`
 	Unbundled_build_apps             *bool `json:",omitempty"`
 	Unbundled_build_sdks_from_source *bool `json:",omitempty"`
+	Always_use_prebuilt_sdks         *bool `json:",omitempty"`
 	Malloc_not_svelte                *bool `json:",omitempty"`
 	Malloc_zero_contents             *bool `json:",omitempty"`
 	Malloc_pattern_fill_contents     *bool `json:",omitempty"`
@@ -380,6 +382,9 @@ type productVariables struct {
 	InstallExtraFlattenedApexes *bool `json:",omitempty"`
 
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
+
+	BoardKernelBinaries                []string `json:",omitempty"`
+	BoardKernelModuleInterfaceVersions []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

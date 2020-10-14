@@ -15,6 +15,7 @@
 package build
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +24,9 @@ import (
 	"time"
 
 	"android/soong/shared"
+	"github.com/golang/protobuf/proto"
+
+	smpb "android/soong/ui/metrics/metrics_proto"
 )
 
 type Config struct{ *configImpl }
@@ -52,8 +56,6 @@ type configImpl struct {
 
 	// Autodetected
 	totalRAM uint64
-
-	pdkBuild bool
 
 	brokenDupRules     bool
 	brokenUsesNetwork  bool
@@ -96,7 +98,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		environ: OsEnvironment(),
 	}
 
-	// Sane default matching ninja
+	// Default matching ninja
 	ret.parallel = runtime.NumCPU() + 2
 	ret.keepGoing = 1
 
@@ -260,18 +262,34 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.environ.Set("BUILD_DATETIME_FILE", buildDateTimeFile)
 
 	if ret.UseRBE() {
-		for k, v := range getRBEVars(ctx, tmpDir) {
+		for k, v := range getRBEVars(ctx, Config{ret}) {
 			ret.environ.Set(k, v)
 		}
 	}
 
-	return Config{ret}
+	c := Config{ret}
+	storeConfigMetrics(ctx, c)
+	return c
 }
 
 // NewBuildActionConfig returns a build configuration based on the build action. The arguments are
 // processed based on the build action and extracts any arguments that belongs to the build action.
 func NewBuildActionConfig(action BuildAction, dir string, ctx Context, args ...string) Config {
 	return NewConfig(ctx, getConfigArgs(action, dir, ctx, args)...)
+}
+
+// storeConfigMetrics selects a set of configuration information and store in
+// the metrics system for further analysis.
+func storeConfigMetrics(ctx Context, config Config) {
+	if ctx.Metrics == nil {
+		return
+	}
+
+	b := &smpb.BuildConfig{
+		UseGoma: proto.Bool(config.UseGoma()),
+		UseRbe:  proto.Bool(config.UseRBE()),
+	}
+	ctx.Metrics.BuildConfig(b)
 }
 
 // getConfigArgs processes the command arguments based on the build action and creates a set of new
@@ -808,13 +826,73 @@ func (c *configImpl) StartRBE() bool {
 	return true
 }
 
-func (c *configImpl) RBEStatsOutputDir() string {
+func (c *configImpl) logDir() string {
+	if c.Dist() {
+		return filepath.Join(c.DistDir(), "logs")
+	}
+	return c.OutDir()
+}
+
+func (c *configImpl) rbeStatsOutputDir() string {
 	for _, f := range []string{"RBE_output_dir", "FLAG_output_dir"} {
 		if v, ok := c.environ.Get(f); ok {
 			return v
 		}
 	}
-	return ""
+	return c.logDir()
+}
+
+func (c *configImpl) rbeLogPath() string {
+	for _, f := range []string{"RBE_log_path", "FLAG_log_path"} {
+		if v, ok := c.environ.Get(f); ok {
+			return v
+		}
+	}
+	return fmt.Sprintf("text://%v/reproxy_log.txt", c.logDir())
+}
+
+func (c *configImpl) rbeExecRoot() string {
+	for _, f := range []string{"RBE_exec_root", "FLAG_exec_root"} {
+		if v, ok := c.environ.Get(f); ok {
+			return v
+		}
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
+func (c *configImpl) rbeDir() string {
+	if v, ok := c.environ.Get("RBE_DIR"); ok {
+		return v
+	}
+	return "prebuilts/remoteexecution-client/live/"
+}
+
+func (c *configImpl) rbeReproxy() string {
+	for _, f := range []string{"RBE_re_proxy", "FLAG_re_proxy"} {
+		if v, ok := c.environ.Get(f); ok {
+			return v
+		}
+	}
+	return filepath.Join(c.rbeDir(), "reproxy")
+}
+
+func (c *configImpl) rbeAuth() (string, string) {
+	credFlags := []string{"use_application_default_credentials", "use_gce_credentials", "credential_file"}
+	for _, cf := range credFlags {
+		for _, f := range []string{"RBE_" + cf, "FLAG_" + cf} {
+			if v, ok := c.environ.Get(f); ok {
+				v = strings.TrimSpace(v)
+				if v != "" && v != "false" && v != "0" {
+					return "RBE_" + cf, v
+				}
+			}
+		}
+	}
+	return "RBE_use_application_default_credentials", "true"
 }
 
 func (c *configImpl) UseRemoteBuild() bool {
@@ -966,14 +1044,6 @@ func (c *configImpl) SetTargetDeviceDir(dir string) {
 
 func (c *configImpl) TargetDeviceDir() string {
 	return c.targetDeviceDir
-}
-
-func (c *configImpl) SetPdkBuild(pdk bool) {
-	c.pdkBuild = pdk
-}
-
-func (c *configImpl) IsPdkBuild() bool {
-	return c.pdkBuild
 }
 
 func (c *configImpl) BuildDateTime() string {

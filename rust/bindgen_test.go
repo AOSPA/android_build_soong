@@ -24,9 +24,11 @@ func TestRustBindgen(t *testing.T) {
 		rust_bindgen {
 			name: "libbindgen",
 			wrapper_src: "src/any.h",
-			stem: "bindings",
-			flags: ["--bindgen-flag"],
-			cflags: ["--clang-flag"],
+			crate_name: "bindgen",
+			stem: "libbindgen",
+			source_stem: "bindings",
+			bindgen_flags: ["--bindgen-flag.*"],
+			cflags: ["--clang-flag()"],
 			shared_libs: ["libfoo_shared"],
 			static_libs: ["libfoo_static"],
 		}
@@ -38,19 +40,45 @@ func TestRustBindgen(t *testing.T) {
 			name: "libfoo_static",
 			export_include_dirs: ["static_include"],
 		}
-
 	`)
 	libbindgen := ctx.ModuleForTests("libbindgen", "android_arm64_armv8-a").Output("bindings.rs")
-	if !strings.Contains(libbindgen.Args["flags"], "--bindgen-flag") {
+	// Ensure that the flags are present and escaped
+	if !strings.Contains(libbindgen.Args["flags"], "'--bindgen-flag.*'") {
 		t.Errorf("missing bindgen flags in rust_bindgen rule: flags %#v", libbindgen.Args["flags"])
 	}
-	if !strings.Contains(libbindgen.Args["cflags"], "--clang-flag") {
+	if !strings.Contains(libbindgen.Args["cflags"], "'--clang-flag()'") {
 		t.Errorf("missing clang cflags in rust_bindgen rule: cflags %#v", libbindgen.Args["cflags"])
 	}
 	if !strings.Contains(libbindgen.Args["cflags"], "-Ishared_include") {
-		t.Errorf("missing clang cflags in rust_bindgen rule: cflags %#v", libbindgen.Args["cflags"])
+		t.Errorf("missing shared_libs exported includes in rust_bindgen rule: cflags %#v", libbindgen.Args["cflags"])
 	}
 	if !strings.Contains(libbindgen.Args["cflags"], "-Istatic_include") {
-		t.Errorf("missing clang cflags in rust_bindgen rule: cflags %#v", libbindgen.Args["cflags"])
+		t.Errorf("missing static_libs exported includes in rust_bindgen rule: cflags %#v", libbindgen.Args["cflags"])
+	}
+}
+
+func TestRustBindgenCustomBindgen(t *testing.T) {
+	ctx := testRust(t, `
+		rust_bindgen {
+			name: "libbindgen",
+			wrapper_src: "src/any.h",
+			crate_name: "bindgen",
+			stem: "libbindgen",
+			source_stem: "bindings",
+			custom_bindgen: "my_bindgen"
+		}
+		rust_binary_host {
+			name: "my_bindgen",
+			srcs: ["foo.rs"],
+		}
+	`)
+
+	libbindgen := ctx.ModuleForTests("libbindgen", "android_arm64_armv8-a").Output("bindings.rs")
+
+	// The rule description should contain the custom binary name rather than bindgen, so checking the description
+	// should be sufficient.
+	if !strings.Contains(libbindgen.Description, "my_bindgen") {
+		t.Errorf("Custom bindgen binary %s not used for libbindgen: rule description %#v", "my_bindgen",
+			libbindgen.Description)
 	}
 }

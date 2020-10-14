@@ -44,7 +44,28 @@ func GatherRequiredDepsForTest() string {
                                 },
 				host_supported: true,
 		}
-
+		rust_prebuilt_library {
+				name: "libstd_x86_64-apple-darwin",
+                                crate_name: "std",
+                                rlib: {
+                                    srcs: ["libstd.rlib"],
+                                },
+                                dylib: {
+                                    srcs: ["libstd.so"],
+                                },
+				host_supported: true,
+		}
+		rust_prebuilt_library {
+				name: "libtest_x86_64-apple-darwin",
+                                crate_name: "test",
+                                rlib: {
+                                    srcs: ["libtest.rlib"],
+                                },
+                                dylib: {
+                                    srcs: ["libtest.so"],
+                                },
+				host_supported: true,
+		}
 		//////////////////////////////
 		// Device module requirements
 
@@ -70,6 +91,12 @@ func GatherRequiredDepsForTest() string {
 			host_supported: true,
                         native_coverage: false,
 		}
+		rust_library {
+			name: "libprotobuf",
+			crate_name: "protobuf",
+			srcs: ["foo.rs"],
+			host_supported: true,
+		}
 
 ` + cc.GatherRequiredDepsForTest(android.NoOsType)
 	return bp
@@ -77,6 +104,8 @@ func GatherRequiredDepsForTest() string {
 
 func CreateTestContext() *android.TestContext {
 	ctx := android.NewTestArchContext()
+	android.RegisterPrebuiltMutators(ctx)
+	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	cc.RegisterRequiredBuildComponentsForTest(ctx)
 	ctx.RegisterModuleType("genrule", genrule.GenRuleFactory)
 	ctx.RegisterModuleType("rust_binary", RustBinaryFactory)
@@ -97,6 +126,8 @@ func CreateTestContext() *android.TestContext {
 	ctx.RegisterModuleType("rust_ffi_host_shared", RustFFISharedHostFactory)
 	ctx.RegisterModuleType("rust_ffi_host_static", RustFFIStaticHostFactory)
 	ctx.RegisterModuleType("rust_proc_macro", ProcMacroFactory)
+	ctx.RegisterModuleType("rust_protobuf", RustProtobufFactory)
+	ctx.RegisterModuleType("rust_protobuf_host", RustProtobufHostFactory)
 	ctx.RegisterModuleType("rust_prebuilt_library", PrebuiltLibraryFactory)
 	ctx.RegisterModuleType("rust_prebuilt_dylib", PrebuiltDylibFactory)
 	ctx.RegisterModuleType("rust_prebuilt_rlib", PrebuiltRlibFactory)

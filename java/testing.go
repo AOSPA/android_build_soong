@@ -22,6 +22,8 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc"
+	"android/soong/python"
+
 	"github.com/google/blueprint"
 )
 
@@ -42,6 +44,9 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 		"prebuilts/sdk/17/public/android.jar":                      nil,
 		"prebuilts/sdk/17/public/framework.aidl":                   nil,
 		"prebuilts/sdk/17/system/android.jar":                      nil,
+		"prebuilts/sdk/28/public/android.jar":                      nil,
+		"prebuilts/sdk/28/public/framework.aidl":                   nil,
+		"prebuilts/sdk/28/system/android.jar":                      nil,
 		"prebuilts/sdk/29/public/android.jar":                      nil,
 		"prebuilts/sdk/29/public/framework.aidl":                   nil,
 		"prebuilts/sdk/29/system/android.jar":                      nil,
@@ -84,6 +89,10 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 		"prebuilts/sdk/30/test/api/bar-removed.txt":                nil,
 		"prebuilts/sdk/tools/core-lambda-stubs.jar":                nil,
 		"prebuilts/sdk/Android.bp":                                 []byte(`prebuilt_apis { name: "sdk", api_dirs: ["14", "28", "30", "current"],}`),
+
+		"bin.py": nil,
+		python.StubTemplateHost: []byte(`PYTHON_BINARY = '%interpreter%'
+		MAIN_FILE = '%main%'`),
 
 		// For java_sdk_library
 		"api/module-lib-current.txt":    nil,
@@ -136,6 +145,7 @@ func GatherRequiredDepsForTest() string {
 				srcs: ["a.java"],
 				sdk_version: "none",
 				system_modules: "stable-core-platform-api-stubs-system-modules",
+				compile_dex: true,
 			}
 		`, extra)
 	}

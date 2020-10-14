@@ -20,8 +20,6 @@ import (
 
 func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterPrebuiltBuildComponents(ctx)
-	android.RegisterPrebuiltMutators(ctx)
-
 	RegisterCCBuildComponents(ctx)
 	RegisterBinaryBuildComponents(ctx)
 	RegisterLibraryBuildComponents(ctx)
@@ -340,6 +338,8 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			vendor_available: true,
 			native_bridge_supported: true,
 			stl: "none",
+			min_sdk_version: "16",
+			crt: true,
 			apex_available: [
 				"//apex_available:platform",
 				"//apex_available:anyapex",
@@ -349,48 +349,26 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 		cc_object {
 			name: "crtbegin_so",
 			defaults: ["crt_defaults"],
-			recovery_available: true,
-			vendor_available: true,
-			native_bridge_supported: true,
-			min_sdk_version: "29",
-			stl: "none",
 		}
 
 		cc_object {
 			name: "crtbegin_dynamic",
 			defaults: ["crt_defaults"],
-			recovery_available: true,
-			vendor_available: true,
-			native_bridge_supported: true,
-			stl: "none",
 		}
 
 		cc_object {
 			name: "crtbegin_static",
 			defaults: ["crt_defaults"],
-			recovery_available: true,
-			vendor_available: true,
-			native_bridge_supported: true,
-			stl: "none",
 		}
 
 		cc_object {
 			name: "crtend_so",
 			defaults: ["crt_defaults"],
-			recovery_available: true,
-			vendor_available: true,
-			native_bridge_supported: true,
-			min_sdk_version: "29",
-			stl: "none",
 		}
 
 		cc_object {
 			name: "crtend_android",
 			defaults: ["crt_defaults"],
-			recovery_available: true,
-			vendor_available: true,
-			native_bridge_supported: true,
-			stl: "none",
 		}
 
 		cc_library {
@@ -420,26 +398,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			name: "libdl",
 			first_version: "minimum",
 			symbol_file: "libdl.map.txt",
-		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtbegin_so.27",
-			sdk_version: "27",
-		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtend_so.27",
-			sdk_version: "27",
-		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtbegin_dynamic.27",
-			sdk_version: "27",
-		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtend_android.27",
-			sdk_version: "27",
 		}
 
 		ndk_prebuilt_shared_stl {
@@ -569,8 +527,11 @@ func CreateTestContext() *android.TestContext {
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 	ctx.RegisterModuleType("vndk_libraries_txt", VndkLibrariesTxtFactory)
+	ctx.RegisterModuleType("vendor_snapshot_shared", VendorSnapshotSharedFactory)
 	ctx.RegisterModuleType("vendor_snapshot_static", VendorSnapshotStaticFactory)
+	ctx.RegisterModuleType("vendor_snapshot_binary", VendorSnapshotBinaryFactory)
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
+	android.RegisterPrebuiltMutators(ctx)
 	RegisterRequiredBuildComponentsForTest(ctx)
 	ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 	ctx.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
