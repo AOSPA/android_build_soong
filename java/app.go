@@ -157,7 +157,7 @@ func (as *AndroidAppSet) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 				"abis":              strings.Join(SupportedAbis(ctx), ","),
 				"allow-prereleased": strconv.FormatBool(proptools.Bool(as.properties.Prerelease)),
 				"screen-densities":  screenDensities,
-				"sdk-version":       ctx.Config().PlatformSdkVersion(),
+				"sdk-version":       ctx.Config().PlatformSdkVersion().String(),
 				"stem":              as.BaseModuleName(),
 				"apkcerts":          as.apkcertsFile.String(),
 				"partition":         as.PartitionTag(ctx.DeviceConfig()),
@@ -379,7 +379,6 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 			"can only be set for modules that set sdk_version")
 	}
 
-	tag := &jniDependencyTag{}
 	for _, jniTarget := range ctx.MultiTargets() {
 		variation := append(jniTarget.Variations(),
 			blueprint.Variation{Mutator: "link", Variation: "shared"})
@@ -393,7 +392,7 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 			Bool(a.appProperties.Jni_uses_sdk_apis) {
 			variation = append(variation, blueprint.Variation{Mutator: "sdk", Variation: "sdk"})
 		}
-		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
+		ctx.AddFarVariationDependencies(variation, jniLibTag, a.appProperties.Jni_libs...)
 	}
 
 	a.usesLibrary.deps(ctx, sdkDep.hasFrameworkLibs())
@@ -436,7 +435,7 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 
 		if minSdkVersion, err := a.minSdkVersion().effectiveVersion(ctx); err == nil {
 			a.checkJniLibsSdkVersion(ctx, minSdkVersion)
-			android.CheckMinSdkVersion(a, ctx, int(minSdkVersion))
+			android.CheckMinSdkVersion(a, ctx, minSdkVersion.ApiLevel(ctx))
 		} else {
 			ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
 		}
@@ -480,8 +479,9 @@ func (a *AndroidApp) useEmbeddedNativeLibs(ctx android.ModuleContext) bool {
 		ctx.PropertyErrorf("min_sdk_version", "invalid value %q: %s", a.minSdkVersion(), err)
 	}
 
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	return (minSdkVersion >= 23 && Bool(a.appProperties.Use_embedded_native_libs)) ||
-		!a.IsForPlatform()
+		!apexInfo.IsForPlatform()
 }
 
 // Returns whether this module should have the dex file stored uncompressed in the APK.
@@ -504,8 +504,9 @@ func (a *AndroidApp) shouldUncompressDex(ctx android.ModuleContext) bool {
 }
 
 func (a *AndroidApp) shouldEmbedJnis(ctx android.BaseModuleContext) bool {
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	return ctx.Config().UnbundledBuild() || Bool(a.appProperties.Use_embedded_native_libs) ||
-		!a.IsForPlatform() || a.appProperties.AlwaysPackageNativeLibs
+		!apexInfo.IsForPlatform() || a.appProperties.AlwaysPackageNativeLibs
 }
 
 func generateAaptRenamePackageFlags(packageName string, renameResourcesPackage bool) []string {
@@ -641,7 +642,7 @@ func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, ctx android.ModuleContext
 					// Work with the team to come up with a new format that handles multilib modules properly
 					// and change this.
 					if len(ctx.Config().Targets[android.Android]) == 1 ||
-						ctx.Config().Targets[android.Android][0].Arch.ArchType == jni.target.Arch.ArchType {
+						ctx.Config().AndroidFirstDeviceTarget.Arch.ArchType == jni.target.Arch.ArchType {
 						a.jniCoverageOutputs = append(a.jniCoverageOutputs, jni.coverageFile.Path())
 					}
 				}
@@ -678,7 +679,7 @@ func (a *AndroidApp) noticeBuildActions(ctx android.ModuleContext) {
 		seenModules[child] = true
 
 		// Skip host modules.
-		if child.Target().Os.Class == android.Host || child.Target().Os.Class == android.HostCross {
+		if child.Target().Os.Class == android.Host {
 			return false
 		}
 
@@ -755,6 +756,10 @@ func (a *AndroidApp) InstallApkName() string {
 
 func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	var apkDeps android.Paths
+
+	if !ctx.Provider(android.ApexInfoProvider).(android.ApexInfo).IsForPlatform() {
+		a.hideApexVariantFromMake = true
+	}
 
 	a.aapt.useEmbeddedNativeLibs = a.useEmbeddedNativeLibs(ctx)
 	a.aapt.useEmbeddedDex = Bool(a.appProperties.Use_embedded_dex)
@@ -850,8 +855,10 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	BuildBundleModule(ctx, bundleFile, a.exportPackage, jniJarFile, dexJarFile)
 	a.bundleFile = bundleFile
 
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+
 	// Install the app package.
-	if (Bool(a.Module.properties.Installable) || ctx.Host()) && a.IsForPlatform() {
+	if (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() {
 		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile)
 		for _, extra := range a.extraOutputFiles {
 			ctx.InstallFile(a.installDir, extra.Base(), extra)
@@ -979,7 +986,7 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 }
 
 func (a *AndroidApp) Updatable() bool {
-	return Bool(a.appProperties.Updatable) || a.ApexModuleBase.Updatable()
+	return Bool(a.appProperties.Updatable)
 }
 
 func (a *AndroidApp) getCertString(ctx android.BaseModuleContext) string {
@@ -1335,6 +1342,8 @@ type AndroidAppImport struct {
 	preprocessed bool
 
 	installPath android.InstallPath
+
+	hideApexVariantFromMake bool
 }
 
 type AndroidAppImportProperties struct {
@@ -1392,7 +1401,7 @@ func (a *AndroidAppImport) processVariants(ctx android.LoadHookContext) {
 	}
 
 	archProps := reflect.ValueOf(a.archVariants).Elem().FieldByName("Arch")
-	archType := ctx.Config().Targets[android.Android][0].Arch.ArchType
+	archType := ctx.Config().AndroidFirstDeviceTarget.Arch.ArchType
 	MergePropertiesFromVariant(ctx, &a.properties, archProps, archType.Name)
 }
 
@@ -1481,6 +1490,11 @@ func (a *AndroidAppImport) InstallApkName() string {
 }
 
 func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext) {
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	if !apexInfo.IsForPlatform() {
+		a.hideApexVariantFromMake = true
+	}
+
 	numCertPropsSet := 0
 	if String(a.properties.Certificate) != "" {
 		numCertPropsSet++
@@ -1569,7 +1583,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 
 	// TODO: Optionally compress the output apk.
 
-	if a.IsForPlatform() {
+	if apexInfo.IsForPlatform() {
 		a.installPath = ctx.InstallFile(installDir, apkFilename, a.outputFile)
 	}
 
@@ -1637,7 +1651,8 @@ func (a *AndroidAppImport) minSdkVersion() sdkSpec {
 	return sdkSpecFrom("")
 }
 
-func (j *AndroidAppImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion int) error {
+func (j *AndroidAppImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
+	sdkVersion android.ApiLevel) error {
 	// Do not check for prebuilts against the min_sdk_version of enclosing APEX
 	return nil
 }

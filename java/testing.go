@@ -55,6 +55,8 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 		"prebuilts/sdk/30/public/framework.aidl":                   nil,
 		"prebuilts/sdk/30/system/android.jar":                      nil,
 		"prebuilts/sdk/30/system/foo.jar":                          nil,
+		"prebuilts/sdk/30/module-lib/android.jar":                  nil,
+		"prebuilts/sdk/30/module-lib/foo.jar":                      nil,
 		"prebuilts/sdk/30/public/core-for-system-modules.jar":      nil,
 		"prebuilts/sdk/current/core/android.jar":                   nil,
 		"prebuilts/sdk/current/public/android.jar":                 nil,
@@ -88,7 +90,7 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 		"prebuilts/sdk/30/system/api/bar-removed.txt":              nil,
 		"prebuilts/sdk/30/test/api/bar-removed.txt":                nil,
 		"prebuilts/sdk/tools/core-lambda-stubs.jar":                nil,
-		"prebuilts/sdk/Android.bp":                                 []byte(`prebuilt_apis { name: "sdk", api_dirs: ["14", "28", "30", "current"],}`),
+		"prebuilts/sdk/Android.bp":                                 []byte(`prebuilt_apis { name: "sdk", api_dirs: ["14", "28", "30", "current"], imports_sdk_version: "none", imports_compile_dex:true,}`),
 
 		"bin.py": nil,
 		python.StubTemplateHost: []byte(`PYTHON_BINARY = '%interpreter%'

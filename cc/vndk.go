@@ -300,6 +300,7 @@ func processLlndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 	if !Bool(lib.Properties.Vendor_available) {
 		vndkPrivateLibraries(mctx.Config())[name] = filename
 	}
+
 	if mctx.OtherModuleExists(name) {
 		mctx.AddFarVariationDependencies(m.Target().Variations(), llndkImplDep, name)
 	}
@@ -533,11 +534,13 @@ type vndkSnapshotSingleton struct {
 	vndkSnapshotZipFile android.OptionalPath
 }
 
-func isVndkSnapshotLibrary(config android.DeviceConfig, m *Module) (i snapshotLibraryInterface, vndkType string, isVndkSnapshotLib bool) {
+func isVndkSnapshotLibrary(config android.DeviceConfig, m *Module,
+	apexInfo android.ApexInfo) (i snapshotLibraryInterface, vndkType string, isVndkSnapshotLib bool) {
+
 	if m.Target().NativeBridge == android.NativeBridgeEnabled {
 		return nil, "", false
 	}
-	if !m.inVendor() || !m.installable() || m.isSnapshotPrebuilt() {
+	if !m.inVendor() || !m.installable(apexInfo) || m.isSnapshotPrebuilt() {
 		return nil, "", false
 	}
 	l, ok := m.linker.(snapshotLibraryInterface)
@@ -617,7 +620,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 
 	var headers android.Paths
 
-	installVndkSnapshotLib := func(m *Module, l snapshotLibraryInterface, vndkType string) (android.Paths, bool) {
+	installVndkSnapshotLib := func(m *Module, vndkType string) (android.Paths, bool) {
 		var ret android.Paths
 
 		targetArch := "arch-" + m.Target().Arch.ArchType.String()
@@ -636,9 +639,10 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 				ExportedFlags       []string `json:",omitempty"`
 				RelativeInstallPath string   `json:",omitempty"`
 			}{}
-			prop.ExportedFlags = l.exportedFlags()
-			prop.ExportedDirs = l.exportedDirs().Strings()
-			prop.ExportedSystemDirs = l.exportedSystemDirs().Strings()
+			exportedInfo := ctx.ModuleProvider(m, FlagExporterInfoProvider).(FlagExporterInfo)
+			prop.ExportedFlags = exportedInfo.Flags
+			prop.ExportedDirs = exportedInfo.IncludeDirs.Strings()
+			prop.ExportedSystemDirs = exportedInfo.SystemIncludeDirs.Strings()
 			prop.RelativeInstallPath = m.RelativeInstallPath()
 
 			propOut := snapshotLibOut + ".json"
@@ -659,14 +663,16 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 			return
 		}
 
-		l, vndkType, ok := isVndkSnapshotLibrary(ctx.DeviceConfig(), m)
+		apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+
+		l, vndkType, ok := isVndkSnapshotLibrary(ctx.DeviceConfig(), m, apexInfo)
 		if !ok {
 			return
 		}
 
 		// install .so files for appropriate modules.
 		// Also install .json files if VNDK_SNAPSHOT_BUILD_ARTIFACTS
-		libs, ok := installVndkSnapshotLib(m, l, vndkType)
+		libs, ok := installVndkSnapshotLib(m, vndkType)
 		if !ok {
 			return
 		}
@@ -823,14 +829,21 @@ func (c *vndkSnapshotSingleton) buildVndkLibrariesTxtFiles(ctx android.Singleton
 func (c *vndkSnapshotSingleton) MakeVars(ctx android.MakeVarsContext) {
 	// Make uses LLNDK_MOVED_TO_APEX_LIBRARIES to avoid installing libraries on /system if
 	// they been moved to an apex.
-	movedToApexLlndkLibraries := []string{}
-	for lib := range llndkLibraries(ctx.Config()) {
-		// Skip bionic libs, they are handled in different manner
-		if android.DirectlyInAnyApex(&notOnHostContext{}, lib) && !isBionic(lib) {
-			movedToApexLlndkLibraries = append(movedToApexLlndkLibraries, lib)
+	movedToApexLlndkLibraries := make(map[string]bool)
+	ctx.VisitAllModules(func(module android.Module) {
+		if m, ok := module.(*Module); ok {
+			if llndk, ok := m.linker.(*llndkStubDecorator); ok {
+				// Skip bionic libs, they are handled in different manner
+				name := m.BaseModuleName()
+				if llndk.movedToApex && !isBionic(m.BaseModuleName()) {
+					movedToApexLlndkLibraries[name] = true
+				}
+			}
 		}
-	}
-	ctx.Strict("LLNDK_MOVED_TO_APEX_LIBRARIES", strings.Join(movedToApexLlndkLibraries, " "))
+	})
+
+	ctx.Strict("LLNDK_MOVED_TO_APEX_LIBRARIES",
+		strings.Join(android.SortedStringKeys(movedToApexLlndkLibraries), " "))
 
 	// Make uses LLNDK_LIBRARIES to determine which libraries to install.
 	// HWASAN is only part of the LL-NDK in builds in which libc depends on HWASAN.

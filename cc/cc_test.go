@@ -20,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
@@ -2890,59 +2889,6 @@ func parseModuleDeps(text string) (modulesInOrder []android.Path, allDeps map[an
 	return modulesInOrder, allDeps
 }
 
-func TestLinkReordering(t *testing.T) {
-	for _, testCase := range staticLinkDepOrderTestCases {
-		errs := []string{}
-
-		// parse testcase
-		_, givenTransitiveDeps := parseModuleDeps(testCase.inStatic)
-		expectedModuleNames, expectedTransitiveDeps := parseModuleDeps(testCase.outOrdered)
-		if testCase.allOrdered == "" {
-			// allow the test case to skip specifying allOrdered
-			testCase.allOrdered = testCase.outOrdered
-		}
-		_, expectedAllDeps := parseModuleDeps(testCase.allOrdered)
-		_, givenAllSharedDeps := parseModuleDeps(testCase.inShared)
-
-		// For each module whose post-reordered dependencies were specified, validate that
-		// reordering the inputs produces the expected outputs.
-		for _, moduleName := range expectedModuleNames {
-			moduleDeps := givenTransitiveDeps[moduleName]
-			givenSharedDeps := givenAllSharedDeps[moduleName]
-			orderedAllDeps, orderedDeclaredDeps := orderDeps(moduleDeps, givenSharedDeps, givenTransitiveDeps)
-
-			correctAllOrdered := expectedAllDeps[moduleName]
-			if !reflect.DeepEqual(orderedAllDeps, correctAllOrdered) {
-				errs = append(errs, fmt.Sprintf("orderDeps returned incorrect orderedAllDeps."+
-					"\nin static:%q"+
-					"\nin shared:%q"+
-					"\nmodule:   %v"+
-					"\nexpected: %s"+
-					"\nactual:   %s",
-					testCase.inStatic, testCase.inShared, moduleName, correctAllOrdered, orderedAllDeps))
-			}
-
-			correctOutputDeps := expectedTransitiveDeps[moduleName]
-			if !reflect.DeepEqual(correctOutputDeps, orderedDeclaredDeps) {
-				errs = append(errs, fmt.Sprintf("orderDeps returned incorrect orderedDeclaredDeps."+
-					"\nin static:%q"+
-					"\nin shared:%q"+
-					"\nmodule:   %v"+
-					"\nexpected: %s"+
-					"\nactual:   %s",
-					testCase.inStatic, testCase.inShared, moduleName, correctOutputDeps, orderedDeclaredDeps))
-			}
-		}
-
-		if len(errs) > 0 {
-			sort.Strings(errs)
-			for _, err := range errs {
-				t.Error(err)
-			}
-		}
-	}
-}
-
 func getOutputPaths(ctx *android.TestContext, variant string, moduleNames []string) (paths android.Paths) {
 	for _, moduleName := range moduleNames {
 		module := ctx.ModuleForTests(moduleName, variant).Module().(*Module)
@@ -2977,8 +2923,8 @@ func TestStaticLibDepReordering(t *testing.T) {
 
 	variant := "android_arm64_armv8-a_static"
 	moduleA := ctx.ModuleForTests("a", variant).Module().(*Module)
-	actual := moduleA.depsInLinkOrder
-	expected := getOutputPaths(ctx, variant, []string{"c", "b", "d"})
+	actual := ctx.ModuleProvider(moduleA, StaticLibraryInfoProvider).(StaticLibraryInfo).TransitiveStaticLibrariesForOrdering.ToList()
+	expected := getOutputPaths(ctx, variant, []string{"a", "c", "b", "d"})
 
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("staticDeps orderings were not propagated correctly"+
@@ -3011,8 +2957,8 @@ func TestStaticLibDepReorderingWithShared(t *testing.T) {
 
 	variant := "android_arm64_armv8-a_static"
 	moduleA := ctx.ModuleForTests("a", variant).Module().(*Module)
-	actual := moduleA.depsInLinkOrder
-	expected := getOutputPaths(ctx, variant, []string{"c", "b"})
+	actual := ctx.ModuleProvider(moduleA, StaticLibraryInfoProvider).(StaticLibraryInfo).TransitiveStaticLibrariesForOrdering.ToList()
+	expected := getOutputPaths(ctx, variant, []string{"a", "c", "b"})
 
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("staticDeps orderings did not account for shared libs"+
@@ -3025,6 +2971,7 @@ func TestStaticLibDepReorderingWithShared(t *testing.T) {
 }
 
 func checkEquals(t *testing.T, message string, expected, actual interface{}) {
+	t.Helper()
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf(message+
 			"\nactual:   %v"+
@@ -3047,12 +2994,12 @@ func TestLlndkLibrary(t *testing.T) {
 	`)
 	actual := ctx.ModuleVariantsForTests("libllndk.llndk")
 	expected := []string{
-		"android_vendor.VER_arm64_armv8-a_shared",
 		"android_vendor.VER_arm64_armv8-a_shared_1",
 		"android_vendor.VER_arm64_armv8-a_shared_2",
-		"android_vendor.VER_arm_armv7-a-neon_shared",
+		"android_vendor.VER_arm64_armv8-a_shared",
 		"android_vendor.VER_arm_armv7-a-neon_shared_1",
 		"android_vendor.VER_arm_armv7-a-neon_shared_2",
+		"android_vendor.VER_arm_armv7-a-neon_shared",
 	}
 	checkEquals(t, "variants for llndk stubs", expected, actual)
 
@@ -3581,7 +3528,7 @@ func TestStaticDepsOrderWithStubs(t *testing.T) {
 		cc_binary {
 			name: "mybin",
 			srcs: ["foo.c"],
-			static_libs: ["libfooB"],
+			static_libs: ["libfooC", "libfooB"],
 			static_executable: true,
 			stl: "none",
 		}
@@ -3602,8 +3549,8 @@ func TestStaticDepsOrderWithStubs(t *testing.T) {
 			},
 		}`)
 
-	mybin := ctx.ModuleForTests("mybin", "android_arm64_armv8-a").Module().(*Module)
-	actual := mybin.depsInLinkOrder
+	mybin := ctx.ModuleForTests("mybin", "android_arm64_armv8-a").Rule("ld")
+	actual := mybin.Implicits[:2]
 	expected := getOutputPaths(ctx, "android_arm64_armv8-a_static", []string{"libfooB", "libfooC"})
 
 	if !reflect.DeepEqual(actual, expected) {
@@ -3778,4 +3725,47 @@ func TestProductVariableDefaults(t *testing.T) {
 	if !android.InList("-DBAR", libfoo.flags.Local.CppFlags) {
 		t.Errorf("expected -DBAR in cppflags, got %q", libfoo.flags.Local.CppFlags)
 	}
+}
+
+func TestEmptyWholeStaticLibsAllowMissingDependencies(t *testing.T) {
+	t.Parallel()
+	bp := `
+		cc_library_static {
+			name: "libfoo",
+			srcs: ["foo.c"],
+			whole_static_libs: ["libbar"],
+		}
+
+		cc_library_static {
+			name: "libbar",
+			whole_static_libs: ["libmissing"],
+		}
+	`
+
+	config := TestConfig(buildDir, android.Android, nil, bp, nil)
+	config.TestProductVariables.Allow_missing_dependencies = BoolPtr(true)
+
+	ctx := CreateTestContext()
+	ctx.SetAllowMissingDependencies(true)
+	ctx.Register(config)
+
+	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
+	android.FailIfErrored(t, errs)
+	_, errs = ctx.PrepareBuildActions(config)
+	android.FailIfErrored(t, errs)
+
+	libbar := ctx.ModuleForTests("libbar", "android_arm64_armv8-a_static").Output("libbar.a")
+	if g, w := libbar.Rule, android.ErrorRule; g != w {
+		t.Fatalf("Expected libbar rule to be %q, got %q", w, g)
+	}
+
+	if g, w := libbar.Args["error"], "missing dependencies: libmissing"; !strings.Contains(g, w) {
+		t.Errorf("Expected libbar error to contain %q, was %q", w, g)
+	}
+
+	libfoo := ctx.ModuleForTests("libfoo", "android_arm64_armv8-a_static").Output("libfoo.a")
+	if g, w := libfoo.Inputs.Strings(), libbar.Output.String(); !android.InList(w, g) {
+		t.Errorf("Expected libfoo.a to depend on %q, got %q", w, g)
+	}
+
 }

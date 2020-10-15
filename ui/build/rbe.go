@@ -34,6 +34,8 @@ const (
 
 	// RBE metrics proto buffer file
 	rbeMetricsPBFilename = "rbe_metrics.pb"
+
+	defaultOutDir = "out"
 )
 
 func rbeCommand(ctx Context, config Config, rbeCmd string) string {
@@ -152,12 +154,15 @@ func DumpRBEMetrics(ctx Context, config Config, filename string) {
 	}
 }
 
-// PrintGomaDeprecation prints a PSA on the deprecation of Goma if it is set for the build.
-func PrintGomaDeprecation(ctx Context, config Config) {
-	if config.UseGoma() {
+// PrintOutDirWarning prints a warning to indicate to the user that
+// setting output directory to a path other than "out" in an RBE enabled
+// build can cause slow builds.
+func PrintOutDirWarning(ctx Context, config Config) {
+	if config.UseRBE() && config.OutDir() != defaultOutDir {
 		fmt.Fprintln(ctx.Writer, "")
-		fmt.Fprintln(ctx.Writer, "Goma for Android is being deprecated and replaced with RBE.")
-		fmt.Fprintln(ctx.Writer, "See go/goma_android_deprecation for more details.")
+		fmt.Fprintln(ctx.Writer, "\033[33mWARNING:\033[0m")
+		fmt.Fprintln(ctx.Writer, fmt.Sprintf("Setting OUT_DIR to a path other than %v may result in slow RBE builds.", defaultOutDir))
+		fmt.Fprintln(ctx.Writer, "See http://go/android_rbe_out_dir for a workaround.")
 		fmt.Fprintln(ctx.Writer, "")
 	}
 }

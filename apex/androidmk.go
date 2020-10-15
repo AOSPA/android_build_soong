@@ -135,7 +135,7 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 				}
 			}
 			if len(newDataPaths) > 0 {
-				fmt.Fprintln(w, "LOCAL_TEST_DATA :=", strings.Join(cc.AndroidMkDataPaths(newDataPaths), " "))
+				fmt.Fprintln(w, "LOCAL_TEST_DATA :=", strings.Join(android.AndroidMkDataPaths(newDataPaths), " "))
 			}
 
 			if fi.module != nil && len(fi.module.NoticeFiles()) > 0 {
@@ -157,13 +157,14 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 			host := false
 			switch fi.module.Target().Os.Class {
 			case android.Host:
-				if fi.module.Target().Arch.ArchType != android.Common {
-					fmt.Fprintln(w, "LOCAL_MODULE_HOST_ARCH :=", archStr)
-				}
-				host = true
-			case android.HostCross:
-				if fi.module.Target().Arch.ArchType != android.Common {
-					fmt.Fprintln(w, "LOCAL_MODULE_HOST_CROSS_ARCH :=", archStr)
+				if fi.module.Target().HostCross {
+					if fi.module.Target().Arch.ArchType != android.Common {
+						fmt.Fprintln(w, "LOCAL_MODULE_HOST_CROSS_ARCH :=", archStr)
+					}
+				} else {
+					if fi.module.Target().Arch.ArchType != android.Common {
+						fmt.Fprintln(w, "LOCAL_MODULE_HOST_ARCH :=", archStr)
+					}
 				}
 				host = true
 			case android.Device:
@@ -263,6 +264,10 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 						postInstallCommands = append(postInstallCommands, a.compatSymlinks...)
 					}
 				}
+
+				// File_contexts of flattened APEXes should be merged into file_contexts.bin
+				fmt.Fprintln(w, "LOCAL_FILE_CONTEXTS :=", a.fileContexts)
+
 				if len(postInstallCommands) > 0 {
 					fmt.Fprintln(w, "LOCAL_POST_INSTALL_CMD :=", strings.Join(postInstallCommands, " && "))
 				}
