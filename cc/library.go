@@ -385,6 +385,8 @@ type libraryDecorator struct {
 	*baseInstaller
 
 	collectedSnapshotHeaders android.Paths
+        isTechPackageLibrary      bool
+        generateTechPackageLsdump bool
 }
 
 // collectHeadersForSnapshot collects all exported headers from library.
@@ -574,13 +576,29 @@ func (library *libraryDecorator) compilerFlags(ctx ModuleContext, flags Flags, d
 	return flags
 }
 
+func loadTechPackageDetails(library *libraryDecorator,ctx ModuleContext){
+        for i := 0; i < len(config.TechPackageLibsList.EnabledLibs); i++ {
+           if(config.TechPackageLibsList.EnabledLibs[i] == library.getLibName(ctx)){
+                library.generateTechPackageLsdump = true
+                library.isTechPackageLibrary = true
+           }
+        }
+        for i := 0; i < len(config.TechPackageLibsList.DisabledLibs); i++ {
+           if(config.TechPackageLibsList.DisabledLibs[i] == library.getLibName(ctx)){
+                library.isTechPackageLibrary = true
+           }
+        }
+}
 // Returns a string that represents the class of the ABI dump.
 // Returns an empty string if ABI check is disabled for this library.
 func (library *libraryDecorator) classifySourceAbiDump(ctx ModuleContext) string {
 	enabled := library.Properties.Header_abi_checker.Enabled
-	if enabled != nil && !Bool(enabled) {
+	if enabled != nil && !Bool(enabled){
 		return ""
 	}
+        if(library.isTechPackageLibrary && !library.generateTechPackageLsdump){
+                return ""
+        }
 	// Return NDK if the library is both NDK and LLNDK.
 	if ctx.isNdk() {
 		return "NDK"
@@ -610,9 +628,11 @@ func (library *libraryDecorator) classifySourceAbiDump(ctx ModuleContext) string
 }
 
 func (library *libraryDecorator) shouldCreateSourceAbiDump(ctx ModuleContext) bool {
-	if !ctx.shouldCreateSourceAbiDump() {
-		return false
-	}
+        if(!library.isTechPackageLibrary){
+	       if !ctx.shouldCreateSourceAbiDump() {
+	             return false
+	       }
+        }
 	if !ctx.isForPlatform() {
 		if !ctx.hasStubsVariants() {
 			// Skip ABI checks if this library is for APEX but isn't exported.
@@ -630,6 +650,7 @@ func (library *libraryDecorator) shouldCreateSourceAbiDump(ctx ModuleContext) bo
 }
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
+        loadTechPackageDetails(library, ctx)
 	if library.buildStubs() {
 		objs, versionScript := compileStubLibrary(ctx, flags, String(library.Properties.Stubs.Symbol_file), library.MutatedProperties.StubsVersion, "--apex")
 		library.versionScriptPath = versionScript
@@ -1095,7 +1116,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		addLsdumpPath(library.classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
 
 		refAbiDumpFile := getRefAbiDumpFile(ctx, vndkVersion, fileName)
-		if refAbiDumpFile != nil {
+		if refAbiDumpFile != nil && !library.isTechPackageLibrary {
 			library.sAbiDiff = SourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
 				refAbiDumpFile, fileName, exportedHeaderFlags,
 				Bool(library.Properties.Header_abi_checker.Check_all_apis),
