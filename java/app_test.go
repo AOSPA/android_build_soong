@@ -161,11 +161,11 @@ func TestAndroidAppSet(t *testing.T) {
 		t.Errorf("wrong partition value: '%s', expected 'system'", s)
 	}
 	mkEntries := android.AndroidMkEntriesForTest(t, config, "", module.Module())[0]
-	actualMaster := mkEntries.EntryMap["LOCAL_APK_SET_MASTER_FILE"]
-	expectedMaster := []string{"foo.apk"}
-	if !reflect.DeepEqual(actualMaster, expectedMaster) {
-		t.Errorf("Unexpected LOCAL_APK_SET_MASTER_FILE value: '%s', expected: '%s',",
-			actualMaster, expectedMaster)
+	actualInstallFile := mkEntries.EntryMap["LOCAL_APK_SET_INSTALL_FILE"]
+	expectedInstallFile := []string{"foo.apk"}
+	if !reflect.DeepEqual(actualInstallFile, expectedInstallFile) {
+		t.Errorf("Unexpected LOCAL_APK_SET_INSTALL_FILE value: '%s', expected: '%s',",
+			actualInstallFile, expectedInstallFile)
 	}
 }
 
@@ -533,16 +533,6 @@ func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
 			system_shared_libs: [],
 			sdk_version: "29",
 		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtbegin_so.29",
-			sdk_version: "29",
-		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtend_so.29",
-			sdk_version: "29",
-		}
 	`
 	fs := map[string][]byte{
 		"prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtbegin_so.o": nil,
@@ -555,16 +545,28 @@ func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
 
 	inputs := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_sdk_shared").Description("link").Implicits
 	var crtbeginFound, crtendFound bool
+	expectedCrtBegin := ctx.ModuleForTests("crtbegin_so",
+		"android_arm64_armv8-a_sdk_29").Rule("partialLd").Output
+	expectedCrtEnd := ctx.ModuleForTests("crtend_so",
+		"android_arm64_armv8-a_sdk_29").Rule("partialLd").Output
+	implicits := []string{}
 	for _, input := range inputs {
-		switch input.String() {
-		case "prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtbegin_so.o":
+		implicits = append(implicits, input.String())
+		if strings.HasSuffix(input.String(), expectedCrtBegin.String()) {
 			crtbeginFound = true
-		case "prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtend_so.o":
+		} else if strings.HasSuffix(input.String(), expectedCrtEnd.String()) {
 			crtendFound = true
 		}
 	}
-	if !crtbeginFound || !crtendFound {
-		t.Error("should link with ndk_crtbegin_so.29 and ndk_crtend_so.29")
+	if !crtbeginFound {
+		t.Error(fmt.Sprintf(
+			"expected implicit with suffix %q, have the following implicits:\n%s",
+			expectedCrtBegin, strings.Join(implicits, "\n")))
+	}
+	if !crtendFound {
+		t.Error(fmt.Sprintf(
+			"expected implicit with suffix %q, have the following implicits:\n%s",
+			expectedCrtEnd, strings.Join(implicits, "\n")))
 	}
 }
 
@@ -1038,6 +1040,35 @@ func TestAndroidResources(t *testing.T) {
 	}
 }
 
+func checkSdkVersion(t *testing.T, config android.Config, expectedSdkVersion string) {
+	ctx := testContext()
+
+	run(t, ctx, config)
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+	link := foo.Output("package-res.apk")
+	linkFlags := strings.Split(link.Args["flags"], " ")
+	min := android.IndexList("--min-sdk-version", linkFlags)
+	target := android.IndexList("--target-sdk-version", linkFlags)
+
+	if min == -1 || target == -1 || min == len(linkFlags)-1 || target == len(linkFlags)-1 {
+		t.Fatalf("missing --min-sdk-version or --target-sdk-version in link flags: %q", linkFlags)
+	}
+
+	gotMinSdkVersion := linkFlags[min+1]
+	gotTargetSdkVersion := linkFlags[target+1]
+
+	if gotMinSdkVersion != expectedSdkVersion {
+		t.Errorf("incorrect --min-sdk-version, expected %q got %q",
+			expectedSdkVersion, gotMinSdkVersion)
+	}
+
+	if gotTargetSdkVersion != expectedSdkVersion {
+		t.Errorf("incorrect --target-sdk-version, expected %q got %q",
+			expectedSdkVersion, gotTargetSdkVersion)
+	}
+}
+
 func TestAppSdkVersion(t *testing.T) {
 	testCases := []struct {
 		name                  string
@@ -1107,34 +1138,81 @@ func TestAppSdkVersion(t *testing.T) {
 				config.TestProductVariables.Platform_sdk_version = &test.platformSdkInt
 				config.TestProductVariables.Platform_sdk_codename = &test.platformSdkCodename
 				config.TestProductVariables.Platform_sdk_final = &test.platformSdkFinal
+				checkSdkVersion(t, config, test.expectedMinSdkVersion)
 
-				ctx := testContext()
-
-				run(t, ctx, config)
-
-				foo := ctx.ModuleForTests("foo", "android_common")
-				link := foo.Output("package-res.apk")
-				linkFlags := strings.Split(link.Args["flags"], " ")
-				min := android.IndexList("--min-sdk-version", linkFlags)
-				target := android.IndexList("--target-sdk-version", linkFlags)
-
-				if min == -1 || target == -1 || min == len(linkFlags)-1 || target == len(linkFlags)-1 {
-					t.Fatalf("missing --min-sdk-version or --target-sdk-version in link flags: %q", linkFlags)
-				}
-
-				gotMinSdkVersion := linkFlags[min+1]
-				gotTargetSdkVersion := linkFlags[target+1]
-
-				if gotMinSdkVersion != test.expectedMinSdkVersion {
-					t.Errorf("incorrect --min-sdk-version, expected %q got %q",
-						test.expectedMinSdkVersion, gotMinSdkVersion)
-				}
-
-				if gotTargetSdkVersion != test.expectedMinSdkVersion {
-					t.Errorf("incorrect --target-sdk-version, expected %q got %q",
-						test.expectedMinSdkVersion, gotTargetSdkVersion)
-				}
 			})
+		}
+	}
+}
+
+func TestVendorAppSdkVersion(t *testing.T) {
+	testCases := []struct {
+		name                                  string
+		sdkVersion                            string
+		platformSdkInt                        int
+		platformSdkCodename                   string
+		platformSdkFinal                      bool
+		deviceCurrentApiLevelForVendorModules string
+		expectedMinSdkVersion                 string
+	}{
+		{
+			name:                                  "current final SDK",
+			sdkVersion:                            "current",
+			platformSdkInt:                        29,
+			platformSdkCodename:                   "REL",
+			platformSdkFinal:                      true,
+			deviceCurrentApiLevelForVendorModules: "29",
+			expectedMinSdkVersion:                 "29",
+		},
+		{
+			name:                                  "current final SDK",
+			sdkVersion:                            "current",
+			platformSdkInt:                        29,
+			platformSdkCodename:                   "REL",
+			platformSdkFinal:                      true,
+			deviceCurrentApiLevelForVendorModules: "28",
+			expectedMinSdkVersion:                 "28",
+		},
+		{
+			name:                                  "current final SDK",
+			sdkVersion:                            "current",
+			platformSdkInt:                        29,
+			platformSdkCodename:                   "Q",
+			platformSdkFinal:                      false,
+			deviceCurrentApiLevelForVendorModules: "current",
+			expectedMinSdkVersion:                 "Q",
+		},
+		{
+			name:                                  "current final SDK",
+			sdkVersion:                            "current",
+			platformSdkInt:                        29,
+			platformSdkCodename:                   "Q",
+			platformSdkFinal:                      false,
+			deviceCurrentApiLevelForVendorModules: "28",
+			expectedMinSdkVersion:                 "28",
+		},
+	}
+
+	for _, moduleType := range []string{"android_app", "android_library"} {
+		for _, sdkKind := range []string{"", "system_"} {
+			for _, test := range testCases {
+				t.Run(moduleType+" "+test.name, func(t *testing.T) {
+					bp := fmt.Sprintf(`%s {
+						name: "foo",
+						srcs: ["a.java"],
+						sdk_version: "%s%s",
+						vendor: true,
+					}`, moduleType, sdkKind, test.sdkVersion)
+
+					config := testAppConfig(nil, bp, nil)
+					config.TestProductVariables.Platform_sdk_version = &test.platformSdkInt
+					config.TestProductVariables.Platform_sdk_codename = &test.platformSdkCodename
+					config.TestProductVariables.Platform_sdk_final = &test.platformSdkFinal
+					config.TestProductVariables.DeviceCurrentApiLevelForVendorModules = &test.deviceCurrentApiLevelForVendorModules
+					config.TestProductVariables.DeviceSystemSdkVersions = []string{"28", "29"}
+					checkSdkVersion(t, config, test.expectedMinSdkVersion)
+				})
+			}
 		}
 	}
 }
@@ -2663,10 +2741,37 @@ func TestUsesLibraries(t *testing.T) {
 			sdk_version: "current",
 		}
 
+		java_sdk_library {
+			name: "runtime-library",
+			srcs: ["a.java"],
+			sdk_version: "current",
+		}
+
+		java_library {
+			name: "static-runtime-helper",
+			srcs: ["a.java"],
+			libs: ["runtime-library"],
+			sdk_version: "current",
+		}
+
 		android_app {
 			name: "app",
 			srcs: ["a.java"],
+			libs: ["qux", "quuz"],
+			static_libs: ["static-runtime-helper"],
+			uses_libs: ["foo"],
+			sdk_version: "current",
+			optional_uses_libs: [
+				"bar",
+				"baz",
+			],
+		}
+
+		android_app {
+			name: "app_with_stub_deps",
+			srcs: ["a.java"],
 			libs: ["qux", "quuz.stubs"],
+			static_libs: ["static-runtime-helper"],
 			uses_libs: ["foo"],
 			sdk_version: "current",
 			optional_uses_libs: [
@@ -2695,15 +2800,15 @@ func TestUsesLibraries(t *testing.T) {
 	run(t, ctx, config)
 
 	app := ctx.ModuleForTests("app", "android_common")
+	appWithStubDeps := ctx.ModuleForTests("app_with_stub_deps", "android_common")
 	prebuilt := ctx.ModuleForTests("prebuilt", "android_common")
 
 	// Test that implicit dependencies on java_sdk_library instances are passed to the manifest.
 	manifestFixerArgs := app.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
-	if w := "--uses-library qux"; !strings.Contains(manifestFixerArgs, w) {
-		t.Errorf("unexpected manifest_fixer args: wanted %q in %q", w, manifestFixerArgs)
-	}
-	if w := "--uses-library quuz"; !strings.Contains(manifestFixerArgs, w) {
-		t.Errorf("unexpected manifest_fixer args: wanted %q in %q", w, manifestFixerArgs)
+	for _, w := range []string{"qux", "quuz", "runtime-library"} {
+		if !strings.Contains(manifestFixerArgs, "--uses-library "+w) {
+			t.Errorf("unexpected manifest_fixer args: wanted %q in %q", w, manifestFixerArgs)
+		}
 	}
 
 	// Test that all libraries are verified
@@ -2726,15 +2831,24 @@ func TestUsesLibraries(t *testing.T) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 
-	// Test that only present libraries are preopted
+	// Test that all present libraries are preopted, including implicit SDK dependencies
 	cmd = app.Rule("dexpreopt").RuleParams.Command
-
-	if w := `--target-classpath-for-sdk any /system/framework/foo.jar:/system/framework/bar.jar`; !strings.Contains(cmd, w) {
+	w := `--target-classpath-for-sdk any` +
+		` /system/framework/foo.jar` +
+		`:/system/framework/quuz.jar` +
+		`:/system/framework/qux.jar` +
+		`:/system/framework/runtime-library.jar` +
+		`:/system/framework/bar.jar`
+	if !strings.Contains(cmd, w) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 
-	cmd = prebuilt.Rule("dexpreopt").RuleParams.Command
+	// TODO(skvadrik) fix dexpreopt for stub libraries for which the implementation is present
+	if appWithStubDeps.MaybeRule("dexpreopt").RuleParams.Command != "" {
+		t.Errorf("dexpreopt should be disabled for apps with dependencies on stub libraries")
+	}
 
+	cmd = prebuilt.Rule("dexpreopt").RuleParams.Command
 	if w := `--target-classpath-for-sdk any /system/framework/foo.jar:/system/framework/bar.jar`; !strings.Contains(cmd, w) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
@@ -3005,6 +3119,7 @@ func TestUncompressDex(t *testing.T) {
 		config := testAppConfig(nil, bp, nil)
 		if unbundled {
 			config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
+			config.TestProductVariables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
 		}
 
 		ctx := testContext()

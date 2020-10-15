@@ -26,6 +26,8 @@ import (
 	"android/soong/android"
 	"android/soong/cc/config"
 	"android/soong/etc"
+
+	"github.com/google/blueprint"
 )
 
 const (
@@ -127,7 +129,7 @@ func (vndk *vndkdep) typeName() string {
 	return "native:vendor:vndkspext"
 }
 
-func (vndk *vndkdep) vndkCheckLinkType(ctx android.ModuleContext, to *Module, tag DependencyTag) {
+func (vndk *vndkdep) vndkCheckLinkType(ctx android.ModuleContext, to *Module, tag blueprint.DependencyTag) {
 	if to.linker == nil {
 		return
 	}
@@ -340,7 +342,7 @@ func processVndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 	}
 }
 
-// Sanity check for modules that mustn't be VNDK
+// Check for modules that mustn't be VNDK
 func shouldSkipVndkMutator(m *Module) bool {
 	if !m.Enabled() {
 		return true
@@ -503,16 +505,23 @@ func (txt *vndkLibrariesTxt) AndroidMkEntries() []android.AndroidMkEntries {
 	}}
 }
 
+// PrebuiltEtcModule interface
 func (txt *vndkLibrariesTxt) OutputFile() android.OutputPath {
 	return txt.outputFile
 }
 
-func (txt *vndkLibrariesTxt) OutputFiles(tag string) (android.Paths, error) {
-	return android.Paths{txt.outputFile}, nil
+// PrebuiltEtcModule interface
+func (txt *vndkLibrariesTxt) BaseDir() string {
+	return "etc"
 }
 
+// PrebuiltEtcModule interface
 func (txt *vndkLibrariesTxt) SubDir() string {
 	return ""
+}
+
+func (txt *vndkLibrariesTxt) OutputFiles(tag string) (android.Paths, error) {
+	return android.Paths{txt.outputFile}, nil
 }
 
 func VndkSnapshotSingleton() android.Singleton {

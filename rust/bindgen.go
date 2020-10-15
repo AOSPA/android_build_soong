@@ -15,36 +15,37 @@
 package rust
 
 import (
-	"github.com/google/blueprint"
 	"strings"
 
+	"github.com/google/blueprint"
+	"github.com/google/blueprint/proptools"
+
 	"android/soong/android"
-	"android/soong/cc"
-	ccConfig "android/soong/cc/config"
 )
 
 var (
 	defaultBindgenFlags = []string{""}
 
 	// bindgen should specify its own Clang revision so updating Clang isn't potentially blocked on bindgen failures.
-	bindgenClangVersion  = "clang-r383902c"
-	bindgenLibClangSoGit = "11git"
+	bindgenClangVersion = "clang-r383902c"
 
 	//TODO(b/160803703) Use a prebuilt bindgen instead of the built bindgen.
 	_ = pctx.SourcePathVariable("bindgenCmd", "out/host/${config.HostPrebuiltTag}/bin/bindgen")
 	_ = pctx.SourcePathVariable("bindgenClang",
-		"${ccConfig.ClangBase}/${config.HostPrebuiltTag}/"+bindgenClangVersion+"/bin/clang")
+		"${cc_config.ClangBase}/${config.HostPrebuiltTag}/"+bindgenClangVersion+"/bin/clang")
 	_ = pctx.SourcePathVariable("bindgenLibClang",
-		"${ccConfig.ClangBase}/${config.HostPrebuiltTag}/"+bindgenClangVersion+"/lib64/libclang.so."+bindgenLibClangSoGit)
+		"${cc_config.ClangBase}/${config.HostPrebuiltTag}/"+bindgenClangVersion+"/lib64/")
 
 	//TODO(ivanlozano) Switch this to RuleBuilder
 	bindgen = pctx.AndroidStaticRule("bindgen",
 		blueprint.RuleParams{
 			Command: "CLANG_PATH=$bindgenClang LIBCLANG_PATH=$bindgenLibClang RUSTFMT=${config.RustBin}/rustfmt " +
-				"$bindgenCmd $flags $in -o $out -- $cflags",
-			CommandDeps: []string{"$bindgenCmd"},
+				"$cmd $flags $in -o $out -- -MD -MF $out.d $cflags",
+			CommandDeps: []string{"$cmd"},
+			Deps:        blueprint.DepsGCC,
+			Depfile:     "$out.d",
 		},
-		"flags", "cflags")
+		"cmd", "flags", "cflags")
 )
 
 func init() {
@@ -59,7 +60,7 @@ type BindgenProperties struct {
 	Wrapper_src *string `android:"path,arch_variant"`
 
 	// list of bindgen-specific flags and options
-	Flags []string `android:"arch_variant"`
+	Bindgen_flags []string `android:"arch_variant"`
 
 	// list of clang flags required to correctly interpret the headers.
 	Cflags []string `android:"arch_variant"`
@@ -74,78 +75,95 @@ type BindgenProperties struct {
 	// list of shared libraries that provide headers for this binding.
 	Shared_libs []string `android:"arch_variant"`
 
+	// module name of a custom binary/script which should be used instead of the 'bindgen' binary. This custom
+	// binary must expect arguments in a similar fashion to bindgen, e.g.
+	//
+	// "my_bindgen [flags] wrapper_header.h -o [output_path] -- [clang flags]"
+	Custom_bindgen string `android:"path"`
+
 	//TODO(b/161141999) Add support for headers from cc_library_header modules.
 }
 
 type bindgenDecorator struct {
-	*baseSourceProvider
+	*BaseSourceProvider
 
 	Properties BindgenProperties
 }
 
-func (b *bindgenDecorator) libraryExports(ctx android.ModuleContext) (android.Paths, []string) {
-	var libraryPaths android.Paths
-	var libraryFlags []string
-
-	for _, static_lib := range b.Properties.Static_libs {
-		if dep, ok := ctx.GetDirectDepWithTag(static_lib, cc.StaticDepTag).(*cc.Module); ok {
-			libraryPaths = append(libraryPaths, dep.ExportedIncludeDirs()...)
-			libraryFlags = append(libraryFlags, dep.ExportedFlags()...)
-		}
-	}
-	for _, shared_lib := range b.Properties.Shared_libs {
-		if dep, ok := ctx.GetDirectDepWithTag(shared_lib, cc.SharedDepTag).(*cc.Module); ok {
-			libraryPaths = append(libraryPaths, dep.ExportedIncludeDirs()...)
-			libraryFlags = append(libraryFlags, dep.ExportedFlags()...)
-		}
-	}
-
-	return libraryPaths, libraryFlags
-}
-
-func (b *bindgenDecorator) generateSource(ctx android.ModuleContext) android.Path {
-	ccToolchain := ccConfig.FindToolchain(ctx.Os(), ctx.Arch())
-	includes, exportedFlags := b.libraryExports(ctx)
+func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) android.Path {
+	ccToolchain := ctx.RustModule().ccToolchain(ctx)
 
 	var cflags []string
-	cflags = append(cflags, b.Properties.Cflags...)
+	var implicits android.Paths
+
+	implicits = append(implicits, deps.depGeneratedHeaders...)
+
+	// Default clang flags
+	cflags = append(cflags, "${cc_config.CommonClangGlobalCflags}")
+	if ctx.Device() {
+		cflags = append(cflags, "${cc_config.DeviceClangGlobalCflags}")
+	}
+
+	// Toolchain clang flags
 	cflags = append(cflags, "-target "+ccToolchain.ClangTriple())
-	cflags = append(cflags, strings.ReplaceAll(ccToolchain.ToolchainClangCflags(), "${config.", "${ccConfig."))
-	cflags = append(cflags, exportedFlags...)
-	for _, include := range includes {
+	cflags = append(cflags, strings.ReplaceAll(ccToolchain.ToolchainClangCflags(), "${config.", "${cc_config."))
+
+	// Dependency clang flags and include paths
+	cflags = append(cflags, deps.depClangFlags...)
+	for _, include := range deps.depIncludePaths {
 		cflags = append(cflags, "-I"+include.String())
 	}
+	for _, include := range deps.depSystemIncludePaths {
+		cflags = append(cflags, "-isystem "+include.String())
+	}
+
+	esc := proptools.NinjaAndShellEscapeList
+
+	// Module defined clang flags and include paths
+	cflags = append(cflags, esc(b.Properties.Cflags)...)
 	for _, include := range b.Properties.Local_include_dirs {
 		cflags = append(cflags, "-I"+android.PathForModuleSrc(ctx, include).String())
+		implicits = append(implicits, android.PathForModuleSrc(ctx, include))
 	}
 
 	bindgenFlags := defaultBindgenFlags
-	bindgenFlags = append(bindgenFlags, strings.Join(b.Properties.Flags, " "))
+	bindgenFlags = append(bindgenFlags, esc(b.Properties.Bindgen_flags)...)
 
 	wrapperFile := android.OptionalPathForModuleSrc(ctx, b.Properties.Wrapper_src)
 	if !wrapperFile.Valid() {
 		ctx.PropertyErrorf("wrapper_src", "invalid path to wrapper source")
 	}
 
-	outputFile := android.PathForModuleOut(ctx, b.baseSourceProvider.getStem(ctx)+".rs")
+	outputFile := android.PathForModuleOut(ctx, b.BaseSourceProvider.getStem(ctx)+".rs")
+
+	var cmd, cmdDesc string
+	if b.Properties.Custom_bindgen != "" {
+		cmd = ctx.GetDirectDepWithTag(b.Properties.Custom_bindgen, customBindgenDepTag).(*Module).HostToolPath().String()
+		cmdDesc = b.Properties.Custom_bindgen
+	} else {
+		cmd = "$bindgenCmd"
+		cmdDesc = "bindgen"
+	}
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        bindgen,
-		Description: "bindgen " + wrapperFile.Path().Rel(),
+		Description: strings.Join([]string{cmdDesc, wrapperFile.Path().Rel()}, " "),
 		Output:      outputFile,
 		Input:       wrapperFile.Path(),
-		Implicits:   includes,
+		Implicits:   implicits,
 		Args: map[string]string{
+			"cmd":    cmd,
 			"flags":  strings.Join(bindgenFlags, " "),
 			"cflags": strings.Join(cflags, " "),
 		},
 	})
-	b.baseSourceProvider.outputFile = outputFile
+
+	b.BaseSourceProvider.OutputFile = outputFile
 	return outputFile
 }
 
-func (b *bindgenDecorator) sourceProviderProps() []interface{} {
-	return append(b.baseSourceProvider.sourceProviderProps(),
+func (b *bindgenDecorator) SourceProviderProps() []interface{} {
+	return append(b.BaseSourceProvider.SourceProviderProps(),
 		&b.Properties)
 }
 
@@ -163,19 +181,22 @@ func RustBindgenHostFactory() android.Module {
 }
 
 func NewRustBindgen(hod android.HostOrDeviceSupported) (*Module, *bindgenDecorator) {
-	module := newModule(hod, android.MultilibBoth)
-
 	bindgen := &bindgenDecorator{
-		baseSourceProvider: NewSourceProvider(),
+		BaseSourceProvider: NewSourceProvider(),
 		Properties:         BindgenProperties{},
 	}
-	module.sourceProvider = bindgen
+
+	module := NewSourceProviderModule(hod, bindgen, false)
 
 	return module, bindgen
 }
 
-func (b *bindgenDecorator) sourceProviderDeps(ctx DepsContext, deps Deps) Deps {
-	deps = b.baseSourceProvider.sourceProviderDeps(ctx, deps)
+func (b *bindgenDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
+	deps = b.BaseSourceProvider.SourceProviderDeps(ctx, deps)
+	if ctx.toolchain().Bionic() {
+		deps = bionicDeps(deps)
+	}
+
 	deps.SharedLibs = append(deps.SharedLibs, b.Properties.Shared_libs...)
 	deps.StaticLibs = append(deps.StaticLibs, b.Properties.Static_libs...)
 	return deps

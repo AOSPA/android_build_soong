@@ -28,7 +28,6 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc/config"
-	"android/soong/genrule"
 )
 
 type LibraryProperties struct {
@@ -337,7 +336,7 @@ type libraryDecorator struct {
 	tocFile android.OptionalPath
 
 	flagExporter
-	stripper
+	stripper Stripper
 
 	// If we're used as a whole_static_lib, our missing dependencies need
 	// to be given
@@ -801,21 +800,8 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, library.StaticProperties.Static.Export_static_lib_headers...)
 	} else if library.shared() {
 		if ctx.toolchain().Bionic() && !Bool(library.baseLinker.Properties.Nocrt) {
-			if !ctx.useSdk() {
-				deps.CrtBegin = "crtbegin_so"
-				deps.CrtEnd = "crtend_so"
-			} else {
-				// TODO(danalbert): Add generation of crt objects.
-				// For `sdk_version: "current"`, we don't actually have a
-				// freshly generated set of CRT objects. Use the last stable
-				// version.
-				version := ctx.sdkVersion()
-				if version == "current" {
-					version = getCurrentNdkPrebuiltVersion(ctx)
-				}
-				deps.CrtBegin = "ndk_crtbegin_so." + version
-				deps.CrtEnd = "ndk_crtend_so." + version
-			}
+			deps.CrtBegin = "crtbegin_so"
+			deps.CrtEnd = "crtend_so"
 		}
 		deps.WholeStaticLibs = append(deps.WholeStaticLibs, library.SharedProperties.Shared.Whole_static_libs...)
 		deps.StaticLibs = append(deps.StaticLibs, library.SharedProperties.Shared.Static_libs...)
@@ -969,13 +955,14 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	library.tocFile = android.OptionalPathForPath(tocFile)
 	TransformSharedObjectToToc(ctx, outputFile, tocFile, builderFlags)
 
-	if library.stripper.needsStrip(ctx) {
+	stripFlags := flagsToStripFlags(flags)
+	if library.stripper.NeedsStrip(ctx) {
 		if ctx.Darwin() {
-			builderFlags.stripUseGnuStrip = true
+			stripFlags.StripUseGnuStrip = true
 		}
 		strippedOutputFile := outputFile
 		outputFile = android.PathForModuleOut(ctx, "unstripped", fileName)
-		library.stripper.stripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile, builderFlags)
+		library.stripper.StripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile, stripFlags)
 	}
 	library.unstrippedOutputFile = outputFile
 
@@ -990,10 +977,10 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 			versionedOutputFile := android.PathForModuleOut(ctx, "versioned", fileName)
 			library.distFile = versionedOutputFile
 
-			if library.stripper.needsStrip(ctx) {
+			if library.stripper.NeedsStrip(ctx) {
 				out := android.PathForModuleOut(ctx, "versioned-stripped", fileName)
 				library.distFile = out
-				library.stripper.stripExecutableOrSharedLib(ctx, versionedOutputFile, out, builderFlags)
+				library.stripper.StripExecutableOrSharedLib(ctx, versionedOutputFile, out, stripFlags)
 			}
 
 			library.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
@@ -1039,6 +1026,10 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 
 func (library *libraryDecorator) unstrippedOutputFilePath() android.Path {
 	return library.unstrippedOutputFile
+}
+
+func (library *libraryDecorator) disableStripping() {
+	library.stripper.StripProperties.Strip.None = BoolPtr(true)
 }
 
 func (library *libraryDecorator) nativeCoverage() bool {
@@ -1365,16 +1356,15 @@ func (library *libraryDecorator) availableFor(what string) bool {
 	return android.CheckAvailableForApex(what, list)
 }
 
-func (library *libraryDecorator) skipInstall(mod *Module) {
+func (library *libraryDecorator) makeUninstallable(mod *Module) {
 	if library.static() && library.buildStatic() && !library.buildStubs() {
-		// If we're asked to skip installation of a static library (in particular
-		// when it's not //apex_available:platform) we still want an AndroidMk entry
-		// for it to ensure we get the relevant NOTICE file targets (cf.
-		// notice_files.mk) that other libraries might depend on. AndroidMkEntries
-		// always sets LOCAL_UNINSTALLABLE_MODULE for these entries.
+		// If we're asked to make a static library uninstallable we don't do
+		// anything since AndroidMkEntries always sets LOCAL_UNINSTALLABLE_MODULE
+		// for these entries. This is done to still get the make targets for NOTICE
+		// files from notice_files.mk, which other libraries might depend on.
 		return
 	}
-	mod.ModuleBase.SkipInstall()
+	mod.ModuleBase.MakeUninstallable()
 }
 
 var versioningMacroNamesListKey = android.NewOnceKey("versioningMacroNamesList")
@@ -1470,6 +1460,12 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 			static.linker.(prebuiltLibraryInterface).setStatic()
 			shared.linker.(prebuiltLibraryInterface).setShared()
 
+			if library.buildShared() {
+				mctx.AliasVariation("shared")
+			} else if library.buildStatic() {
+				mctx.AliasVariation("static")
+			}
+
 			if !library.buildStatic() {
 				static.linker.(prebuiltLibraryInterface).disablePrebuilt()
 			}
@@ -1501,18 +1497,22 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 			if _, ok := library.(*Module); ok {
 				reuseStaticLibrary(mctx, static.(*Module), shared.(*Module))
 			}
+			mctx.AliasVariation("shared")
 		} else if library.BuildStaticVariant() {
 			variations := append([]string{"static"}, variations...)
 
 			modules := mctx.CreateLocalVariations(variations...)
 			modules[0].(LinkableInterface).SetStatic()
+			mctx.AliasVariation("static")
 		} else if library.BuildSharedVariant() {
 			variations := append([]string{"shared"}, variations...)
 
 			modules := mctx.CreateLocalVariations(variations...)
 			modules[0].(LinkableInterface).SetShared()
+			mctx.AliasVariation("shared")
 		} else if len(variations) > 0 {
 			mctx.CreateLocalVariations(variations...)
+			mctx.AliasVariation(variations[0])
 		}
 	}
 }
@@ -1559,13 +1559,14 @@ func createVersionVariations(mctx android.BottomUpMutatorContext, versions []str
 	// "" is for the non-stubs variant
 	versions = append([]string{""}, versions...)
 
-	modules := mctx.CreateVariations(versions...)
+	modules := mctx.CreateLocalVariations(versions...)
 	for i, m := range modules {
 		if versions[i] != "" {
 			m.(LinkableInterface).SetBuildStubs()
 			m.(LinkableInterface).SetStubsVersions(versions[i])
 		}
 	}
+	mctx.AliasVariation("")
 }
 
 func VersionVariantAvailable(module interface {
@@ -1600,7 +1601,7 @@ func VersionMutator(mctx android.BottomUpMutatorContext) {
 		if c, ok := library.(*Module); ok && c.IsStubs() {
 			stubsVersionsLock.Lock()
 			defer stubsVersionsLock.Unlock()
-			// For LLNDK llndk_library, we borrow vstubs.ersions from its implementation library.
+			// For LLNDK llndk_library, we borrow stubs.versions from its implementation library.
 			// Since llndk_library has dependency to its implementation library,
 			// we can safely access stubsVersionsFor() with its baseModuleName.
 			versions := stubsVersionsFor(mctx.Config())[c.BaseModuleName()]
@@ -1611,16 +1612,9 @@ func VersionMutator(mctx android.BottomUpMutatorContext) {
 			return
 		}
 
-		mctx.CreateVariations("")
+		mctx.CreateLocalVariations("")
+		mctx.AliasVariation("")
 		return
-	}
-	if genrule, ok := mctx.Module().(*genrule.Module); ok {
-		if _, ok := genrule.Extra.(*GenruleExtraProperties); ok {
-			if VersionVariantAvailable(genrule) {
-				mctx.CreateVariations("")
-				return
-			}
-		}
 	}
 }
 
@@ -1633,8 +1627,7 @@ func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.Modu
 	// TODO(b/137267623): Remove this in favor of a cc_genrule when they support operating on shared libraries.
 	injectBoringSSLHash := Bool(inject)
 	ctx.VisitDirectDeps(func(dep android.Module) {
-		tag := ctx.OtherModuleDependencyTag(dep)
-		if tag == StaticDepTag || tag == staticExportDepTag || tag == wholeStaticDepTag || tag == lateStaticDepTag {
+		if tag, ok := ctx.OtherModuleDependencyTag(dep).(libraryDependencyTag); ok && tag.static() {
 			if cc, ok := dep.(*Module); ok {
 				if library, ok := cc.linker.(*libraryDecorator); ok {
 					if Bool(library.Properties.Inject_bssl_hash) {

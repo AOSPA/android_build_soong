@@ -56,6 +56,7 @@ func init() {
 	AddNeverAllowRules(createJavaDeviceForHostRules()...)
 	AddNeverAllowRules(createCcSdkVariantRules()...)
 	AddNeverAllowRules(createUncompressDexRules()...)
+	AddNeverAllowRules(createMakefileGoalRules()...)
 }
 
 // Add a NeverAllow rule to the set of rules to apply.
@@ -193,7 +194,7 @@ func createCcSdkVariantRules() []Rule {
 		// This sometimes works because the APEX modules that contain derive_sdk and
 		// derive_sdk_prefer32 suppress the platform installation rules, but fails when
 		// the APEX modules contain the SDK variant and the platform variant still exists.
-		"frameworks/base/apex/sdkextensions/derive_sdk",
+		"packages/modules/SdkExtensions/derive_sdk",
 		// These are for apps and shouldn't be used by non-SDK variant modules.
 		"prebuilts/ndk",
 		"tools/test/graphicsbenchmark/apps/sample_app",
@@ -229,6 +230,15 @@ func createUncompressDexRules() []Rule {
 			NotIn("art").
 			WithMatcher("uncompress_dex", isSetMatcherInstance).
 			Because("uncompress_dex is only allowed for certain jars for test in art."),
+	}
+}
+
+func createMakefileGoalRules() []Rule {
+	return []Rule{
+		NeverAllow().
+			ModuleType("makefile_goal").
+			WithoutMatcher("product_out_path", Regexp("^boot[0-9a-zA-Z.-]*[.]img$")).
+			Because("Only boot images may be imported as a makefile goal."),
 	}
 }
 

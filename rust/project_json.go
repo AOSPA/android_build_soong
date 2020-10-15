@@ -75,24 +75,23 @@ func mergeDependencies(ctx android.SingletonContext, project *rustProjectJson,
 	knownCrates map[string]crateInfo, module android.Module,
 	crate *rustProjectCrate, deps map[string]int) {
 
-	//TODO(tweek): The stdlib dependencies do not appear here. We need to manually add them.
 	ctx.VisitDirectDeps(module, func(child android.Module) {
-		childId, childName, ok := appendLibraryAndDeps(ctx, project, knownCrates, child)
+		childId, childCrateName, ok := appendLibraryAndDeps(ctx, project, knownCrates, child)
 		if !ok {
 			return
 		}
-		if _, ok = deps[childName]; ok {
+		if _, ok = deps[ctx.ModuleName(child)]; ok {
 			return
 		}
-		crate.Deps = append(crate.Deps, rustProjectDep{Crate: childId, Name: childName})
-		deps[childName] = childId
+		crate.Deps = append(crate.Deps, rustProjectDep{Crate: childId, Name: childCrateName})
+		deps[ctx.ModuleName(child)] = childId
 	})
 }
 
 // appendLibraryAndDeps creates a rustProjectCrate for the module argument and
 // appends it to the rustProjectJson struct.  It visits the dependencies of the
 // module depth-first. If the current module is already in knownCrates, its
-// its dependencies are merged. Returns a tuple (id, crate_name, ok).
+// dependencies are merged. Returns a tuple (id, crate_name, ok).
 func appendLibraryAndDeps(ctx android.SingletonContext, project *rustProjectJson,
 	knownCrates map[string]crateInfo, module android.Module) (int, string, bool) {
 	rModule, ok := module.(*Module)
@@ -106,23 +105,28 @@ func appendLibraryAndDeps(ctx android.SingletonContext, project *rustProjectJson
 	if !ok {
 		return 0, "", false
 	}
+	moduleName := ctx.ModuleName(module)
 	crateName := rModule.CrateName()
-	if cInfo, ok := knownCrates[crateName]; ok {
+	if cInfo, ok := knownCrates[moduleName]; ok {
 		// We have seen this crate already; merge any new dependencies.
 		crate := project.Crates[cInfo.ID]
 		mergeDependencies(ctx, project, knownCrates, module, &crate, cInfo.Deps)
+		project.Crates[cInfo.ID] = crate
 		return cInfo.ID, crateName, true
 	}
 	crate := rustProjectCrate{Deps: make([]rustProjectDep, 0), Cfgs: make([]string, 0)}
-	src := rustLib.baseCompiler.Properties.Srcs[0]
-	crate.RootModule = path.Join(ctx.ModuleDir(rModule), src)
-	crate.Edition = getEdition(rustLib.baseCompiler)
+	srcs := rustLib.baseCompiler.Properties.Srcs
+	if len(srcs) == 0 {
+		return 0, "", false
+	}
+	crate.RootModule = path.Join(ctx.ModuleDir(rModule), srcs[0])
+	crate.Edition = rustLib.baseCompiler.edition()
 
 	deps := make(map[string]int)
 	mergeDependencies(ctx, project, knownCrates, module, &crate, deps)
 
 	id := len(project.Crates)
-	knownCrates[crateName] = crateInfo{ID: id, Deps: deps}
+	knownCrates[moduleName] = crateInfo{ID: id, Deps: deps}
 	project.Crates = append(project.Crates, crate)
 	// rust-analyzer requires that all crates belong to at least one root:
 	// https://github.com/rust-analyzer/rust-analyzer/issues/4735.

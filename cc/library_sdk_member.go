@@ -27,8 +27,9 @@ import (
 
 var sharedLibrarySdkMemberType = &librarySdkMemberType{
 	SdkMemberTypeBase: android.SdkMemberTypeBase{
-		PropertyName: "native_shared_libs",
-		SupportsSdk:  true,
+		PropertyName:    "native_shared_libs",
+		SupportsSdk:     true,
+		HostOsDependent: true,
 	},
 	prebuiltModuleType: "cc_prebuilt_library_shared",
 	linkTypes:          []string{"shared"},
@@ -36,8 +37,9 @@ var sharedLibrarySdkMemberType = &librarySdkMemberType{
 
 var staticLibrarySdkMemberType = &librarySdkMemberType{
 	SdkMemberTypeBase: android.SdkMemberTypeBase{
-		PropertyName: "native_static_libs",
-		SupportsSdk:  true,
+		PropertyName:    "native_static_libs",
+		SupportsSdk:     true,
+		HostOsDependent: true,
 	},
 	prebuiltModuleType: "cc_prebuilt_library_static",
 	linkTypes:          []string{"static"},
@@ -45,8 +47,9 @@ var staticLibrarySdkMemberType = &librarySdkMemberType{
 
 var staticAndSharedLibrarySdkMemberType = &librarySdkMemberType{
 	SdkMemberTypeBase: android.SdkMemberTypeBase{
-		PropertyName: "native_libs",
-		SupportsSdk:  true,
+		PropertyName:    "native_libs",
+		SupportsSdk:     true,
+		HostOsDependent: true,
 	},
 	prebuiltModuleType: "cc_prebuilt_library",
 	linkTypes:          []string{"static", "shared"},
@@ -79,18 +82,19 @@ func (mt *librarySdkMemberType) AddDependencies(mctx android.BottomUpMutatorCont
 			if version == "" {
 				version = LatestStubsVersionFor(mctx.Config(), name)
 			}
+			variations := target.Variations()
+			if mctx.Device() {
+				variations = append(variations,
+					blueprint.Variation{Mutator: "image", Variation: android.CoreVariation},
+					blueprint.Variation{Mutator: "version", Variation: version})
+			}
 			if mt.linkTypes == nil {
-				mctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
-					{Mutator: "image", Variation: android.CoreVariation},
-					{Mutator: "version", Variation: version},
-				}...), dependencyTag, name)
+				mctx.AddFarVariationDependencies(variations, dependencyTag, name)
 			} else {
 				for _, linkType := range mt.linkTypes {
-					mctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
-						{Mutator: "image", Variation: android.CoreVariation},
-						{Mutator: "link", Variation: linkType},
-						{Mutator: "version", Variation: version},
-					}...), dependencyTag, name)
+					libVariations := append(variations,
+						blueprint.Variation{Mutator: "link", Variation: linkType})
+					mctx.AddFarVariationDependencies(libVariations, dependencyTag, name)
 				}
 			}
 		}
@@ -114,6 +118,14 @@ func (mt *librarySdkMemberType) AddPrebuiltModule(ctx android.SdkMemberContext, 
 	pbm := ctx.SnapshotBuilder().AddPrebuiltModule(member, mt.prebuiltModuleType)
 
 	ccModule := member.Variants()[0].(*Module)
+
+	if proptools.Bool(ccModule.Properties.Recovery_available) {
+		pbm.AddProperty("recovery_available", true)
+	}
+
+	if proptools.Bool(ccModule.VendorProperties.Vendor_available) {
+		pbm.AddProperty("vendor_available", true)
+	}
 
 	sdkVersion := ccModule.SdkVersion()
 	if sdkVersion != "" {
@@ -209,6 +221,11 @@ var includeDirProperties = []includeDirsProperty{
 // Add properties that may, or may not, be arch specific.
 func addPossiblyArchSpecificProperties(sdkModuleContext android.ModuleContext, builder android.SnapshotBuilder, libInfo *nativeLibInfoProperties, outputProperties android.BpPropertySet) {
 
+	if libInfo.SanitizeNever {
+		sanitizeSet := outputProperties.AddPropertySet("sanitize")
+		sanitizeSet.AddProperty("never", true)
+	}
+
 	// Copy the generated library to the snapshot and add a reference to it in the .bp module.
 	if libInfo.outputFile != nil {
 		nativeLibraryPath := nativeLibraryPathFor(libInfo)
@@ -274,8 +291,8 @@ func addPossiblyArchSpecificProperties(sdkModuleContext android.ModuleContext, b
 	}
 
 	// Add the collated include dir properties to the output.
-	for property, dirs := range includeDirs {
-		outputProperties.AddProperty(property, dirs)
+	for _, property := range android.SortedStringKeys(includeDirs) {
+		outputProperties.AddProperty(property, includeDirs[property])
 	}
 
 	if len(libInfo.StubsVersion) > 0 {
@@ -356,6 +373,9 @@ type nativeLibInfoProperties struct {
 	// not vary by arch so cannot be android specific.
 	StubsVersion string `sdk:"ignored-on-host"`
 
+	// Value of SanitizeProperties.Sanitize.Never. Needs to be propagated for CRT objects.
+	SanitizeNever bool `android:"arch_variant"`
+
 	// outputFile is not exported as it is always arch specific.
 	outputFile android.Path
 }
@@ -401,6 +421,10 @@ func (p *nativeLibInfoProperties) PopulateFromVariant(ctx android.SdkMemberConte
 
 	if ccModule.HasStubsVariants() {
 		p.StubsVersion = ccModule.StubsVersion()
+	}
+
+	if ccModule.sanitize != nil && proptools.Bool(ccModule.sanitize.Properties.Sanitize.Never) {
+		p.SanitizeNever = true
 	}
 }
 
