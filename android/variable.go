@@ -342,8 +342,8 @@ type productVariables struct {
 
 	BoardVendorSepolicyDirs      []string `json:",omitempty"`
 	BoardOdmSepolicyDirs         []string `json:",omitempty"`
-	BoardPlatPublicSepolicyDirs  []string `json:",omitempty"`
-	BoardPlatPrivateSepolicyDirs []string `json:",omitempty"`
+	SystemExtPublicSepolicyDirs  []string `json:",omitempty"`
+	SystemExtPrivateSepolicyDirs []string `json:",omitempty"`
 	BoardSepolicyM4Defs          []string `json:",omitempty"`
 
 	VendorVars map[string]map[string]string `json:",omitempty"`
@@ -403,12 +403,12 @@ func (v *productVariables) SetDefaultConfig() {
 	*v = productVariables{
 		BuildNumberFile: stringPtr("build_number.txt"),
 
-		Platform_version_name:             stringPtr("Q"),
-		Platform_sdk_version:              intPtr(28),
-		Platform_sdk_codename:             stringPtr("Q"),
+		Platform_version_name:             stringPtr("S"),
+		Platform_sdk_version:              intPtr(30),
+		Platform_sdk_codename:             stringPtr("S"),
 		Platform_sdk_final:                boolPtr(false),
-		Platform_version_active_codenames: []string{"Q"},
-		Platform_vndk_version:             stringPtr("Q"),
+		Platform_version_active_codenames: []string{"S"},
+		Platform_vndk_version:             stringPtr("S"),
 
 		HostArch:                   stringPtr("x86_64"),
 		HostSecondaryArch:          stringPtr("x86"),
@@ -428,7 +428,7 @@ func (v *productVariables) SetDefaultConfig() {
 		AAPTPrebuiltDPI:     []string{"xhdpi", "xxhdpi"},
 
 		Malloc_not_svelte:            boolPtr(true),
-		Malloc_zero_contents:         boolPtr(false),
+		Malloc_zero_contents:         boolPtr(true),
 		Malloc_pattern_fill_contents: boolPtr(false),
 		Safestack:                    boolPtr(false),
 	}

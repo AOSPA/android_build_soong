@@ -80,13 +80,16 @@ func (mt *librarySdkMemberType) AddDependencies(mctx android.BottomUpMutatorCont
 		for _, target := range targets {
 			name, version := StubsLibNameAndVersion(lib)
 			if version == "" {
-				version = LatestStubsVersionFor(mctx.Config(), name)
+				version = "latest"
 			}
 			variations := target.Variations()
 			if mctx.Device() {
 				variations = append(variations,
-					blueprint.Variation{Mutator: "image", Variation: android.CoreVariation},
-					blueprint.Variation{Mutator: "version", Variation: version})
+					blueprint.Variation{Mutator: "image", Variation: android.CoreVariation})
+				if mt.linkTypes != nil {
+					variations = append(variations,
+						blueprint.Variation{Mutator: "version", Variation: version})
+				}
 			}
 			if mt.linkTypes == nil {
 				mctx.AddFarVariationDependencies(variations, dependencyTag, name)
@@ -221,10 +224,7 @@ var includeDirProperties = []includeDirsProperty{
 // Add properties that may, or may not, be arch specific.
 func addPossiblyArchSpecificProperties(sdkModuleContext android.ModuleContext, builder android.SnapshotBuilder, libInfo *nativeLibInfoProperties, outputProperties android.BpPropertySet) {
 
-	if libInfo.SanitizeNever {
-		sanitizeSet := outputProperties.AddPropertySet("sanitize")
-		sanitizeSet.AddProperty("never", true)
-	}
+	outputProperties.AddProperty("sanitize", &libInfo.Sanitize)
 
 	// Copy the generated library to the snapshot and add a reference to it in the .bp module.
 	if libInfo.outputFile != nil {
@@ -295,9 +295,9 @@ func addPossiblyArchSpecificProperties(sdkModuleContext android.ModuleContext, b
 		outputProperties.AddProperty(property, includeDirs[property])
 	}
 
-	if len(libInfo.StubsVersion) > 0 {
+	if len(libInfo.StubsVersions) > 0 {
 		stubsSet := outputProperties.AddPropertySet("stubs")
-		stubsSet.AddProperty("versions", []string{libInfo.StubsVersion})
+		stubsSet.AddProperty("versions", libInfo.StubsVersions)
 	}
 }
 
@@ -368,13 +368,15 @@ type nativeLibInfoProperties struct {
 	// The specific stubs version for the lib variant, or empty string if stubs
 	// are not in use.
 	//
-	// Marked 'ignored-on-host' as the StubsVersion() from which this is initialized is
-	// not set on host and the stubs.versions property which this is written to is does
-	// not vary by arch so cannot be android specific.
-	StubsVersion string `sdk:"ignored-on-host"`
+	// Marked 'ignored-on-host' as the AllStubsVersions() from which this is
+	// initialized is not set on host and the stubs.versions property which this
+	// is written to does not vary by arch so cannot be android specific.
+	StubsVersions []string `sdk:"ignored-on-host"`
 
-	// Value of SanitizeProperties.Sanitize.Never. Needs to be propagated for CRT objects.
-	SanitizeNever bool `android:"arch_variant"`
+	// Value of SanitizeProperties.Sanitize. Several - but not all - of these
+	// affect the expanded variants. All are propagated to avoid entangling the
+	// sanitizer logic with the snapshot generation.
+	Sanitize SanitizeUserProps `android:"arch_variant"`
 
 	// outputFile is not exported as it is always arch specific.
 	outputFile android.Path
@@ -389,10 +391,12 @@ func (p *nativeLibInfoProperties) PopulateFromVariant(ctx android.SdkMemberConte
 		p.outputFile = getRequiredMemberOutputFile(ctx, ccModule)
 	}
 
+	exportedInfo := ctx.SdkModuleContext().OtherModuleProvider(variant, FlagExporterInfoProvider).(FlagExporterInfo)
+
 	// Separate out the generated include dirs (which are arch specific) from the
 	// include dirs (which may not be).
 	exportedIncludeDirs, exportedGeneratedIncludeDirs := android.FilterPathListPredicate(
-		ccModule.ExportedIncludeDirs(), isGeneratedHeaderDirectory)
+		exportedInfo.IncludeDirs, isGeneratedHeaderDirectory)
 
 	p.name = variant.Name()
 	p.archType = ccModule.Target().Arch.ArchType.String()
@@ -403,10 +407,10 @@ func (p *nativeLibInfoProperties) PopulateFromVariant(ctx android.SdkMemberConte
 
 	// Take a copy before filtering out duplicates to avoid changing the slice owned by the
 	// ccModule.
-	dirs := append(android.Paths(nil), ccModule.ExportedSystemIncludeDirs()...)
+	dirs := append(android.Paths(nil), exportedInfo.SystemIncludeDirs...)
 	p.ExportedSystemIncludeDirs = android.FirstUniquePaths(dirs)
 
-	p.ExportedFlags = ccModule.ExportedFlags()
+	p.ExportedFlags = exportedInfo.Flags
 	if ccModule.linker != nil {
 		specifiedDeps := specifiedDeps{}
 		specifiedDeps = ccModule.linker.linkerSpecifiedDeps(specifiedDeps)
@@ -417,14 +421,18 @@ func (p *nativeLibInfoProperties) PopulateFromVariant(ctx android.SdkMemberConte
 		}
 		p.SystemSharedLibs = specifiedDeps.systemSharedLibs
 	}
-	p.exportedGeneratedHeaders = ccModule.ExportedGeneratedHeaders()
+	p.exportedGeneratedHeaders = exportedInfo.GeneratedHeaders
 
 	if ccModule.HasStubsVariants() {
-		p.StubsVersion = ccModule.StubsVersion()
+		// TODO(b/169373910): 1. Only output the specific version (from
+		// ccModule.StubsVersion()) if the module is versioned. 2. Ensure that all
+		// the versioned stub libs are retained in the prebuilt tree; currently only
+		// the stub corresponding to ccModule.StubsVersion() is.
+		p.StubsVersions = ccModule.AllStubsVersions()
 	}
 
-	if ccModule.sanitize != nil && proptools.Bool(ccModule.sanitize.Properties.Sanitize.Never) {
-		p.SanitizeNever = true
+	if ccModule.sanitize != nil {
+		p.Sanitize = ccModule.sanitize.Properties.Sanitize
 	}
 }
 

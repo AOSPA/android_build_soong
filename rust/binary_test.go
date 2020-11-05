@@ -30,6 +30,13 @@ func TestBinaryLinkage(t *testing.T) {
 			rustlibs: ["libfoo"],
 			host_supported: true,
 		}
+		rust_binary {
+			name: "rlib_linked",
+			srcs: ["foo.rs"],
+			rustlibs: ["libfoo"],
+			host_supported: true,
+			prefer_rlib: true,
+		}
 		rust_library {
 			name: "libfoo",
 			srcs: ["foo.rs"],
@@ -40,12 +47,40 @@ func TestBinaryLinkage(t *testing.T) {
 	fizzBuzzHost := ctx.ModuleForTests("fizz-buzz", "linux_glibc_x86_64").Module().(*Module)
 	fizzBuzzDevice := ctx.ModuleForTests("fizz-buzz", "android_arm64_armv8-a").Module().(*Module)
 
-	if !android.InList("libfoo", fizzBuzzHost.Properties.AndroidMkRlibs) {
+	if !android.InList("libfoo.rlib-std", fizzBuzzHost.Properties.AndroidMkRlibs) {
 		t.Errorf("rustlibs dependency libfoo should be an rlib dep for host modules")
 	}
 
 	if !android.InList("libfoo", fizzBuzzDevice.Properties.AndroidMkDylibs) {
 		t.Errorf("rustlibs dependency libfoo should be an dylib dep for device modules")
+	}
+}
+
+// Test that prefer_rlib links in libstd statically as well as rustlibs.
+func TestBinaryPreferRlib(t *testing.T) {
+	ctx := testRust(t, `
+		rust_binary {
+			name: "rlib_linked",
+			srcs: ["foo.rs"],
+			rustlibs: ["libfoo"],
+			host_supported: true,
+			prefer_rlib: true,
+		}
+		rust_library {
+			name: "libfoo",
+			srcs: ["foo.rs"],
+			crate_name: "foo",
+			host_supported: true,
+		}`)
+
+	mod := ctx.ModuleForTests("rlib_linked", "android_arm64_armv8-a").Module().(*Module)
+
+	if !android.InList("libfoo.rlib-std", mod.Properties.AndroidMkRlibs) {
+		t.Errorf("rustlibs dependency libfoo should be an rlib dep when prefer_rlib is defined")
+	}
+
+	if !android.InList("libstd", mod.Properties.AndroidMkRlibs) {
+		t.Errorf("libstd dependency should be an rlib dep when prefer_rlib is defined")
 	}
 }
 
@@ -76,6 +111,34 @@ func TestBinaryFlags(t *testing.T) {
 	flags := fizzBuzz.Args["rustcFlags"]
 	if strings.Contains(flags, "--test") {
 		t.Errorf("extra --test flag, rustcFlags: %#v", flags)
+	}
+}
+
+func TestStaticBinaryFlags(t *testing.T) {
+	ctx := testRust(t, `
+		rust_binary {
+			name: "fizz",
+			srcs: ["foo.rs"],
+			static_executable: true,
+		}`)
+
+	fizzOut := ctx.ModuleForTests("fizz", "android_arm64_armv8-a").Output("fizz")
+	fizzMod := ctx.ModuleForTests("fizz", "android_arm64_armv8-a").Module().(*Module)
+
+	flags := fizzOut.Args["rustcFlags"]
+	linkFlags := fizzOut.Args["linkFlags"]
+	if !strings.Contains(flags, "-C relocation-model=static") {
+		t.Errorf("static binary missing '-C relocation-model=static' in rustcFlags, found: %#v", flags)
+	}
+	if !strings.Contains(linkFlags, "-static") {
+		t.Errorf("static binary missing '-static' in linkFlags, found: %#v", flags)
+	}
+
+	if !android.InList("libc", fizzMod.Properties.AndroidMkStaticLibs) {
+		t.Errorf("static binary not linking against libc as a static library")
+	}
+	if len(fizzMod.Properties.AndroidMkSharedLibs) > 0 {
+		t.Errorf("static binary incorrectly linking against shared libraries")
 	}
 }
 

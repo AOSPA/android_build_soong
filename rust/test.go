@@ -133,3 +133,7 @@ func RustTestHostFactory() android.Module {
 	module, _ := NewRustTest(android.HostSupported)
 	return module.Init()
 }
+
+func (test *testDecorator) stdLinkage(ctx *depsContext) RustLinkage {
+	return RlibLinkage
+}
