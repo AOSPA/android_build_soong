@@ -78,13 +78,22 @@ module {
     },
     target: {
         android: {
-            // Device variants
+            // Device variants (implies Bionic)
         },
         host: {
             // Host variants
         },
+        bionic: {
+            // Bionic (device and host) variants
+        },
+        linux_bionic: {
+            // Bionic host variants
+        },
+        linux: {
+            // Bionic (device and host) and Linux glibc variants
+        },
         linux_glibc: {
-            // Linux host variants
+            // Linux host variants (using non-Bionic libc)
         },
         darwin: {
             // Darwin host variants
@@ -94,6 +103,9 @@ module {
         },
         not_windows: {
             // Non-windows host variants
+        },
+        android_arm: {
+            // Any <os>_<arch> combination restricts to that os and arch
         },
     },
 }
@@ -126,6 +138,7 @@ var archVariants = map[ArchType][]string{
 	Arm64: {
 		"armv8_a",
 		"armv8_2a",
+		"armv8-2a-dotprod",
 		"cortex-a53",
 		"cortex-a55",
 		"cortex-a72",
@@ -174,6 +187,9 @@ var archFeatures = map[ArchType][]string{
 	Arm: {
 		"neon",
 	},
+	Arm64: {
+		"dotprod",
+	},
 	X86: {
 		"ssse3",
 		"sse4",
@@ -209,6 +225,11 @@ var archFeatureMap = map[ArchType]map[string][]string{
 		},
 		"armv8-2a": {
 			"neon",
+		},
+	},
+	Arm64: {
+		"armv8-2a-dotprod": {
+			"dotprod",
 		},
 	},
 	X86: {
@@ -571,7 +592,7 @@ var (
 	Linux       = NewOsType("linux_glibc", Host, false)
 	Darwin      = NewOsType("darwin", Host, false)
 	LinuxBionic = NewOsType("linux_bionic", Host, false)
-	Windows     = NewOsType("windows", HostCross, true)
+	Windows     = NewOsType("windows", Host, true)
 	Android     = NewOsType("android", Device, false)
 	Fuchsia     = NewOsType("fuchsia", Device, false)
 
@@ -602,7 +623,6 @@ const (
 	Generic OsClass = iota
 	Device
 	Host
-	HostCross
 )
 
 func (class OsClass) String() string {
@@ -613,8 +633,6 @@ func (class OsClass) String() string {
 		return "device"
 	case Host:
 		return "host"
-	case HostCross:
-		return "host cross"
 	default:
 		panic(fmt.Errorf("unknown class %d", class))
 	}
@@ -674,6 +692,11 @@ type Target struct {
 	NativeBridge             NativeBridgeSupport
 	NativeBridgeHostArchName string
 	NativeBridgeRelativePath string
+
+	// HostCross is true when the target cannot run natively on the current build host.
+	// For example, linux_glibc_x86 returns true on a regular x86/i686/Linux machines, but returns false
+	// on Mac (different OS), or on 64-bit only i686/Linux machines (unsupported arch).
+	HostCross bool
 }
 
 func (target Target) String() string {
@@ -732,26 +755,15 @@ func osMutator(bpctx blueprint.BottomUpMutatorContext) {
 		return
 	}
 
-	osClasses := base.OsClassSupported()
-
 	var moduleOSList []OsType
 
 	for _, os := range OsTypeList {
-		supportedClass := false
-		for _, osClass := range osClasses {
-			if os.Class == osClass {
-				supportedClass = true
+		for _, t := range mctx.Config().Targets[os] {
+			if base.supportsTarget(t, mctx.Config()) {
+				moduleOSList = append(moduleOSList, os)
+				break
 			}
 		}
-		if !supportedClass {
-			continue
-		}
-
-		if len(mctx.Config().Targets[os]) == 0 {
-			continue
-		}
-
-		moduleOSList = append(moduleOSList, os)
 	}
 
 	if len(moduleOSList) == 0 {
@@ -801,10 +813,16 @@ func osMutator(bpctx blueprint.BottomUpMutatorContext) {
 	}
 }
 
-// Identifies the dependency from CommonOS variant to the os specific variants.
-type commonOSTag struct{ blueprint.BaseDependencyTag }
+type archDepTag struct {
+	blueprint.BaseDependencyTag
+	name string
+}
 
-var commonOsToOsSpecificVariantTag = commonOSTag{}
+// Identifies the dependency from CommonOS variant to the os specific variants.
+var commonOsToOsSpecificVariantTag = archDepTag{name: "common os to os specific"}
+
+// Identifies the dependency from arch variant to the common variant for a "common_first" multilib.
+var firstArchToCommonArchDepTag = archDepTag{name: "first arch to common arch"}
 
 // Get the OsType specific variants for the current CommonOS variant.
 //
@@ -821,7 +839,6 @@ func GetOsSpecificVariantsOfCommonOSVariant(mctx BaseModuleContext) []Module {
 			}
 		}
 	})
-
 	return variants
 }
 
@@ -906,7 +923,7 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 
 	prefer32 := false
 	if base.prefer32 != nil {
-		prefer32 = base.prefer32(mctx, base, os.Class)
+		prefer32 = base.prefer32(mctx, base, os)
 	}
 
 	multilib, extraMultilib := decodeMultilib(base, os.Class)
@@ -945,6 +962,12 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 		addTargetProperties(m, targets[i], multiTargets, i == 0)
 		m.base().setArchProperties(mctx)
 	}
+
+	if multilib == "common_first" && len(modules) >= 2 {
+		for i := range modules[1:] {
+			mctx.AddInterVariantDependency(firstArchToCommonArchDepTag, modules[i+1], modules[0])
+		}
+	}
 }
 
 func addTargetProperties(m Module, target Target, multiTargets []Target, primaryTarget bool) {
@@ -957,7 +980,7 @@ func decodeMultilib(base *ModuleBase, class OsClass) (multilib, extraMultilib st
 	switch class {
 	case Device:
 		multilib = String(base.commonProperties.Target.Android.Compile_multilib)
-	case Host, HostCross:
+	case Host:
 		multilib = String(base.commonProperties.Target.Host.Compile_multilib)
 	}
 	if multilib == "" {
@@ -1233,7 +1256,7 @@ func (m *ModuleBase) setOSProperties(ctx BottomUpMutatorContext) {
 			//         key: value,
 			//     },
 			// },
-			if os.Class == Host || os.Class == HostCross {
+			if os.Class == Host {
 				field := "Host"
 				prefix := "target.host"
 				m.appendProperties(ctx, genProps, targetProp, field, prefix)
@@ -1273,7 +1296,7 @@ func (m *ModuleBase) setOSProperties(ctx BottomUpMutatorContext) {
 			prefix := "target." + os.Name
 			m.appendProperties(ctx, genProps, targetProp, field, prefix)
 
-			if (os.Class == Host || os.Class == HostCross) && os != Windows {
+			if os.Class == Host && os != Windows {
 				field := "Not_windows"
 				prefix := "target.not_windows"
 				m.appendProperties(ctx, genProps, targetProp, field, prefix)
@@ -1501,6 +1524,36 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 			nativeBridgeRelativePathStr = arch.ArchType.String()
 		}
 
+		// A target is considered as HostCross if it's a host target which can't run natively on
+		// the currently configured build machine (either because the OS is different or because of
+		// the unsupported arch)
+		hostCross := false
+		if os.Class == Host {
+			var osSupported bool
+			if os == BuildOs {
+				osSupported = true
+			} else if BuildOs.Linux() && os.Linux() {
+				// LinuxBionic and Linux are compatible
+				osSupported = true
+			} else {
+				osSupported = false
+			}
+
+			var archSupported bool
+			if arch.ArchType == Common {
+				archSupported = true
+			} else if arch.ArchType.Name == *variables.HostArch {
+				archSupported = true
+			} else if variables.HostSecondaryArch != nil && arch.ArchType.Name == *variables.HostSecondaryArch {
+				archSupported = true
+			} else {
+				archSupported = false
+			}
+			if !osSupported || !archSupported {
+				hostCross = true
+			}
+		}
+
 		targets[os] = append(targets[os],
 			Target{
 				Os:                       os,
@@ -1508,6 +1561,7 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 				NativeBridge:             nativeBridgeEnabled,
 				NativeBridgeHostArchName: nativeBridgeHostArchNameStr,
 				NativeBridgeRelativePath: nativeBridgeRelativePathStr,
+				HostCross:                hostCross,
 			})
 	}
 
@@ -1523,6 +1577,9 @@ func decodeTargetProductVariables(config *config) (map[OsType][]Target, error) {
 
 	if Bool(config.Host_bionic) {
 		addTarget(LinuxBionic, "x86_64", nil, nil, nil, NativeBridgeDisabled, nil, nil)
+	}
+	if Bool(config.Host_bionic_arm64) {
+		addTarget(LinuxBionic, "arm64", nil, nil, nil, NativeBridgeDisabled, nil, nil)
 	}
 
 	if String(variables.CrossHost) != "" {
@@ -1631,10 +1688,11 @@ func getMegaDeviceConfig() []archConfig {
 		{"arm64", "armv8-a", "kryo", []string{"arm64-v8a"}},
 		{"arm64", "armv8-a", "exynos-m1", []string{"arm64-v8a"}},
 		{"arm64", "armv8-a", "exynos-m2", []string{"arm64-v8a"}},
-		{"arm64", "armv8-2a", "cortex-a75", []string{"arm64-v8a"}},
-		{"arm64", "armv8-2a", "cortex-a76", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "kryo300", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "kryo385", []string{"arm64-v8a"}},
+		{"arm64", "armv8-2a-dotprod", "cortex-a55", []string{"arm64-v8a"}},
+		{"arm64", "armv8-2a-dotprod", "cortex-a75", []string{"arm64-v8a"}},
+		{"arm64", "armv8-2a-dotprod", "cortex-a76", []string{"arm64-v8a"}},
 		{"x86", "", "", []string{"x86"}},
 		{"x86", "atom", "", []string{"x86"}},
 		{"x86", "haswell", "", []string{"x86"}},
@@ -1765,13 +1823,22 @@ func getCommonTargets(targets []Target) []Target {
 }
 
 func firstTarget(targets []Target, filters ...string) []Target {
+	// find the first target from each OS
+	var ret []Target
+	hasHost := false
+	set := make(map[OsType]bool)
+
 	for _, filter := range filters {
 		buildTargets := filterMultilibTargets(targets, filter)
-		if len(buildTargets) > 0 {
-			return buildTargets[:1]
+		for _, t := range buildTargets {
+			if _, found := set[t.Os]; !found {
+				hasHost = hasHost || (t.Os.Class == Host)
+				set[t.Os] = true
+				ret = append(ret, t)
+			}
 		}
 	}
-	return nil
+	return ret
 }
 
 // Use the module multilib setting to select one or more targets from a target list

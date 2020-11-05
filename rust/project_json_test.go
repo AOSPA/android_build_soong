@@ -18,25 +18,19 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"android/soong/android"
-	"android/soong/cc"
 )
 
 // testProjectJson run the generation of rust-project.json. It returns the raw
 // content of the generated file.
-func testProjectJson(t *testing.T, bp string, fs map[string][]byte) []byte {
-	cc.GatherRequiredFilesForTest(fs)
-
-	env := map[string]string{"SOONG_GEN_RUST_PROJECT": "1"}
-	config := android.TestArchConfig(buildDir, env, bp, fs)
-	ctx := CreateTestContext()
-	ctx.Register(config)
-	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-	android.FailIfErrored(t, errs)
-	_, errs = ctx.PrepareBuildActions(config)
-	android.FailIfErrored(t, errs)
+func testProjectJson(t *testing.T, bp string) []byte {
+	tctx := newTestRustCtx(t, bp)
+	tctx.env = map[string]string{"SOONG_GEN_RUST_PROJECT": "1"}
+	tctx.generateConfig()
+	tctx.parse(t)
 
 	// The JSON file is generated via WriteFileToOutputDir. Therefore, it
 	// won't appear in the Output of the TestingSingleton. Manually verify
@@ -86,12 +80,8 @@ func TestProjectJsonDep(t *testing.T) {
 		crate_name: "b",
 		rlibs: ["liba"],
 	}
-	` + GatherRequiredDepsForTest()
-	fs := map[string][]byte{
-		"a/src/lib.rs": nil,
-		"b/src/lib.rs": nil,
-	}
-	jsonContent := testProjectJson(t, bp, fs)
+	`
+	jsonContent := testProjectJson(t, bp)
 	validateJsonCrates(t, jsonContent)
 }
 
@@ -100,22 +90,48 @@ func TestProjectJsonBindGen(t *testing.T) {
 	rust_library {
 		name: "liba",
 		srcs: ["src/lib.rs"],
-		rlibs: ["libbindings"],
+		rlibs: ["libbindings1"],
 		crate_name: "a"
 	}
 	rust_bindgen {
-		name: "libbindings",
-		crate_name: "bindings",
-		source_stem: "bindings",
+		name: "libbindings1",
+		crate_name: "bindings1",
+		source_stem: "bindings1",
 		host_supported: true,
 		wrapper_src: "src/any.h",
 	}
-	` + GatherRequiredDepsForTest()
-	fs := map[string][]byte{
-		"src/lib.rs": nil,
+	rust_library_host {
+		name: "libb",
+		srcs: ["src/lib.rs"],
+		rustlibs: ["libbindings2"],
+		crate_name: "b"
 	}
-	jsonContent := testProjectJson(t, bp, fs)
-	validateJsonCrates(t, jsonContent)
+	rust_bindgen_host {
+		name: "libbindings2",
+		crate_name: "bindings2",
+		source_stem: "bindings2",
+		wrapper_src: "src/any.h",
+	}
+	`
+	jsonContent := testProjectJson(t, bp)
+	crates := validateJsonCrates(t, jsonContent)
+	for _, c := range crates {
+		crate, ok := c.(map[string]interface{})
+		if !ok {
+			t.Fatalf("Unexpected type for crate: %v", c)
+		}
+		rootModule, ok := crate["root_module"].(string)
+		if !ok {
+			t.Fatalf("Unexpected type for root_module: %v", crate["root_module"])
+		}
+		if strings.Contains(rootModule, "libbindings1") && !strings.Contains(rootModule, "android_arm64") {
+			t.Errorf("The source path for libbindings1 does not contain android_arm64, got %v", rootModule)
+		}
+		if strings.Contains(rootModule, "libbindings2") && !strings.Contains(rootModule, android.BuildOs.String()) {
+			t.Errorf("The source path for libbindings2 does not contain the BuildOs, got %v; want %v",
+				rootModule, android.BuildOs.String())
+		}
+	}
 }
 
 func TestProjectJsonMultiVersion(t *testing.T) {
@@ -136,13 +152,8 @@ func TestProjectJsonMultiVersion(t *testing.T) {
 		crate_name: "b",
 		rustlibs: ["liba1", "liba2"],
 	}
-	` + GatherRequiredDepsForTest()
-	fs := map[string][]byte{
-		"a1/src/lib.rs": nil,
-		"a2/src/lib.rs": nil,
-		"b/src/lib.rs":  nil,
-	}
-	jsonContent := testProjectJson(t, bp, fs)
+	`
+	jsonContent := testProjectJson(t, bp)
 	crates := validateJsonCrates(t, jsonContent)
 	for _, crate := range crates {
 		c := crate.(map[string]interface{})

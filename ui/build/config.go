@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"android/soong/shared"
+
 	"github.com/golang/protobuf/proto"
 
 	smpb "android/soong/ui/metrics/metrics_proto"
@@ -183,6 +184,17 @@ func NewConfig(ctx Context, args ...string) Config {
 		"EMPTY_NINJA_FILE",
 	)
 
+	if ret.UseGoma() {
+		ctx.Println("Goma for Android is being deprecated and replaced with RBE. See go/rbe_for_android for instructions on how to use RBE.")
+		ctx.Println()
+		ctx.Println("See go/goma_android_exceptions for exceptions.")
+		ctx.Fatalln("USE_GOMA flag is no longer supported.")
+	}
+
+	if ret.ForceUseGoma() {
+		ret.environ.Set("USE_GOMA", "true")
+	}
+
 	// Tell python not to spam the source tree with .pyc files.
 	ret.environ.Set("PYTHONDONTWRITEBYTECODE", "1")
 
@@ -286,10 +298,17 @@ func storeConfigMetrics(ctx Context, config Config) {
 	}
 
 	b := &smpb.BuildConfig{
-		UseGoma: proto.Bool(config.UseGoma()),
-		UseRbe:  proto.Bool(config.UseRBE()),
+		ForceUseGoma: proto.Bool(config.ForceUseGoma()),
+		UseGoma:      proto.Bool(config.UseGoma()),
+		UseRbe:       proto.Bool(config.UseRBE()),
 	}
 	ctx.Metrics.BuildConfig(b)
+
+	s := &smpb.SystemResourceInfo{
+		TotalPhysicalMemory: proto.Uint64(config.TotalRAM()),
+		AvailableCpus:       proto.Int32(int32(runtime.NumCPU())),
+	}
+	ctx.Metrics.SystemResourceInfo(s)
 }
 
 // getConfigArgs processes the command arguments based on the build action and creates a set of new
@@ -778,6 +797,18 @@ func (c *configImpl) TotalRAM() uint64 {
 	return c.totalRAM
 }
 
+// ForceUseGoma determines whether we should override Goma deprecation
+// and use Goma for the current build or not.
+func (c *configImpl) ForceUseGoma() bool {
+	if v, ok := c.environ.Get("FORCE_USE_GOMA"); ok {
+		v = strings.TrimSpace(v)
+		if v != "" && v != "false" {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *configImpl) UseGoma() bool {
 	if v, ok := c.environ.Get("USE_GOMA"); ok {
 		v = strings.TrimSpace(v)
@@ -827,6 +858,11 @@ func (c *configImpl) StartRBE() bool {
 }
 
 func (c *configImpl) logDir() string {
+	for _, f := range []string{"RBE_log_dir", "FLAG_log_dir"} {
+		if v, ok := c.environ.Get(f); ok {
+			return v
+		}
+	}
 	if c.Dist() {
 		return filepath.Join(c.DistDir(), "logs")
 	}

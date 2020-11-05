@@ -102,6 +102,10 @@ func testContext() *android.TestContext {
 
 	dexpreopt.RegisterToolModulesForTest(ctx)
 
+	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
+		ctx.TopDown("propagate_rro_enforcement", propagateRROEnforcementMutator).Parallel()
+	})
+
 	return ctx
 }
 
@@ -456,6 +460,14 @@ func TestBinary(t *testing.T) {
 			name: "bar",
 			srcs: ["b.java"],
 			static_libs: ["foo"],
+			jni_libs: ["libjni"],
+		}
+
+		cc_library_shared {
+			name: "libjni",
+			host_supported: true,
+			device_supported: false,
+			stl: "none",
 		}
 	`)
 
@@ -466,10 +478,17 @@ func TestBinary(t *testing.T) {
 	barWrapper := ctx.ModuleForTests("bar", buildOS+"_x86_64")
 	barWrapperDeps := barWrapper.Output("bar").Implicits.Strings()
 
+	libjni := ctx.ModuleForTests("libjni", buildOS+"_x86_64_shared")
+	libjniSO := libjni.Rule("Cp").Output.String()
+
 	// Test that the install binary wrapper depends on the installed jar file
-	if len(barWrapperDeps) != 1 || barWrapperDeps[0] != barJar {
-		t.Errorf("expected binary wrapper implicits [%q], got %v",
-			barJar, barWrapperDeps)
+	if g, w := barWrapperDeps, barJar; !android.InList(w, g) {
+		t.Errorf("expected binary wrapper implicits to contain %q, got %q", w, g)
+	}
+
+	// Test that the install binary wrapper depends on the installed JNI libraries
+	if g, w := barWrapperDeps, libjniSO; !android.InList(w, g) {
+		t.Errorf("expected binary wrapper implicits to contain %q, got %q", w, g)
 	}
 }
 
@@ -1412,7 +1431,31 @@ func TestJavaLibrary(t *testing.T) {
 						name: "core",
 						sdk_version: "none",
 						system_modules: "none",
-				}`),
+				}
+
+				filegroup {
+					name: "core-jar",
+					srcs: [":core{.jar}"],
+				}
+`),
+	})
+	ctx := testContext()
+	run(t, ctx, config)
+}
+
+func TestJavaImport(t *testing.T) {
+	config := testConfig(nil, "", map[string][]byte{
+		"libcore/Android.bp": []byte(`
+				java_import {
+						name: "core",
+						sdk_version: "none",
+				}
+
+				filegroup {
+					name: "core-jar",
+					srcs: [":core{.jar}"],
+				}
+`),
 	})
 	ctx := testContext()
 	run(t, ctx, config)
@@ -1487,6 +1530,12 @@ func TestJavaSdkLibrary(t *testing.T) {
 			libs: ["foo"],
 			sdk_version: "system_29",
 		}
+		java_library {
+			name: "baz-module-30",
+			srcs: ["c.java"],
+			libs: ["foo"],
+			sdk_version: "module_30",
+		}
 		`)
 
 	// check the existence of the internal modules
@@ -1533,6 +1582,13 @@ func TestJavaSdkLibrary(t *testing.T) {
 			"prebuilts/sdk/29/system/foo.jar")
 	}
 
+	bazModule30Javac := ctx.ModuleForTests("baz-module-30", "android_common").Rule("javac")
+	// tests if "baz-module-30" is actually linked to the module 30 stubs lib
+	if !strings.Contains(bazModule30Javac.Args["classpath"], "prebuilts/sdk/30/module-lib/foo.jar") {
+		t.Errorf("baz-module-30 javac classpath %v does not contain %q", bazModule30Javac.Args["classpath"],
+			"prebuilts/sdk/30/module-lib/foo.jar")
+	}
+
 	// test if baz has exported SDK lib names foo and bar to qux
 	qux := ctx.ModuleForTests("qux", "android_common")
 	if quxLib, ok := qux.Module().(*Library); ok {
@@ -1540,6 +1596,39 @@ func TestJavaSdkLibrary(t *testing.T) {
 		if w := []string{"bar", "foo", "fred", "quuz"}; !reflect.DeepEqual(w, sdkLibs) {
 			t.Errorf("qux should export %q but exports %q", w, sdkLibs)
 		}
+	}
+}
+
+func TestJavaSdkLibrary_StubOrImplOnlyLibs(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_sdk_library {
+			name: "sdk_lib",
+			srcs: ["a.java"],
+			impl_only_libs: ["foo"],
+			stub_only_libs: ["bar"],
+		}
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+		}
+		java_library {
+			name: "bar",
+			srcs: ["a.java"],
+			sdk_version: "current",
+		}
+		`)
+
+	for _, implName := range []string{"sdk_lib", "sdk_lib.impl"} {
+		implJavacCp := ctx.ModuleForTests(implName, "android_common").Rule("javac").Args["classpath"]
+		if !strings.Contains(implJavacCp, "/foo.jar") || strings.Contains(implJavacCp, "/bar.jar") {
+			t.Errorf("%v javac classpath %v does not contain foo and not bar", implName, implJavacCp)
+		}
+	}
+	stubName := apiScopePublic.stubsLibraryModuleName("sdk_lib")
+	stubsJavacCp := ctx.ModuleForTests(stubName, "android_common").Rule("javac").Args["classpath"]
+	if strings.Contains(stubsJavacCp, "/foo.jar") || !strings.Contains(stubsJavacCp, "/bar.jar") {
+		t.Errorf("stubs javac classpath %v does not contain bar and not foo", stubsJavacCp)
 	}
 }
 

@@ -138,6 +138,12 @@ var (
 	noOverrideGlobalCflags = []string{
 		"-Werror=int-to-pointer-cast",
 		"-Werror=pointer-to-int-cast",
+		// http://b/161386391 for -Wno-void-pointer-to-enum-cast
+		"-Wno-void-pointer-to-enum-cast",
+		// http://b/161386391 for -Wno-void-pointer-to-int-cast
+		"-Wno-void-pointer-to-int-cast",
+		// http://b/161386391 for -Wno-pointer-to-int-cast
+		"-Wno-pointer-to-int-cast",
 		// SDClang does not support -Werror=fortify-source.
 		// TODO: b/142476859
 		// "-Werror=fortify-source",
@@ -152,8 +158,6 @@ var (
 	ExperimentalCStdVersion   = "gnu11"
 	ExperimentalCppStdVersion = "gnu++2a"
 
-	NdkMaxPrebuiltVersionInt = 27
-
 	SDClang                  = false
 	SDClangPath              = ""
         TechPackageLibsList      = &TechPackageLibs{}
@@ -161,8 +165,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r383902b"
-	ClangDefaultShortVersion = "11.0.2"
+	ClangDefaultVersion      = "clang-r399163b"
+	ClangDefaultShortVersion = "11.0.5"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -245,6 +249,7 @@ func init() {
 	pctx.PrefixedExistentPathsForSourcesVariable("CommonGlobalIncludes", "-I",
 		[]string{
 			"system/core/include",
+			"system/core/liblog/include",
 			"system/media/audio/include",
 			"hardware/libhardware/include",
 			"hardware/libhardware_legacy/include",

@@ -68,14 +68,14 @@ func testSdkContext(bp string, fs map[string][]byte, extraOsTypes []android.OsTy
 	// Add windows as a default disable OS to test behavior when some OS variants
 	// are disabled.
 	config.Targets[android.Windows] = []android.Target{
-		{android.Windows, android.Arch{ArchType: android.X86_64}, android.NativeBridgeDisabled, "", ""},
+		{android.Windows, android.Arch{ArchType: android.X86_64}, android.NativeBridgeDisabled, "", "", true},
 	}
 
 	for _, extraOsType := range extraOsTypes {
 		switch extraOsType {
 		case android.LinuxBionic:
 			config.Targets[android.LinuxBionic] = []android.Target{
-				{android.LinuxBionic, android.Arch{ArchType: android.X86_64}, android.NativeBridgeDisabled, "", ""},
+				{android.LinuxBionic, android.Arch{ArchType: android.X86_64}, android.NativeBridgeDisabled, "", "", false},
 			}
 		}
 	}
@@ -89,11 +89,12 @@ func testSdkContext(bp string, fs map[string][]byte, extraOsTypes []android.OsTy
 	android.RegisterAndroidMkBuildComponents(ctx)
 	android.SetInMakeForTests(config)
 	config.Targets[android.CommonOS] = []android.Target{
-		{android.CommonOS, android.Arch{ArchType: android.Common}, android.NativeBridgeDisabled, "", ""},
+		{android.CommonOS, android.Arch{ArchType: android.Common}, android.NativeBridgeDisabled, "", "", true},
 	}
 
 	// from android package
 	android.RegisterPackageBuildComponents(ctx)
+	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.PreArchMutators(android.RegisterVisibilityRuleChecker)
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	ctx.PreArchMutators(android.RegisterComponentsMutator)
@@ -214,6 +215,22 @@ func (h *TestHelper) AssertDeepEquals(message string, expected interface{}, actu
 	h.t.Helper()
 	if !reflect.DeepEqual(actual, expected) {
 		h.t.Errorf("%s: expected %#v, actual %#v", message, expected, actual)
+	}
+}
+
+func (h *TestHelper) AssertPanic(message string, funcThatShouldPanic func()) {
+	h.t.Helper()
+	panicked := false
+	func() {
+		defer func() {
+			if x := recover(); x != nil {
+				panicked = true
+			}
+		}()
+		funcThatShouldPanic()
+	}()
+	if !panicked {
+		h.t.Error(message)
 	}
 }
 
