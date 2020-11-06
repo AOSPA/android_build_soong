@@ -90,6 +90,11 @@ type variableProperties struct {
 			Required        []string
 			Host_required   []string
 			Target_required []string
+			Strip           struct {
+				All                          *bool
+				Keep_symbols                 *bool
+				Keep_symbols_and_debug_frame *bool
+			}
 		}
 
 		// eng is true for -eng builds, and can be used to turn on additionaly heavyweight debugging
@@ -252,6 +257,7 @@ type productVariables struct {
 	Unbundled_build_apps             *bool `json:",omitempty"`
 	Unbundled_build_sdks_from_source *bool `json:",omitempty"`
 	Always_use_prebuilt_sdks         *bool `json:",omitempty"`
+	Skip_boot_jars_check             *bool `json:",omitempty"`
 	Malloc_not_svelte                *bool `json:",omitempty"`
 	Malloc_zero_contents             *bool `json:",omitempty"`
 	Malloc_pattern_fill_contents     *bool `json:",omitempty"`
@@ -278,8 +284,8 @@ type productVariables struct {
 	UncompressPrivAppDex             *bool    `json:",omitempty"`
 	ModulesLoadedByPrivilegedModules []string `json:",omitempty"`
 
-	BootJars          []string `json:",omitempty"`
-	UpdatableBootJars []string `json:",omitempty"`
+	BootJars          ConfiguredJarList `json:",omitempty"`
+	UpdatableBootJars ConfiguredJarList `json:",omitempty"`
 
 	IntegerOverflowExcludePaths []string `json:",omitempty"`
 	IntegerOverflowIncludePaths []string `json:",omitempty"`
@@ -385,6 +391,8 @@ type productVariables struct {
 
 	BoardKernelBinaries                []string `json:",omitempty"`
 	BoardKernelModuleInterfaceVersions []string `json:",omitempty"`
+
+	BoardMoveRecoveryResourcesToVendorBoot *bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

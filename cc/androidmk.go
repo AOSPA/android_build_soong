@@ -24,15 +24,17 @@ import (
 )
 
 var (
-	nativeBridgeSuffix = ".native_bridge"
-	productSuffix      = ".product"
-	vendorSuffix       = ".vendor"
-	ramdiskSuffix      = ".ramdisk"
-	recoverySuffix     = ".recovery"
-	sdkSuffix          = ".sdk"
+	nativeBridgeSuffix  = ".native_bridge"
+	productSuffix       = ".product"
+	vendorSuffix        = ".vendor"
+	ramdiskSuffix       = ".ramdisk"
+	vendorRamdiskSuffix = ".vendor_ramdisk"
+	recoverySuffix      = ".recovery"
+	sdkSuffix           = ".sdk"
 )
 
 type AndroidMkContext interface {
+	BaseModuleName() string
 	Target() android.Target
 	subAndroidMk(*android.AndroidMkEntries, interface{})
 	Arch() android.Arch
@@ -42,6 +44,7 @@ type AndroidMkContext interface {
 	VndkVersion() string
 	static() bool
 	InRamdisk() bool
+	InVendorRamdisk() bool
 	InRecovery() bool
 	AnyVariantDirectlyInAnyApex() bool
 }
@@ -71,10 +74,11 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 
 	entries := android.AndroidMkEntries{
 		OutputFile: c.outputFile,
-		// TODO(jiyong): add the APEXes providing shared libs to the required modules
-		// Currently, adding c.Properties.ApexesProvidingSharedLibs is causing multiple
-		// ART APEXes (com.android.art.debug|release) to be installed. And this
-		// is breaking some older devices (like marlin) where system.img is small.
+		// TODO(jiyong): add the APEXes providing shared libs to the required
+		// modules Currently, adding c.Properties.ApexesProvidingSharedLibs is
+		// causing multiple ART APEXes (com.android.art and com.android.art.debug)
+		// to be installed. And this is breaking some older devices (like marlin)
+		// where system.img is small.
 		Required: c.Properties.AndroidMkRuntimeLibs,
 		Include:  "$(BUILD_SYSTEM)/soong_cc_prebuilt.mk",
 
@@ -281,7 +285,7 @@ func (library *libraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries 
 		})
 	}
 	if len(library.Properties.Stubs.Versions) > 0 && !ctx.Host() && ctx.AnyVariantDirectlyInAnyApex() &&
-		!ctx.InRamdisk() && !ctx.InRecovery() && !ctx.UseVndk() && !ctx.static() {
+		!ctx.InRamdisk() && !ctx.InVendorRamdisk() && !ctx.InRecovery() && !ctx.UseVndk() && !ctx.static() {
 		if library.buildStubs() && library.isLatestStubVersion() {
 			// reference the latest version via its name without suffix when it is provided by apex
 			entries.SubName = ""
@@ -465,6 +469,7 @@ func (c *stubDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 
 func (c *llndkStubDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.Class = "SHARED_LIBRARIES"
+	entries.OverrideName = c.implementationModuleName(ctx.BaseModuleName())
 
 	entries.ExtraEntries = append(entries.ExtraEntries, func(entries *android.AndroidMkEntries) {
 		c.libraryDecorator.androidMkWriteExportedFlags(entries)
@@ -485,15 +490,21 @@ func (c *vndkPrebuiltLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, en
 	entries.ExtraEntries = append(entries.ExtraEntries, func(entries *android.AndroidMkEntries) {
 		c.libraryDecorator.androidMkWriteExportedFlags(entries)
 
-		path, file := filepath.Split(c.path.ToMakePath().String())
+		// Specifying stem is to pass check_elf_files when vendor modules link against vndk prebuilt.
+		// We can't use install path because VNDKs are not installed. Instead, Srcs is directly used.
+		_, file := filepath.Split(c.properties.Srcs[0])
 		stem, suffix, ext := android.SplitFileExt(file)
 		entries.SetString("LOCAL_BUILT_MODULE_STEM", "$(LOCAL_MODULE)"+ext)
 		entries.SetString("LOCAL_MODULE_SUFFIX", suffix)
-		entries.SetString("LOCAL_MODULE_PATH", path)
 		entries.SetString("LOCAL_MODULE_STEM", stem)
+
 		if c.tocFile.Valid() {
 			entries.SetString("LOCAL_SOONG_TOC", c.tocFile.String())
 		}
+
+		// VNDK libraries available to vendor are not installed because
+		// they are packaged in VNDK APEX and installed by APEX packages (apex/apex.go)
+		entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
 	})
 }
 

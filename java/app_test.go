@@ -2766,7 +2766,7 @@ func TestUsesLibraries(t *testing.T) {
 			name: "prebuilt",
 			apk: "prebuilts/apk/app.apk",
 			certificate: "platform",
-			uses_libs: ["foo"],
+			uses_libs: ["foo", "android.test.runner"],
 			optional_uses_libs: [
 				"bar",
 				"baz",
@@ -2804,7 +2804,7 @@ func TestUsesLibraries(t *testing.T) {
 
 	cmd = prebuilt.Rule("verify_uses_libraries").RuleParams.Command
 
-	if w := `uses_library_names="foo"`; !strings.Contains(cmd, w) {
+	if w := `uses_library_names="foo android.test.runner"`; !strings.Contains(cmd, w) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 
@@ -2814,18 +2814,49 @@ func TestUsesLibraries(t *testing.T) {
 
 	// Test that all present libraries are preopted, including implicit SDK dependencies, possibly stubs
 	cmd = app.Rule("dexpreopt").RuleParams.Command
-	w := `--target-classpath-for-sdk any` +
-		` /system/framework/foo.jar` +
-		`:/system/framework/quuz.jar` +
-		`:/system/framework/qux.jar` +
-		`:/system/framework/runtime-library.jar` +
-		`:/system/framework/bar.jar`
+	w := `--target-context-for-sdk any ` +
+		`PCL[/system/framework/foo.jar]#` +
+		`PCL[/system/framework/quuz.jar]#` +
+		`PCL[/system/framework/qux.jar]#` +
+		`PCL[/system/framework/runtime-library.jar]#` +
+		`PCL[/system/framework/bar.jar]`
 	if !strings.Contains(cmd, w) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 
+	// Test conditional context for target SDK version 28.
+	if w := `--target-context-for-sdk 28` +
+		` PCL[/system/framework/org.apache.http.legacy.jar] `; !strings.Contains(cmd, w) {
+		t.Errorf("wanted %q in %q", w, cmd)
+	}
+
+	// Test conditional context for target SDK version 29.
+	if w := `--target-context-for-sdk 29` +
+		` PCL[/system/framework/android.hidl.base-V1.0-java.jar]` +
+		`#PCL[/system/framework/android.hidl.manager-V1.0-java.jar] `; !strings.Contains(cmd, w) {
+		t.Errorf("wanted %q in %q", w, cmd)
+	}
+
+	// Test conditional context for target SDK version 30.
+	// "android.test.mock" is absent because "android.test.runner" is not used.
+	if w := `--target-context-for-sdk 30` +
+		` PCL[/system/framework/android.test.base.jar] `; !strings.Contains(cmd, w) {
+		t.Errorf("wanted %q in %q", w, cmd)
+	}
+
 	cmd = prebuilt.Rule("dexpreopt").RuleParams.Command
-	if w := `--target-classpath-for-sdk any /system/framework/foo.jar:/system/framework/bar.jar`; !strings.Contains(cmd, w) {
+	if w := `--target-context-for-sdk any` +
+		` PCL[/system/framework/foo.jar]` +
+		`#PCL[/system/framework/android.test.runner.jar]` +
+		`#PCL[/system/framework/bar.jar] `; !strings.Contains(cmd, w) {
+		t.Errorf("wanted %q in %q", w, cmd)
+	}
+
+	// Test conditional context for target SDK version 30.
+	// "android.test.mock" is present because "android.test.runner" is used.
+	if w := `--target-context-for-sdk 30` +
+		` PCL[/system/framework/android.test.base.jar]` +
+		`#PCL[/system/framework/android.test.mock.jar] `; !strings.Contains(cmd, w) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 }
@@ -3489,5 +3520,36 @@ func TestEnforceRRO_propagatesToDependencies(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExportedProguardFlagFiles(t *testing.T) {
+	ctx, _ := testJava(t, `
+		android_app {
+			name: "foo",
+			sdk_version: "current",
+			static_libs: ["lib1"],
+		}
+
+		android_library {
+			name: "lib1",
+			sdk_version: "current",
+			optimize: {
+				proguard_flags_files: ["lib1proguard.cfg"],
+			}
+		}
+	`)
+
+	m := ctx.ModuleForTests("foo", "android_common")
+	hasLib1Proguard := false
+	for _, s := range m.Rule("java.r8").Implicits.Strings() {
+		if s == "lib1proguard.cfg" {
+			hasLib1Proguard = true
+			break
+		}
+	}
+
+	if !hasLib1Proguard {
+		t.Errorf("App does not use library proguard config")
 	}
 }

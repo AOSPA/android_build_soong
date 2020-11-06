@@ -86,10 +86,6 @@ func (mt *librarySdkMemberType) AddDependencies(mctx android.BottomUpMutatorCont
 			if mctx.Device() {
 				variations = append(variations,
 					blueprint.Variation{Mutator: "image", Variation: android.CoreVariation})
-				if mt.linkTypes != nil {
-					variations = append(variations,
-						blueprint.Variation{Mutator: "version", Variation: version})
-				}
 			}
 			if mt.linkTypes == nil {
 				mctx.AddFarVariationDependencies(variations, dependencyTag, name)
@@ -97,6 +93,10 @@ func (mt *librarySdkMemberType) AddDependencies(mctx android.BottomUpMutatorCont
 				for _, linkType := range mt.linkTypes {
 					libVariations := append(variations,
 						blueprint.Variation{Mutator: "link", Variation: linkType})
+					if mctx.Device() && linkType == "shared" {
+						libVariations = append(libVariations,
+							blueprint.Variation{Mutator: "version", Variation: version})
+					}
 					mctx.AddFarVariationDependencies(libVariations, dependencyTag, name)
 				}
 			}
@@ -383,12 +383,25 @@ type nativeLibInfoProperties struct {
 }
 
 func (p *nativeLibInfoProperties) PopulateFromVariant(ctx android.SdkMemberContext, variant android.Module) {
+	addOutputFile := true
 	ccModule := variant.(*Module)
 
-	// If the library has some link types then it produces an output binary file, otherwise it
-	// is header only.
-	if !p.memberType.noOutputFiles {
-		p.outputFile = getRequiredMemberOutputFile(ctx, ccModule)
+	if s := ccModule.sanitize; s != nil {
+		// We currently do not capture sanitizer flags for libs with sanitizers
+		// enabled, because they may vary among variants that cannot be represented
+		// in the input blueprint files. In particular, sanitizerDepsMutator enables
+		// various sanitizers on dependencies, but in many cases only on static
+		// ones, and we cannot specify sanitizer flags at the link type level (i.e.
+		// in StaticOrSharedProperties).
+		if s.isUnsanitizedVariant() {
+			// This still captures explicitly disabled sanitizers, which may be
+			// necessary to avoid cyclic dependencies.
+			p.Sanitize = s.Properties.Sanitize
+		} else {
+			// Do not add the output file to the snapshot if we don't represent it
+			// properly.
+			addOutputFile = false
+		}
 	}
 
 	exportedInfo := ctx.SdkModuleContext().OtherModuleProvider(variant, FlagExporterInfoProvider).(FlagExporterInfo)
@@ -415,24 +428,24 @@ func (p *nativeLibInfoProperties) PopulateFromVariant(ctx android.SdkMemberConte
 		specifiedDeps := specifiedDeps{}
 		specifiedDeps = ccModule.linker.linkerSpecifiedDeps(specifiedDeps)
 
-		if !ccModule.HasStubsVariants() {
-			// Propagate dynamic dependencies for implementation libs, but not stubs.
-			p.SharedLibs = specifiedDeps.sharedLibs
+		if lib := ccModule.library; lib != nil {
+			if !lib.hasStubsVariants() {
+				// Propagate dynamic dependencies for implementation libs, but not stubs.
+				p.SharedLibs = specifiedDeps.sharedLibs
+			} else {
+				// TODO(b/169373910): 1. Only output the specific version (from
+				// ccModule.StubsVersion()) if the module is versioned. 2. Ensure that all
+				// the versioned stub libs are retained in the prebuilt tree; currently only
+				// the stub corresponding to ccModule.StubsVersion() is.
+				p.StubsVersions = lib.allStubsVersions()
+			}
 		}
 		p.SystemSharedLibs = specifiedDeps.systemSharedLibs
 	}
 	p.exportedGeneratedHeaders = exportedInfo.GeneratedHeaders
 
-	if ccModule.HasStubsVariants() {
-		// TODO(b/169373910): 1. Only output the specific version (from
-		// ccModule.StubsVersion()) if the module is versioned. 2. Ensure that all
-		// the versioned stub libs are retained in the prebuilt tree; currently only
-		// the stub corresponding to ccModule.StubsVersion() is.
-		p.StubsVersions = ccModule.AllStubsVersions()
-	}
-
-	if ccModule.sanitize != nil {
-		p.Sanitize = ccModule.sanitize.Properties.Sanitize
+	if !p.memberType.noOutputFiles && addOutputFile {
+		p.outputFile = getRequiredMemberOutputFile(ctx, ccModule)
 	}
 }
 

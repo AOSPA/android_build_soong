@@ -169,6 +169,8 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 			TableOfContents: p.tocFile,
 		})
 
+		p.libraryDecorator.flagExporter.setProvider(ctx)
+
 		return in
 	}
 
@@ -199,21 +201,7 @@ func (p *vndkPrebuiltLibraryDecorator) isSnapshotPrebuilt() bool {
 }
 
 func (p *vndkPrebuiltLibraryDecorator) install(ctx ModuleContext, file android.Path) {
-	arches := ctx.DeviceConfig().Arches()
-	if len(arches) == 0 || arches[0].ArchType.String() != p.arch() {
-		return
-	}
-	if ctx.DeviceConfig().BinderBitness() != p.binderBit() {
-		return
-	}
-	if p.shared() {
-		if ctx.isVndkSp() {
-			p.baseInstaller.subDir = "vndk-sp-" + p.version()
-		} else if ctx.isVndk() {
-			p.baseInstaller.subDir = "vndk-" + p.version()
-		}
-		p.baseInstaller.install(ctx, file)
-	}
+	// do not install vndk libs
 }
 
 func vndkPrebuiltSharedLibrary() *Module {
@@ -243,6 +231,14 @@ func vndkPrebuiltSharedLibrary() *Module {
 	module.AddProperties(
 		&prebuilt.properties,
 	)
+
+	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+		// empty BOARD_VNDK_VERSION implies that the device won't support
+		// system only OTA. In this case, VNDK snapshots aren't needed.
+		if ctx.DeviceConfig().VndkVersion() == "" {
+			ctx.Module().Disable()
+		}
+	})
 
 	return module
 }

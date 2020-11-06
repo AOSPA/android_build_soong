@@ -6,13 +6,15 @@ var (
 	// for an example.
 	// TODO(b/160223496): enable rustfmt globally.
 	RustAllowedPaths = []string{
+		"external/adhd",
+		"external/crosvm",
 		"external/minijail",
 		"external/rust",
-		"external/crosvm",
-		"external/adhd",
+		"external/vm_tools/p9",
 		"frameworks/native/libs/binder/rust",
 		"packages/modules/Virtualization",
 		"prebuilts/rust",
+		"system/bt",
 		"system/extras/profcollectd",
 		"system/hardware/interfaces/keystore2",
 		"system/security",

@@ -547,6 +547,18 @@ type dependencyTag struct {
 	name string
 }
 
+type usesLibraryDependencyTag struct {
+	dependencyTag
+	sdkVersion int // SDK version in which the library appared as a standalone library.
+}
+
+func makeUsesLibraryDependencyTag(sdkVersion int) usesLibraryDependencyTag {
+	return usesLibraryDependencyTag{
+		dependencyTag: dependencyTag{name: fmt.Sprintf("uses-library-%d", sdkVersion)},
+		sdkVersion:    sdkVersion,
+	}
+}
+
 func IsJniDepTag(depTag blueprint.DependencyTag) bool {
 	return depTag == jniLibTag
 }
@@ -566,9 +578,12 @@ var (
 	proguardRaiseTag      = dependencyTag{name: "proguard-raise"}
 	certificateTag        = dependencyTag{name: "certificate"}
 	instrumentationForTag = dependencyTag{name: "instrumentation_for"}
-	usesLibTag            = dependencyTag{name: "uses-library"}
 	extraLintCheckTag     = dependencyTag{name: "extra-lint-check"}
 	jniLibTag             = dependencyTag{name: "jnilib"}
+	usesLibTag            = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion)
+	usesLibCompat28Tag    = makeUsesLibraryDependencyTag(28)
+	usesLibCompat29Tag    = makeUsesLibraryDependencyTag(29)
+	usesLibCompat30Tag    = makeUsesLibraryDependencyTag(30)
 )
 
 func IsLibDepTag(depTag blueprint.DependencyTag) bool {
@@ -1172,18 +1187,6 @@ func (j *Module) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaB
 	// javaVersion flag.
 	flags.javaVersion = getJavaVersion(ctx, String(j.properties.Java_version), sdkContext(j))
 
-	// javac flags.
-	javacFlags := j.properties.Javacflags
-	if flags.javaVersion.usesJavaModules() {
-		javacFlags = append(javacFlags, j.properties.Openjdk9.Javacflags...)
-	}
-	if ctx.Config().MinimizeJavaDebugInfo() && !ctx.Host() {
-		// For non-host binaries, override the -g flag passed globally to remove
-		// local variable debug info to reduce disk and memory usage.
-		javacFlags = append(javacFlags, "-g:source,lines")
-	}
-	javacFlags = append(javacFlags, "-Xlint:-dep-ann")
-
 	if ctx.Config().RunErrorProne() {
 		if config.ErrorProneClasspath == nil {
 			ctx.ModuleErrorf("cannot build with Error Prone, missing external/error_prone?")
@@ -1234,23 +1237,76 @@ func (j *Module) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaB
 		}
 	}
 
-	if j.properties.Patch_module != nil && flags.javaVersion.usesJavaModules() {
-		// Manually specify build directory in case it is not under the repo root.
-		// (javac doesn't seem to expand into symbolc links when searching for patch-module targets, so
-		// just adding a symlink under the root doesn't help.)
-		patchPaths := ".:" + ctx.Config().BuildDir()
-		classPath := flags.classpath.FormJavaClassPath("")
-		if classPath != "" {
-			patchPaths += ":" + classPath
-		}
-		javacFlags = append(javacFlags, "--patch-module="+String(j.properties.Patch_module)+"="+patchPaths)
-	}
-
 	// systemModules
 	flags.systemModules = deps.systemModules
 
 	// aidl flags.
 	flags.aidlFlags, flags.aidlDeps = j.aidlFlags(ctx, deps.aidlPreprocess, deps.aidlIncludeDirs)
+
+	return flags
+}
+
+func (j *Module) collectJavacFlags(
+	ctx android.ModuleContext, flags javaBuilderFlags, srcFiles android.Paths) javaBuilderFlags {
+	// javac flags.
+	javacFlags := j.properties.Javacflags
+
+	if ctx.Config().MinimizeJavaDebugInfo() && !ctx.Host() {
+		// For non-host binaries, override the -g flag passed globally to remove
+		// local variable debug info to reduce disk and memory usage.
+		javacFlags = append(javacFlags, "-g:source,lines")
+	}
+	javacFlags = append(javacFlags, "-Xlint:-dep-ann")
+
+	if flags.javaVersion.usesJavaModules() {
+		javacFlags = append(javacFlags, j.properties.Openjdk9.Javacflags...)
+
+		if j.properties.Patch_module != nil {
+			// Manually specify build directory in case it is not under the repo root.
+			// (javac doesn't seem to expand into symbolic links when searching for patch-module targets, so
+			// just adding a symlink under the root doesn't help.)
+			patchPaths := []string{".", ctx.Config().BuildDir()}
+
+			// b/150878007
+			//
+			// Workaround to support *Bazel-executed* JDK9 javac in Bazel's
+			// execution root for --patch-module. If this javac command line is
+			// invoked within Bazel's execution root working directory, the top
+			// level directories (e.g. libcore/, tools/, frameworks/) are all
+			// symlinks. JDK9 javac does not traverse into symlinks, which causes
+			// --patch-module to fail source file lookups when invoked in the
+			// execution root.
+			//
+			// Short of patching javac or enumerating *all* directories as possible
+			// input dirs, manually add the top level dir of the source files to be
+			// compiled.
+			topLevelDirs := map[string]bool{}
+			for _, srcFilePath := range srcFiles {
+				srcFileParts := strings.Split(srcFilePath.String(), "/")
+				// Ignore source files that are already in the top level directory
+				// as well as generated files in the out directory. The out
+				// directory may be an absolute path, which means srcFileParts[0] is the
+				// empty string, so check that as well. Note that "out" in Bazel's execution
+				// root is *not* a symlink, which doesn't cause problems for --patch-modules
+				// anyway, so it's fine to not apply this workaround for generated
+				// source files.
+				if len(srcFileParts) > 1 &&
+					srcFileParts[0] != "" &&
+					srcFileParts[0] != "out" {
+					topLevelDirs[srcFileParts[0]] = true
+				}
+			}
+			patchPaths = append(patchPaths, android.SortedStringKeys(topLevelDirs)...)
+
+			classPath := flags.classpath.FormJavaClassPath("")
+			if classPath != "" {
+				patchPaths = append(patchPaths, classPath)
+			}
+			javacFlags = append(
+				javacFlags,
+				"--patch-module="+String(j.properties.Patch_module)+"="+strings.Join(patchPaths, ":"))
+		}
+	}
 
 	if len(javacFlags) > 0 {
 		// optimization.
@@ -1281,6 +1337,10 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	}
 
 	srcFiles = j.genSources(ctx, srcFiles, flags)
+
+	// Collect javac flags only after computing the full set of srcFiles to
+	// ensure that the --patch-module lookup paths are complete.
+	flags = j.collectJavacFlags(ctx, flags, srcFiles)
 
 	srcJars := srcFiles.FilterByExt(".srcjar")
 	srcJars = append(srcJars, deps.srcJars...)
@@ -2731,7 +2791,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 func (j *Import) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
-	case ".jar":
+	case "", ".jar":
 		return android.Paths{j.combinedClasspathFile}, nil
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)

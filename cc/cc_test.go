@@ -103,6 +103,7 @@ func testCcErrorWithConfig(t *testing.T, pattern string, config android.Config) 
 }
 
 func testCcError(t *testing.T, pattern string, bp string) {
+	t.Helper()
 	config := TestConfig(buildDir, android.Android, nil, bp, nil)
 	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
 	config.TestProductVariables.Platform_vndk_version = StringPtr("VER")
@@ -111,6 +112,7 @@ func testCcError(t *testing.T, pattern string, bp string) {
 }
 
 func testCcErrorProductVndk(t *testing.T, pattern string, bp string) {
+	t.Helper()
 	config := TestConfig(buildDir, android.Android, nil, bp, nil)
 	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
 	config.TestProductVariables.ProductVndkVersion = StringPtr("current")
@@ -388,10 +390,12 @@ func TestVndk(t *testing.T) {
 
 	ctx := testCcWithConfig(t, config)
 
-	checkVndkModule(t, ctx, "libvndk", "vndk-VER", false, "", vendorVariant)
-	checkVndkModule(t, ctx, "libvndk_private", "vndk-VER", false, "", vendorVariant)
-	checkVndkModule(t, ctx, "libvndk_sp", "vndk-sp-VER", true, "", vendorVariant)
-	checkVndkModule(t, ctx, "libvndk_sp_private", "vndk-sp-VER", true, "", vendorVariant)
+	// subdir == "" because VNDK libs are not supposed to be installed separately.
+	// They are installed as part of VNDK APEX instead.
+	checkVndkModule(t, ctx, "libvndk", "", false, "", vendorVariant)
+	checkVndkModule(t, ctx, "libvndk_private", "", false, "", vendorVariant)
+	checkVndkModule(t, ctx, "libvndk_sp", "", true, "", vendorVariant)
+	checkVndkModule(t, ctx, "libvndk_sp_private", "", true, "", vendorVariant)
 
 	// Check VNDK snapshot output.
 
@@ -846,10 +850,11 @@ func TestDoubleLoadbleDep(t *testing.T) {
 		cc_library {
 			name: "libllndk",
 			shared_libs: ["libdoubleloadable"],
+			llndk_stubs: "libllndk.llndk",
 		}
 
 		llndk_library {
-			name: "libllndk",
+			name: "libllndk.llndk",
 			symbol_file: "",
 		}
 
@@ -867,10 +872,11 @@ func TestDoubleLoadbleDep(t *testing.T) {
 		cc_library {
 			name: "libllndk",
 			shared_libs: ["libvndksp"],
+			llndk_stubs: "libllndk.llndk",
 		}
 
 		llndk_library {
-			name: "libllndk",
+			name: "libllndk.llndk",
 			symbol_file: "",
 		}
 
@@ -924,10 +930,11 @@ func TestDoubleLoadbleDep(t *testing.T) {
 		cc_library {
 			name: "libllndk",
 			shared_libs: ["libcoreonly"],
+			llndk_stubs: "libllndk.llndk",
 		}
 
 		llndk_library {
-			name: "libllndk",
+			name: "libllndk.llndk",
 			symbol_file: "",
 		}
 
@@ -1123,6 +1130,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		arch: {
 			arm64: {
 				srcs: ["libvndk.so"],
+				export_include_dirs: ["include/libvndk"],
 			},
 		},
 	}
@@ -1149,6 +1157,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		shared_libs: ["libvndk"],
 		static_libs: ["libvendor", "libvendor_without_snapshot"],
 		compile_multilib: "64",
+		srcs: ["client.cpp"],
 	}
 
 	cc_binary {
@@ -1160,6 +1169,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		system_shared_libs: [],
 		static_libs: ["libvndk"],
 		compile_multilib: "64",
+		srcs: ["bin.cpp"],
 	}
 
 	vendor_snapshot_static {
@@ -1170,6 +1180,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		arch: {
 			arm64: {
 				src: "libvndk.a",
+				export_include_dirs: ["include/libvndk"],
 			},
 		},
 	}
@@ -1182,6 +1193,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		arch: {
 			arm64: {
 				src: "libvendor.so",
+				export_include_dirs: ["include/libvendor"],
 			},
 		},
 	}
@@ -1194,6 +1206,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		arch: {
 			arm64: {
 				src: "libvendor.a",
+				export_include_dirs: ["include/libvendor"],
 			},
 		},
 	}
@@ -1213,15 +1226,20 @@ func TestVendorSnapshotUse(t *testing.T) {
 	depsBp := GatherRequiredDepsForTest(android.Android)
 
 	mockFS := map[string][]byte{
-		"deps/Android.bp":      []byte(depsBp),
-		"framework/Android.bp": []byte(frameworkBp),
-		"vendor/Android.bp":    []byte(vendorProprietaryBp),
-		"vendor/libvndk.a":     nil,
-		"vendor/libvendor.a":   nil,
-		"vendor/libvendor.so":  nil,
-		"vendor/bin":           nil,
-		"vndk/Android.bp":      []byte(vndkBp),
-		"vndk/libvndk.so":      nil,
+		"deps/Android.bp":              []byte(depsBp),
+		"framework/Android.bp":         []byte(frameworkBp),
+		"vendor/Android.bp":            []byte(vendorProprietaryBp),
+		"vendor/bin":                   nil,
+		"vendor/bin.cpp":               nil,
+		"vendor/client.cpp":            nil,
+		"vendor/include/libvndk/a.h":   nil,
+		"vendor/include/libvendor/b.h": nil,
+		"vendor/libvndk.a":             nil,
+		"vendor/libvendor.a":           nil,
+		"vendor/libvendor.so":          nil,
+		"vndk/Android.bp":              []byte(vndkBp),
+		"vndk/include/libvndk/a.h":     nil,
+		"vndk/libvndk.so":              nil,
 	}
 
 	config := TestConfig(buildDir, android.Android, nil, "", mockFS)
@@ -1240,27 +1258,41 @@ func TestVendorSnapshotUse(t *testing.T) {
 	binaryVariant := "android_vendor.BOARD_arm64_armv8-a"
 
 	// libclient uses libvndk.vndk.BOARD.arm64, libvendor.vendor_static.BOARD.arm64, libvendor_without_snapshot
-	libclientLdRule := ctx.ModuleForTests("libclient", sharedVariant).Rule("ld")
-	libclientFlags := libclientLdRule.Args["libFlags"]
+	libclientCcFlags := ctx.ModuleForTests("libclient", sharedVariant).Rule("cc").Args["cFlags"]
+	for _, includeFlags := range []string{
+		"-Ivndk/include/libvndk",     // libvndk
+		"-Ivendor/include/libvendor", // libvendor
+	} {
+		if !strings.Contains(libclientCcFlags, includeFlags) {
+			t.Errorf("flags for libclient must contain %#v, but was %#v.",
+				includeFlags, libclientCcFlags)
+		}
+	}
 
+	libclientLdFlags := ctx.ModuleForTests("libclient", sharedVariant).Rule("ld").Args["libFlags"]
 	for _, input := range [][]string{
 		[]string{sharedVariant, "libvndk.vndk.BOARD.arm64"},
 		[]string{staticVariant, "libvendor.vendor_static.BOARD.arm64"},
 		[]string{staticVariant, "libvendor_without_snapshot"},
 	} {
 		outputPaths := getOutputPaths(ctx, input[0] /* variant */, []string{input[1]} /* module name */)
-		if !strings.Contains(libclientFlags, outputPaths[0].String()) {
-			t.Errorf("libflags for libclient must contain %#v, but was %#v", outputPaths[0], libclientFlags)
+		if !strings.Contains(libclientLdFlags, outputPaths[0].String()) {
+			t.Errorf("libflags for libclient must contain %#v, but was %#v", outputPaths[0], libclientLdFlags)
 		}
 	}
 
 	// bin_without_snapshot uses libvndk.vendor_static.BOARD.arm64
-	binWithoutSnapshotLdRule := ctx.ModuleForTests("bin_without_snapshot", binaryVariant).Rule("ld")
-	binWithoutSnapshotFlags := binWithoutSnapshotLdRule.Args["libFlags"]
+	binWithoutSnapshotCcFlags := ctx.ModuleForTests("bin_without_snapshot", binaryVariant).Rule("cc").Args["cFlags"]
+	if !strings.Contains(binWithoutSnapshotCcFlags, "-Ivendor/include/libvndk") {
+		t.Errorf("flags for bin_without_snapshot must contain %#v, but was %#v.",
+			"-Ivendor/include/libvndk", binWithoutSnapshotCcFlags)
+	}
+
+	binWithoutSnapshotLdFlags := ctx.ModuleForTests("bin_without_snapshot", binaryVariant).Rule("ld").Args["libFlags"]
 	libVndkStaticOutputPaths := getOutputPaths(ctx, staticVariant, []string{"libvndk.vendor_static.BOARD.arm64"})
-	if !strings.Contains(binWithoutSnapshotFlags, libVndkStaticOutputPaths[0].String()) {
+	if !strings.Contains(binWithoutSnapshotLdFlags, libVndkStaticOutputPaths[0].String()) {
 		t.Errorf("libflags for bin_without_snapshot must contain %#v, but was %#v",
-			libVndkStaticOutputPaths[0], binWithoutSnapshotFlags)
+			libVndkStaticOutputPaths[0], binWithoutSnapshotLdFlags)
 	}
 
 	// libvendor.so is installed by libvendor.vendor_shared.BOARD.arm64
@@ -1523,10 +1555,11 @@ func TestDoubleLoadableDepError(t *testing.T) {
 		cc_library {
 			name: "libllndk",
 			shared_libs: ["libnondoubleloadable"],
+			llndk_stubs: "libllndk.llndk",
 		}
 
 		llndk_library {
-			name: "libllndk",
+			name: "libllndk.llndk",
 			symbol_file: "",
 		}
 
@@ -1545,10 +1578,11 @@ func TestDoubleLoadableDepError(t *testing.T) {
 			name: "libllndk",
 			no_libcrt: true,
 			shared_libs: ["libnondoubleloadable"],
+			llndk_stubs: "libllndk.llndk",
 		}
 
 		llndk_library {
-			name: "libllndk",
+			name: "libllndk.llndk",
 			symbol_file: "",
 		}
 
@@ -1617,10 +1651,11 @@ func TestDoubleLoadableDepError(t *testing.T) {
 		cc_library {
 			name: "libllndk",
 			shared_libs: ["libcoreonly"],
+			llndk_stubs: "libllndk.llndk",
 		}
 
 		llndk_library {
-			name: "libllndk",
+			name: "libllndk.llndk",
 			symbol_file: "",
 		}
 
@@ -1632,6 +1667,35 @@ func TestDoubleLoadableDepError(t *testing.T) {
 		// indirect dependency of LLNDK
 		cc_library {
 			name: "libvendoravailable",
+			vendor_available: true,
+		}
+	`)
+}
+
+func TestCheckVndkMembershipBeforeDoubleLoadable(t *testing.T) {
+	testCcError(t, "module \"libvndksp\" variant .*: .*: VNDK-SP must only depend on VNDK-SP", `
+		cc_library {
+			name: "libvndksp",
+			shared_libs: ["libanothervndksp"],
+			vendor_available: true,
+			vndk: {
+				enabled: true,
+				support_system_process: true,
+			}
+		}
+
+		cc_library {
+			name: "libllndk",
+			shared_libs: ["libanothervndksp"],
+		}
+
+		llndk_library {
+			name: "libllndk",
+			symbol_file: "",
+		}
+
+		cc_library {
+			name: "libanothervndksp",
 			vendor_available: true,
 		}
 	`)
@@ -2361,9 +2425,10 @@ func TestEnforceProductVndkVersion(t *testing.T) {
 	bp := `
 		cc_library {
 			name: "libllndk",
+			llndk_stubs: "libllndk.llndk",
 		}
 		llndk_library {
-			name: "libllndk",
+			name: "libllndk.llndk",
 			symbol_file: "",
 		}
 		cc_library {
@@ -2427,8 +2492,8 @@ func TestEnforceProductVndkVersion(t *testing.T) {
 
 	ctx := testCcWithConfig(t, config)
 
-	checkVndkModule(t, ctx, "libvndk", "vndk-VER", false, "", productVariant)
-	checkVndkModule(t, ctx, "libvndk_sp", "vndk-sp-VER", true, "", productVariant)
+	checkVndkModule(t, ctx, "libvndk", "", false, "", productVariant)
+	checkVndkModule(t, ctx, "libvndk_sp", "", true, "", productVariant)
 }
 
 func TestEnforceProductVndkVersionErrors(t *testing.T) {
@@ -2564,16 +2629,18 @@ func TestMakeLinkType(t *testing.T) {
 		}
 		cc_library {
 			name: "libllndk",
+			llndk_stubs: "libllndk.llndk",
 		}
 		llndk_library {
-			name: "libllndk",
+			name: "libllndk.llndk",
 			symbol_file: "",
 		}
 		cc_library {
 			name: "libllndkprivate",
+			llndk_stubs: "libllndkprivate.llndk",
 		}
 		llndk_library {
-			name: "libllndkprivate",
+			name: "libllndkprivate.llndk",
 			vendor_available: false,
 			symbol_file: "",
 		}`
@@ -2987,9 +3054,10 @@ func TestLlndkLibrary(t *testing.T) {
 	cc_library {
 		name: "libllndk",
 		stubs: { versions: ["1", "2"] },
+		llndk_stubs: "libllndk.llndk",
 	}
 	llndk_library {
-		name: "libllndk",
+		name: "libllndk.llndk",
 	}
 	`)
 	actual := ctx.ModuleVariantsForTests("libllndk.llndk")
@@ -3017,9 +3085,14 @@ func TestLlndkHeaders(t *testing.T) {
 		export_include_dirs: ["my_include"],
 	}
 	llndk_library {
-		name: "libllndk",
+		name: "libllndk.llndk",
 		export_llndk_headers: ["libllndk_headers"],
 	}
+	cc_library {
+		name: "libllndk",
+		llndk_stubs: "libllndk.llndk",
+	}
+
 	cc_library {
 		name: "libvendor",
 		shared_libs: ["libllndk"],
