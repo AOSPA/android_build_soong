@@ -225,8 +225,6 @@ func init() {
 	pctx.PrefixedExistentPathsForSourcesVariable("CommonNativehelperInclude", "-I",
 		[]string{"libnativehelper/include_jni"})
 
-	setSdclangVars()
-
 	pctx.SourcePathVariable("ClangDefaultBase", ClangDefaultBase)
 	pctx.VariableFunc("ClangBase", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("LLVM_PREBUILTS_BASE"); override != "" {
