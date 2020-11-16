@@ -29,10 +29,10 @@ var (
 	defaultBindgenFlags = []string{""}
 
 	// bindgen should specify its own Clang revision so updating Clang isn't potentially blocked on bindgen failures.
-	bindgenClangVersion = "clang-r383902c"
+	bindgenClangVersion = "clang-r399163b"
 
 	//TODO(b/160803703) Use a prebuilt bindgen instead of the built bindgen.
-	_ = pctx.SourcePathVariable("bindgenCmd", "out/host/${config.HostPrebuiltTag}/bin/bindgen")
+	_ = pctx.HostBinToolVariable("bindgenCmd", "bindgen")
 	_ = pctx.SourcePathVariable("bindgenClang",
 		"${cc_config.ClangBase}/${config.HostPrebuiltTag}/"+bindgenClangVersion+"/bin/clang")
 	_ = pctx.SourcePathVariable("bindgenLibClang",

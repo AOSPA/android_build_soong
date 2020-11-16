@@ -216,7 +216,7 @@ func testApexContext(_ *testing.T, bp string, handlers ...testCustomizer) (*andr
 		handler(tempFS, config)
 	}
 
-	ctx := android.NewTestArchContext()
+	ctx := android.NewTestArchContext(config)
 
 	// from android package
 	android.RegisterPackageBuildComponents(ctx)
@@ -261,7 +261,7 @@ func testApexContext(_ *testing.T, bp string, handlers ...testCustomizer) (*andr
 	ctx.PreDepsMutators(RegisterPreDepsMutators)
 	ctx.PostDepsMutators(RegisterPostDepsMutators)
 
-	ctx.Register(config)
+	ctx.Register()
 
 	return ctx, config
 }
@@ -2349,6 +2349,7 @@ func TestVendorApex_use_vndk_as_stable(t *testing.T) {
 				enabled: true,
 			},
 			vendor_available: true,
+			product_available: true,
 		}
 		cc_library {
 			name: "libvendor",
@@ -3022,6 +3023,7 @@ func TestVndkApexCurrent(t *testing.T) {
 			name: "libvndk",
 			srcs: ["mylib.cpp"],
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3034,6 +3036,7 @@ func TestVndkApexCurrent(t *testing.T) {
 			name: "libvndksp",
 			srcs: ["mylib.cpp"],
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 				support_system_process: true,
@@ -3075,6 +3078,7 @@ func TestVndkApexWithPrebuilt(t *testing.T) {
 			name: "libvndk",
 			srcs: ["libvndk.so"],
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3087,6 +3091,7 @@ func TestVndkApexWithPrebuilt(t *testing.T) {
 			name: "libvndk.arm",
 			srcs: ["libvndk.arm.so"],
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3159,6 +3164,7 @@ func TestVndkApexVersion(t *testing.T) {
 			name: "libvndk27",
 			version: "27",
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3178,6 +3184,7 @@ func TestVndkApexVersion(t *testing.T) {
 			name: "libvndk27",
 			version: "27",
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3231,6 +3238,7 @@ func TestVndkApexErrorWithDuplicateVersion(t *testing.T) {
 			name: "libvndk",
 			srcs: ["mylib.cpp"],
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3242,6 +3250,7 @@ func TestVndkApexErrorWithDuplicateVersion(t *testing.T) {
 			name: "libvndk",
 			version: "27",
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3301,6 +3310,7 @@ func TestVndkApexSkipsNativeBridgeSupportedModules(t *testing.T) {
 			name: "libvndk",
 			srcs: ["mylib.cpp"],
 			vendor_available: true,
+			product_available: true,
 			native_bridge_supported: true,
 			host_supported: true,
 			vndk: {
@@ -3340,6 +3350,7 @@ func TestVndkApexDoesntSupportNativeBridgeSupported(t *testing.T) {
 			name: "libvndk",
 			srcs: ["mylib.cpp"],
 			vendor_available: true,
+			product_available: true,
 			native_bridge_supported: true,
 			host_supported: true,
 			vndk: {
@@ -3371,6 +3382,7 @@ func TestVndkApexWithBinder32(t *testing.T) {
 			version: "27",
 			target_arch: "arm",
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3387,6 +3399,7 @@ func TestVndkApexWithBinder32(t *testing.T) {
 			target_arch: "arm",
 			binder32bit: true,
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -3434,6 +3447,7 @@ func TestVndkApexShouldNotProvideNativeLibs(t *testing.T) {
 		cc_library {
 			name: "libz",
 			vendor_available: true,
+			product_available: true,
 			vndk: {
 				enabled: true,
 			},
@@ -5732,7 +5746,9 @@ func testNoUpdatableJarsInBootImage(t *testing.T, errmsg string, transformDexpre
 	}
 	cc.GatherRequiredFilesForTest(fs)
 
-	ctx := android.NewTestArchContext()
+	config := android.TestArchConfig(buildDir, nil, bp, fs)
+
+	ctx := android.NewTestArchContext(config)
 	ctx.RegisterModuleType("apex", BundleFactory)
 	ctx.RegisterModuleType("apex_key", ApexKeyFactory)
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
@@ -5747,8 +5763,7 @@ func testNoUpdatableJarsInBootImage(t *testing.T, errmsg string, transformDexpre
 	ctx.PreDepsMutators(RegisterPreDepsMutators)
 	ctx.PostDepsMutators(RegisterPostDepsMutators)
 
-	config := android.TestArchConfig(buildDir, nil, bp, fs)
-	ctx.Register(config)
+	ctx.Register()
 
 	_ = dexpreopt.GlobalSoongConfigForTests(config)
 	dexpreopt.RegisterToolModulesForTest(ctx)
@@ -5883,7 +5898,15 @@ func testApexPermittedPackagesRules(t *testing.T, errmsg, bp string, apexBootJar
 		"system/sepolicy/apex/myapex-file_contexts": nil,
 	}
 
-	ctx := android.NewTestArchContext()
+	config := android.TestArchConfig(buildDir, nil, bp, fs)
+	android.SetTestNeverallowRules(config, rules)
+	updatableBootJars := make([]string, 0, len(apexBootJars))
+	for _, apexBootJar := range apexBootJars {
+		updatableBootJars = append(updatableBootJars, "myapex:"+apexBootJar)
+	}
+	config.TestProductVariables.UpdatableBootJars = android.CreateTestConfiguredJarList(updatableBootJars)
+
+	ctx := android.NewTestArchContext(config)
 	ctx.RegisterModuleType("apex", BundleFactory)
 	ctx.RegisterModuleType("apex_key", ApexKeyFactory)
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
@@ -5896,15 +5919,7 @@ func testApexPermittedPackagesRules(t *testing.T, errmsg, bp string, apexBootJar
 	ctx.PostDepsMutators(RegisterPostDepsMutators)
 	ctx.PostDepsMutators(android.RegisterNeverallowMutator)
 
-	config := android.TestArchConfig(buildDir, nil, bp, fs)
-	android.SetTestNeverallowRules(config, rules)
-	updatableBootJars := make([]string, 0, len(apexBootJars))
-	for _, apexBootJar := range apexBootJars {
-		updatableBootJars = append(updatableBootJars, "myapex:"+apexBootJar)
-	}
-	config.TestProductVariables.UpdatableBootJars = android.CreateTestConfiguredJarList(updatableBootJars)
-
-	ctx.Register(config)
+	ctx.Register()
 
 	_, errs := ctx.ParseBlueprintsFiles("Android.bp")
 	android.FailIfErrored(t, errs)

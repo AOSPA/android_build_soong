@@ -34,6 +34,7 @@ var (
 //     version: "27",
 //     target_arch: "arm64",
 //     vendor_available: true,
+//     product_available: true,
 //     vndk: {
 //         enabled: true,
 //     },
@@ -52,7 +53,7 @@ type vndkPrebuiltProperties struct {
 	// VNDK snapshot version.
 	Version *string
 
-	// Target arch name of the snapshot (e.g. 'arm64' for variant 'aosp_arm64_ab')
+	// Target arch name of the snapshot (e.g. 'arm64' for variant 'aosp_arm64')
 	Target_arch *string
 
 	// If the prebuilt snapshot lib is built with 32 bit binder, this must be set to true.
@@ -251,6 +252,7 @@ func vndkPrebuiltSharedLibrary() *Module {
 //        version: "27",
 //        target_arch: "arm64",
 //        vendor_available: true,
+//        product_available: true,
 //        vndk: {
 //            enabled: true,
 //        },

@@ -15,6 +15,9 @@
 package rust
 
 import (
+	"fmt"
+	"strings"
+
 	"android/soong/android"
 )
 
@@ -22,9 +25,22 @@ var (
 	defaultProtobufFlags = []string{""}
 )
 
+const (
+	grpcSuffix = "_grpc"
+)
+
+type PluginType int
+
+const (
+	Protobuf PluginType = iota
+	Grpc
+)
+
 func init() {
 	android.RegisterModuleType("rust_protobuf", RustProtobufFactory)
 	android.RegisterModuleType("rust_protobuf_host", RustProtobufHostFactory)
+	android.RegisterModuleType("rust_grpcio", RustGrpcioFactory)
+	android.RegisterModuleType("rust_grpcio_host", RustGrpcioHostFactory)
 }
 
 var _ SourceProvider = (*protobufDecorator)(nil)
@@ -35,32 +51,42 @@ type ProtobufProperties struct {
 
 	// List of additional flags to pass to aprotoc
 	Proto_flags []string `android:"arch_variant"`
+
+	// List of libraries which export include paths required for this module
+	Header_libs []string `android:"arch_variant"`
 }
 
 type protobufDecorator struct {
 	*BaseSourceProvider
 
 	Properties ProtobufProperties
+	plugin     PluginType
 }
 
 func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) android.Path {
 	var protoFlags android.ProtoFlags
-	pluginPath := ctx.Config().HostToolPath(ctx, "protoc-gen-rust")
+	var pluginPaths android.Paths
 
 	protoFlags.OutTypeFlag = "--rust_out"
+	outDir := android.PathForModuleOut(ctx)
 
-	protoFlags.Flags = append(protoFlags.Flags, " --plugin="+pluginPath.String())
+	pluginPaths, protoFlags = proto.setupPlugin(ctx, protoFlags, outDir)
+
 	protoFlags.Flags = append(protoFlags.Flags, defaultProtobufFlags...)
 	protoFlags.Flags = append(protoFlags.Flags, proto.Properties.Proto_flags...)
 
-	protoFlags.Deps = append(protoFlags.Deps, pluginPath)
+	protoFlags.Deps = append(protoFlags.Deps, pluginPaths...)
 
 	protoFile := android.OptionalPathForModuleSrc(ctx, proto.Properties.Proto)
 	if !protoFile.Valid() {
 		ctx.PropertyErrorf("proto", "invalid path to proto file")
 	}
 
-	outDir := android.PathForModuleOut(ctx)
+	// Add exported dependency include paths
+	for _, include := range deps.depIncludePaths {
+		protoFlags.Flags = append(protoFlags.Flags, "-I"+include.String())
+	}
+
 	stem := proto.BaseSourceProvider.getStem(ctx)
 	// rust protobuf-codegen output <stem>.rs
 	stemFile := android.PathForModuleOut(ctx, stem+".rs")
@@ -68,15 +94,58 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 	modFile := android.PathForModuleOut(ctx, "mod_"+stem+".rs")
 	// mod_<stem>.rs is the main/first output file to be included/compiled
 	outputs := android.WritablePaths{modFile, stemFile}
+	if proto.plugin == Grpc {
+		outputs = append(outputs, android.PathForModuleOut(ctx, stem+grpcSuffix+".rs"))
+	}
 	depFile := android.PathForModuleOut(ctx, "mod_"+stem+".d")
 
 	rule := android.NewRuleBuilder()
 	android.ProtoRule(ctx, rule, protoFile.Path(), protoFlags, protoFlags.Deps, outDir, depFile, outputs)
-	rule.Command().Text("printf '// @generated\\npub mod %s;\\n' '" + stem + "' >").Output(modFile)
+	rule.Command().Text("printf '" + proto.getModFileContents(ctx) + "' >").Output(modFile)
 	rule.Build(pctx, ctx, "protoc_"+protoFile.Path().Rel(), "protoc "+protoFile.Path().Rel())
 
 	proto.BaseSourceProvider.OutputFiles = android.Paths{modFile, stemFile}
 	return modFile
+}
+
+func (proto *protobufDecorator) getModFileContents(ctx ModuleContext) string {
+	stem := proto.BaseSourceProvider.getStem(ctx)
+	lines := []string{
+		"// @generated",
+		fmt.Sprintf("pub mod %s;", stem),
+	}
+
+	if proto.plugin == Grpc {
+		lines = append(lines, fmt.Sprintf("pub mod %s%s;", stem, grpcSuffix))
+		lines = append(
+			lines,
+			"pub mod empty {",
+			"    pub use protobuf::well_known_types::Empty;",
+			"}")
+	}
+
+	return strings.Join(lines, "\\n")
+}
+
+func (proto *protobufDecorator) setupPlugin(ctx ModuleContext, protoFlags android.ProtoFlags, outDir android.ModuleOutPath) (android.Paths, android.ProtoFlags) {
+	pluginPaths := []android.Path{}
+
+	if proto.plugin == Protobuf {
+		pluginPath := ctx.Config().HostToolPath(ctx, "protoc-gen-rust")
+		pluginPaths = append(pluginPaths, pluginPath)
+		protoFlags.Flags = append(protoFlags.Flags, "--plugin="+pluginPath.String())
+	} else if proto.plugin == Grpc {
+		grpcPath := ctx.Config().HostToolPath(ctx, "grpc_rust_plugin")
+		protobufPath := ctx.Config().HostToolPath(ctx, "protoc-gen-rust")
+		pluginPaths = append(pluginPaths, grpcPath, protobufPath)
+		protoFlags.Flags = append(protoFlags.Flags, "--grpc_out="+outDir.String())
+		protoFlags.Flags = append(protoFlags.Flags, "--plugin=protoc-gen-grpc="+grpcPath.String())
+		protoFlags.Flags = append(protoFlags.Flags, "--plugin=protoc-gen-rust="+protobufPath.String())
+	} else {
+		ctx.ModuleErrorf("Unknown protobuf plugin type requested")
+	}
+
+	return pluginPaths, protoFlags
 }
 
 func (proto *protobufDecorator) SourceProviderProps() []interface{} {
@@ -86,6 +155,13 @@ func (proto *protobufDecorator) SourceProviderProps() []interface{} {
 func (proto *protobufDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
 	deps = proto.BaseSourceProvider.SourceProviderDeps(ctx, deps)
 	deps.Rustlibs = append(deps.Rustlibs, "libprotobuf")
+	deps.HeaderLibs = append(deps.SharedLibs, proto.Properties.Header_libs...)
+
+	if proto.plugin == Grpc {
+		deps.Rustlibs = append(deps.Rustlibs, "libgrpcio", "libfutures")
+		deps.HeaderLibs = append(deps.HeaderLibs, "libprotobuf-cpp-full")
+	}
+
 	return deps
 }
 
@@ -104,10 +180,34 @@ func RustProtobufHostFactory() android.Module {
 	return module.Init()
 }
 
+func RustGrpcioFactory() android.Module {
+	module, _ := NewRustGrpcio(android.HostAndDeviceSupported)
+	return module.Init()
+}
+
+// A host-only variant of rust_protobuf. Refer to rust_protobuf for more details.
+func RustGrpcioHostFactory() android.Module {
+	module, _ := NewRustGrpcio(android.HostSupported)
+	return module.Init()
+}
+
 func NewRustProtobuf(hod android.HostOrDeviceSupported) (*Module, *protobufDecorator) {
 	protobuf := &protobufDecorator{
 		BaseSourceProvider: NewSourceProvider(),
 		Properties:         ProtobufProperties{},
+		plugin:             Protobuf,
+	}
+
+	module := NewSourceProviderModule(hod, protobuf, false)
+
+	return module, protobuf
+}
+
+func NewRustGrpcio(hod android.HostOrDeviceSupported) (*Module, *protobufDecorator) {
+	protobuf := &protobufDecorator{
+		BaseSourceProvider: NewSourceProvider(),
+		Properties:         ProtobufProperties{},
+		plugin:             Grpc,
 	}
 
 	module := NewSourceProviderModule(hod, protobuf, false)

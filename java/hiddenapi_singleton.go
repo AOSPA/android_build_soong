@@ -211,15 +211,6 @@ func stubFlagsRule(ctx android.SingletonContext) {
 	rule.Build(pctx, ctx, "hiddenAPIStubFlagsFile", "hiddenapi stub flags")
 }
 
-func moduleForGreyListRemovedApis(ctx android.SingletonContext, module android.Module) bool {
-	switch ctx.ModuleName(module) {
-	case "api-stubs-docs", "system-api-stubs-docs", "android.car-stubs-docs", "android.car-system-stubs-docs":
-		return true
-	default:
-		return false
-	}
-}
-
 // flagsRule creates a rule to build hiddenapi-flags.csv out of flags.csv files generated for boot image modules and
 // the unsupported API.
 func flagsRule(ctx android.SingletonContext) android.Path {
@@ -267,6 +258,8 @@ func flagsRule(ctx android.SingletonContext) android.Path {
 			ctx, "frameworks/base/config/hiddenapi-max-target-o.txt")).Flag("--ignore-conflicts ").
 		FlagWithInput("--blocked ",
 			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-force-blocked.txt")).
+		FlagWithInput("--blocked ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-temp-blocklist.txt")).
 		FlagWithInput("--unsupported ", android.PathForSource(
 			ctx, "frameworks/base/config/hiddenapi-unsupported-packages.txt")).Flag("--packages ").
 		FlagWithOutput("--output ", tempPath)
