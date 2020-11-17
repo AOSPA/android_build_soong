@@ -81,6 +81,12 @@ type hostToolDependencyTag struct {
 	label string
 }
 
+// TODO(cparsons): Move to a common location when there is more than just
+// genrule with a bazel_module property.
+type bazelModuleProperties struct {
+	Label string
+}
+
 type generatorProperties struct {
 	// The command to run on one or more input files. Cmd supports substitution of a few variables
 	//
@@ -115,7 +121,7 @@ type generatorProperties struct {
 	Exclude_srcs []string `android:"path,arch_variant"`
 
 	// in bazel-enabled mode, the bazel label to evaluate instead of this module
-	Bazel_module string
+	Bazel_module bazelModuleProperties
 }
 type Module struct {
 	android.ModuleBase
@@ -472,7 +478,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	g.outputFiles = outputFiles.Paths()
 
-	bazelModuleLabel := g.properties.Bazel_module
+	bazelModuleLabel := g.properties.Bazel_module.Label
 	bazelActionsUsed := false
 	if ctx.Config().BazelContext.BazelEnabled() && len(bazelModuleLabel) > 0 {
 		bazelActionsUsed = g.generateBazelBuildActions(ctx, bazelModuleLabel)
@@ -555,13 +561,12 @@ func (g *Module) IDEInfo(dpInfo *android.IdeInfo) {
 
 func (g *Module) AndroidMk() android.AndroidMkData {
 	return android.AndroidMkData{
-		Include:    "$(BUILD_PHONY_PACKAGE)",
-		Class:      "FAKE",
+		Class:      "ETC",
 		OutputFile: android.OptionalPathForPath(g.outputFiles[0]),
 		SubName:    g.subName,
 		Extra: []android.AndroidMkExtraFunc{
 			func(w io.Writer, outputFile android.Path) {
-				fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES :=", strings.Join(g.outputDeps.Strings(), " "))
+				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
 			},
 		},
 		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
@@ -599,6 +604,7 @@ type noopImageInterface struct{}
 func (x noopImageInterface) ImageMutatorBegin(android.BaseModuleContext)                 {}
 func (x noopImageInterface) CoreVariantNeeded(android.BaseModuleContext) bool            { return false }
 func (x noopImageInterface) RamdiskVariantNeeded(android.BaseModuleContext) bool         { return false }
+func (x noopImageInterface) VendorRamdiskVariantNeeded(android.BaseModuleContext) bool   { return false }
 func (x noopImageInterface) RecoveryVariantNeeded(android.BaseModuleContext) bool        { return false }
 func (x noopImageInterface) ExtraImageVariations(ctx android.BaseModuleContext) []string { return nil }
 func (x noopImageInterface) SetImageVariation(ctx android.BaseModuleContext, variation string, module android.Module) {

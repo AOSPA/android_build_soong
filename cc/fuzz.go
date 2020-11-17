@@ -174,12 +174,25 @@ func isValidSharedDependency(dependency android.Module) bool {
 	// TODO(b/144090547): We should be parsing these modules using
 	// ModuleDependencyTag instead of the current brute-force checking.
 
-	if linkable, ok := dependency.(LinkableInterface); !ok || // Discard non-linkables.
-		!linkable.CcLibraryInterface() || !linkable.Shared() || // Discard static libs.
-		linkable.UseVndk() || // Discard vendor linked libraries.
+	linkable, ok := dependency.(LinkableInterface)
+	if !ok || !linkable.CcLibraryInterface() {
+		// Discard non-linkables.
+		return false
+	}
+
+	if !linkable.Shared() {
+		// Discard static libs.
+		return false
+	}
+
+	if linkable.UseVndk() {
+		// Discard vendor linked libraries.
+		return false
+	}
+
+	if lib := moduleLibraryInterface(dependency); lib != nil && lib.buildStubs() && linkable.CcLibrary() {
 		// Discard stubs libs (only CCLibrary variants). Prebuilt libraries should not
 		// be excluded on the basis of they're not CCLibrary()'s.
-		(linkable.CcLibrary() && linkable.BuildStubs()) {
 		return false
 	}
 
@@ -388,10 +401,10 @@ func (s *fuzzPackager) GenerateBuildActions(ctx android.SingletonContext) {
 			return
 		}
 
-		// Discard ramdisk + recovery modules, they're duplicates of
+		// Discard ramdisk + vendor_ramdisk + recovery modules, they're duplicates of
 		// fuzz targets we're going to package anyway.
 		if !ccModule.Enabled() || ccModule.Properties.PreventInstall ||
-			ccModule.InRamdisk() || ccModule.InRecovery() {
+			ccModule.InRamdisk() || ccModule.InVendorRamdisk() || ccModule.InRecovery() {
 			return
 		}
 

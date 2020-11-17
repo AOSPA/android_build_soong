@@ -916,8 +916,8 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 		osTargets = targets
 	}
 
-	// only the primary arch in the ramdisk / recovery partition
-	if os == Android && (module.InstallInRecovery() || module.InstallInRamdisk()) {
+	// only the primary arch in the ramdisk / vendor_ramdisk / recovery partition
+	if os == Android && (module.InstallInRecovery() || module.InstallInRamdisk() || module.InstallInVendorRamdisk()) {
 		osTargets = []Target{osTargets[0]}
 	}
 
@@ -1721,7 +1721,7 @@ func getNdkAbisConfig() []archConfig {
 
 func getAmlAbisConfig() []archConfig {
 	return []archConfig{
-		{"arm", "armv7-a", "", []string{"armeabi-v7a"}},
+		{"arm", "armv7-a-neon", "", []string{"armeabi-v7a"}},
 		{"arm64", "armv8-a", "", []string{"arm64-v8a"}},
 		{"x86", "", "", []string{"x86"}},
 		{"x86_64", "", "", []string{"x86_64"}},

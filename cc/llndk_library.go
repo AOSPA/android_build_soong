@@ -72,6 +72,8 @@ type llndkStubDecorator struct {
 	movedToApex bool
 }
 
+var _ versionedInterface = (*llndkStubDecorator)(nil)
+
 func (stub *llndkStubDecorator) compilerFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags {
 	flags = stub.baseCompiler.compilerFlags(ctx, flags, deps)
 	return addStubLibraryCompilerFlags(flags)
@@ -101,12 +103,14 @@ func (stub *llndkStubDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 }
 
 func (stub *llndkStubDecorator) Name(name string) string {
+	if strings.HasSuffix(name, llndkLibrarySuffix) {
+		return name
+	}
 	return name + llndkLibrarySuffix
 }
 
 func (stub *llndkStubDecorator) linkerFlags(ctx ModuleContext, flags Flags) Flags {
-	stub.libraryDecorator.libName = strings.TrimSuffix(ctx.ModuleName(),
-		llndkLibrarySuffix)
+	stub.libraryDecorator.libName = stub.implementationModuleName(ctx.ModuleName())
 	return stub.libraryDecorator.linkerFlags(ctx, flags)
 }
 
@@ -133,7 +137,7 @@ func (stub *llndkStubDecorator) processHeaders(ctx ModuleContext, srcHeaderDir s
 func (stub *llndkStubDecorator) link(ctx ModuleContext, flags Flags, deps PathDeps,
 	objs Objects) android.Path {
 
-	impl := ctx.GetDirectDepWithTag(ctx.baseModuleName(), llndkImplDep)
+	impl := ctx.GetDirectDepWithTag(stub.implementationModuleName(ctx.ModuleName()), llndkImplDep)
 	if implApexModule, ok := impl.(android.ApexModule); ok {
 		stub.movedToApex = implApexModule.DirectlyInAnyApex()
 	}
@@ -167,6 +171,10 @@ func (stub *llndkStubDecorator) nativeCoverage() bool {
 	return false
 }
 
+func (stub *llndkStubDecorator) implementationModuleName(name string) string {
+	return strings.TrimSuffix(name, llndkLibrarySuffix)
+}
+
 func (stub *llndkStubDecorator) buildStubs() bool {
 	return true
 }
@@ -177,7 +185,7 @@ func (stub *llndkStubDecorator) stubsVersions(ctx android.BaseMutatorContext) []
 	if len(impls) > 1 {
 		panic(fmt.Errorf("Expected single implmenetation library, got %d", len(impls)))
 	} else if len(impls) == 1 {
-		return impls[0].(*Module).AllStubsVersions()
+		return moduleLibraryInterface(impls[0]).allStubsVersions()
 	}
 	return nil
 }
@@ -196,6 +204,7 @@ func NewLLndkStubLibrary() *Module {
 	module.compiler = stub
 	module.linker = stub
 	module.installer = nil
+	module.library = stub
 
 	module.AddProperties(
 		&module.Properties,
@@ -243,6 +252,7 @@ func llndkHeadersFactory() android.Module {
 	module.compiler = nil
 	module.linker = decorator
 	module.installer = nil
+	module.library = decorator
 
 	module.AddProperties(
 		&module.Properties,

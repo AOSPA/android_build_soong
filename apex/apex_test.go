@@ -825,7 +825,7 @@ func TestApexWithStubs(t *testing.T) {
 	ensureNotContains(t, mylib2Cflags, "-include ")
 
 	// Ensure that genstub is invoked with --apex
-	ensureContains(t, "--apex", ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_static_3").Rule("genStubSrc").Args["flags"])
+	ensureContains(t, "--apex", ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_shared_3").Rule("genStubSrc").Args["flags"])
 
 	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
 		"lib64/mylib.so",
@@ -920,11 +920,11 @@ func TestApexWithStubsWithMinSdkVersion(t *testing.T) {
 	ensureNotContains(t, mylibLdFlags, "mylib3/android_arm64_armv8-a_shared_29/mylib3.so")
 
 	// Ensure that stubs libs are built without -include flags
-	mylib2Cflags := ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
+	mylib2Cflags := ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_shared_29").Rule("cc").Args["cFlags"]
 	ensureNotContains(t, mylib2Cflags, "-include ")
 
 	// Ensure that genstub is invoked with --apex
-	ensureContains(t, "--apex", ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_static_29").Rule("genStubSrc").Args["flags"])
+	ensureContains(t, "--apex", ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_shared_29").Rule("genStubSrc").Args["flags"])
 
 	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
 		"lib64/mylib.so",
@@ -1270,10 +1270,11 @@ func TestApexDependsOnLLNDKTransitively(t *testing.T) {
 				system_shared_libs: [],
 				stl: "none",
 				stubs: { versions: ["29","30"] },
+				llndk_stubs: "libbar.llndk",
 			}
 
 			llndk_library {
-				name: "libbar",
+				name: "libbar.llndk",
 				symbol_file: "",
 			}
 			`, func(fs map[string][]byte, config android.Config) {
@@ -4558,7 +4559,7 @@ func TestApexWithTestHelperApp(t *testing.T) {
 
 func TestApexPropertiesShouldBeDefaultable(t *testing.T) {
 	// libfoo's apex_available comes from cc_defaults
-	testApexError(t, `requires "libfoo" that is not available for the APEX`, `
+	testApexError(t, `requires "libfoo" that doesn't list the APEX under 'apex_available'.`, `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -4592,7 +4593,7 @@ func TestApexPropertiesShouldBeDefaultable(t *testing.T) {
 
 func TestApexAvailable_DirectDep(t *testing.T) {
 	// libfoo is not available to myapex, but only to otherapex
-	testApexError(t, "requires \"libfoo\" that is not available for the APEX", `
+	testApexError(t, "requires \"libfoo\" that doesn't list the APEX under 'apex_available'.", `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -4627,7 +4628,7 @@ func TestApexAvailable_DirectDep(t *testing.T) {
 
 func TestApexAvailable_IndirectDep(t *testing.T) {
 	// libbbaz is an indirect dep
-	testApexError(t, `requires "libbaz" that is not available for the APEX. Dependency path:
+	testApexError(t, `requires "libbaz" that doesn't list the APEX under 'apex_available'. Dependency path:
 .*via tag apex\.dependencyTag.*name:sharedLib.*
 .*-> libfoo.*link:shared.*
 .*via tag cc\.libraryDependencyTag.*Kind:sharedLibraryDependency.*
@@ -5790,12 +5791,9 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 	var err string
 	var transform func(*dexpreopt.GlobalConfig)
 
-	config := android.TestArchConfig(buildDir, nil, "", nil)
-	ctx := android.PathContextForTesting(config)
-
 	t.Run("updatable jar from ART apex in the ART boot image => ok", func(t *testing.T) {
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.ArtApexJars = android.CreateConfiguredJarList(ctx, []string{"com.android.art.something:some-art-lib"})
+			config.ArtApexJars = android.CreateTestConfiguredJarList([]string{"com.android.art.something:some-art-lib"})
 		}
 		testNoUpdatableJarsInBootImage(t, "", transform)
 	})
@@ -5803,7 +5801,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 	t.Run("updatable jar from ART apex in the framework boot image => error", func(t *testing.T) {
 		err = `module "some-art-lib" from updatable apexes \["com.android.art.something"\] is not allowed in the framework boot image`
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.BootJars = android.CreateConfiguredJarList(ctx, []string{"com.android.art.something:some-art-lib"})
+			config.BootJars = android.CreateTestConfiguredJarList([]string{"com.android.art.something:some-art-lib"})
 		}
 		testNoUpdatableJarsInBootImage(t, err, transform)
 	})
@@ -5811,7 +5809,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 	t.Run("updatable jar from some other apex in the ART boot image => error", func(t *testing.T) {
 		err = `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the ART boot image`
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.ArtApexJars = android.CreateConfiguredJarList(ctx, []string{"some-updatable-apex:some-updatable-apex-lib"})
+			config.ArtApexJars = android.CreateTestConfiguredJarList([]string{"some-updatable-apex:some-updatable-apex-lib"})
 		}
 		testNoUpdatableJarsInBootImage(t, err, transform)
 	})
@@ -5819,7 +5817,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 	t.Run("non-updatable jar from some other apex in the ART boot image => error", func(t *testing.T) {
 		err = `module "some-non-updatable-apex-lib" is not allowed in the ART boot image`
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.ArtApexJars = android.CreateConfiguredJarList(ctx, []string{"some-non-updatable-apex:some-non-updatable-apex-lib"})
+			config.ArtApexJars = android.CreateTestConfiguredJarList([]string{"some-non-updatable-apex:some-non-updatable-apex-lib"})
 		}
 		testNoUpdatableJarsInBootImage(t, err, transform)
 	})
@@ -5827,14 +5825,14 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 	t.Run("updatable jar from some other apex in the framework boot image => error", func(t *testing.T) {
 		err = `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the framework boot image`
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.BootJars = android.CreateConfiguredJarList(ctx, []string{"some-updatable-apex:some-updatable-apex-lib"})
+			config.BootJars = android.CreateTestConfiguredJarList([]string{"some-updatable-apex:some-updatable-apex-lib"})
 		}
 		testNoUpdatableJarsInBootImage(t, err, transform)
 	})
 
 	t.Run("non-updatable jar from some other apex in the framework boot image => ok", func(t *testing.T) {
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.BootJars = android.CreateConfiguredJarList(ctx, []string{"some-non-updatable-apex:some-non-updatable-apex-lib"})
+			config.BootJars = android.CreateTestConfiguredJarList([]string{"some-non-updatable-apex:some-non-updatable-apex-lib"})
 		}
 		testNoUpdatableJarsInBootImage(t, "", transform)
 	})
@@ -5842,7 +5840,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 	t.Run("nonexistent jar in the ART boot image => error", func(t *testing.T) {
 		err = "failed to find a dex jar path for module 'nonexistent'"
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.ArtApexJars = android.CreateConfiguredJarList(ctx, []string{"platform:nonexistent"})
+			config.ArtApexJars = android.CreateTestConfiguredJarList([]string{"platform:nonexistent"})
 		}
 		testNoUpdatableJarsInBootImage(t, err, transform)
 	})
@@ -5850,7 +5848,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 	t.Run("nonexistent jar in the framework boot image => error", func(t *testing.T) {
 		err = "failed to find a dex jar path for module 'nonexistent'"
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.BootJars = android.CreateConfiguredJarList(ctx, []string{"platform:nonexistent"})
+			config.BootJars = android.CreateTestConfiguredJarList([]string{"platform:nonexistent"})
 		}
 		testNoUpdatableJarsInBootImage(t, err, transform)
 	})
@@ -5858,14 +5856,14 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 	t.Run("platform jar in the ART boot image => error", func(t *testing.T) {
 		err = `module "some-platform-lib" is not allowed in the ART boot image`
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.ArtApexJars = android.CreateConfiguredJarList(ctx, []string{"platform:some-platform-lib"})
+			config.ArtApexJars = android.CreateTestConfiguredJarList([]string{"platform:some-platform-lib"})
 		}
 		testNoUpdatableJarsInBootImage(t, err, transform)
 	})
 
 	t.Run("platform jar in the framework boot image => ok", func(t *testing.T) {
 		transform = func(config *dexpreopt.GlobalConfig) {
-			config.BootJars = android.CreateConfiguredJarList(ctx, []string{"platform:some-platform-lib"})
+			config.BootJars = android.CreateTestConfiguredJarList([]string{"platform:some-platform-lib"})
 		}
 		testNoUpdatableJarsInBootImage(t, "", transform)
 	})
@@ -5904,7 +5902,7 @@ func testApexPermittedPackagesRules(t *testing.T, errmsg, bp string, apexBootJar
 	for _, apexBootJar := range apexBootJars {
 		updatableBootJars = append(updatableBootJars, "myapex:"+apexBootJar)
 	}
-	config.TestProductVariables.UpdatableBootJars = updatableBootJars
+	config.TestProductVariables.UpdatableBootJars = android.CreateTestConfiguredJarList(updatableBootJars)
 
 	ctx.Register(config)
 

@@ -70,6 +70,7 @@ var (
 
 		"-O2",
 		"-g",
+		"-fdebug-info-for-profiling",
 
 		"-fno-strict-aliasing",
 
@@ -249,7 +250,7 @@ func init() {
 	pctx.PrefixedExistentPathsForSourcesVariable("CommonGlobalIncludes", "-I",
 		[]string{
 			"system/core/include",
-			"system/core/liblog/include",
+			"system/logging/liblog/include",
 			"system/media/audio/include",
 			"hardware/libhardware/include",
 			"hardware/libhardware_legacy/include",

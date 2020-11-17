@@ -129,7 +129,7 @@ func (vndk *vndkdep) typeName() string {
 	return "native:vendor:vndkspext"
 }
 
-func (vndk *vndkdep) vndkCheckLinkType(ctx android.ModuleContext, to *Module, tag blueprint.DependencyTag) {
+func (vndk *vndkdep) vndkCheckLinkType(ctx android.BaseModuleContext, to *Module, tag blueprint.DependencyTag) {
 	if to.linker == nil {
 		return
 	}
@@ -247,7 +247,7 @@ func vndkSpLibraries(config android.Config) map[string]string {
 }
 
 func isLlndkLibrary(baseModuleName string, config android.Config) bool {
-	_, ok := llndkLibraries(config)[baseModuleName]
+	_, ok := llndkLibraries(config)[strings.TrimSuffix(baseModuleName, llndkLibrarySuffix)]
 	return ok
 }
 
@@ -290,8 +290,8 @@ func setVndkMustUseVendorVariantListForTest(config android.Config, mustUseVendor
 
 func processLlndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 	lib := m.linker.(*llndkStubDecorator)
-	name := m.BaseModuleName()
-	filename := m.BaseModuleName() + ".so"
+	name := m.ImplementationModuleName(mctx)
+	filename := name + ".so"
 
 	vndkLibrariesLock.Lock()
 	defer vndkLibrariesLock.Unlock()
@@ -313,7 +313,7 @@ func processVndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 		panic(err)
 	}
 
-	if m.HasStubsVariants() && name != "libz" {
+	if lib := m.library; lib != nil && lib.hasStubsVariants() && name != "libz" {
 		// b/155456180 libz is the ONLY exception here. We don't want to make
 		// libz an LLNDK library because we in general can't guarantee that
 		// libz will behave consistently especially about the compression.
@@ -540,6 +540,9 @@ func isVndkSnapshotLibrary(config android.DeviceConfig, m *Module,
 	if m.Target().NativeBridge == android.NativeBridgeEnabled {
 		return nil, "", false
 	}
+	// !inVendor: There's product/vendor variants for VNDK libs. We only care about vendor variants.
+	// !installable: Snapshot only cares about "installable" modules.
+	// isSnapshotPrebuilt: Snapshotting a snapshot doesn't make sense.
 	if !m.inVendor() || !m.installable(apexInfo) || m.isSnapshotPrebuilt() {
 		return nil, "", false
 	}
@@ -737,7 +740,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 	/*
 		module_paths.txt contains paths on which VNDK modules are defined.
 		e.g.,
-			libbase.so system/core/base
+			libbase.so system/libbase
 			libc.so bionic/libc
 			...
 	*/
@@ -834,8 +837,8 @@ func (c *vndkSnapshotSingleton) MakeVars(ctx android.MakeVarsContext) {
 		if m, ok := module.(*Module); ok {
 			if llndk, ok := m.linker.(*llndkStubDecorator); ok {
 				// Skip bionic libs, they are handled in different manner
-				name := m.BaseModuleName()
-				if llndk.movedToApex && !isBionic(m.BaseModuleName()) {
+				name := llndk.implementationModuleName(m.BaseModuleName())
+				if llndk.movedToApex && !isBionic(name) {
 					movedToApexLlndkLibraries[name] = true
 				}
 			}
