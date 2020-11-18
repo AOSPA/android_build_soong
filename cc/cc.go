@@ -278,10 +278,11 @@ type BaseProperties struct {
 
 	// Normally Soong uses the directory structure to decide which modules
 	// should be included (framework) or excluded (non-framework) from the
-	// vendor snapshot, but this property allows a partner to exclude a
-	// module normally thought of as a framework module from the vendor
-	// snapshot.
-	Exclude_from_vendor_snapshot *bool
+	// different snapshots (vendor, recovery, etc.), but these properties
+	// allow a partner to exclude a module normally thought of as a
+	// framework module from a snapshot.
+	Exclude_from_vendor_snapshot   *bool
+	Exclude_from_recovery_snapshot *bool
 }
 
 type VendorProperties struct {
@@ -1017,6 +1018,10 @@ func (c *Module) ExportedGeneratedHeaders() android.Paths {
 
 func (c *Module) ExcludeFromVendorSnapshot() bool {
 	return Bool(c.Properties.Exclude_from_vendor_snapshot)
+}
+
+func (c *Module) ExcludeFromRecoverySnapshot() bool {
+	return Bool(c.Properties.Exclude_from_recovery_snapshot)
 }
 
 func isBionic(name string) bool {
