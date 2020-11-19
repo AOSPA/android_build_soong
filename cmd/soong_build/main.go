@@ -26,13 +26,13 @@ import (
 )
 
 var (
-	docFile         string
-	bazelOverlayDir string
+	docFile           string
+	bazelQueryViewDir string
 )
 
 func init() {
 	flag.StringVar(&docFile, "soong_docs", "", "build documentation file to output")
-	flag.StringVar(&bazelOverlayDir, "bazel_overlay_dir", "", "path to the bazel overlay directory")
+	flag.StringVar(&bazelQueryViewDir, "bazel_queryview_dir", "", "path to the bazel queryview directory")
 }
 
 func newNameResolver(config android.Config) *android.NameResolver {
@@ -52,7 +52,7 @@ func newNameResolver(config android.Config) *android.NameResolver {
 }
 
 func newContext(srcDir string, configuration android.Config) *android.Context {
-	ctx := android.NewContext()
+	ctx := android.NewContext(configuration)
 	ctx.Register()
 	if !shouldPrepareBuildActions() {
 		configuration.SetStopBefore(bootstrap.StopBeforePrepareBuildActions)
@@ -95,6 +95,7 @@ func main() {
 		// TODO(cparsons): Don't output any ninja file, as the second pass will overwrite
 		// the incorrect results from the first pass, and file I/O is expensive.
 		firstCtx := newContext(srcDir, configuration)
+		configuration.SetStopBefore(bootstrap.StopBeforeWriteNinja)
 		bootstrap.Main(firstCtx.Context, configuration, extraNinjaDeps...)
 		// Invoke bazel commands and save results for second pass.
 		if err := configuration.BazelContext.InvokeBazel(); err != nil {
@@ -113,8 +114,8 @@ func main() {
 		ctx = newContext(srcDir, configuration)
 		bootstrap.Main(ctx.Context, configuration, extraNinjaDeps...)
 	}
-	if bazelOverlayDir != "" {
-		if err := createBazelOverlay(ctx, bazelOverlayDir); err != nil {
+	if bazelQueryViewDir != "" {
+		if err := createBazelQueryView(ctx, bazelQueryViewDir); err != nil {
 			fmt.Fprintf(os.Stderr, "%s", err)
 			os.Exit(1)
 		}
@@ -140,7 +141,7 @@ func main() {
 }
 
 func shouldPrepareBuildActions() bool {
-	// If we're writing soong_docs or bazel_overlay, don't write build.ninja or
+	// If we're writing soong_docs or queryview, don't write build.ninja or
 	// collect metrics.
-	return docFile == "" && bazelOverlayDir == ""
+	return docFile == "" && bazelQueryViewDir == ""
 }

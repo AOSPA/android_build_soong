@@ -15,6 +15,7 @@
 package rust
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -22,6 +23,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc"
+	"android/soong/rust/config"
 )
 
 var (
@@ -138,6 +140,13 @@ func transformSrctoCrate(ctx ModuleContext, main android.Path, deps PathDeps, fl
 	crate_name := ctx.RustModule().CrateName()
 	targetTriple := ctx.toolchain().RustTriple()
 
+	// libstd requires a specific environment variable to be set. This is
+	// not officially documented and may be removed in the future. See
+	// https://github.com/rust-lang/rust/blob/master/library/std/src/env.rs#L866.
+	if crate_name == "std" {
+		envVars = append(envVars, "STD_ENV_ARCH="+config.StdEnvArch[ctx.RustModule().Arch().ArchType])
+	}
+
 	inputs = append(inputs, main)
 
 	// Collect rustc flags
@@ -227,7 +236,18 @@ func transformSrctoCrate(ctx ModuleContext, main android.Path, deps PathDeps, fl
 			},
 		})
 		implicits = append(implicits, outputs.Paths()...)
-		envVars = append(envVars, "OUT_DIR=$$PWD/"+moduleGenDir.String())
+
+		// We must calculate an absolute path for OUT_DIR since Rust's include! macro (which normally consumes this)
+		// assumes that paths are relative to the source file.
+		var outDirPrefix string
+		if !filepath.IsAbs(moduleGenDir.String()) {
+			// If OUT_DIR is not absolute, we use $$PWD to generate an absolute path (os.Getwd() returns '/')
+			outDirPrefix = "$$PWD/"
+		} else {
+			// If OUT_DIR is absolute, then moduleGenDir will be an absolute path, so we don't need to set this to anything.
+			outDirPrefix = ""
+		}
+		envVars = append(envVars, "OUT_DIR="+filepath.Join(outDirPrefix, moduleGenDir.String()))
 	}
 
 	if flags.Clippy {
