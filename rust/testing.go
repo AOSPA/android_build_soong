@@ -79,6 +79,13 @@ func GatherRequiredDepsForTest() string {
 			nocrt: true,
 			system_shared_libs: [],
 		}
+		cc_library {
+			name: "libprotobuf-cpp-full",
+			no_libcrt: true,
+			nocrt: true,
+			system_shared_libs: [],
+			export_include_dirs: ["libprotobuf-cpp-full-includes"],
+		}
 		rust_library {
 			name: "libstd",
 			crate_name: "std",
@@ -103,13 +110,25 @@ func GatherRequiredDepsForTest() string {
 			srcs: ["foo.rs"],
 			host_supported: true,
 		}
+		rust_library {
+			name: "libgrpcio",
+			crate_name: "grpcio",
+			srcs: ["foo.rs"],
+			host_supported: true,
+		}
+		rust_library {
+			name: "libfutures",
+			crate_name: "futures",
+			srcs: ["foo.rs"],
+			host_supported: true,
+		}
 
 ` + cc.GatherRequiredDepsForTest(android.NoOsType)
 	return bp
 }
 
-func CreateTestContext() *android.TestContext {
-	ctx := android.NewTestArchContext()
+func CreateTestContext(config android.Config) *android.TestContext {
+	ctx := android.NewTestArchContext(config)
 	android.RegisterPrebuiltMutators(ctx)
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	cc.RegisterRequiredBuildComponentsForTest(ctx)
@@ -132,6 +151,8 @@ func CreateTestContext() *android.TestContext {
 	ctx.RegisterModuleType("rust_ffi_host", RustFFIHostFactory)
 	ctx.RegisterModuleType("rust_ffi_host_shared", RustFFISharedHostFactory)
 	ctx.RegisterModuleType("rust_ffi_host_static", RustFFIStaticHostFactory)
+	ctx.RegisterModuleType("rust_grpcio", RustGrpcioFactory)
+	ctx.RegisterModuleType("rust_grpcio_host", RustGrpcioHostFactory)
 	ctx.RegisterModuleType("rust_proc_macro", ProcMacroFactory)
 	ctx.RegisterModuleType("rust_protobuf", RustProtobufFactory)
 	ctx.RegisterModuleType("rust_protobuf_host", RustProtobufHostFactory)
