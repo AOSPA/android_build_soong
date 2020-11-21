@@ -661,6 +661,7 @@ var (
 		"kernel",
 		"vendor",
 		"hardware",
+		"disregard",
 	}
 
 	// Modules under following directories are ignored. They are OEM's and vendor's
