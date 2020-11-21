@@ -489,6 +489,7 @@ var (
 		"kernel",
 		"vendor",
 		"hardware",
+		"disregard",
 	}
 
 	// Modules under following directories are included as they are in AOSP,
