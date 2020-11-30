@@ -23,13 +23,20 @@ import (
 	"android/soong/ui/metrics"
 )
 
-// Ensures the out directory exists, and has the proper files to prevent kati
-// from recursing into it.
+// SetupOutDir ensures the out directory exists, and has the proper files to
+// prevent kati from recursing into it.
 func SetupOutDir(ctx Context, config Config) {
 	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), "Android.mk"))
 	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), "CleanSpec.mk"))
 	if !config.SkipMake() {
-		ensureEmptyFileExists(ctx, filepath.Join(config.SoongOutDir(), ".soong.in_make"))
+		// Run soong_build with Kati for a hybrid build, e.g. running the
+		// AndroidMk singleton and postinstall commands. Communicate this to
+		// soong_build by writing an empty .soong.kati_enabled marker file in the
+		// soong_build output directory for the soong_build primary builder to
+		// know if the user wants to run Kati after.
+		//
+		// This does not preclude running Kati for *product configuration purposes*.
+		ensureEmptyFileExists(ctx, filepath.Join(config.SoongOutDir(), ".soong.kati_enabled"))
 	}
 	// The ninja_build file is used by our buildbots to understand that the output
 	// can be parsed as ninja output.
@@ -176,7 +183,7 @@ func Build(ctx Context, config Config, what int) {
 		help(ctx, config, what)
 		return
 	} else if inList("clean", config.Arguments()) || inList("clobber", config.Arguments()) {
-		clean(ctx, config, what)
+		clean(ctx, config)
 		return
 	}
 
@@ -211,12 +218,12 @@ func Build(ctx Context, config Config, what int) {
 
 	if inList("installclean", config.Arguments()) ||
 		inList("install-clean", config.Arguments()) {
-		installClean(ctx, config, what)
+		installClean(ctx, config)
 		ctx.Println("Deleted images and staging directories.")
 		return
 	} else if inList("dataclean", config.Arguments()) ||
 		inList("data-clean", config.Arguments()) {
-		dataClean(ctx, config, what)
+		dataClean(ctx, config)
 		ctx.Println("Deleted data files.")
 		return
 	}

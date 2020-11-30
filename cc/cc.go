@@ -88,7 +88,7 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 		ctx.TopDown("double_loadable", checkDoubleLoadableLibraries).Parallel()
 	})
 
-	android.RegisterSingletonType("kythe_extract_all", kytheExtractAllFactory)
+	ctx.RegisterSingletonType("kythe_extract_all", kytheExtractAllFactory)
 }
 
 type Deps struct {
@@ -309,10 +309,11 @@ type BaseProperties struct {
 
 	// Normally Soong uses the directory structure to decide which modules
 	// should be included (framework) or excluded (non-framework) from the
-	// vendor snapshot, but this property allows a partner to exclude a
-	// module normally thought of as a framework module from the vendor
-	// snapshot.
-	Exclude_from_vendor_snapshot *bool
+	// different snapshots (vendor, recovery, etc.), but these properties
+	// allow a partner to exclude a module normally thought of as a
+	// framework module from a snapshot.
+	Exclude_from_vendor_snapshot   *bool
+	Exclude_from_recovery_snapshot *bool
 }
 
 type VendorProperties struct {
@@ -372,7 +373,7 @@ type ModuleContextIntf interface {
 	useSdk() bool
 	sdkVersion() string
 	useVndk() bool
-	isNdk() bool
+	isNdk(config android.Config) bool
 	isLlndk(config android.Config) bool
 	isLlndkPublic(config android.Config) bool
 	isVndkPrivate(config android.Config) bool
@@ -554,13 +555,30 @@ func (d libraryDependencyTag) static() bool {
 	return d.Kind == staticLibraryDependency
 }
 
-// dependencyTag is used for tagging miscellanous dependency types that don't fit into
+// InstallDepNeeded returns true for shared libraries so that shared library dependencies of
+// binaries or other shared libraries are installed as dependencies.
+func (d libraryDependencyTag) InstallDepNeeded() bool {
+	return d.shared()
+}
+
+var _ android.InstallNeededDependencyTag = libraryDependencyTag{}
+
+// dependencyTag is used for tagging miscellaneous dependency types that don't fit into
 // libraryDependencyTag.  Each tag object is created globally and reused for multiple
 // dependencies (although since the object contains no references, assigning a tag to a
 // variable and modifying it will not modify the original).  Users can compare the tag
 // returned by ctx.OtherModuleDependencyTag against the global original
 type dependencyTag struct {
 	blueprint.BaseDependencyTag
+	name string
+}
+
+// installDependencyTag is used for tagging miscellaneous dependency types that don't fit into
+// libraryDependencyTag, but where the dependency needs to be installed when the parent is
+// installed.
+type installDependencyTag struct {
+	blueprint.BaseDependencyTag
+	android.InstallAlwaysNeededDependencyTag
 	name string
 }
 
@@ -575,7 +593,7 @@ var (
 	staticVariantTag      = dependencyTag{name: "static variant"}
 	vndkExtDepTag         = dependencyTag{name: "vndk extends"}
 	dataLibDepTag         = dependencyTag{name: "data lib"}
-	runtimeDepTag         = dependencyTag{name: "runtime lib"}
+	runtimeDepTag         = installDependencyTag{name: "runtime lib"}
 	testPerSrcDepTag      = dependencyTag{name: "test_per_src"}
 	stubImplDepTag        = dependencyTag{name: "stub_impl"}
 )
@@ -602,8 +620,7 @@ func IsHeaderDepTag(depTag blueprint.DependencyTag) bool {
 }
 
 func IsRuntimeDepTag(depTag blueprint.DependencyTag) bool {
-	ccDepTag, ok := depTag.(dependencyTag)
-	return ok && ccDepTag == runtimeDepTag
+	return depTag == runtimeDepTag
 }
 
 func IsTestPerSrcDepTag(depTag blueprint.DependencyTag) bool {
@@ -942,8 +959,8 @@ func (c *Module) isCoverageVariant() bool {
 	return c.coverage.Properties.IsCoverageVariant
 }
 
-func (c *Module) IsNdk() bool {
-	return inList(c.BaseModuleName(), ndkKnownLibs)
+func (c *Module) IsNdk(config android.Config) bool {
+	return inList(c.BaseModuleName(), *getNDKKnownLibs(config))
 }
 
 func (c *Module) isLlndk(config android.Config) bool {
@@ -1055,6 +1072,10 @@ func (c *Module) ExcludeFromVendorSnapshot() bool {
 	return Bool(c.Properties.Exclude_from_vendor_snapshot)
 }
 
+func (c *Module) ExcludeFromRecoverySnapshot() bool {
+	return Bool(c.Properties.Exclude_from_recovery_snapshot)
+}
+
 func isBionic(name string) bool {
 	switch name {
 	case "libc", "libm", "libdl", "libdl_android", "linker":
@@ -1144,8 +1165,8 @@ func (ctx *moduleContextImpl) useVndk() bool {
 	return ctx.mod.UseVndk()
 }
 
-func (ctx *moduleContextImpl) isNdk() bool {
-	return ctx.mod.IsNdk()
+func (ctx *moduleContextImpl) isNdk(config android.Config) bool {
+	return ctx.mod.IsNdk(config)
 }
 
 func (ctx *moduleContextImpl) isLlndk(config android.Config) bool {
@@ -1766,7 +1787,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 			for _, entry := range list {
 				// strip #version suffix out
 				name, _ := StubsLibNameAndVersion(entry)
-				if ctx.useSdk() && inList(name, ndkKnownLibs) {
+				if ctx.useSdk() && inList(name, *getNDKKnownLibs(ctx.Config())) {
 					variantLibs = append(variantLibs, name+ndkLibrarySuffix)
 				} else if ctx.useVndk() {
 					nonvariantLibs = append(nonvariantLibs, rewriteVendorLibs(entry))
@@ -1841,6 +1862,11 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		return
 	}
 
+	// sysprop_library has to support both C++ and Java. So sysprop_library internally creates one
+	// C++ implementation library and one Java implementation library. When a module links against
+	// sysprop_library, the C++ implementation library has to be linked. syspropImplLibraries is a
+	// map from sysprop_library to implementation library; it will be used in whole_static_libs,
+	// static_libs, and shared_libs.
 	syspropImplLibraries := syspropImplLibraries(actx.Config())
 	vendorSnapshotStaticLibs := vendorSnapshotStaticLibs(actx.Config())
 

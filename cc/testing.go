@@ -16,6 +16,7 @@ package cc
 
 import (
 	"android/soong/android"
+	"android/soong/genrule"
 )
 
 func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
@@ -24,6 +25,7 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterBinaryBuildComponents(ctx)
 	RegisterLibraryBuildComponents(ctx)
 	RegisterLibraryHeadersBuildComponents(ctx)
+	genrule.RegisterGenruleBuildComponents(ctx)
 
 	ctx.RegisterModuleType("toolchain_library", ToolchainLibraryFactory)
 	ctx.RegisterModuleType("llndk_library", LlndkLibraryFactory)
@@ -563,6 +565,7 @@ func CreateTestContext(config android.Config) *android.TestContext {
 	RegisterRequiredBuildComponentsForTest(ctx)
 	ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 	ctx.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
+	ctx.RegisterSingletonType("recovery-snapshot", RecoverySnapshotSingleton)
 
 	return ctx
 }

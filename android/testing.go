@@ -104,7 +104,7 @@ func (ctx *TestContext) RegisterModuleType(name string, factory ModuleFactory) {
 }
 
 func (ctx *TestContext) RegisterSingletonType(name string, factory SingletonFactory) {
-	ctx.Context.RegisterSingletonType(name, SingletonFactoryAdaptor(factory))
+	ctx.Context.RegisterSingletonType(name, SingletonFactoryAdaptor(ctx.Context, factory))
 }
 
 func (ctx *TestContext) ModuleForTests(name, variant string) TestingModule {
@@ -424,8 +424,8 @@ func CheckErrorsAgainstExpectations(t *testing.T, errs []error, expectedErrorPat
 
 }
 
-func SetInMakeForTests(config Config) {
-	config.inMake = true
+func SetKatiEnabledForTests(config Config) {
+	config.katiEnabled = true
 }
 
 func AndroidMkEntriesForTest(t *testing.T, config Config, bpPath string, mod blueprint.Module) []AndroidMkEntries {
