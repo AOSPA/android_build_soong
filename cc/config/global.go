@@ -531,6 +531,11 @@ func setSdclangVars() {
 	sdclangConfigPath := os.Getenv("SDCLANG_CONFIG")
 	sdclangSA := os.Getenv("SDCLANG_SA_ENABLED")
 
+	// Bail out if SDCLANG_CONFIG isn't set
+	if sdclangConfigPath == "" {
+		return
+	}
+
 	type sdclangAEConfig struct {
 		SDCLANG_AE_FLAG string
 	}
@@ -617,7 +622,7 @@ func setSdclangVars() {
 	}
 
 	// Sanity check SDCLANG_PATH
-	if envPath := os.Getenv("SDCLANG_PATH"); sdclangPath == "" && envPath == "" {
+	if envPath := os.Getenv("SDCLANG_PATH"); SDClang && sdclangPath == "" && envPath == "" {
 		panic("SDCLANG_PATH can not be empty")
 	}
 
