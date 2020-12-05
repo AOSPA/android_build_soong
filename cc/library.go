@@ -585,7 +585,7 @@ func (library *libraryDecorator) classifySourceAbiDump(ctx ModuleContext) string
                 return ""
         }
 	// Return NDK if the library is both NDK and LLNDK.
-	if ctx.isNdk() {
+	if ctx.isNdk(ctx.Config()) {
 		return "NDK"
 	}
 	if ctx.isLlndkPublic(ctx.Config()) {
@@ -1120,7 +1120,7 @@ func (library *libraryDecorator) coverageOutputFilePath() android.OptionalPath {
 
 func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
 	// The logic must be consistent with classifySourceAbiDump.
-	isNdk := ctx.isNdk()
+	isNdk := ctx.isNdk(ctx.Config())
 	isLlndkOrVndk := ctx.isLlndkPublic(ctx.Config()) || (ctx.useVndk() && ctx.isVndk())
 
 	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isLlndkOrVndk, false)
@@ -1174,7 +1174,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 			library.sAbiDiff = SourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
 				refAbiDumpFile, fileName, exportedHeaderFlags,
 				Bool(library.Properties.Header_abi_checker.Check_all_apis),
-				ctx.isLlndk(ctx.Config()), ctx.isNdk(), ctx.isVndkExt())
+				ctx.isLlndk(ctx.Config()), ctx.isNdk(ctx.Config()), ctx.isVndkExt())
 		}
 	}
 }
@@ -1223,15 +1223,21 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 		}
 	}
 
+	// If the library is sysprop_library, expose either public or internal header selectively.
 	if library.baseCompiler.hasSrcExt(".sysprop") {
 		dir := android.PathForModuleGen(ctx, "sysprop", "include")
 		if library.Properties.Sysprop.Platform != nil {
-			isProduct := ctx.ProductSpecific() && !ctx.useVndk()
-			isVendor := ctx.useVndk()
+			isClientProduct := ctx.ProductSpecific() && !ctx.useVndk()
+			isClientVendor := ctx.useVndk()
 			isOwnerPlatform := Bool(library.Properties.Sysprop.Platform)
 
+			// If the owner is different from the user, expose public header. That is,
+			// 1) if the user is product (as owner can only be platform / vendor)
+			// 2) if one is platform and the other is vendor
+			// Exceptions are ramdisk and recovery. They are not enforced at all. So
+			// they always use internal header.
 			if !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() &&
-				(isProduct || (isOwnerPlatform == isVendor)) {
+				(isClientProduct || (isOwnerPlatform == isClientVendor)) {
 				dir = android.PathForModuleGen(ctx, "sysprop/public", "include")
 			}
 		}

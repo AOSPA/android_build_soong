@@ -116,7 +116,7 @@ func (s *apexKeysText) GenerateBuildActions(ctx android.SingletonContext) {
 		partition             string
 	}
 	toString := func(e apexKeyEntry) string {
-		format := "name=%q public_key=%q private_key=%q container_certificate=%q container_private_key=%q partition=%q\\n"
+		format := "name=%q public_key=%q private_key=%q container_certificate=%q container_private_key=%q partition=%q\n"
 		if e.presigned {
 			return fmt.Sprintf(format, e.name, "PRESIGNED", "PRESIGNED", "PRESIGNED", "PRESIGNED", e.partition)
 		} else {
@@ -127,13 +127,14 @@ func (s *apexKeysText) GenerateBuildActions(ctx android.SingletonContext) {
 	apexKeyMap := make(map[string]apexKeyEntry)
 	ctx.VisitAllModules(func(module android.Module) {
 		if m, ok := module.(*apexBundle); ok && m.Enabled() && m.installable() {
+			pem, key := m.getCertificateAndPrivateKey(ctx)
 			apexKeyMap[m.Name()] = apexKeyEntry{
 				name:                  m.Name() + ".apex",
 				presigned:             false,
 				public_key:            m.public_key_file.String(),
 				private_key:           m.private_key_file.String(),
-				container_certificate: m.container_certificate_file.String(),
-				container_private_key: m.container_private_key_file.String(),
+				container_certificate: pem.String(),
+				container_private_key: key.String(),
 				partition:             m.PartitionTag(ctx.DeviceConfig()),
 			}
 		}
@@ -173,17 +174,9 @@ func (s *apexKeysText) GenerateBuildActions(ctx android.SingletonContext) {
 
 	var filecontent strings.Builder
 	for _, name := range moduleNames {
-		fmt.Fprintf(&filecontent, "%s", toString(apexKeyMap[name]))
+		filecontent.WriteString(toString(apexKeyMap[name]))
 	}
-
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.WriteFile,
-		Description: "apexkeys.txt",
-		Output:      s.output,
-		Args: map[string]string{
-			"content": filecontent.String(),
-		},
-	})
+	android.WriteFileRule(ctx, s.output, filecontent.String())
 }
 
 func apexKeysTextFactory() android.Singleton {
