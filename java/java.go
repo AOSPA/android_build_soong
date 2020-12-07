@@ -456,8 +456,6 @@ type Module struct {
 	// list of the xref extraction files
 	kytheFiles android.Paths
 
-	distFiles android.TaggedDistFiles
-
 	// Collect the module directory for IDE info in java/jdeps.go.
 	modulePaths []string
 
@@ -486,6 +484,8 @@ func (j *Module) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
 	case "":
 		return append(android.Paths{j.outputFile}, j.extraOutputFiles...), nil
+	case android.DefaultDistTag:
+		return android.Paths{j.outputFile}, nil
 	case ".jar":
 		return android.Paths{j.implementationAndResourcesJar}, nil
 	case ".proguard_map":
@@ -771,6 +771,37 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 
 	libDeps := ctx.AddVariationDependencies(nil, libTag, rewriteSyspropLibs(j.properties.Libs, "libs")...)
 	ctx.AddVariationDependencies(nil, staticLibTag, rewriteSyspropLibs(j.properties.Static_libs, "static_libs")...)
+
+	if ctx.DeviceConfig().VndkVersion() != "" && ctx.Config().EnforceInterPartitionJavaSdkLibrary() {
+		// Require java_sdk_library at inter-partition java dependency to ensure stable
+		// interface between partitions. If inter-partition java_library dependency is detected,
+		// raise build error because java_library doesn't have a stable interface.
+		//
+		// Inputs:
+		//    PRODUCT_ENFORCE_INTER_PARTITION_JAVA_SDK_LIBRARY
+		//      if true, enable enforcement
+		//    PRODUCT_INTER_PARTITION_JAVA_LIBRARY_ALLOWLIST
+		//      exception list of java_library names to allow inter-partition dependency
+		for idx, lib := range j.properties.Libs {
+			if libDeps[idx] == nil {
+				continue
+			}
+
+			if _, ok := syspropPublicStubs[lib]; ok {
+				continue
+			}
+
+			if javaDep, ok := libDeps[idx].(javaSdkLibraryEnforceContext); ok {
+				// java_sdk_library is always allowed at inter-partition dependency.
+				// So, skip check.
+				if _, ok := javaDep.(*SdkLibrary); ok {
+					continue
+				}
+
+				j.checkPartitionsForJavaDependency(ctx, "libs", javaDep)
+			}
+		}
+	}
 
 	// For library dependencies that are component libraries (like stubs), add the implementation
 	// as a dependency (dexpreopt needs to be against the implementation library, not stubs).
@@ -1414,6 +1445,9 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		// user defined kotlin flags.
 		kotlincFlags := j.properties.Kotlincflags
 		CheckKotlincFlags(ctx, kotlincFlags)
+
+		// Dogfood the JVM_IR backend.
+		kotlincFlags = append(kotlincFlags, "-Xuse-ir")
 
 		// If there are kotlin files, compile them first but pass all the kotlin and java files
 		// kotlinc will use the java files to resolve types referenced by the kotlin files, but
@@ -2112,8 +2146,6 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	if lib := proptools.String(j.usesLibraryProperties.Provides_uses_lib); lib != "" {
 		j.classLoaderContexts.AddContext(ctx, lib, j.DexJarBuildPath(), j.DexJarInstallPath())
 	}
-
-	j.distFiles = j.GenerateTaggedDistFiles(ctx)
 }
 
 func (j *Library) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -3051,21 +3083,21 @@ func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	dexOutputFile := android.PathForModuleOut(ctx, ctx.ModuleName()+".jar")
 
 	if j.dexpreopter.uncompressedDex {
-		rule := android.NewRuleBuilder()
+		rule := android.NewRuleBuilder(pctx, ctx)
 
 		temporary := android.PathForModuleOut(ctx, ctx.ModuleName()+".jar.unaligned")
 		rule.Temporary(temporary)
 
 		// use zip2zip to uncompress classes*.dex files
 		rule.Command().
-			BuiltTool(ctx, "zip2zip").
+			BuiltTool("zip2zip").
 			FlagWithInput("-i ", inputJar).
 			FlagWithOutput("-o ", temporary).
 			FlagWithArg("-0 ", "'classes*.dex'")
 
 		// use zipalign to align uncompressed classes*.dex files
 		rule.Command().
-			BuiltTool(ctx, "zipalign").
+			BuiltTool("zipalign").
 			Flag("-f").
 			Text("4").
 			Input(temporary).
@@ -3073,7 +3105,7 @@ func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 		rule.DeleteTemporaryFiles()
 
-		rule.Build(pctx, ctx, "uncompress_dex", "uncompress dex")
+		rule.Build("uncompress_dex", "uncompress dex")
 	} else {
 		ctx.Build(pctx, android.BuildParams{
 			Rule:   android.Cp,
