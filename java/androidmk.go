@@ -127,8 +127,8 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 						entries.AddStrings("LOCAL_ADDITIONAL_CHECKED_MODULE", library.additionalCheckedModules.Strings()...)
 					}
 
-					if library.proguardDictionary != nil {
-						entries.SetPath("LOCAL_SOONG_PROGUARD_DICT", library.proguardDictionary)
+					if library.dexer.proguardDictionary.Valid() {
+						entries.SetPath("LOCAL_SOONG_PROGUARD_DICT", library.dexer.proguardDictionary.Path())
 					}
 					entries.SetString("LOCAL_MODULE_STEM", library.Stem())
 
@@ -198,7 +198,7 @@ func (prebuilt *Import) AndroidMkEntries() []android.AndroidMkEntries {
 				entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", !Bool(prebuilt.properties.Installable))
 				entries.SetPath("LOCAL_SOONG_HEADER_JAR", prebuilt.combinedClasspathFile)
 				entries.SetPath("LOCAL_SOONG_CLASSES_JAR", prebuilt.combinedClasspathFile)
-				entries.SetString("LOCAL_SDK_VERSION", prebuilt.sdkVersion().raw)
+				entries.SetString("LOCAL_SDK_VERSION", prebuilt.makeSdkVersion())
 				entries.SetString("LOCAL_MODULE_STEM", prebuilt.Stem())
 			},
 		},
@@ -334,8 +334,8 @@ func (app *AndroidApp) AndroidMkEntries() []android.AndroidMkEntries {
 				if app.jacocoReportClassesFile != nil {
 					entries.SetPath("LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR", app.jacocoReportClassesFile)
 				}
-				if app.proguardDictionary != nil {
-					entries.SetPath("LOCAL_SOONG_PROGUARD_DICT", app.proguardDictionary)
+				if app.dexer.proguardDictionary.Valid() {
+					entries.SetPath("LOCAL_SOONG_PROGUARD_DICT", app.dexer.proguardDictionary.Path())
 				}
 
 				if app.Name() == "framework-res" {
