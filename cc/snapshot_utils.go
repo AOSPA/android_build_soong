@@ -58,7 +58,13 @@ func (s *snapshotMap) get(name string, arch android.ArchType) (snapshot string, 
 	return snapshot, found
 }
 
-func isSnapshotAware(ctx android.ModuleContext, m *Module) bool {
+// shouldCollectHeadersForSnapshot determines if the module is a possible candidate for snapshot.
+// If it's true, collectHeadersForSnapshot will be called in GenerateAndroidBuildActions.
+func shouldCollectHeadersForSnapshot(ctx android.ModuleContext, m *Module) bool {
+	if ctx.DeviceConfig().VndkVersion() != "current" &&
+		ctx.DeviceConfig().RecoverySnapshotVersion() != "current" {
+		return false
+	}
 	if _, _, ok := isVndkSnapshotLibrary(ctx.DeviceConfig(), m); ok {
 		return ctx.Config().VndkSnapshotBuildArtifacts()
 	} else if isVendorSnapshotModule(m, isVendorProprietaryPath(ctx.ModuleDir())) ||
