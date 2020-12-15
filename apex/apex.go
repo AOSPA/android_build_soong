@@ -32,6 +32,7 @@ import (
 	prebuilt_etc "android/soong/etc"
 	"android/soong/java"
 	"android/soong/python"
+	"android/soong/rust"
 	"android/soong/sh"
 )
 
@@ -178,6 +179,9 @@ type ApexNativeDependencies struct {
 
 	// List of JNI libraries that are embedded inside this APEX.
 	Jni_libs []string
+
+	// List of rust dyn libraries
+	Rust_dyn_libs []string
 
 	// List of native executables that are embedded inside this APEX.
 	Binaries []string
@@ -350,7 +354,8 @@ type apexBundle struct {
 
 	prebuiltFileToDelete string
 
-	distFiles android.TaggedDistFiles
+	// Path of API coverage generate file
+	coverageOutputPath android.ModuleOutPath
 }
 
 // apexFileClass represents a type of file that can be included in APEX.
@@ -513,13 +518,15 @@ var (
 func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeModules ApexNativeDependencies, target android.Target, imageVariation string) {
 	binVariations := target.Variations()
 	libVariations := append(target.Variations(), blueprint.Variation{Mutator: "link", Variation: "shared"})
+	rustLibVariations := append(target.Variations(), blueprint.Variation{Mutator: "rust_libraries", Variation: "dylib"})
 
 	if ctx.Device() {
 		binVariations = append(binVariations, blueprint.Variation{Mutator: "image", Variation: imageVariation})
 		libVariations = append(libVariations,
 			blueprint.Variation{Mutator: "image", Variation: imageVariation},
-			blueprint.Variation{Mutator: "version", Variation: ""}, // "" is the non-stub variant
-		)
+			blueprint.Variation{Mutator: "version", Variation: ""}) // "" is the non-stub variant
+		rustLibVariations = append(rustLibVariations,
+			blueprint.Variation{Mutator: "image", Variation: imageVariation})
 	}
 
 	// Use *FarVariation* to be able to depend on modules having conflicting variations with
@@ -529,6 +536,7 @@ func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeM
 	ctx.AddFarVariationDependencies(binVariations, testTag, nativeModules.Tests...)
 	ctx.AddFarVariationDependencies(libVariations, jniLibTag, nativeModules.Jni_libs...)
 	ctx.AddFarVariationDependencies(libVariations, sharedLibTag, nativeModules.Native_shared_libs...)
+	ctx.AddFarVariationDependencies(rustLibVariations, sharedLibTag, nativeModules.Rust_dyn_libs...)
 }
 
 func (a *apexBundle) combineProperties(ctx android.BottomUpMutatorContext) {
@@ -1096,7 +1104,8 @@ var _ android.OutputFileProducer = (*apexBundle)(nil)
 // Implements android.OutputFileProducer
 func (a *apexBundle) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
-	case "":
+	case "", android.DefaultDistTag:
+		// This is the default dist path.
 		return android.Paths{a.outputFile}, nil
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
@@ -1262,6 +1271,35 @@ func apexFileForExecutable(ctx android.BaseModuleContext, cc *cc.Module) apexFil
 	af.symlinks = cc.Symlinks()
 	af.dataPaths = cc.DataPaths()
 	return af
+}
+
+func apexFileForRustExecutable(ctx android.BaseModuleContext, rustm *rust.Module) apexFile {
+	dirInApex := "bin"
+	if rustm.Target().NativeBridge == android.NativeBridgeEnabled {
+		dirInApex = filepath.Join(dirInApex, rustm.Target().NativeBridgeRelativePath)
+	}
+	fileToCopy := rustm.OutputFile().Path()
+	androidMkModuleName := rustm.BaseModuleName() + rustm.Properties.SubName
+	af := newApexFile(ctx, fileToCopy, androidMkModuleName, dirInApex, nativeExecutable, rustm)
+	return af
+}
+
+func apexFileForRustLibrary(ctx android.BaseModuleContext, rustm *rust.Module) apexFile {
+	// Decide the APEX-local directory by the multilib of the library
+	// In the future, we may query this to the module.
+	var dirInApex string
+	switch rustm.Arch().ArchType.Multilib {
+	case "lib32":
+		dirInApex = "lib"
+	case "lib64":
+		dirInApex = "lib64"
+	}
+	if rustm.Target().NativeBridge == android.NativeBridgeEnabled {
+		dirInApex = filepath.Join(dirInApex, rustm.Target().NativeBridgeRelativePath)
+	}
+	fileToCopy := rustm.OutputFile().Path()
+	androidMkModuleName := rustm.BaseModuleName() + rustm.Properties.SubName
+	return newApexFile(ctx, fileToCopy, androidMkModuleName, dirInApex, nativeSharedLib, rustm)
 }
 
 func apexFileForPyBinary(ctx android.BaseModuleContext, py *python.Module) apexFile {
@@ -1501,8 +1539,11 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					filesInfo = append(filesInfo, apexFileForPyBinary(ctx, py))
 				} else if gb, ok := child.(bootstrap.GoBinaryTool); ok && a.Host() {
 					filesInfo = append(filesInfo, apexFileForGoBinary(ctx, depName, gb))
+				} else if rust, ok := child.(*rust.Module); ok {
+					filesInfo = append(filesInfo, apexFileForRustExecutable(ctx, rust))
+					return true // track transitive dependencies
 				} else {
-					ctx.PropertyErrorf("binaries", "%q is neither cc_binary, (embedded) py_binary, (host) blueprint_go_binary, (host) bootstrap_go_binary, nor sh_binary", depName)
+					ctx.PropertyErrorf("binaries", "%q is neither cc_binary, rust_binary, (embedded) py_binary, (host) blueprint_go_binary, (host) bootstrap_go_binary, nor sh_binary", depName)
 				}
 			case javaLibTag:
 				switch child.(type) {
@@ -1625,7 +1666,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 							// system libraries.
 							if !am.DirectlyInAnyApex() {
 								// we need a module name for Make
-								name := cc.ImplementationModuleName(ctx)
+								name := cc.ImplementationModuleNameForMake(ctx)
 
 								if !proptools.Bool(a.properties.Use_vendor) {
 									// we don't use subName(.vendor) for a "use_vendor: true" apex
@@ -1662,6 +1703,13 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				} else if java.IsXmlPermissionsFileDepTag(depTag) {
 					if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
 						filesInfo = append(filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, depName))
+					}
+				} else if rust.IsDylibDepTag(depTag) {
+					if rustm, ok := child.(*rust.Module); ok && rustm.IsInstallableToApex() {
+						af := apexFileForRustLibrary(ctx, rustm)
+						af.transitiveDep = true
+						filesInfo = append(filesInfo, af)
+						return true // track transitive dependencies
 					}
 				} else if _, ok := depTag.(android.CopyDirectlyInAnyApexTag); ok {
 					// nothing
@@ -1798,7 +1846,6 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	a.buildApexDependencyInfo(ctx)
 	a.buildLintReports(ctx)
-	a.distFiles = a.GenerateTaggedDistFiles(ctx)
 
 	// Append meta-files to the filesInfo list so that they are reflected in Android.mk as well.
 	if a.installable() {
@@ -1969,7 +2016,9 @@ func (a *apexBundle) checkStaticLinkingToStubLibraries(ctx android.ModuleContext
 			// The dynamic linker and crash_dump tool in the runtime APEX is the only
 			// exception to this rule. It can't make the static dependencies dynamic
 			// because it can't do the dynamic linking for itself.
-			if apexName == "com.android.runtime" && (fromName == "linker" || fromName == "crash_dump") {
+			// Same rule should be applied to linkerconfig, because it should be executed
+			// only with static linked libraries before linker is available with ld.config.txt
+			if apexName == "com.android.runtime" && (fromName == "linker" || fromName == "crash_dump" || fromName == "linkerconfig") {
 				return false
 			}
 

@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// A genrule module takes a list of source files ("srcs" property), an optional
+// list of tools ("tools" property), and a command line ("cmd" property), to
+// generate output files ("out" property).
+
 package genrule
 
 import (
@@ -47,6 +51,8 @@ func RegisterGenruleBuildComponents(ctx android.RegistrationContext) {
 var (
 	pctx = android.NewPackageContext("android/soong/genrule")
 
+	// Used by gensrcs when there is more than 1 shard to merge the outputs
+	// of each shard into a zip file.
 	gensrcsMerge = pctx.AndroidStaticRule("gensrcsMerge", blueprint.RuleParams{
 		Command:        "${soongZip} -o ${tmpZip} @${tmpZip}.rsp && ${zipSync} -d ${genDir} ${tmpZip}",
 		CommandDeps:    []string{"${soongZip}", "${zipSync}"},
@@ -115,6 +121,7 @@ type generatorProperties struct {
 	// Properties for Bazel migration purposes.
 	bazel.Properties
 }
+
 type Module struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
@@ -127,6 +134,9 @@ type Module struct {
 
 	properties generatorProperties
 
+	// For the different tasks that genrule and gensrc generate. genrule will
+	// generate 1 task, and gensrc will generate 1 or more tasks based on the
+	// number of shards the input files are sharded into.
 	taskGenerator taskFunc
 
 	deps        android.Paths
@@ -151,11 +161,12 @@ type generateTask struct {
 	in         android.Paths
 	out        android.WritablePaths
 	depFile    android.WritablePath
-	copyTo     android.WritablePaths
+	copyTo     android.WritablePaths // For gensrcs to set on gensrcsMerge rule.
 	genDir     android.WritablePath
 	extraTools android.Paths // dependencies on tools used by the generator
 
-	cmd    string
+	cmd string
+	// For gensrsc sharding.
 	shard  int
 	shards int
 }
@@ -324,14 +335,34 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var outputFiles android.WritablePaths
 	var zipArgs strings.Builder
 
+	// Generate tasks, either from genrule or gensrcs.
 	for _, task := range g.taskGenerator(ctx, String(g.properties.Cmd), srcFiles) {
 		if len(task.out) == 0 {
 			ctx.ModuleErrorf("must have at least one output file")
 			return
 		}
 
+		// Pick a unique path outside the task.genDir for the sbox manifest textproto,
+		// a unique rule name, and the user-visible description.
+		manifestName := "genrule.sbox.textproto"
+		desc := "generate"
+		name := "generator"
+		if task.shards > 0 {
+			manifestName = "genrule_" + strconv.Itoa(task.shard) + ".sbox.textproto"
+			desc += " " + strconv.Itoa(task.shard)
+			name += strconv.Itoa(task.shard)
+		} else if len(task.out) == 1 {
+			desc += " " + task.out[0].Base()
+		}
+
+		manifestPath := android.PathForModuleOut(ctx, manifestName)
+
+		// Use a RuleBuilder to create a rule that runs the command inside an sbox sandbox.
+		rule := android.NewRuleBuilder(pctx, ctx).Sbox(task.genDir, manifestPath)
+		cmd := rule.Command()
+
 		for _, out := range task.out {
-			addLocationLabel(out.Rel(), []string{android.SboxPathForOutput(out, task.genDir)})
+			addLocationLabel(out.Rel(), []string{cmd.PathForOutput(out)})
 		}
 
 		referencedDepfile := false
@@ -362,7 +393,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			case "out":
 				var sandboxOuts []string
 				for _, out := range task.out {
-					sandboxOuts = append(sandboxOuts, android.SboxPathForOutput(out, task.genDir))
+					sandboxOuts = append(sandboxOuts, cmd.PathForOutput(out))
 				}
 				return strings.Join(sandboxOuts, " "), nil
 			case "depfile":
@@ -372,7 +403,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				}
 				return "__SBOX_DEPFILE__", nil
 			case "genDir":
-				return android.SboxPathForOutput(task.genDir, task.genDir), nil
+				return cmd.PathForOutput(task.genDir), nil
 			default:
 				if strings.HasPrefix(name, "location ") {
 					label := strings.TrimSpace(strings.TrimPrefix(name, "location "))
@@ -414,24 +445,6 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		g.rawCommands = append(g.rawCommands, rawCommand)
 
-		// Pick a unique path outside the task.genDir for the sbox manifest textproto,
-		// a unique rule name, and the user-visible description.
-		manifestName := "genrule.sbox.textproto"
-		desc := "generate"
-		name := "generator"
-		if task.shards > 0 {
-			manifestName = "genrule_" + strconv.Itoa(task.shard) + ".sbox.textproto"
-			desc += " " + strconv.Itoa(task.shard)
-			name += strconv.Itoa(task.shard)
-		} else if len(task.out) == 1 {
-			desc += " " + task.out[0].Base()
-		}
-
-		manifestPath := android.PathForModuleOut(ctx, manifestName)
-
-		// Use a RuleBuilder to create a rule that runs the command inside an sbox sandbox.
-		rule := android.NewRuleBuilder().Sbox(task.genDir, manifestPath)
-		cmd := rule.Command()
 		cmd.Text(rawCommand)
 		cmd.ImplicitOutputs(task.out)
 		cmd.Implicits(task.in)
@@ -442,7 +455,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 
 		// Create the rule to run the genrule command inside sbox.
-		rule.Build(pctx, ctx, name, desc)
+		rule.Build(name, desc)
 
 		if len(task.copyTo) > 0 {
 			// If copyTo is set, multiple shards need to be copied into a single directory.
@@ -600,6 +613,10 @@ func NewGenSrcs() *Module {
 			}
 
 			genDir := android.PathForModuleGen(ctx, genSubDir)
+			// TODO(ccross): this RuleBuilder is a hack to be able to call
+			// rule.Command().PathForOutput.  Replace this with passing the rule into the
+			// generator.
+			rule := android.NewRuleBuilder(pctx, ctx).Sbox(genDir, nil)
 
 			for _, in := range shard {
 				outFile := android.GenPathWithExt(ctx, finalSubDir, in, String(properties.Output_extension))
@@ -622,11 +639,11 @@ func NewGenSrcs() *Module {
 					case "in":
 						return in.String(), nil
 					case "out":
-						return android.SboxPathForOutput(outFile, genDir), nil
+						return rule.Command().PathForOutput(outFile), nil
 					case "depfile":
 						// Generate a depfile for each output file.  Store the list for
 						// later in order to combine them all into a single depfile.
-						depFile := android.SboxPathForOutput(outFile.ReplaceExtension(ctx, "d"), genDir)
+						depFile := rule.Command().PathForOutput(outFile.ReplaceExtension(ctx, "d"))
 						commandDepFiles = append(commandDepFiles, depFile)
 						return depFile, nil
 					default:
@@ -691,7 +708,7 @@ type genSrcsProperties struct {
 	Shard_size *int64
 }
 
-const defaultShardSize = 100
+const defaultShardSize = 50
 
 func NewGenRule() *Module {
 	properties := &genRuleProperties{}

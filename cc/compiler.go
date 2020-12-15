@@ -366,7 +366,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		if ctx.Device() {
 			flags.Global.CommonFlags = append(flags.Global.CommonFlags,
-				fmt.Sprintf("-D__ANDROID_SDK_VERSION__=%d",
+				fmt.Sprintf("-D__ANDROID_APEX_MIN_SDK_VERSION__=%d",
 					ctx.apexSdkVersion().FinalOrFutureInt()))
 		}
 	}
@@ -649,7 +649,7 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 func compileObjs(ctx android.ModuleContext, flags builderFlags,
 	subdir string, srcFiles, pathDeps android.Paths, cFlagsDeps android.Paths) Objects {
 
-	return TransformSourceToObj(ctx, subdir, srcFiles, flags, pathDeps, cFlagsDeps)
+	return transformSourceToObj(ctx, subdir, srcFiles, flags, pathDeps, cFlagsDeps)
 }
 
 var thirdPartyDirPrefixExceptions = []*regexp.Regexp{
