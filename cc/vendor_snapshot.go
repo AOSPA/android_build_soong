@@ -339,7 +339,7 @@ func (p *snapshotLibraryDecorator) link(ctx ModuleContext,
 		// depending on a table of contents file instead of the library itself.
 		tocFile := android.PathForModuleOut(ctx, libName+".toc")
 		p.tocFile = android.OptionalPathForPath(tocFile)
-		TransformSharedObjectToToc(ctx, in, tocFile, builderFlags)
+		transformSharedObjectToToc(ctx, in, tocFile, builderFlags)
 
 		ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
 			SharedLibrary:           in,
@@ -1125,7 +1125,7 @@ func (c *snapshotSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 		ctx,
 		snapshotDir,
 		c.name+"-"+ctx.Config().DeviceName()+".zip")
-	zipRule := android.NewRuleBuilder()
+	zipRule := android.NewRuleBuilder(pctx, ctx)
 
 	// filenames in rspfile from FlagWithRspFileInputList might be single-quoted. Remove it with tr
 	snapshotOutputList := android.PathForOutput(
@@ -1141,12 +1141,12 @@ func (c *snapshotSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	zipRule.Temporary(snapshotOutputList)
 
 	zipRule.Command().
-		BuiltTool(ctx, "soong_zip").
+		BuiltTool("soong_zip").
 		FlagWithOutput("-o ", zipPath).
 		FlagWithArg("-C ", android.PathForOutput(ctx, snapshotDir).String()).
 		FlagWithInput("-l ", snapshotOutputList)
 
-	zipRule.Build(pctx, ctx, zipPath.String(), c.name+" snapshot "+zipPath.String())
+	zipRule.Build(zipPath.String(), c.name+" snapshot "+zipPath.String())
 	zipRule.DeleteTemporaryFiles()
 	c.snapshotZipFile = android.OptionalPathForPath(zipPath)
 }
