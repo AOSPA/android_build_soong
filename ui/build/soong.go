@@ -104,20 +104,6 @@ func runSoong(ctx Context, config Config) {
 		}
 	}()
 
-	func() {
-		ctx.BeginTrace(metrics.RunSoong, "QSSI_violators")
-		defer ctx.EndTrace()
-
-		cmd := Command(ctx, config, config.PrebuiltBuildTool("qssi"),
-			"vendor/qcom/opensource/core-utils/build/QSSI_violators")
-
-		cmd.Sandbox = soongSandbox
-		err := cmd.Run()
-		if err != nil {
-			ctx.Verboseln("QSSI_violators returned error...")
-		}
-	}()
-
 	ninja := func(name, file string) {
 		ctx.BeginTrace(metrics.RunSoong, name)
 		defer ctx.EndTrace()
