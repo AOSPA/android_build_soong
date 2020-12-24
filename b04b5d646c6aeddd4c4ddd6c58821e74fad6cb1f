@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8dd9964a_eaa0acfb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000012
+      },
+      "writtenOn": "2020-12-24T01:20:54Z",
+      "side": 1,
+      "message": "I\u0027m aware QC is using this, they\u0027ll fix in S most likely",
+      "revId": "b04b5d646c6aeddd4c4ddd6c58821e74fad6cb1f",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
