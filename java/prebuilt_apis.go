@@ -34,6 +34,13 @@ func RegisterPrebuiltApisBuildComponents(ctx android.RegistrationContext) {
 type prebuiltApisProperties struct {
 	// list of api version directories
 	Api_dirs []string
+
+	// The sdk_version of java_import modules generated based on jar files.
+	// Defaults to "current"
+	Imports_sdk_version *string
+
+	// If set to true, compile dex for java_import modules. Defaults to false.
+	Imports_compile_dex *bool
 }
 
 type prebuiltApis struct {
@@ -74,18 +81,19 @@ func prebuiltApiModuleName(mctx android.LoadHookContext, module string, scope st
 	return mctx.ModuleName() + "_" + scope + "_" + apiver + "_" + module
 }
 
-func createImport(mctx android.LoadHookContext, module string, scope string, apiver string, path string) {
+func createImport(mctx android.LoadHookContext, module, scope, apiver, path, sdkVersion string, compileDex bool) {
 	props := struct {
 		Name        *string
 		Jars        []string
 		Sdk_version *string
 		Installable *bool
+		Compile_dex *bool
 	}{}
 	props.Name = proptools.StringPtr(prebuiltApiModuleName(mctx, module, scope, apiver))
 	props.Jars = append(props.Jars, path)
-	// TODO(hansson): change to scope after migration is done.
-	props.Sdk_version = proptools.StringPtr("current")
+	props.Sdk_version = proptools.StringPtr(sdkVersion)
 	props.Installable = proptools.BoolPtr(false)
+	props.Compile_dex = proptools.BoolPtr(compileDex)
 
 	mctx.CreateModule(ImportFactory, &props)
 }
@@ -101,10 +109,10 @@ func createFilegroup(mctx android.LoadHookContext, module string, scope string, 
 	mctx.CreateModule(android.FileGroupFactory, &filegroupProps)
 }
 
-func getPrebuiltFiles(mctx android.LoadHookContext, name string) []string {
+func getPrebuiltFiles(mctx android.LoadHookContext, p *prebuiltApis, name string) []string {
 	mydir := mctx.ModuleDir() + "/"
 	var files []string
-	for _, apiver := range mctx.Module().(*prebuiltApis).properties.Api_dirs {
+	for _, apiver := range p.properties.Api_dirs {
 		for _, scope := range []string{"public", "system", "test", "core", "module-lib", "system-server"} {
 			vfiles, err := mctx.GlobWithDeps(mydir+apiver+"/"+scope+"/"+name, nil)
 			if err != nil {
@@ -116,16 +124,19 @@ func getPrebuiltFiles(mctx android.LoadHookContext, name string) []string {
 	return files
 }
 
-func prebuiltSdkStubs(mctx android.LoadHookContext) {
+func prebuiltSdkStubs(mctx android.LoadHookContext, p *prebuiltApis) {
 	mydir := mctx.ModuleDir() + "/"
 	// <apiver>/<scope>/<module>.jar
-	files := getPrebuiltFiles(mctx, "*.jar")
+	files := getPrebuiltFiles(mctx, p, "*.jar")
+
+	sdkVersion := proptools.StringDefault(p.properties.Imports_sdk_version, "current")
+	compileDex := proptools.BoolDefault(p.properties.Imports_compile_dex, false)
 
 	for _, f := range files {
 		// create a Import module for each jar file
 		localPath := strings.TrimPrefix(f, mydir)
 		module, apiver, scope := parseJarPath(localPath)
-		createImport(mctx, module, scope, apiver, localPath)
+		createImport(mctx, module, scope, apiver, localPath, sdkVersion, compileDex)
 	}
 }
 
@@ -140,8 +151,8 @@ func createSystemModules(mctx android.LoadHookContext, apiver string) {
 	mctx.CreateModule(SystemModulesFactory, &props)
 }
 
-func prebuiltSdkSystemModules(mctx android.LoadHookContext) {
-	for _, apiver := range mctx.Module().(*prebuiltApis).properties.Api_dirs {
+func prebuiltSdkSystemModules(mctx android.LoadHookContext, p *prebuiltApis) {
+	for _, apiver := range p.properties.Api_dirs {
 		jar := android.ExistentPathForSource(mctx,
 			mctx.ModuleDir(), apiver, "public", "core-for-system-modules.jar")
 		if jar.Valid() {
@@ -150,10 +161,10 @@ func prebuiltSdkSystemModules(mctx android.LoadHookContext) {
 	}
 }
 
-func prebuiltApiFiles(mctx android.LoadHookContext) {
+func prebuiltApiFiles(mctx android.LoadHookContext, p *prebuiltApis) {
 	mydir := mctx.ModuleDir() + "/"
 	// <apiver>/<scope>/api/<module>.txt
-	files := getPrebuiltFiles(mctx, "api/*.txt")
+	files := getPrebuiltFiles(mctx, p, "api/*.txt")
 
 	if len(files) == 0 {
 		mctx.ModuleErrorf("no api file found under %q", mydir)
@@ -201,10 +212,10 @@ func prebuiltApiFiles(mctx android.LoadHookContext) {
 }
 
 func createPrebuiltApiModules(mctx android.LoadHookContext) {
-	if _, ok := mctx.Module().(*prebuiltApis); ok {
-		prebuiltApiFiles(mctx)
-		prebuiltSdkStubs(mctx)
-		prebuiltSdkSystemModules(mctx)
+	if p, ok := mctx.Module().(*prebuiltApis); ok {
+		prebuiltApiFiles(mctx, p)
+		prebuiltSdkStubs(mctx, p)
+		prebuiltSdkSystemModules(mctx, p)
 	}
 }
 
