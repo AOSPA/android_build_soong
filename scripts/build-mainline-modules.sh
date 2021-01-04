@@ -3,13 +3,13 @@
 # Non exhaustive list of modules where we want prebuilts. More can be added as
 # needed.
 MAINLINE_MODULES=(
+  com.android.art
   com.android.art.debug
-  com.android.art.release
   com.android.art.testing
   com.android.conscrypt
+  com.android.i18n
   com.android.runtime
   com.android.tzdata
-  com.android.i18n
 )
 
 # List of SDKs and module exports we know of.
@@ -24,7 +24,7 @@ MODULES_SDK_AND_EXPORTS=(
   i18n-module-test-exports
   i18n-module-sdk
   platform-mainline-sdk
-  platform-mainline-host-exports
+  platform-mainline-test-exports
 )
 
 # List of libraries installed on the platform that are needed for ART chroot
@@ -52,6 +52,13 @@ echo_and_run() {
   "$@"
 }
 
+lib_dir() {
+  case $1 in
+    (aosp_arm|aosp_x86) echo "lib";;
+    (aosp_arm64|aosp_x86_64) echo "lib64";;
+  esac
+}
+
 OUT_DIR=$(source build/envsetup.sh > /dev/null; TARGET_PRODUCT= get_build_var OUT_DIR)
 DIST_DIR=$(source build/envsetup.sh > /dev/null; TARGET_PRODUCT= get_build_var DIST_DIR)
 
@@ -69,7 +76,8 @@ for product in "${PRODUCTS[@]}"; do
     echo_and_run cp ${PWD}/${PRODUCT_OUT}/system/apex/${module}.apex ${DIST_DIR}/${TARGET_ARCH}/
   done
   for library in "${PLATFORM_LIBRARIES[@]}"; do
-    echo_and_run cp ${PWD}/${PRODUCT_OUT}/system/lib/${library}.so ${DIST_DIR}/${TARGET_ARCH}/
+    libdir=$(lib_dir $product)
+    echo_and_run cp ${PWD}/${PRODUCT_OUT}/system/${libdir}/${library}.so ${DIST_DIR}/${TARGET_ARCH}/
   done
 done
 

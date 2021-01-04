@@ -41,6 +41,9 @@ type TestProperties struct {
 	// doesn't exist next to the Android.bp, this attribute doesn't need to be set to true
 	// explicitly.
 	Auto_gen_config *bool
+
+	// if set, build with the standard Rust test harness. Defaults to true.
+	Test_harness *bool
 }
 
 // A test module is a binary module with extra --test compiler flag
@@ -54,6 +57,10 @@ type testDecorator struct {
 
 func (test *testDecorator) nativeCoverage() bool {
 	return true
+}
+
+func (test *testDecorator) testHarness() bool {
+	return BoolDefault(test.Properties.Test_harness, true)
 }
 
 func NewRustTest(hod android.HostOrDeviceSupported) (*Module, *testDecorator) {
@@ -81,7 +88,7 @@ func (test *testDecorator) compilerProps() []interface{} {
 	return append(test.binaryDecorator.compilerProps(), &test.Properties)
 }
 
-func (test *testDecorator) install(ctx ModuleContext, file android.Path) {
+func (test *testDecorator) install(ctx ModuleContext) {
 	test.testConfig = tradefed.AutoGenRustTestConfig(ctx,
 		test.Properties.Test_config,
 		test.Properties.Test_config_template,
@@ -96,16 +103,18 @@ func (test *testDecorator) install(ctx ModuleContext, file android.Path) {
 		ctx.PropertyErrorf("no_named_install_directory", "Module install directory may only be disabled if relative_install_path is set")
 	}
 
-	test.binaryDecorator.install(ctx, file)
+	test.binaryDecorator.install(ctx)
 }
 
 func (test *testDecorator) compilerFlags(ctx ModuleContext, flags Flags) Flags {
 	flags = test.binaryDecorator.compilerFlags(ctx, flags)
-	flags.RustFlags = append(flags.RustFlags, "--test")
+	if test.testHarness() {
+		flags.RustFlags = append(flags.RustFlags, "--test")
+	}
 	return flags
 }
 
-func (test *testDecorator) autoDep() autoDep {
+func (test *testDecorator) autoDep(ctx BaseModuleContext) autoDep {
 	return rlibAutoDep
 }
 
@@ -123,4 +132,8 @@ func RustTestFactory() android.Module {
 func RustTestHostFactory() android.Module {
 	module, _ := NewRustTest(android.HostSupported)
 	return module.Init()
+}
+
+func (test *testDecorator) stdLinkage(ctx *depsContext) RustLinkage {
+	return RlibLinkage
 }

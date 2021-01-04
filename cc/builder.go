@@ -69,12 +69,12 @@ var (
 		&remoteexec.REParams{
 			Labels:          map[string]string{"type": "link", "tool": "clang"},
 			ExecStrategy:    "${config.RECXXLinksExecStrategy}",
-			Inputs:          []string{"${out}.rsp"},
+			Inputs:          []string{"${out}.rsp", "$implicitInputs"},
 			RSPFile:         "${out}.rsp",
 			OutputFiles:     []string{"${out}", "$implicitOutputs"},
 			ToolchainInputs: []string{"$ldCmd"},
 			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXLinksPool}"},
-		}, []string{"ldCmd", "crtBegin", "libFlags", "crtEnd", "ldFlags", "extraLibFlags"}, []string{"implicitOutputs"})
+		}, []string{"ldCmd", "crtBegin", "libFlags", "crtEnd", "ldFlags", "extraLibFlags"}, []string{"implicitInputs", "implicitOutputs"})
 
 	partialLd, partialLdRE = remoteexec.StaticRules(pctx, "partialLd",
 		blueprint.RuleParams{
@@ -83,12 +83,13 @@ var (
 			Command:     "$reTemplate$ldCmd -fuse-ld=lld -nostdlib -no-pie -Wl,-r ${in} -o ${out} ${ldFlags}",
 			CommandDeps: []string{"$ldCmd"},
 		}, &remoteexec.REParams{
-			Labels:       map[string]string{"type": "link", "tool": "clang"},
-			ExecStrategy: "${config.RECXXLinksExecStrategy}", Inputs: []string{"$inCommaList"},
+			Labels:          map[string]string{"type": "link", "tool": "clang"},
+			ExecStrategy:    "${config.RECXXLinksExecStrategy}",
+			Inputs:          []string{"$inCommaList", "$implicitInputs"},
 			OutputFiles:     []string{"${out}", "$implicitOutputs"},
 			ToolchainInputs: []string{"$ldCmd"},
 			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXLinksPool}"},
-		}, []string{"ldCmd", "ldFlags"}, []string{"inCommaList", "implicitOutputs"})
+		}, []string{"ldCmd", "ldFlags"}, []string{"implicitInputs", "inCommaList", "implicitOutputs"})
 
 	ar = pctx.AndroidStaticRule("ar",
 		blueprint.RuleParams{
@@ -174,12 +175,21 @@ var (
 		},
 		"crossCompile", "format")
 
-	clangTidy = pctx.AndroidStaticRule("clangTidy",
+	clangTidy, clangTidyRE = remoteexec.StaticRules(pctx, "clangTidy",
 		blueprint.RuleParams{
-			Command:     "rm -f $out && ${config.ClangBin}/clang-tidy $tidyFlags $in -- $cFlags && touch $out",
+			Command:     "rm -f $out && $reTemplate${config.ClangBin}/clang-tidy $tidyFlags $in -- $cFlags && touch $out",
 			CommandDeps: []string{"${config.ClangBin}/clang-tidy"},
 		},
-		"cFlags", "tidyFlags")
+		&remoteexec.REParams{
+			Labels:       map[string]string{"type": "lint", "tool": "clang-tidy", "lang": "cpp"},
+			ExecStrategy: "${config.REClangTidyExecStrategy}",
+			Inputs:       []string{"$in"},
+			// OutputFile here is $in for remote-execution since its possible that
+			// clang-tidy modifies the given input file itself and $out refers to the
+			// ".tidy" file generated for ninja-dependency reasons.
+			OutputFiles: []string{"$in"},
+			Platform:    map[string]string{remoteexec.PoolKey: "${config.REClangTidyPool}"},
+		}, []string{"cFlags", "tidyFlags"}, []string{})
 
 	_ = pctx.SourcePathVariable("yasmCmd", "prebuilts/misc/${config.HostPrebuiltTag}/yasm/yasm")
 
@@ -211,7 +221,6 @@ var (
 			ExecStrategy: "${config.REAbiDumperExecStrategy}",
 			Platform: map[string]string{
 				remoteexec.PoolKey:      "${config.RECXXPool}",
-				"InputRootAbsolutePath": android.AbsSrcDirForExistingUseCases(),
 			},
 		}, []string{"cFlags", "exportDirs"}, nil)
 
@@ -227,12 +236,12 @@ var (
 		}, &remoteexec.REParams{
 			Labels:          map[string]string{"type": "tool", "name": "abi-linker"},
 			ExecStrategy:    "${config.REAbiLinkerExecStrategy}",
-			Inputs:          []string{"$sAbiLinkerLibs", "${out}.rsp", "$implicits"},
+			Inputs:          []string{"$sAbiLinkerLibs", "${out}.rsp", "$implicitInputs"},
 			RSPFile:         "${out}.rsp",
 			OutputFiles:     []string{"$out"},
 			ToolchainInputs: []string{"$sAbiLinker"},
 			Platform:        map[string]string{remoteexec.PoolKey: "${config.RECXXPool}"},
-		}, []string{"symbolFilter", "arch", "exportedHeaderFlags"}, []string{"implicits"})
+		}, []string{"symbolFilter", "arch", "exportedHeaderFlags"}, []string{"implicitInputs"})
 
 	_ = pctx.SourcePathVariable("sAbiDiffer", "prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/header-abi-diff")
 
@@ -256,9 +265,9 @@ var (
 
 	zip = pctx.AndroidStaticRule("zip",
 		blueprint.RuleParams{
-			Command:        "cat $out.rsp | tr ' ' '\\n' | tr -d \\' | sort -u > ${out}.tmp && ${SoongZipCmd} -o ${out} -C $$OUT_DIR -l ${out}.tmp",
+			Command:        "${SoongZipCmd} -o ${out} -C $$OUT_DIR -r ${out}.rsp",
 			CommandDeps:    []string{"${SoongZipCmd}"},
-			Rspfile:        "$out.rsp",
+			Rspfile:        "${out}.rsp",
 			RspfileContent: "$in",
 		})
 
@@ -341,18 +350,22 @@ type builderFlags struct {
 
 	groupStaticLibs bool
 
-	stripKeepSymbols              bool
-	stripKeepSymbolsList          string
-	stripKeepSymbolsAndDebugFrame bool
-	stripKeepMiniDebugInfo        bool
-	stripAddGnuDebuglink          bool
-	stripUseGnuStrip              bool
-
 	proto            android.ProtoFlags
 	protoC           bool
 	protoOptionsFile bool
 
 	yacc *YaccProperties
+	lex  *LexProperties
+}
+
+type StripFlags struct {
+	Toolchain                     config.Toolchain
+	StripKeepSymbols              bool
+	StripKeepSymbolsList          string
+	StripKeepSymbolsAndDebugFrame bool
+	StripKeepMiniDebugInfo        bool
+	StripAddGnuDebuglink          bool
+	StripUseGnuStrip              bool
 }
 
 type Objects struct {
@@ -576,8 +589,13 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			tidyFile := android.ObjPathWithExt(ctx, subdir, srcFile, "tidy")
 			tidyFiles = append(tidyFiles, tidyFile)
 
+			rule := clangTidy
+			if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_CLANG_TIDY") {
+				rule = clangTidyRE
+			}
+
 			ctx.Build(pctx, android.BuildParams{
-				Rule:        clangTidy,
+				Rule:        rule,
 				Description: "clang-tidy " + srcFile.Rel(),
 				Output:      tidyFile,
 				Input:       srcFile,
@@ -598,7 +616,7 @@ func TransformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			sAbiDumpFiles = append(sAbiDumpFiles, sAbiDumpFile)
 
 			dumpRule := sAbiDump
-			if ctx.Config().IsEnvTrue("RBE_ABI_DUMPER") {
+			if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_ABI_DUMPER") {
 				dumpRule = sAbiDumpRE
 			}
 			ctx.Build(pctx, android.BuildParams{
@@ -634,8 +652,8 @@ func TransformObjToStaticLib(ctx android.ModuleContext,
 
 	arCmd := "${config.ClangBin}/llvm-ar"
 	if flags.sdclang {
-                arCmd = "${config.ClangBin}/llvm-ar"
-        }
+		arCmd = "${config.SDClangBin}/llvm-ar"
+	}
 	arFlags := ""
 	if !ctx.Darwin() {
 		arFlags += " -format=gnu"
@@ -743,9 +761,10 @@ func TransformObjToDynamicBinary(ctx android.ModuleContext,
 		"ldFlags":       flags.globalLdFlags + " " + flags.localLdFlags + " " + extraFlags,
 		"crtEnd":        crtEnd.String(),
 	}
-	if ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
+	if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
 		rule = ldRE
 		args["implicitOutputs"] = strings.Join(implicitOutputs.Strings(), ",")
+		args["implicitInputs"] = strings.Join(deps.Strings(), ",")
 	}
 
 	ctx.Build(pctx, android.BuildParams{
@@ -786,7 +805,7 @@ func TransformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Path
 		"arch":                ctx.Arch().ArchType.Name,
 		"exportedHeaderFlags": exportedHeaderFlags,
 	}
-	if ctx.Config().IsEnvTrue("RBE_ABI_LINKER") {
+	if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_ABI_LINKER") {
 		rule = sAbiLinkRE
 		rbeImplicits := implicits.Strings()
 		for _, p := range strings.Split(exportedHeaderFlags, " ") {
@@ -795,7 +814,7 @@ func TransformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Path
 				rbeImplicits = append(rbeImplicits, p[2:])
 			}
 		}
-		args["implicits"] = strings.Join(rbeImplicits, ",")
+		args["implicitInputs"] = strings.Join(rbeImplicits, ",")
 	}
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        rule,
@@ -929,9 +948,10 @@ func TransformObjsToObj(ctx android.ModuleContext, objFiles android.Paths,
 		"ldCmd":   ldCmd,
 		"ldFlags": flags.globalLdFlags + " " + flags.localLdFlags + " " + extraFlags,
 	}
-	if ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
+	if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
 		rule = partialLdRE
 		args["inCommaList"] = strings.Join(objFiles.Strings(), ",")
+		args["implicitInputs"] = strings.Join(deps.Strings(), ",")
 	}
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        rule,
@@ -962,26 +982,26 @@ func TransformBinaryPrefixSymbols(ctx android.ModuleContext, prefix string, inpu
 }
 
 func TransformStrip(ctx android.ModuleContext, inputFile android.Path,
-	outputFile android.WritablePath, flags builderFlags) {
+	outputFile android.WritablePath, flags StripFlags) {
 
-	crossCompile := gccCmd(flags.toolchain, "")
+	crossCompile := gccCmd(flags.Toolchain, "")
 	args := ""
-	if flags.stripAddGnuDebuglink {
+	if flags.StripAddGnuDebuglink {
 		args += " --add-gnu-debuglink"
 	}
-	if flags.stripKeepMiniDebugInfo {
+	if flags.StripKeepMiniDebugInfo {
 		args += " --keep-mini-debug-info"
 	}
-	if flags.stripKeepSymbols {
+	if flags.StripKeepSymbols {
 		args += " --keep-symbols"
 	}
-	if flags.stripKeepSymbolsList != "" {
-		args += " -k" + flags.stripKeepSymbolsList
+	if flags.StripKeepSymbolsList != "" {
+		args += " -k" + flags.StripKeepSymbolsList
 	}
-	if flags.stripKeepSymbolsAndDebugFrame {
+	if flags.StripKeepSymbolsAndDebugFrame {
 		args += " --keep-symbols-and-debug-frame"
 	}
-	if flags.stripUseGnuStrip {
+	if flags.StripUseGnuStrip {
 		args += " --use-gnu-strip"
 	}
 

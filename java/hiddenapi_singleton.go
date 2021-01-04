@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"android/soong/android"
+	"android/soong/genrule"
 )
 
 func init() {
@@ -43,7 +44,7 @@ func hiddenAPISingletonPaths(ctx android.PathContext) hiddenAPISingletonPathsStr
 		return hiddenAPISingletonPathsStruct{
 			flags:     android.PathForOutput(ctx, "hiddenapi", "hiddenapi-flags.csv"),
 			index:     android.PathForOutput(ctx, "hiddenapi", "hiddenapi-index.csv"),
-			metadata:  android.PathForOutput(ctx, "hiddenapi", "hiddenapi-greylist.csv"),
+			metadata:  android.PathForOutput(ctx, "hiddenapi", "hiddenapi-unsupported.csv"),
 			stubFlags: android.PathForOutput(ctx, "hiddenapi", "hiddenapi-stub-flags.txt"),
 		}
 	}).(hiddenAPISingletonPathsStruct)
@@ -92,31 +93,34 @@ func (h *hiddenAPISingleton) MakeVars(ctx android.MakeVarsContext) {
 // stubFlagsRule creates the rule to build hiddenapi-stub-flags.txt out of dex jars from stub modules and boot image
 // modules.
 func stubFlagsRule(ctx android.SingletonContext) {
-	// Public API stubs
-	publicStubModules := []string{
-		"android_stubs_current",
+	var publicStubModules []string
+	var systemStubModules []string
+	var testStubModules []string
+	var corePlatformStubModules []string
+
+	if ctx.Config().AlwaysUsePrebuiltSdks() {
+		// Build configuration mandates using prebuilt stub modules
+		publicStubModules = append(publicStubModules, "sdk_public_current_android")
+		systemStubModules = append(systemStubModules, "sdk_system_current_android")
+		testStubModules = append(testStubModules, "sdk_test_current_android")
+	} else {
+		// Use stub modules built from source
+		publicStubModules = append(publicStubModules, "android_stubs_current")
+		systemStubModules = append(systemStubModules, "android_system_stubs_current")
+		testStubModules = append(testStubModules, "android_test_stubs_current")
 	}
+	// We do not have prebuilts of the core platform api yet
+	corePlatformStubModules = append(corePlatformStubModules, "legacy.core.platform.api.stubs")
 
 	// Add the android.test.base to the set of stubs only if the android.test.base module is on
 	// the boot jars list as the runtime will only enforce hiddenapi access against modules on
 	// that list.
-	if inList("android.test.base", ctx.Config().BootJars()) && !ctx.Config().UnbundledBuildUsePrebuiltSdks() {
-		publicStubModules = append(publicStubModules, "android.test.base.stubs")
-	}
-
-	// System API stubs
-	systemStubModules := []string{
-		"android_system_stubs_current",
-	}
-
-	// Test API stubs
-	testStubModules := []string{
-		"android_test_stubs_current",
-	}
-
-	// Core Platform API stubs
-	corePlatformStubModules := []string{
-		"legacy.core.platform.api.stubs",
+	if inList("android.test.base", ctx.Config().BootJars()) {
+		if ctx.Config().AlwaysUsePrebuiltSdks() {
+			publicStubModules = append(publicStubModules, "sdk_public_current_android.test.base")
+		} else {
+			publicStubModules = append(publicStubModules, "android.test.base.stubs")
+		}
 	}
 
 	// Allow products to define their own stubs for custom product jars that apps can use.
@@ -158,11 +162,11 @@ func stubFlagsRule(ctx android.SingletonContext) {
 				// For a java lib included in an APEX, only take the one built for
 				// the platform variant, and skip the variants for APEXes.
 				// Otherwise, the hiddenapi tool will complain about duplicated classes
-				if a, ok := module.(android.ApexModule); ok {
-					if android.InAnyApex(module.Name()) && !a.IsForPlatform() {
-						return
-					}
+				apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+				if !apexInfo.IsForPlatform() {
+					return
 				}
+
 				bootDexJars = append(bootDexJars, jar)
 			}
 		}
@@ -207,43 +211,30 @@ func stubFlagsRule(ctx android.SingletonContext) {
 	rule.Build(pctx, ctx, "hiddenAPIStubFlagsFile", "hiddenapi stub flags")
 }
 
-func moduleForGreyListRemovedApis(ctx android.SingletonContext, module android.Module) bool {
-	switch ctx.ModuleName(module) {
-	case "api-stubs-docs", "system-api-stubs-docs", "android.car-stubs-docs", "android.car-system-stubs-docs":
-		return true
-	default:
-		return false
-	}
-}
-
 // flagsRule creates a rule to build hiddenapi-flags.csv out of flags.csv files generated for boot image modules and
-// the greylists.
+// the unsupported API.
 func flagsRule(ctx android.SingletonContext) android.Path {
 	var flagsCSV android.Paths
-	var greylistRemovedApis android.Paths
+	var combinedRemovedApis android.Path
 
 	ctx.VisitAllModules(func(module android.Module) {
 		if h, ok := module.(hiddenAPIIntf); ok {
 			if csv := h.flagsCSV(); csv != nil {
 				flagsCSV = append(flagsCSV, csv)
 			}
-		} else if ds, ok := module.(*Droidstubs); ok {
-			// Track @removed public and system APIs via corresponding droidstubs targets.
-			// These APIs are not present in the stubs, however, we have to keep allowing access
-			// to them at runtime.
-			if moduleForGreyListRemovedApis(ctx, module) {
-				greylistRemovedApis = append(greylistRemovedApis, ds.removedDexApiFile)
+		} else if g, ok := module.(*genrule.Module); ok {
+			if ctx.ModuleName(module) == "combined-removed-dex" {
+				if len(g.GeneratedSourceFiles()) != 1 || combinedRemovedApis != nil {
+					ctx.Errorf("Expected 1 combined-removed-dex module that generates 1 output file.")
+				}
+				combinedRemovedApis = g.GeneratedSourceFiles()[0]
 			}
 		}
 	})
 
-	combinedRemovedApis := android.PathForOutput(ctx, "hiddenapi", "combined-removed-dex.txt")
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.Cat,
-		Inputs:      greylistRemovedApis,
-		Output:      combinedRemovedApis,
-		Description: "Combine removed apis for " + combinedRemovedApis.String(),
-	})
+	if combinedRemovedApis == nil {
+		ctx.Errorf("Failed to find combined-removed-dex.")
+	}
 
 	rule := android.NewRuleBuilder()
 
@@ -256,19 +247,21 @@ func flagsRule(ctx android.SingletonContext) android.Path {
 		Tool(android.PathForSource(ctx, "frameworks/base/tools/hiddenapi/generate_hiddenapi_lists.py")).
 		FlagWithInput("--csv ", stubFlags).
 		Inputs(flagsCSV).
-		FlagWithInput("--greylist ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist.txt")).
-		FlagWithInput("--greylist-ignore-conflicts ", combinedRemovedApis).
-		FlagWithInput("--greylist-max-q ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-max-q.txt")).
-		FlagWithInput("--greylist-max-p ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-max-p.txt")).
-		FlagWithInput("--greylist-max-o-ignore-conflicts ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-max-o.txt")).
-		FlagWithInput("--blacklist ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-force-blacklist.txt")).
-		FlagWithInput("--greylist-packages ",
-			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-packages.txt")).
+		FlagWithInput("--unsupported ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-unsupported.txt")).
+		FlagWithInput("--unsupported ", combinedRemovedApis).Flag("--ignore-conflicts ").FlagWithArg("--tag ", "removed").
+		FlagWithInput("--max-target-q ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-max-target-q.txt")).
+		FlagWithInput("--max-target-p ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-max-target-p.txt")).
+		FlagWithInput("--max-target-o ", android.PathForSource(
+			ctx, "frameworks/base/config/hiddenapi-max-target-o.txt")).Flag("--ignore-conflicts ").
+		FlagWithInput("--blocked ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-force-blocked.txt")).
+		FlagWithInput("--blocked ",
+			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-temp-blocklist.txt")).
+		FlagWithInput("--unsupported ", android.PathForSource(
+			ctx, "frameworks/base/config/hiddenapi-unsupported-packages.txt")).Flag("--packages ").
 		FlagWithOutput("--output ", tempPath)
 
 	commitChangeForRestat(rule, tempPath, outputPath)
@@ -293,7 +286,7 @@ func emptyFlagsRule(ctx android.SingletonContext) android.Path {
 	return outputPath
 }
 
-// metadataRule creates a rule to build hiddenapi-greylist.csv out of the metadata.csv files generated for boot image
+// metadataRule creates a rule to build hiddenapi-unsupported.csv out of the metadata.csv files generated for boot image
 // modules.
 func metadataRule(ctx android.SingletonContext) android.Path {
 	var metadataCSV android.Paths

@@ -96,32 +96,32 @@ type BaseLinkerProperties struct {
 	Runtime_libs []string `android:"arch_variant"`
 
 	Target struct {
-		Vendor struct {
-			// list of shared libs that only should be used to build the vendor
-			// variant of the C/C++ module.
+		Vendor, Product struct {
+			// list of shared libs that only should be used to build vendor or
+			// product variant of the C/C++ module.
 			Shared_libs []string
 
-			// list of static libs that only should be used to build the vendor
-			// variant of the C/C++ module.
+			// list of static libs that only should be used to build vendor or
+			// product variant of the C/C++ module.
 			Static_libs []string
 
-			// list of shared libs that should not be used to build the vendor variant
-			// of the C/C++ module.
+			// list of shared libs that should not be used to build vendor or
+			// product variant of the C/C++ module.
 			Exclude_shared_libs []string
 
-			// list of static libs that should not be used to build the vendor variant
-			// of the C/C++ module.
+			// list of static libs that should not be used to build vendor or
+			// product variant of the C/C++ module.
 			Exclude_static_libs []string
 
-			// list of header libs that should not be used to build the vendor variant
-			// of the C/C++ module.
+			// list of header libs that should not be used to build vendor or
+			// product variant of the C/C++ module.
 			Exclude_header_libs []string
 
-			// list of runtime libs that should not be installed along with the vendor
-			// variant of the C/C++ module.
+			// list of runtime libs that should not be installed along with
+			// vendor or variant of the C/C++ module.
 			Exclude_runtime_libs []string
 
-			// version script for this vendor variant
+			// version script for vendor or product variant
 			Version_script *string `android:"arch_variant"`
 		}
 		Recovery struct {
@@ -156,6 +156,15 @@ type BaseLinkerProperties struct {
 
 			// list of static libs that should not be used to build
 			// the ramdisk variant of the C/C++ module.
+			Exclude_static_libs []string
+		}
+		Vendor_ramdisk struct {
+			// list of shared libs that should not be used to build
+			// the recovery variant of the C/C++ module.
+			Exclude_shared_libs []string
+
+			// list of static libs that should not be used to build
+			// the vendor ramdisk variant of the C/C++ module.
 			Exclude_static_libs []string
 		}
 		Platform struct {
@@ -234,6 +243,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.WholeStaticLibs = append(deps.WholeStaticLibs, "libbuildversion")
 	}
 
+	// TODO(b/150902910): product variant must use Target.Product
 	if ctx.useVndk() {
 		deps.SharedLibs = append(deps.SharedLibs, linker.Properties.Target.Vendor.Shared_libs...)
 		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Vendor.Exclude_shared_libs)
@@ -259,12 +269,20 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	}
 
 	if ctx.inRamdisk() {
-		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Recovery.Exclude_shared_libs)
-		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, linker.Properties.Target.Recovery.Exclude_shared_libs)
-		deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Target.Recovery.Static_libs...)
-		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Recovery.Exclude_static_libs)
-		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Recovery.Exclude_static_libs)
-		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Recovery.Exclude_static_libs)
+		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Ramdisk.Exclude_shared_libs)
+		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, linker.Properties.Target.Ramdisk.Exclude_shared_libs)
+		deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Target.Ramdisk.Static_libs...)
+		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Ramdisk.Exclude_static_libs)
+		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Ramdisk.Exclude_static_libs)
+		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Ramdisk.Exclude_static_libs)
+	}
+
+	if ctx.inVendorRamdisk() {
+		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Vendor_ramdisk.Exclude_shared_libs)
+		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, linker.Properties.Target.Vendor_ramdisk.Exclude_shared_libs)
+		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Vendor_ramdisk.Exclude_static_libs)
+		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Vendor_ramdisk.Exclude_static_libs)
+		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Vendor_ramdisk.Exclude_static_libs)
 	}
 
 	if !ctx.useSdk() {
@@ -278,19 +296,19 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 			deps.LateStaticLibs = append(deps.LateStaticLibs, "libatomic")
 		}
 
-		systemSharedLibs := linker.Properties.System_shared_libs
-		if systemSharedLibs == nil {
+		deps.SystemSharedLibs = linker.Properties.System_shared_libs
+		if deps.SystemSharedLibs == nil {
 			// Provide a default system_shared_libs if it is unspecified. Note: If an
 			// empty list [] is specified, it implies that the module declines the
 			// default system_shared_libs.
-			systemSharedLibs = []string{"libc", "libm", "libdl"}
+			deps.SystemSharedLibs = []string{"libc", "libm", "libdl"}
 		}
 
 		if inList("libdl", deps.SharedLibs) {
 			// If system_shared_libs has libc but not libdl, make sure shared_libs does not
 			// have libdl to avoid loading libdl before libc.
-			if inList("libc", systemSharedLibs) {
-				if !inList("libdl", systemSharedLibs) {
+			if inList("libc", deps.SystemSharedLibs) {
+				if !inList("libdl", deps.SystemSharedLibs) {
 					ctx.PropertyErrorf("shared_libs",
 						"libdl must be in system_shared_libs, not shared_libs")
 				}
@@ -300,12 +318,12 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 
 		// If libc and libdl are both in system_shared_libs make sure libdl comes after libc
 		// to avoid loading libdl before libc.
-		if inList("libdl", systemSharedLibs) && inList("libc", systemSharedLibs) &&
-			indexList("libdl", systemSharedLibs) < indexList("libc", systemSharedLibs) {
+		if inList("libdl", deps.SystemSharedLibs) && inList("libc", deps.SystemSharedLibs) &&
+			indexList("libdl", deps.SystemSharedLibs) < indexList("libc", deps.SystemSharedLibs) {
 			ctx.PropertyErrorf("system_shared_libs", "libdl must be after libc")
 		}
 
-		deps.LateSharedLibs = append(deps.LateSharedLibs, systemSharedLibs...)
+		deps.LateSharedLibs = append(deps.LateSharedLibs, deps.SystemSharedLibs...)
 	}
 
 	if ctx.Fuchsia() {
@@ -462,6 +480,7 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 		versionScript := ctx.ExpandOptionalSource(
 			linker.Properties.Version_script, "version_script")
 
+		// TODO(b/150902910): product variant must use Target.Product
 		if ctx.useVndk() && linker.Properties.Target.Vendor.Version_script != nil {
 			versionScript = ctx.ExpandOptionalSource(
 				linker.Properties.Target.Vendor.Version_script,

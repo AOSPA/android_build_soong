@@ -17,7 +17,6 @@ package cc
 import (
 	"android/soong/android"
 	"fmt"
-	"strconv"
 )
 
 func getNdkStlFamily(m LinkableInterface) string {
@@ -136,23 +135,8 @@ func (stl *stl) begin(ctx BaseModuleContext) {
 }
 
 func needsLibAndroidSupport(ctx BaseModuleContext) bool {
-	versionStr, err := normalizeNdkApiLevel(ctx, ctx.sdkVersion(), ctx.Arch())
-	if err != nil {
-		ctx.PropertyErrorf("sdk_version", err.Error())
-	}
-
-	if versionStr == "current" {
-		return false
-	}
-
-	version, err := strconv.Atoi(versionStr)
-	if err != nil {
-		panic(fmt.Sprintf(
-			"invalid API level returned from normalizeNdkApiLevel: %q",
-			versionStr))
-	}
-
-	return version < 21
+	version := nativeApiLevelOrPanic(ctx, ctx.sdkVersion())
+	return version.LessThan(android.FirstNonLibAndroidSupportVersion)
 }
 
 func staticUnwinder(ctx android.BaseModuleContext) string {
@@ -239,11 +223,6 @@ func (stl *stl) flags(ctx ModuleContext, flags Flags) Flags {
 			flags.Local.CppFlags = append(flags.Local.CppFlags, "-nostdinc++")
 			flags.extraLibFlags = append(flags.extraLibFlags, "-nostdlib++")
 			if ctx.Windows() {
-				// Use SjLj exceptions for 32-bit.  libgcc_eh implements SjLj
-				// exception model for 32-bit.
-				if ctx.Arch().ArchType == android.X86 {
-					flags.Local.CppFlags = append(flags.Local.CppFlags, "-fsjlj-exceptions")
-				}
 				flags.Local.CppFlags = append(flags.Local.CppFlags,
 					// Disable visiblity annotations since we're using static
 					// libc++.

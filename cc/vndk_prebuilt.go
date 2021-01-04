@@ -34,6 +34,7 @@ var (
 //     version: "27",
 //     target_arch: "arm64",
 //     vendor_available: true,
+//     product_available: true,
 //     vndk: {
 //         enabled: true,
 //     },
@@ -52,7 +53,7 @@ type vndkPrebuiltProperties struct {
 	// VNDK snapshot version.
 	Version *string
 
-	// Target arch name of the snapshot (e.g. 'arm64' for variant 'aosp_arm64_ab')
+	// Target arch name of the snapshot (e.g. 'arm64' for variant 'aosp_arm64')
 	Target_arch *string
 
 	// If the prebuilt snapshot lib is built with 32 bit binder, this must be set to true.
@@ -142,9 +143,10 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 		builderFlags := flagsToBuilderFlags(flags)
 		p.unstrippedOutputFile = in
 		libName := in.Base()
-		if p.needsStrip(ctx) {
+		if p.stripper.NeedsStrip(ctx) {
+			stripFlags := flagsToStripFlags(flags)
 			stripped := android.PathForModuleOut(ctx, "stripped", libName)
-			p.stripExecutableOrSharedLib(ctx, in, stripped, builderFlags)
+			p.stripper.StripExecutableOrSharedLib(ctx, in, stripped, stripFlags)
 			in = stripped
 		}
 
@@ -160,6 +162,15 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 		if vndkVersion == p.version() {
 			p.androidMkSuffix = ""
 		}
+
+		ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
+			SharedLibrary:           in,
+			UnstrippedSharedLibrary: p.unstrippedOutputFile,
+
+			TableOfContents: p.tocFile,
+		})
+
+		p.libraryDecorator.flagExporter.setProvider(ctx)
 
 		return in
 	}
@@ -191,21 +202,7 @@ func (p *vndkPrebuiltLibraryDecorator) isSnapshotPrebuilt() bool {
 }
 
 func (p *vndkPrebuiltLibraryDecorator) install(ctx ModuleContext, file android.Path) {
-	arches := ctx.DeviceConfig().Arches()
-	if len(arches) == 0 || arches[0].ArchType.String() != p.arch() {
-		return
-	}
-	if ctx.DeviceConfig().BinderBitness() != p.binderBit() {
-		return
-	}
-	if p.shared() {
-		if ctx.isVndkSp() {
-			p.baseInstaller.subDir = "vndk-sp-" + p.version()
-		} else if ctx.isVndk() {
-			p.baseInstaller.subDir = "vndk-" + p.version()
-		}
-		p.baseInstaller.install(ctx, file)
-	}
+	// do not install vndk libs
 }
 
 func vndkPrebuiltSharedLibrary() *Module {
@@ -213,7 +210,7 @@ func vndkPrebuiltSharedLibrary() *Module {
 	library.BuildOnlyShared()
 	module.stl = nil
 	module.sanitize = nil
-	library.StripProperties.Strip.None = BoolPtr(true)
+	library.disableStripping()
 
 	prebuilt := &vndkPrebuiltLibraryDecorator{
 		libraryDecorator: library,
@@ -236,6 +233,14 @@ func vndkPrebuiltSharedLibrary() *Module {
 		&prebuilt.properties,
 	)
 
+	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+		// empty BOARD_VNDK_VERSION implies that the device won't support
+		// system only OTA. In this case, VNDK snapshots aren't needed.
+		if ctx.DeviceConfig().VndkVersion() == "" {
+			ctx.Module().Disable()
+		}
+	})
+
 	return module
 }
 
@@ -247,6 +252,7 @@ func vndkPrebuiltSharedLibrary() *Module {
 //        version: "27",
 //        target_arch: "arm64",
 //        vendor_available: true,
+//        product_available: true,
 //        vndk: {
 //            enabled: true,
 //        },

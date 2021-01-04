@@ -78,7 +78,7 @@ type AndroidAppSet struct {
 
 	properties   AndroidAppSetProperties
 	packedOutput android.WritablePath
-	masterFile   string
+	installFile  string
 	apkcertsFile android.ModuleOutPath
 }
 
@@ -102,8 +102,8 @@ func (as *AndroidAppSet) OutputFile() android.Path {
 	return as.packedOutput
 }
 
-func (as *AndroidAppSet) MasterFile() string {
-	return as.masterFile
+func (as *AndroidAppSet) InstallFile() string {
+	return as.installFile
 }
 
 func (as *AndroidAppSet) APKCertsFile() android.Path {
@@ -136,10 +136,10 @@ func SupportedAbis(ctx android.ModuleContext) []string {
 func (as *AndroidAppSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	as.packedOutput = android.PathForModuleOut(ctx, ctx.ModuleName()+".zip")
 	as.apkcertsFile = android.PathForModuleOut(ctx, "apkcerts.txt")
-	// We are assuming here that the master file in the APK
+	// We are assuming here that the install file in the APK
 	// set has `.apk` suffix. If it doesn't the build will fail.
 	// APK sets containing APEX files are handled elsewhere.
-	as.masterFile = as.BaseModuleName() + ".apk"
+	as.installFile = as.BaseModuleName() + ".apk"
 	screenDensities := "all"
 	if dpis := ctx.Config().ProductAAPTPrebuiltDPI(); len(dpis) > 0 {
 		screenDensities = strings.ToUpper(strings.Join(dpis, ","))
@@ -157,7 +157,7 @@ func (as *AndroidAppSet) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 				"abis":              strings.Join(SupportedAbis(ctx), ","),
 				"allow-prereleased": strconv.FormatBool(proptools.Bool(as.properties.Prerelease)),
 				"screen-densities":  screenDensities,
-				"sdk-version":       ctx.Config().PlatformSdkVersion(),
+				"sdk-version":       ctx.Config().PlatformSdkVersion().String(),
 				"stem":              as.BaseModuleName(),
 				"apkcerts":          as.apkcertsFile.String(),
 				"partition":         as.PartitionTag(ctx.DeviceConfig()),
@@ -167,7 +167,7 @@ func (as *AndroidAppSet) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 
 // android_app_set extracts a set of APKs based on the target device
 // configuration and installs this set as "split APKs".
-// The extracted set always contains 'master' APK whose name is
+// The extracted set always contains an APK whose name is
 // _module_name_.apk and every split APK matching target device.
 // The extraction of the density-specific splits depends on
 // PRODUCT_AAPT_PREBUILT_DPI variable. If present (its value should
@@ -287,8 +287,6 @@ type AndroidApp struct {
 	aapt
 	android.OverridableModuleBase
 
-	usesLibrary usesLibrary
-
 	certificate Certificate
 
 	appProperties appProperties
@@ -381,7 +379,6 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 			"can only be set for modules that set sdk_version")
 	}
 
-	tag := &jniDependencyTag{}
 	for _, jniTarget := range ctx.MultiTargets() {
 		variation := append(jniTarget.Variations(),
 			blueprint.Variation{Mutator: "link", Variation: "shared"})
@@ -395,7 +392,7 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 			Bool(a.appProperties.Jni_uses_sdk_apis) {
 			variation = append(variation, blueprint.Variation{Mutator: "sdk", Variation: "sdk"})
 		}
-		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
+		ctx.AddFarVariationDependencies(variation, jniLibTag, a.appProperties.Jni_libs...)
 	}
 
 	a.usesLibrary.deps(ctx, sdkDep.hasFrameworkLibs())
@@ -438,7 +435,7 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 
 		if minSdkVersion, err := a.minSdkVersion().effectiveVersion(ctx); err == nil {
 			a.checkJniLibsSdkVersion(ctx, minSdkVersion)
-			android.CheckMinSdkVersion(a, ctx, int(minSdkVersion))
+			android.CheckMinSdkVersion(a, ctx, minSdkVersion.ApiLevel(ctx))
 		} else {
 			ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
 		}
@@ -482,8 +479,9 @@ func (a *AndroidApp) useEmbeddedNativeLibs(ctx android.ModuleContext) bool {
 		ctx.PropertyErrorf("min_sdk_version", "invalid value %q: %s", a.minSdkVersion(), err)
 	}
 
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	return (minSdkVersion >= 23 && Bool(a.appProperties.Use_embedded_native_libs)) ||
-		!a.IsForPlatform()
+		!apexInfo.IsForPlatform()
 }
 
 // Returns whether this module should have the dex file stored uncompressed in the APK.
@@ -506,8 +504,9 @@ func (a *AndroidApp) shouldUncompressDex(ctx android.ModuleContext) bool {
 }
 
 func (a *AndroidApp) shouldEmbedJnis(ctx android.BaseModuleContext) bool {
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	return ctx.Config().UnbundledBuild() || Bool(a.appProperties.Use_embedded_native_libs) ||
-		!a.IsForPlatform() || a.appProperties.AlwaysPackageNativeLibs
+		!apexInfo.IsForPlatform() || a.appProperties.AlwaysPackageNativeLibs
 }
 
 func generateAaptRenamePackageFlags(packageName string, renameResourcesPackage bool) []string {
@@ -602,18 +601,20 @@ func (a *AndroidApp) installPath(ctx android.ModuleContext) android.InstallPath 
 	return android.PathForModuleInstall(ctx, installDir, a.installApkName+".apk")
 }
 
-func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) android.Path {
+func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext, sdkLibs dexpreopt.LibraryPaths) android.Path {
 	a.dexpreopter.installPath = a.installPath(ctx)
-	if a.deviceProperties.Uncompress_dex == nil {
+	if a.dexProperties.Uncompress_dex == nil {
 		// If the value was not force-set by the user, use reasonable default based on the module.
-		a.deviceProperties.Uncompress_dex = proptools.BoolPtr(a.shouldUncompressDex(ctx))
+		a.dexProperties.Uncompress_dex = proptools.BoolPtr(a.shouldUncompressDex(ctx))
 	}
-	a.dexpreopter.uncompressedDex = *a.deviceProperties.Uncompress_dex
+	a.dexpreopter.uncompressedDex = *a.dexProperties.Uncompress_dex
 	a.dexpreopter.enforceUsesLibs = a.usesLibrary.enforceUsesLibraries()
 	a.dexpreopter.usesLibs = a.usesLibrary.usesLibraryProperties.Uses_libs
 	a.dexpreopter.optionalUsesLibs = a.usesLibrary.presentOptionalUsesLibs(ctx)
 	a.dexpreopter.libraryPaths = a.usesLibrary.usesLibraryPaths(ctx)
+	a.dexpreopter.libraryPaths.AddLibraryPaths(sdkLibs)
 	a.dexpreopter.manifestFile = a.mergedManifestFile
+	a.exportedSdkLibs = make(dexpreopt.LibraryPaths)
 
 	if ctx.ModuleName() != "framework-res" {
 		a.Module.compile(ctx, a.aaptSrcJar)
@@ -641,7 +642,7 @@ func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, ctx android.ModuleContext
 					// Work with the team to come up with a new format that handles multilib modules properly
 					// and change this.
 					if len(ctx.Config().Targets[android.Android]) == 1 ||
-						ctx.Config().Targets[android.Android][0].Arch.ArchType == jni.target.Arch.ArchType {
+						ctx.Config().AndroidFirstDeviceTarget.Arch.ArchType == jni.target.Arch.ArchType {
 						a.jniCoverageOutputs = append(a.jniCoverageOutputs, jni.coverageFile.Path())
 					}
 				}
@@ -678,7 +679,7 @@ func (a *AndroidApp) noticeBuildActions(ctx android.ModuleContext) {
 		seenModules[child] = true
 
 		// Skip host modules.
-		if child.Target().Os.Class == android.Host || child.Target().Os.Class == android.HostCross {
+		if child.Target().Os.Class == android.Host {
 			return false
 		}
 
@@ -756,6 +757,10 @@ func (a *AndroidApp) InstallApkName() string {
 func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	var apkDeps android.Paths
 
+	if !ctx.Provider(android.ApexInfoProvider).(android.ApexInfo).IsForPlatform() {
+		a.hideApexVariantFromMake = true
+	}
+
 	a.aapt.useEmbeddedNativeLibs = a.useEmbeddedNativeLibs(ctx)
 	a.aapt.useEmbeddedDex = Bool(a.appProperties.Use_embedded_dex)
 
@@ -782,6 +787,15 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	// Process all building blocks, from AAPT to certificates.
 	a.aaptBuildActions(ctx)
 
+	// The decision to enforce <uses-library> checks is made before adding implicit SDK libraries.
+	a.usesLibrary.freezeEnforceUsesLibraries()
+
+	// Add implicit SDK libraries to <uses-library> list.
+	for _, usesLib := range android.SortedStringKeys(a.aapt.sdkLibraries) {
+		a.usesLibrary.addLib(usesLib, inList(usesLib, dexpreopt.OptionalCompatUsesLibs))
+	}
+
+	// Check that the <uses-library> list is coherent with the manifest.
 	if a.usesLibrary.enforceUsesLibraries() {
 		manifestCheckFile := a.usesLibrary.verifyUsesLibrariesManifest(ctx, a.mergedManifestFile)
 		apkDeps = append(apkDeps, manifestCheckFile)
@@ -794,7 +808,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.linter.resources = a.aapt.resourceFiles
 	a.linter.buildModuleReportZip = ctx.Config().UnbundledBuildApps()
 
-	dexJarFile := a.dexBuildActions(ctx)
+	dexJarFile := a.dexBuildActions(ctx, a.aapt.sdkLibraries)
 
 	jniLibs, certificateDeps := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
 	jniJarFile := a.jniBuildActions(jniLibs, ctx)
@@ -841,8 +855,10 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	BuildBundleModule(ctx, bundleFile, a.exportPackage, jniJarFile, dexJarFile)
 	a.bundleFile = bundleFile
 
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+
 	// Install the app package.
-	if (Bool(a.Module.properties.Installable) || ctx.Host()) && a.IsForPlatform() {
+	if (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() {
 		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile)
 		for _, extra := range a.extraOutputFiles {
 			ctx.InstallFile(a.installDir, extra.Base(), extra)
@@ -875,7 +891,7 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
 
-		if IsJniDepTag(tag) || tag == cc.SharedDepTag {
+		if IsJniDepTag(tag) || cc.IsSharedDepTag(tag) {
 			if dep, ok := module.(*cc.Module); ok {
 				if dep.IsNdk() || dep.IsStubs() {
 					return false
@@ -970,7 +986,7 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 }
 
 func (a *AndroidApp) Updatable() bool {
-	return Bool(a.appProperties.Updatable) || a.ApexModuleBase.Updatable()
+	return Bool(a.appProperties.Updatable)
 }
 
 func (a *AndroidApp) getCertString(ctx android.BaseModuleContext) string {
@@ -993,6 +1009,8 @@ func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
 	case ".aapt.srcjar":
 		return []android.Path{a.aaptSrcJar}, nil
+	case ".export-package.apk":
+		return []android.Path{a.exportPackage}, nil
 	}
 	return a.Library.OutputFiles(tag)
 }
@@ -1025,8 +1043,8 @@ var _ cc.Coverage = (*AndroidApp)(nil)
 func AndroidAppFactory() android.Module {
 	module := &AndroidApp{}
 
-	module.Module.deviceProperties.Optimize.EnabledByDefault = true
-	module.Module.deviceProperties.Optimize.Shrink = proptools.BoolPtr(true)
+	module.Module.dexProperties.Optimize.EnabledByDefault = true
+	module.Module.dexProperties.Optimize.Shrink = proptools.BoolPtr(true)
 
 	module.Module.properties.Instrument = true
 	module.Module.properties.Installable = proptools.BoolPtr(true)
@@ -1035,8 +1053,7 @@ func AndroidAppFactory() android.Module {
 	module.AddProperties(
 		&module.aaptProperties,
 		&module.appProperties,
-		&module.overridableAppProperties,
-		&module.usesLibrary.usesLibraryProperties)
+		&module.overridableAppProperties)
 
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
@@ -1061,8 +1078,9 @@ type AndroidTest struct {
 
 	testProperties testProperties
 
-	testConfig android.Path
-	data       android.Paths
+	testConfig       android.Path
+	extraTestConfigs android.Paths
+	data             android.Paths
 }
 
 func (a *AndroidTest) InstallInTestcases() bool {
@@ -1090,6 +1108,7 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	testConfig := tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config,
 		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites, a.testProperties.Auto_gen_config, configs)
 	a.testConfig = a.FixTestConfig(ctx, testConfig)
+	a.extraTestConfigs = android.PathsForModuleSrc(ctx, a.testProperties.Test_options.Extra_test_configs)
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
 }
 
@@ -1140,7 +1159,7 @@ func (a *AndroidTest) OverridablePropertiesDepsMutator(ctx android.BottomUpMutat
 func AndroidTestFactory() android.Module {
 	module := &AndroidTest{}
 
-	module.Module.deviceProperties.Optimize.EnabledByDefault = true
+	module.Module.dexProperties.Optimize.EnabledByDefault = true
 
 	module.Module.properties.Instrument = true
 	module.Module.properties.Installable = proptools.BoolPtr(true)
@@ -1155,7 +1174,6 @@ func AndroidTestFactory() android.Module {
 		&module.appProperties,
 		&module.appTestProperties,
 		&module.overridableAppProperties,
-		&module.usesLibrary.usesLibraryProperties,
 		&module.testProperties)
 
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
@@ -1191,7 +1209,7 @@ func (a *AndroidTestHelperApp) InstallInTestcases() bool {
 func AndroidTestHelperAppFactory() android.Module {
 	module := &AndroidTestHelperApp{}
 
-	module.Module.deviceProperties.Optimize.EnabledByDefault = true
+	module.Module.dexProperties.Optimize.EnabledByDefault = true
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.appProperties.Use_embedded_native_libs = proptools.BoolPtr(true)
@@ -1204,8 +1222,7 @@ func AndroidTestHelperAppFactory() android.Module {
 		&module.aaptProperties,
 		&module.appProperties,
 		&module.appTestHelperAppProperties,
-		&module.overridableAppProperties,
-		&module.usesLibrary.usesLibraryProperties)
+		&module.overridableAppProperties)
 
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
@@ -1325,6 +1342,8 @@ type AndroidAppImport struct {
 	preprocessed bool
 
 	installPath android.InstallPath
+
+	hideApexVariantFromMake bool
 }
 
 type AndroidAppImportProperties struct {
@@ -1382,7 +1401,7 @@ func (a *AndroidAppImport) processVariants(ctx android.LoadHookContext) {
 	}
 
 	archProps := reflect.ValueOf(a.archVariants).Elem().FieldByName("Arch")
-	archType := ctx.Config().Targets[android.Android][0].Arch.ArchType
+	archType := ctx.Config().AndroidFirstDeviceTarget.Arch.ArchType
 	MergePropertiesFromVariant(ctx, &a.properties, archProps, archType.Name)
 }
 
@@ -1471,6 +1490,11 @@ func (a *AndroidAppImport) InstallApkName() string {
 }
 
 func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext) {
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	if !apexInfo.IsForPlatform() {
+		a.hideApexVariantFromMake = true
+	}
+
 	numCertPropsSet := 0
 	if String(a.properties.Certificate) != "" {
 		numCertPropsSet++
@@ -1559,7 +1583,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 
 	// TODO: Optionally compress the output apk.
 
-	if a.IsForPlatform() {
+	if apexInfo.IsForPlatform() {
 		a.installPath = ctx.InstallFile(installDir, apkFilename, a.outputFile)
 	}
 
@@ -1627,7 +1651,8 @@ func (a *AndroidAppImport) minSdkVersion() sdkSpec {
 	return sdkSpecFrom("")
 }
 
-func (j *AndroidAppImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion int) error {
+func (j *AndroidAppImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
+	sdkVersion android.ApiLevel) error {
 	// Do not check for prebuilts against the min_sdk_version of enclosing APEX
 	return nil
 }
@@ -1719,7 +1744,6 @@ func AndroidTestImportFactory() android.Module {
 	module := &AndroidTestImport{}
 	module.AddProperties(&module.properties)
 	module.AddProperties(&module.dexpreoptProperties)
-	module.AddProperties(&module.usesLibrary.usesLibraryProperties)
 	module.AddProperties(&module.testProperties)
 	module.AddProperties(&module.testImportProperties)
 	module.populateAllVariantStructs()
@@ -1903,6 +1927,11 @@ type UsesLibraryProperties struct {
 	// If true, the list of uses_libs and optional_uses_libs modules must match the AndroidManifest.xml file.  Defaults
 	// to true if either uses_libs or optional_uses_libs is set.  Will unconditionally default to true in the future.
 	Enforce_uses_libs *bool
+
+	// Optional name of the <uses-library> provided by this module. This is needed for non-SDK
+	// libraries, because SDK ones are automatically picked up by Soong. The <uses-library> name
+	// normally is the same as the module name, but there are exceptions.
+	Provides_uses_lib *string
 }
 
 // usesLibrary provides properties and helper functions for AndroidApp and AndroidAppImport to verify that the
@@ -1911,6 +1940,16 @@ type UsesLibraryProperties struct {
 // with knowledge of their shared libraries.
 type usesLibrary struct {
 	usesLibraryProperties UsesLibraryProperties
+}
+
+func (u *usesLibrary) addLib(lib string, optional bool) {
+	if !android.InList(lib, u.usesLibraryProperties.Uses_libs) && !android.InList(lib, u.usesLibraryProperties.Optional_uses_libs) {
+		if optional {
+			u.usesLibraryProperties.Optional_uses_libs = append(u.usesLibraryProperties.Optional_uses_libs, lib)
+		} else {
+			u.usesLibraryProperties.Uses_libs = append(u.usesLibraryProperties.Uses_libs, lib)
+		}
+	}
 }
 
 func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, hasFrameworkLibs bool) {
@@ -1923,11 +1962,9 @@ func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, hasFrameworkLibs 
 		if hasFrameworkLibs {
 			// Dexpreopt needs paths to the dex jars of these libraries in order to construct
 			// class loader context for dex2oat. Add them as a dependency with a special tag.
-			ctx.AddVariationDependencies(nil, usesLibTag,
-				"org.apache.http.legacy",
-				"android.hidl.base-V1.0-java",
-				"android.hidl.manager-V1.0-java")
-			ctx.AddVariationDependencies(nil, usesLibTag, optionalUsesLibs...)
+			ctx.AddVariationDependencies(nil, usesLibCompat29Tag, dexpreopt.CompatUsesLibs29...)
+			ctx.AddVariationDependencies(nil, usesLibCompat28Tag, dexpreopt.OptionalCompatUsesLibs28...)
+			ctx.AddVariationDependencies(nil, usesLibCompat30Tag, dexpreopt.OptionalCompatUsesLibs30...)
 		}
 	}
 }
@@ -1945,30 +1982,16 @@ func (u *usesLibrary) usesLibraryPaths(ctx android.ModuleContext) dexpreopt.Libr
 	usesLibPaths := make(dexpreopt.LibraryPaths)
 
 	if !ctx.Config().UnbundledBuild() {
-		ctx.VisitDirectDepsWithTag(usesLibTag, func(m android.Module) {
-			dep := ctx.OtherModuleName(m)
-			if lib, ok := m.(Dependency); ok {
-				buildPath := lib.DexJarBuildPath()
-				if buildPath == nil {
-					ctx.ModuleErrorf("module %q in uses_libs or optional_uses_libs must"+
-						" produce a dex jar, does it have installable: true?", dep)
-					return
-				}
-
-				var devicePath string
-				installPath := lib.DexJarInstallPath()
-				if installPath == nil {
-					devicePath = filepath.Join("/system/framework", dep+".jar")
+		ctx.VisitDirectDeps(func(m android.Module) {
+			if _, ok := ctx.OtherModuleDependencyTag(m).(usesLibraryDependencyTag); ok {
+				dep := ctx.OtherModuleName(m)
+				if lib, ok := m.(Dependency); ok {
+					usesLibPaths.AddLibraryPath(ctx, dep, lib.DexJarBuildPath(), lib.DexJarInstallPath())
+				} else if ctx.Config().AllowMissingDependencies() {
+					ctx.AddMissingDependencies([]string{dep})
 				} else {
-					devicePath = android.InstallPathToOnDevicePath(ctx, installPath.(android.InstallPath))
+					ctx.ModuleErrorf("module %q in uses_libs or optional_uses_libs must be a java library", dep)
 				}
-
-				usesLibPaths[dep] = &dexpreopt.LibraryPath{buildPath, devicePath}
-			} else if ctx.Config().AllowMissingDependencies() {
-				ctx.AddMissingDependencies([]string{dep})
-			} else {
-				ctx.ModuleErrorf("module %q in uses_libs or optional_uses_libs must be "+
-					"a java library", dep)
 			}
 		})
 	}
@@ -1983,6 +2006,12 @@ func (u *usesLibrary) enforceUsesLibraries() bool {
 	defaultEnforceUsesLibs := len(u.usesLibraryProperties.Uses_libs) > 0 ||
 		len(u.usesLibraryProperties.Optional_uses_libs) > 0
 	return BoolDefault(u.usesLibraryProperties.Enforce_uses_libs, defaultEnforceUsesLibs)
+}
+
+// Freeze the value of `enforce_uses_libs` based on the current values of `uses_libs` and `optional_uses_libs`.
+func (u *usesLibrary) freezeEnforceUsesLibraries() {
+	enforce := u.enforceUsesLibraries()
+	u.usesLibraryProperties.Enforce_uses_libs = &enforce
 }
 
 // verifyUsesLibrariesManifest checks the <uses-library> tags in an AndroidManifest.xml against the ones specified

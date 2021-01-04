@@ -25,14 +25,14 @@ import (
 	"github.com/google/blueprint"
 )
 
-func NewTestContext() *TestContext {
+func NewTestContext(config Config) *TestContext {
 	namespaceExportFilter := func(namespace *Namespace) bool {
 		return true
 	}
 
 	nameResolver := NewNameResolver(namespaceExportFilter)
 	ctx := &TestContext{
-		Context:      &Context{blueprint.NewContext()},
+		Context:      &Context{blueprint.NewContext(), config},
 		NameResolver: nameResolver,
 	}
 
@@ -40,11 +40,16 @@ func NewTestContext() *TestContext {
 
 	ctx.postDeps = append(ctx.postDeps, registerPathDepsMutator)
 
+	ctx.SetFs(ctx.config.fs)
+	if ctx.config.mockBpList != "" {
+		ctx.SetModuleListFile(ctx.config.mockBpList)
+	}
+
 	return ctx
 }
 
-func NewTestArchContext() *TestContext {
-	ctx := NewTestContext()
+func NewTestArchContext(config Config) *TestContext {
+	ctx := NewTestContext(config)
 	ctx.preDeps = append(ctx.preDeps, registerArchMutator)
 	return ctx
 }
@@ -53,7 +58,6 @@ type TestContext struct {
 	*Context
 	preArch, preDeps, postDeps, finalDeps []RegisterMutatorFunc
 	NameResolver                          *NameResolver
-	config                                Config
 }
 
 func (ctx *TestContext) PreArchMutators(f RegisterMutatorFunc) {
@@ -77,16 +81,10 @@ func (ctx *TestContext) FinalDepsMutators(f RegisterMutatorFunc) {
 	ctx.finalDeps = append(ctx.finalDeps, f)
 }
 
-func (ctx *TestContext) Register(config Config) {
-	ctx.SetFs(config.fs)
-	if config.mockBpList != "" {
-		ctx.SetModuleListFile(config.mockBpList)
-	}
+func (ctx *TestContext) Register() {
 	registerMutators(ctx.Context.Context, ctx.preArch, ctx.preDeps, ctx.postDeps, ctx.finalDeps)
 
 	ctx.RegisterSingletonType("env", EnvSingleton)
-
-	ctx.config = config
 }
 
 func (ctx *TestContext) ParseFileList(rootDir string, filePaths []string) (deps []string, errs []error) {
@@ -119,14 +117,24 @@ func (ctx *TestContext) ModuleForTests(name, variant string) TestingModule {
 
 	if module == nil {
 		// find all the modules that do exist
-		allModuleNames := []string{}
+		var allModuleNames []string
+		var allVariants []string
 		ctx.VisitAllModules(func(m blueprint.Module) {
-			allModuleNames = append(allModuleNames, m.(Module).Name()+"("+ctx.ModuleSubDir(m)+")")
+			allModuleNames = append(allModuleNames, ctx.ModuleName(m))
+			if ctx.ModuleName(m) == name {
+				allVariants = append(allVariants, ctx.ModuleSubDir(m))
+			}
 		})
 		sort.Strings(allModuleNames)
+		sort.Strings(allVariants)
 
-		panic(fmt.Errorf("failed to find module %q variant %q. All modules:\n  %s",
-			name, variant, strings.Join(allModuleNames, "\n  ")))
+		if len(allVariants) == 0 {
+			panic(fmt.Errorf("failed to find module %q. All modules:\n  %s",
+				name, strings.Join(allModuleNames, "\n  ")))
+		} else {
+			panic(fmt.Errorf("failed to find module %q variant %q. All variants:\n  %s",
+				name, variant, strings.Join(allVariants, "\n  ")))
+		}
 	}
 
 	return TestingModule{module}
@@ -177,19 +185,21 @@ func newTestingBuildParams(provider testBuildProvider, bparams BuildParams) Test
 	}
 }
 
-func maybeBuildParamsFromRule(provider testBuildProvider, rule string) TestingBuildParams {
+func maybeBuildParamsFromRule(provider testBuildProvider, rule string) (TestingBuildParams, []string) {
+	var searchedRules []string
 	for _, p := range provider.BuildParamsForTests() {
+		searchedRules = append(searchedRules, p.Rule.String())
 		if strings.Contains(p.Rule.String(), rule) {
-			return newTestingBuildParams(provider, p)
+			return newTestingBuildParams(provider, p), searchedRules
 		}
 	}
-	return TestingBuildParams{}
+	return TestingBuildParams{}, searchedRules
 }
 
 func buildParamsFromRule(provider testBuildProvider, rule string) TestingBuildParams {
-	p := maybeBuildParamsFromRule(provider, rule)
+	p, searchRules := maybeBuildParamsFromRule(provider, rule)
 	if p.Rule == nil {
-		panic(fmt.Errorf("couldn't find rule %q", rule))
+		panic(fmt.Errorf("couldn't find rule %q.\nall rules: %v", rule, searchRules))
 	}
 	return p
 }
@@ -265,7 +275,8 @@ func (m TestingModule) Module() Module {
 // MaybeRule finds a call to ctx.Build with BuildParams.Rule set to a rule with the given name.  Returns an empty
 // BuildParams if no rule is found.
 func (m TestingModule) MaybeRule(rule string) TestingBuildParams {
-	return maybeBuildParamsFromRule(m.module, rule)
+	r, _ := maybeBuildParamsFromRule(m.module, rule)
+	return r
 }
 
 // Rule finds a call to ctx.Build with BuildParams.Rule set to a rule with the given name.  Panics if no rule is found.
@@ -318,7 +329,8 @@ func (s TestingSingleton) Singleton() Singleton {
 // MaybeRule finds a call to ctx.Build with BuildParams.Rule set to a rule with the given name.  Returns an empty
 // BuildParams if no rule is found.
 func (s TestingSingleton) MaybeRule(rule string) TestingBuildParams {
-	return maybeBuildParamsFromRule(s.provider, rule)
+	r, _ := maybeBuildParamsFromRule(s.provider, rule)
+	return r
 }
 
 // Rule finds a call to ctx.Build with BuildParams.Rule set to a rule with the given name.  Panics if no rule is found.
@@ -384,7 +396,7 @@ func FailIfNoMatchingErrors(t *testing.T, pattern string, errs []error) {
 	if !found {
 		t.Errorf("missing the expected error %q (checked %d error(s))", pattern, len(errs))
 		for i, err := range errs {
-			t.Errorf("errs[%d] = %s", i, err)
+			t.Errorf("errs[%d] = %q", i, err)
 		}
 	}
 }

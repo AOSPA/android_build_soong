@@ -35,14 +35,14 @@ import (
 // A command represents an operation to be executed in the soong build
 // system.
 type command struct {
-	// the flag name (must have double dashes)
+	// The flag name (must have double dashes).
 	flag string
 
-	// description for the flag (to display when running help)
+	// Description for the flag (to display when running help).
 	description string
 
-	// Forces the status output into dumb terminal mode.
-	forceDumbOutput bool
+	// Stream the build status output into the simple terminal mode.
+	simpleOutput bool
 
 	// Sets a prefix string to use for filenames of log files.
 	logsPrefix string
@@ -70,21 +70,21 @@ var commands []command = []command{
 		stdio: stdio,
 		run:   make,
 	}, {
-		flag:            "--dumpvar-mode",
-		description:     "print the value of the legacy make variable VAR to stdout",
-		forceDumbOutput: true,
-		logsPrefix:      "dumpvars-",
-		config:          dumpVarConfig,
-		stdio:           customStdio,
-		run:             dumpVar,
+		flag:         "--dumpvar-mode",
+		description:  "print the value of the legacy make variable VAR to stdout",
+		simpleOutput: true,
+		logsPrefix:   "dumpvars-",
+		config:       dumpVarConfig,
+		stdio:        customStdio,
+		run:          dumpVar,
 	}, {
-		flag:            "--dumpvars-mode",
-		description:     "dump the values of one or more legacy make variables, in shell syntax",
-		forceDumbOutput: true,
-		logsPrefix:      "dumpvars-",
-		config:          dumpVarConfig,
-		stdio:           customStdio,
-		run:             dumpVars,
+		flag:         "--dumpvars-mode",
+		description:  "dump the values of one or more legacy make variables, in shell syntax",
+		simpleOutput: true,
+		logsPrefix:   "dumpvars-",
+		config:       dumpVarConfig,
+		stdio:        customStdio,
+		run:          dumpVars,
 	}, {
 		flag:        "--build-mode",
 		description: "build modules based on the specified build action",
@@ -119,13 +119,13 @@ func inList(s string, list []string) bool {
 func main() {
 	buildStarted := time.Now()
 
-	c, args := getCommand(os.Args)
-	if c == nil {
-		fmt.Fprintf(os.Stderr, "The `soong` native UI is not yet available.\n")
+	c, args, err := getCommand(os.Args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing `soong` args: %s.\n", err)
 		os.Exit(1)
 	}
 
-	output := terminal.NewStatusOutput(c.stdio().Stdout(), os.Getenv("NINJA_STATUS"), c.forceDumbOutput,
+	output := terminal.NewStatusOutput(c.stdio().Stdout(), os.Getenv("NINJA_STATUS"), c.simpleOutput,
 		build.OsEnvironment().IsEnvTrue("ANDROID_QUIET_BUILD"))
 
 	log := logger.New(output)
@@ -139,6 +139,7 @@ func main() {
 
 	met := metrics.New()
 	met.SetBuildDateTime(buildStarted)
+	met.SetBuildCommand(os.Args)
 
 	stat := &status.Status{}
 	defer stat.Finish()
@@ -172,7 +173,8 @@ func main() {
 	buildErrorFile := filepath.Join(logsDir, c.logsPrefix+"build_error")
 	rbeMetricsFile := filepath.Join(logsDir, c.logsPrefix+"rbe_metrics.pb")
 	soongMetricsFile := filepath.Join(logsDir, c.logsPrefix+"soong_metrics")
-	defer build.UploadMetrics(buildCtx, config, c.forceDumbOutput, buildStarted, buildErrorFile, rbeMetricsFile, soongMetricsFile)
+	defer build.UploadMetrics(buildCtx, config, c.simpleOutput, buildStarted, buildErrorFile, rbeMetricsFile, soongMetricsFile)
+	build.PrintOutDirWarning(buildCtx, config)
 
 	os.MkdirAll(logsDir, 0777)
 	log.SetOutput(filepath.Join(logsDir, c.logsPrefix+"soong.log"))
@@ -470,6 +472,10 @@ func make(ctx build.Context, config build.Config, _ []string, logsDir string) {
 	}
 
 	toBuild := build.BuildAll
+	if config.UseBazel() {
+		toBuild = build.BuildAllWithBazel
+	}
+
 	if config.Checkbuild() {
 		toBuild |= build.RunBuildTests
 	}
@@ -478,14 +484,14 @@ func make(ctx build.Context, config build.Config, _ []string, logsDir string) {
 
 // getCommand finds the appropriate command based on args[1] flag. args[0]
 // is the soong_ui filename.
-func getCommand(args []string) (*command, []string) {
+func getCommand(args []string) (*command, []string, error) {
 	if len(args) < 2 {
-		return nil, args
+		return nil, nil, fmt.Errorf("Too few arguments: %q", args)
 	}
 
 	for _, c := range commands {
 		if c.flag == args[1] {
-			return &c, args[2:]
+			return &c, args[2:], nil
 		}
 
 		// special case for --make-mode: if soong_ui was called from
@@ -494,11 +500,11 @@ func getCommand(args []string) (*command, []string) {
 		// TODO: Remove this hack once it has been fixed.
 		if c.flag == makeModeFlagName {
 			if inList(makeModeFlagName, args) {
-				return &c, args[1:]
+				return &c, args[1:], nil
 			}
 		}
 	}
 
 	// command not found
-	return nil, args
+	return nil, nil, fmt.Errorf("Command not found: %q", args)
 }

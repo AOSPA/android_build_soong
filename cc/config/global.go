@@ -17,7 +17,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	//"io/ioutil"
+        "io/ioutil"
+        "encoding/xml"
 	"os"
 	//"path"
 	//"path/filepath"
@@ -27,6 +28,22 @@ import (
 	"android/soong/android"
 	"android/soong/remoteexec"
 )
+
+type TechPackage struct {
+    XMLName         xml.Name       `xml:"techpackage"`
+    TechPackageName string         `xml:"techpackagename"`
+    Enabled         string          `xml:"enable"`
+    Library         []string       `xml:"library"`
+}
+type TechPackages struct {
+    XMLName        xml.Name        `xml:"techpackages"`
+    TechPackages   []TechPackage   `xml:"techpackage"`
+}
+
+type TechPackageLibs struct{
+    EnabledLibs    []string
+    DisabledLibs   []string
+}
 
 var (
 	// Flags used by lots of devices.  Putting them in package static variables
@@ -53,6 +70,7 @@ var (
 
 		"-O2",
 		"-g",
+		"-fdebug-info-for-profiling",
 
 		"-fno-strict-aliasing",
 
@@ -121,6 +139,12 @@ var (
 	noOverrideGlobalCflags = []string{
 		"-Werror=int-to-pointer-cast",
 		"-Werror=pointer-to-int-cast",
+		// http://b/161386391 for -Wno-void-pointer-to-enum-cast
+		"-Wno-void-pointer-to-enum-cast",
+		// http://b/161386391 for -Wno-void-pointer-to-int-cast
+		"-Wno-void-pointer-to-int-cast",
+		// http://b/161386391 for -Wno-pointer-to-int-cast
+		"-Wno-pointer-to-int-cast",
 		// SDClang does not support -Werror=fortify-source.
 		// TODO: b/142476859
 		// "-Werror=fortify-source",
@@ -135,16 +159,15 @@ var (
 	ExperimentalCStdVersion   = "gnu11"
 	ExperimentalCppStdVersion = "gnu++2a"
 
-	NdkMaxPrebuiltVersionInt = 27
-
 	SDClang                  = false
 	SDClangPath              = ""
+        TechPackageLibsList      = &TechPackageLibs{}
 	ForceSDClangOff          = false
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r383902b"
-	ClangDefaultShortVersion = "11.0.2"
+	ClangDefaultVersion      = "clang-r399163b"
+	ClangDefaultShortVersion = "11.0.5"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -162,7 +185,20 @@ func init() {
 	if android.BuildOs == android.Linux {
 		commonGlobalCflags = append(commonGlobalCflags, "-fdebug-prefix-map=/proc/self/cwd=")
 	}
-
+        if _, err := os.Stat(android.QiifaBuildConfig); !os.IsNotExist(err) {
+                data, _ := ioutil.ReadFile(android.QiifaBuildConfig)
+                var techpackages TechPackages
+                _ = xml.Unmarshal([]byte(data), &techpackages)
+                for i := 0; i < len(techpackages.TechPackages); i++ {
+                         for j := 0; j < len(techpackages.TechPackages[i].Library); j++ {
+                                 if(techpackages.TechPackages[i].Enabled == "enabled") {
+                                        TechPackageLibsList.EnabledLibs = append(TechPackageLibsList.EnabledLibs,techpackages.TechPackages[i].Library[j])
+                                 } else {
+                                        TechPackageLibsList.DisabledLibs = append(TechPackageLibsList.DisabledLibs,techpackages.TechPackages[i].Library[j])
+                                 }
+                         }
+                }
+        }
 	pctx.StaticVariable("CommonGlobalConlyflags", strings.Join(commonGlobalConlyflags, " "))
 	pctx.StaticVariable("DeviceGlobalCppflags", strings.Join(deviceGlobalCppflags, " "))
 	pctx.StaticVariable("DeviceGlobalLdflags", strings.Join(deviceGlobalLdflags, " "))
@@ -214,6 +250,7 @@ func init() {
 	pctx.PrefixedExistentPathsForSourcesVariable("CommonGlobalIncludes", "-I",
 		[]string{
 			"system/core/include",
+			"system/logging/liblog/include",
 			"system/media/audio/include",
 			"hardware/libhardware/include",
 			"hardware/libhardware_legacy/include",
@@ -276,7 +313,9 @@ func init() {
 
 	pctx.VariableFunc("RECXXPool", remoteexec.EnvOverrideFunc("RBE_CXX_POOL", remoteexec.DefaultPool))
 	pctx.VariableFunc("RECXXLinksPool", remoteexec.EnvOverrideFunc("RBE_CXX_LINKS_POOL", remoteexec.DefaultPool))
+	pctx.VariableFunc("REClangTidyPool", remoteexec.EnvOverrideFunc("RBE_CLANG_TIDY_POOL", remoteexec.DefaultPool))
 	pctx.VariableFunc("RECXXLinksExecStrategy", remoteexec.EnvOverrideFunc("RBE_CXX_LINKS_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
+	pctx.VariableFunc("REClangTidyExecStrategy", remoteexec.EnvOverrideFunc("RBE_CLANG_TIDY_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
 	pctx.VariableFunc("REAbiDumperExecStrategy", remoteexec.EnvOverrideFunc("RBE_ABI_DUMPER_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
 	pctx.VariableFunc("REAbiLinkerExecStrategy", remoteexec.EnvOverrideFunc("RBE_ABI_LINKER_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
 }

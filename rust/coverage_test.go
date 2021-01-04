@@ -56,7 +56,7 @@ func TestCoverageFlags(t *testing.T) {
 	fizzCov := ctx.ModuleForTests("fizz_cov", "android_arm64_armv8-a_cov").Rule("rustc")
 	buzzNoCov := ctx.ModuleForTests("buzzNoCov", "android_arm64_armv8-a").Rule("rustc")
 
-	rustcCoverageFlags := []string{"-Z profile", " -g ", "-C opt-level=0", "-C link-dead-code", "-Z no-landing-pads"}
+	rustcCoverageFlags := []string{"-Z profile", " -g ", "-C opt-level=0", "-C link-dead-code"}
 	for _, flag := range rustcCoverageFlags {
 		missingErrorStr := "missing rustc flag '%s' for '%s' module with coverage enabled; rustcFlags: %#v"
 		containsErrorStr := "contains rustc flag '%s' for '%s' module with coverage disabled; rustcFlags: %#v"
@@ -154,12 +154,12 @@ func TestCoverageZip(t *testing.T) {
 	}
 
 	// Make sure the expected inputs are provided to the zip rule.
-	if !android.SuffixInList(fizzZipInputs, "android_arm64_armv8-a_rlib_cov/librlib.gcno") ||
+	if !android.SuffixInList(fizzZipInputs, "android_arm64_armv8-a_rlib_dylib-std_cov/librlib.gcno") ||
 		!android.SuffixInList(fizzZipInputs, "android_arm64_armv8-a_static_cov/libbaz.gcno") ||
 		!android.SuffixInList(fizzZipInputs, "android_arm64_armv8-a_cov/fizz.gcno") {
 		t.Fatalf("missing expected coverage files for rust 'fizz' binary: %#v", fizzZipInputs)
 	}
-	if !android.SuffixInList(libfooZipInputs, "android_arm64_armv8-a_rlib_cov/librlib.gcno") ||
+	if !android.SuffixInList(libfooZipInputs, "android_arm64_armv8-a_rlib_dylib-std_cov/librlib.gcno") ||
 		!android.SuffixInList(libfooZipInputs, "android_arm64_armv8-a_dylib_cov/libfoo.dylib.gcno") {
 		t.Fatalf("missing expected coverage files for rust 'fizz' binary: %#v", libfooZipInputs)
 	}

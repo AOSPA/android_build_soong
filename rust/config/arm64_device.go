@@ -23,16 +23,12 @@ import (
 var (
 	Arm64RustFlags            = []string{}
 	Arm64ArchFeatureRustFlags = map[string][]string{}
-	Arm64LinkFlags            = []string{
-		"-Wl,--icf=safe",
-		"-Wl,-z,max-page-size=4096",
-
-		"-Wl,-z,separate-code",
-	}
+	Arm64LinkFlags            = []string{}
 
 	Arm64ArchVariantRustFlags = map[string][]string{
 		"armv8-a":  []string{},
 		"armv8-2a": []string{},
+		"armv8-2a-dotprod": []string{},
 	}
 )
 
@@ -59,7 +55,8 @@ func (t *toolchainArm64) RustTriple() string {
 }
 
 func (t *toolchainArm64) ToolchainLinkFlags() string {
-	return "${config.DeviceGlobalLinkFlags} ${config.Arm64ToolchainLinkFlags}"
+	// Prepend the lld flags from cc_config so we stay in sync with cc
+	return "${config.DeviceGlobalLinkFlags} ${cc_config.Arm64Lldflags} ${config.Arm64ToolchainLinkFlags}"
 }
 
 func (t *toolchainArm64) ToolchainRustFlags() string {
@@ -75,9 +72,16 @@ func (t *toolchainArm64) Supported() bool {
 }
 
 func Arm64ToolchainFactory(arch android.Arch) Toolchain {
+	archVariant := arch.ArchVariant
+	if archVariant == "" {
+		// arch variants defaults to armv8-a. This is mostly for
+		// the host target which borrows toolchain configs from here.
+		archVariant = "armv8-a"
+	}
+
 	toolchainRustFlags := []string{
 		"${config.Arm64ToolchainRustFlags}",
-		"${config.Arm64" + arch.ArchVariant + "VariantRustFlags}",
+		"${config.Arm64" + archVariant + "VariantRustFlags}",
 	}
 
 	toolchainRustFlags = append(toolchainRustFlags, deviceGlobalRustFlags...)

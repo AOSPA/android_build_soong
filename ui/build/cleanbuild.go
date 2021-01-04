@@ -80,6 +80,10 @@ func installClean(ctx Context, config Config, what int) {
 		return filepath.Join(hostOutPath, path)
 	}
 
+	hostCommonOut := func(path string) string {
+		return filepath.Join(config.hostOutRoot(), "common", path)
+	}
+
 	productOutPath := config.ProductOut()
 	productOut := func(path string) string {
 		return filepath.Join(productOutPath, path)
@@ -101,6 +105,7 @@ func installClean(ctx Context, config Config, what int) {
 		hostOut("vts"),
 		hostOut("vts10"),
 		hostOut("vts-core"),
+		hostCommonOut("obj/PACKAGING"),
 		productOut("*.img"),
 		productOut("*.zip"),
 		productOut("android-info.txt"),
@@ -122,6 +127,7 @@ func installClean(ctx Context, config Config, what int) {
 		productOut("system"),
 		productOut("system_other"),
 		productOut("vendor"),
+		productOut("vendor_dlkm"),
 		productOut("product"),
 		productOut("system_ext"),
 		productOut("oem"),
@@ -131,6 +137,7 @@ func installClean(ctx Context, config Config, what int) {
 		productOut("coverage"),
 		productOut("installer"),
 		productOut("odm"),
+		productOut("odm_dlkm"),
 		productOut("sysloader"),
 		productOut("testcases"))
 }

@@ -81,6 +81,12 @@ type hostToolDependencyTag struct {
 	label string
 }
 
+// TODO(cparsons): Move to a common location when there is more than just
+// genrule with a bazel_module property.
+type bazelModuleProperties struct {
+	Label string
+}
+
 type generatorProperties struct {
 	// The command to run on one or more input files. Cmd supports substitution of a few variables
 	//
@@ -113,8 +119,10 @@ type generatorProperties struct {
 
 	// input files to exclude
 	Exclude_srcs []string `android:"path,arch_variant"`
-}
 
+	// in bazel-enabled mode, the bazel label to evaluate instead of this module
+	Bazel_module bazelModuleProperties
+}
 type Module struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
@@ -186,6 +194,20 @@ func toolDepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 }
 
+// Returns true if information was available from Bazel, false if bazel invocation still needs to occur.
+func (c *Module) generateBazelBuildActions(ctx android.ModuleContext, label string) bool {
+	bazelCtx := ctx.Config().BazelContext
+	filePaths, ok := bazelCtx.GetAllFiles(label)
+	if ok {
+		var bazelOutputFiles android.Paths
+		for _, bazelOutputFile := range filePaths {
+			bazelOutputFiles = append(bazelOutputFiles, android.PathForSource(ctx, bazelOutputFile))
+		}
+		c.outputFiles = bazelOutputFiles
+		c.outputDeps = bazelOutputFiles
+	}
+	return ok
+}
 func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	g.subName = ctx.ModuleSubDir()
 
@@ -259,9 +281,9 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 		// If AllowMissingDependencies is enabled, the build will not have stopped when
 		// AddFarVariationDependencies was called on a missing tool, which will result in nonsensical
-		// "cmd: unknown location label ..." errors later.  Add a dummy file to the local label.  The
-		// command that uses this dummy file will never be executed because the rule will be replaced with
-		// an android.Error rule reporting the missing dependencies.
+		// "cmd: unknown location label ..." errors later.  Add a placeholder file to the local label.
+		// The command that uses this placeholder file will never be executed because the rule will be
+		// replaced with an android.Error rule reporting the missing dependencies.
 		if ctx.Config().AllowMissingDependencies() {
 			for _, tool := range g.properties.Tools {
 				if !seenTools[tool] {
@@ -292,9 +314,9 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 			// If AllowMissingDependencies is enabled, the build will not have stopped when
 			// the dependency was added on a missing SourceFileProducer module, which will result in nonsensical
-			// "cmd: label ":..." has no files" errors later.  Add a dummy file to the local label.  The
-			// command that uses this dummy file will never be executed because the rule will be replaced with
-			// an android.Error rule reporting the missing dependencies.
+			// "cmd: label ":..." has no files" errors later.  Add a placeholder file to the local label.
+			// The command that uses this placeholder file will never be executed because the rule will be
+			// replaced with an android.Error rule reporting the missing dependencies.
 			ctx.AddMissingDependencies(missingDeps)
 			addLocationLabel(in, []string{"***missing srcs " + in + "***"})
 		} else {
@@ -456,26 +478,29 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	g.outputFiles = outputFiles.Paths()
 
-	// For <= 6 outputs, just embed those directly in the users. Right now, that covers >90% of
-	// the genrules on AOSP. That will make things simpler to look at the graph in the common
-	// case. For larger sets of outputs, inject a phony target in between to limit ninja file
-	// growth.
-	if len(g.outputFiles) <= 6 {
-		g.outputDeps = g.outputFiles
-	} else {
-		phonyFile := android.PathForModuleGen(ctx, "genrule-phony")
-
-		ctx.Build(pctx, android.BuildParams{
-			Rule:   blueprint.Phony,
-			Output: phonyFile,
-			Inputs: g.outputFiles,
-		})
-
-		g.outputDeps = android.Paths{phonyFile}
+	bazelModuleLabel := g.properties.Bazel_module.Label
+	bazelActionsUsed := false
+	if ctx.Config().BazelContext.BazelEnabled() && len(bazelModuleLabel) > 0 {
+		bazelActionsUsed = g.generateBazelBuildActions(ctx, bazelModuleLabel)
 	}
-
+	if !bazelActionsUsed {
+		// For <= 6 outputs, just embed those directly in the users. Right now, that covers >90% of
+		// the genrules on AOSP. That will make things simpler to look at the graph in the common
+		// case. For larger sets of outputs, inject a phony target in between to limit ninja file
+		// growth.
+		if len(g.outputFiles) <= 6 {
+			g.outputDeps = g.outputFiles
+		} else {
+			phonyFile := android.PathForModuleGen(ctx, "genrule-phony")
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   blueprint.Phony,
+				Output: phonyFile,
+				Inputs: g.outputFiles,
+			})
+			g.outputDeps = android.Paths{phonyFile}
+		}
+	}
 }
-
 func hashSrcFiles(srcFiles android.Paths) string {
 	h := sha256.New()
 	for _, src := range srcFiles {
@@ -536,13 +561,12 @@ func (g *Module) IDEInfo(dpInfo *android.IdeInfo) {
 
 func (g *Module) AndroidMk() android.AndroidMkData {
 	return android.AndroidMkData{
-		Include:    "$(BUILD_PHONY_PACKAGE)",
-		Class:      "FAKE",
+		Class:      "ETC",
 		OutputFile: android.OptionalPathForPath(g.outputFiles[0]),
 		SubName:    g.subName,
 		Extra: []android.AndroidMkExtraFunc{
 			func(w io.Writer, outputFile android.Path) {
-				fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES :=", strings.Join(g.outputDeps.Strings(), " "))
+				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE := true")
 			},
 		},
 		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
@@ -555,7 +579,8 @@ func (g *Module) AndroidMk() android.AndroidMkData {
 	}
 }
 
-func (g *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion int) error {
+func (g *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
+	sdkVersion android.ApiLevel) error {
 	// Because generated outputs are checked by client modules(e.g. cc_library, ...)
 	// we can safely ignore the check here.
 	return nil
@@ -579,6 +604,7 @@ type noopImageInterface struct{}
 func (x noopImageInterface) ImageMutatorBegin(android.BaseModuleContext)                 {}
 func (x noopImageInterface) CoreVariantNeeded(android.BaseModuleContext) bool            { return false }
 func (x noopImageInterface) RamdiskVariantNeeded(android.BaseModuleContext) bool         { return false }
+func (x noopImageInterface) VendorRamdiskVariantNeeded(android.BaseModuleContext) bool   { return false }
 func (x noopImageInterface) RecoveryVariantNeeded(android.BaseModuleContext) bool        { return false }
 func (x noopImageInterface) ExtraImageVariations(ctx android.BaseModuleContext) []string { return nil }
 func (x noopImageInterface) SetImageVariation(ctx android.BaseModuleContext, variation string, module android.Module) {

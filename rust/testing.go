@@ -32,6 +32,7 @@ func GatherRequiredDepsForTest() string {
                                     srcs: ["libstd.so"],
                                 },
 				host_supported: true,
+				sysroot: true,
 		}
 		rust_prebuilt_library {
 				name: "libtest_x86_64-unknown-linux-gnu",
@@ -43,8 +44,32 @@ func GatherRequiredDepsForTest() string {
                                     srcs: ["libtest.so"],
                                 },
 				host_supported: true,
+				sysroot: true,
 		}
-
+		rust_prebuilt_library {
+				name: "libstd_x86_64-apple-darwin",
+                                crate_name: "std",
+                                rlib: {
+                                    srcs: ["libstd.rlib"],
+                                },
+                                dylib: {
+                                    srcs: ["libstd.so"],
+                                },
+				host_supported: true,
+				sysroot: true,
+		}
+		rust_prebuilt_library {
+				name: "libtest_x86_64-apple-darwin",
+                                crate_name: "test",
+                                rlib: {
+                                    srcs: ["libtest.rlib"],
+                                },
+                                dylib: {
+                                    srcs: ["libtest.so"],
+                                },
+				host_supported: true,
+				sysroot: true,
+		}
 		//////////////////////////////
 		// Device module requirements
 
@@ -54,6 +79,13 @@ func GatherRequiredDepsForTest() string {
 			nocrt: true,
 			system_shared_libs: [],
 		}
+		cc_library {
+			name: "libprotobuf-cpp-full",
+			no_libcrt: true,
+			nocrt: true,
+			system_shared_libs: [],
+			export_include_dirs: ["libprotobuf-cpp-full-includes"],
+		}
 		rust_library {
 			name: "libstd",
 			crate_name: "std",
@@ -61,6 +93,7 @@ func GatherRequiredDepsForTest() string {
 			no_stdlibs: true,
 			host_supported: true,
                         native_coverage: false,
+			sysroot: true,
 		}
 		rust_library {
 			name: "libtest",
@@ -69,19 +102,41 @@ func GatherRequiredDepsForTest() string {
 			no_stdlibs: true,
 			host_supported: true,
                         native_coverage: false,
+			sysroot: true,
+		}
+		rust_library {
+			name: "libprotobuf",
+			crate_name: "protobuf",
+			srcs: ["foo.rs"],
+			host_supported: true,
+		}
+		rust_library {
+			name: "libgrpcio",
+			crate_name: "grpcio",
+			srcs: ["foo.rs"],
+			host_supported: true,
+		}
+		rust_library {
+			name: "libfutures",
+			crate_name: "futures",
+			srcs: ["foo.rs"],
+			host_supported: true,
 		}
 
 ` + cc.GatherRequiredDepsForTest(android.NoOsType)
 	return bp
 }
 
-func CreateTestContext() *android.TestContext {
-	ctx := android.NewTestArchContext()
+func CreateTestContext(config android.Config) *android.TestContext {
+	ctx := android.NewTestArchContext(config)
+	android.RegisterPrebuiltMutators(ctx)
+	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	cc.RegisterRequiredBuildComponentsForTest(ctx)
 	ctx.RegisterModuleType("genrule", genrule.GenRuleFactory)
 	ctx.RegisterModuleType("rust_binary", RustBinaryFactory)
 	ctx.RegisterModuleType("rust_binary_host", RustBinaryHostFactory)
 	ctx.RegisterModuleType("rust_bindgen", RustBindgenFactory)
+	ctx.RegisterModuleType("rust_bindgen_host", RustBindgenHostFactory)
 	ctx.RegisterModuleType("rust_test", RustTestFactory)
 	ctx.RegisterModuleType("rust_test_host", RustTestHostFactory)
 	ctx.RegisterModuleType("rust_library", RustLibraryFactory)
@@ -96,13 +151,18 @@ func CreateTestContext() *android.TestContext {
 	ctx.RegisterModuleType("rust_ffi_host", RustFFIHostFactory)
 	ctx.RegisterModuleType("rust_ffi_host_shared", RustFFISharedHostFactory)
 	ctx.RegisterModuleType("rust_ffi_host_static", RustFFIStaticHostFactory)
+	ctx.RegisterModuleType("rust_grpcio", RustGrpcioFactory)
+	ctx.RegisterModuleType("rust_grpcio_host", RustGrpcioHostFactory)
 	ctx.RegisterModuleType("rust_proc_macro", ProcMacroFactory)
+	ctx.RegisterModuleType("rust_protobuf", RustProtobufFactory)
+	ctx.RegisterModuleType("rust_protobuf_host", RustProtobufHostFactory)
 	ctx.RegisterModuleType("rust_prebuilt_library", PrebuiltLibraryFactory)
 	ctx.RegisterModuleType("rust_prebuilt_dylib", PrebuiltDylibFactory)
 	ctx.RegisterModuleType("rust_prebuilt_rlib", PrebuiltRlibFactory)
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		// rust mutators
 		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
+		ctx.BottomUp("rust_stdlinkage", LibstdMutator).Parallel()
 		ctx.BottomUp("rust_begin", BeginMutator).Parallel()
 	})
 	ctx.RegisterSingletonType("rust_project_generator", rustProjectGeneratorSingleton)

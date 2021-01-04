@@ -24,17 +24,65 @@ import (
 	"github.com/google/blueprint"
 )
 
-const (
-	SdkVersion_Android10 = 29
+var (
+	SdkVersion_Android10 = uncheckedFinalApiLevel(29)
 )
 
+// ApexInfo describes the metadata common to all modules in an apexBundle.
 type ApexInfo struct {
-	// Name of the apex variant that this module is mutated into
-	ApexName string
+	// Name of the apex variation that this module is mutated into, or "" for
+	// a platform variant.  Note that a module can be included in multiple APEXes,
+	// in which case, the module is mutated into one or more variants, each of
+	// which is for one or more APEXes.
+	ApexVariationName string
 
-	MinSdkVersion int
-	Updatable     bool
+	// Serialized ApiLevel. Use via MinSdkVersion() method. Cannot be stored in
+	// its struct form because this is cloned into properties structs, and
+	// ApiLevel has private members.
+	MinSdkVersionStr string
+
+	// True if the module comes from an updatable APEX.
+	Updatable    bool
+	RequiredSdks SdkRefs
+
+	InApexes     []string
+	ApexContents []*ApexContents
 }
+
+var ApexInfoProvider = blueprint.NewMutatorProvider(ApexInfo{}, "apex")
+
+func (i ApexInfo) mergedName(ctx PathContext) string {
+	name := "apex" + strconv.Itoa(i.MinSdkVersion(ctx).FinalOrFutureInt())
+	for _, sdk := range i.RequiredSdks {
+		name += "_" + sdk.Name + "_" + sdk.Version
+	}
+	return name
+}
+
+func (this *ApexInfo) MinSdkVersion(ctx PathContext) ApiLevel {
+	return ApiLevelOrPanic(ctx, this.MinSdkVersionStr)
+}
+
+func (i ApexInfo) IsForPlatform() bool {
+	return i.ApexVariationName == ""
+}
+
+func (i ApexInfo) InApex(apex string) bool {
+	for _, a := range i.InApexes {
+		if a == apex {
+			return true
+		}
+	}
+	return false
+}
+
+// ApexTestForInfo stores the contents of APEXes for which this module is a test and thus has
+// access to APEX internals.
+type ApexTestForInfo struct {
+	ApexContents []*ApexContents
+}
+
+var ApexTestForInfoProvider = blueprint.NewMutatorProvider(ApexTestForInfo{}, "apex_test_for")
 
 // Extracted from ApexModule to make it easier to define custom subsets of the
 // ApexModule interface and improve code navigation within the IDE.
@@ -69,20 +117,18 @@ type ApexModule interface {
 	// Call this before apex.apexMutator is run.
 	BuildForApex(apex ApexInfo)
 
-	// Returns the APEXes that this module will be built for
-	ApexVariations() []ApexInfo
-
-	// Returns the name of APEX that this module will be built for. Empty string
-	// is returned when 'IsForPlatform() == true'. Note that a module can be
-	// included in multiple APEXes, in which case, the module is mutated into
-	// multiple modules each of which for an APEX. This method returns the
-	// name of the APEX that a variant module is for.
+	// Returns true if this module is present in any APEXes
+	// directly or indirectly.
 	// Call this after apex.apexMutator is run.
-	ApexName() string
+	InAnyApex() bool
 
-	// Tests whether this module will be built for the platform or not.
-	// This is a shortcut for ApexName() == ""
-	IsForPlatform() bool
+	// Returns true if this module is directly in any APEXes.
+	// Call this after apex.apexMutator is run.
+	DirectlyInAnyApex() bool
+
+	// Returns true if any variant of this module is directly in any APEXes.
+	// Call this after apex.apexMutator is run.
+	AnyVariantDirectlyInAnyApex() bool
 
 	// Tests if this module could have APEX variants. APEX variants are
 	// created only for the modules that returns true here. This is useful
@@ -94,10 +140,6 @@ type ApexModule interface {
 	// this would return true for shared libs while return false for static
 	// libs.
 	IsInstallableToApex() bool
-
-	// Mutate this module into one or more variants each of which is built
-	// for an APEX marked via BuildForApex().
-	CreateApexVariations(mctx BottomUpMutatorContext) []Module
 
 	// Tests if this module is available for the specified APEX or ":platform"
 	AvailableFor(what string) bool
@@ -112,14 +154,6 @@ type ApexModule interface {
 	// check-platform-availability mutator in the apex package.
 	SetNotAvailableForPlatform()
 
-	// Returns the highest version which is <= maxSdkVersion.
-	// For example, with maxSdkVersion is 10 and versionList is [9,11]
-	// it returns 9 as string
-	ChooseSdkVersion(versionList []string, maxSdkVersion int) (string, error)
-
-	// Tests if the module comes from an updatable APEX.
-	Updatable() bool
-
 	// List of APEXes that this module tests. The module has access to
 	// the private part of the listed APEXes even when it is not included in the
 	// APEXes.
@@ -127,7 +161,11 @@ type ApexModule interface {
 
 	// Returns nil if this module supports sdkVersion
 	// Otherwise, returns error with reason
-	ShouldSupportSdkVersion(ctx BaseModuleContext, sdkVersion int) error
+	ShouldSupportSdkVersion(ctx BaseModuleContext, sdkVersion ApiLevel) error
+
+	// Returns true if this module needs a unique variation per apex, for example if
+	// use_apex_name_macro is set.
+	UniqueApexVariations() bool
 }
 
 type ApexProperties struct {
@@ -137,12 +175,29 @@ type ApexProperties struct {
 	//
 	// "//apex_available:anyapex" is a pseudo APEX name that matches to any APEX.
 	// "//apex_available:platform" refers to non-APEX partitions like "system.img".
+	// "com.android.gki.*" matches any APEX module name with the prefix "com.android.gki.".
 	// Default is ["//apex_available:platform"].
 	Apex_available []string
 
-	Info ApexInfo `blueprint:"mutated"`
+	// AnyVariantDirectlyInAnyApex is true in the primary variant of a module if _any_ variant
+	// of the module is directly in any apex.  This includes host, arch, asan, etc. variants.
+	// It is unused in any variant that is not the primary variant.
+	// Ideally this wouldn't be used, as it incorrectly mixes arch variants if only one arch
+	// is in an apex, but a few places depend on it, for example when an ASAN variant is
+	// created before the apexMutator.
+	AnyVariantDirectlyInAnyApex bool `blueprint:"mutated"`
+
+	// DirectlyInAnyApex is true if any APEX variant (including the "" variant used for the
+	// platform) of this module is directly in any APEX.
+	DirectlyInAnyApex bool `blueprint:"mutated"`
+
+	// DirectlyInAnyApex is true if any APEX variant (including the "" variant used for the
+	// platform) of this module is directly or indirectly in any APEX.
+	InAnyApex bool `blueprint:"mutated"`
 
 	NotAvailableForPlatform bool `blueprint:"mutated"`
+
+	UniqueApexVariationsForDeps bool `blueprint:"mutated"`
 }
 
 // Marker interface that identifies dependencies that are excluded from APEX
@@ -152,6 +207,15 @@ type ExcludeFromApexContentsTag interface {
 
 	// Method that differentiates this interface from others.
 	ExcludeFromApexContents()
+}
+
+// Marker interface that identifies dependencies that should inherit the DirectlyInAnyApex
+// state from the parent to the child.  For example, stubs libraries are marked as
+// DirectlyInAnyApex if their implementation is in an apex.
+type CopyDirectlyInAnyApexTag interface {
+	blueprint.DependencyTag
+
+	CopyDirectlyInAnyApex()
 }
 
 // Provides default implementation for the ApexModule interface. APEX-aware
@@ -178,27 +242,31 @@ func (m *ApexModuleBase) TestFor() []string {
 	return nil
 }
 
+func (m *ApexModuleBase) UniqueApexVariations() bool {
+	return false
+}
+
 func (m *ApexModuleBase) BuildForApex(apex ApexInfo) {
 	m.apexVariationsLock.Lock()
 	defer m.apexVariationsLock.Unlock()
 	for _, v := range m.apexVariations {
-		if v.ApexName == apex.ApexName {
+		if v.ApexVariationName == apex.ApexVariationName {
 			return
 		}
 	}
 	m.apexVariations = append(m.apexVariations, apex)
 }
 
-func (m *ApexModuleBase) ApexVariations() []ApexInfo {
-	return m.apexVariations
+func (m *ApexModuleBase) DirectlyInAnyApex() bool {
+	return m.ApexProperties.DirectlyInAnyApex
 }
 
-func (m *ApexModuleBase) ApexName() string {
-	return m.ApexProperties.Info.ApexName
+func (m *ApexModuleBase) AnyVariantDirectlyInAnyApex() bool {
+	return m.ApexProperties.AnyVariantDirectlyInAnyApex
 }
 
-func (m *ApexModuleBase) IsForPlatform() bool {
-	return m.ApexProperties.Info.ApexName == ""
+func (m *ApexModuleBase) InAnyApex() bool {
+	return m.ApexProperties.InAnyApex
 }
 
 func (m *ApexModuleBase) CanHaveApexVariants() bool {
@@ -213,6 +281,7 @@ func (m *ApexModuleBase) IsInstallableToApex() bool {
 const (
 	AvailableToPlatform = "//apex_available:platform"
 	AvailableToAnyApex  = "//apex_available:anyapex"
+	AvailableToGkiApex  = "com.android.gki.*"
 )
 
 func CheckAvailableForApex(what string, apex_available []string) bool {
@@ -222,7 +291,8 @@ func CheckAvailableForApex(what string, apex_available []string) bool {
 		return what == AvailableToPlatform
 	}
 	return InList(what, apex_available) ||
-		(what != AvailableToPlatform && InList(AvailableToAnyApex, apex_available))
+		(what != AvailableToPlatform && InList(AvailableToAnyApex, apex_available)) ||
+		(strings.HasPrefix(what, "com.android.gki.") && InList(AvailableToGkiApex, apex_available))
 }
 
 func (m *ApexModuleBase) AvailableFor(what string) bool {
@@ -244,19 +314,9 @@ func (m *ApexModuleBase) DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
 	return true
 }
 
-func (m *ApexModuleBase) ChooseSdkVersion(versionList []string, maxSdkVersion int) (string, error) {
-	for i := range versionList {
-		ver, _ := strconv.Atoi(versionList[len(versionList)-i-1])
-		if ver <= maxSdkVersion {
-			return versionList[len(versionList)-i-1], nil
-		}
-	}
-	return "", fmt.Errorf("not found a version(<=%d) in versionList: %v", maxSdkVersion, versionList)
-}
-
 func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
 	for _, n := range m.ApexProperties.Apex_available {
-		if n == AvailableToPlatform || n == AvailableToAnyApex {
+		if n == AvailableToPlatform || n == AvailableToAnyApex || n == AvailableToGkiApex {
 			continue
 		}
 		if !mctx.OtherModuleExists(n) && !mctx.Config().AllowMissingDependencies() {
@@ -265,136 +325,229 @@ func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
 	}
 }
 
-func (m *ApexModuleBase) Updatable() bool {
-	return m.ApexProperties.Info.Updatable
-}
-
 type byApexName []ApexInfo
 
 func (a byApexName) Len() int           { return len(a) }
 func (a byApexName) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a byApexName) Less(i, j int) bool { return a[i].ApexName < a[j].ApexName }
+func (a byApexName) Less(i, j int) bool { return a[i].ApexVariationName < a[j].ApexVariationName }
 
-func (m *ApexModuleBase) CreateApexVariations(mctx BottomUpMutatorContext) []Module {
-	if len(m.apexVariations) > 0 {
-		m.checkApexAvailableProperty(mctx)
+// mergeApexVariations deduplicates APEX variations that would build identically into a common
+// variation.  It returns the reduced list of variations and a list of aliases from the original
+// variation names to the new variation names.
+func mergeApexVariations(ctx PathContext, apexVariations []ApexInfo) (merged []ApexInfo, aliases [][2]string) {
+	sort.Sort(byApexName(apexVariations))
+	seen := make(map[string]int)
+	for _, apexInfo := range apexVariations {
+		apexName := apexInfo.ApexVariationName
+		mergedName := apexInfo.mergedName(ctx)
+		if index, exists := seen[mergedName]; exists {
+			merged[index].InApexes = append(merged[index].InApexes, apexName)
+			merged[index].ApexContents = append(merged[index].ApexContents, apexInfo.ApexContents...)
+			merged[index].Updatable = merged[index].Updatable || apexInfo.Updatable
+		} else {
+			seen[mergedName] = len(merged)
+			apexInfo.ApexVariationName = apexInfo.mergedName(ctx)
+			apexInfo.InApexes = CopyOf(apexInfo.InApexes)
+			apexInfo.ApexContents = append([]*ApexContents(nil), apexInfo.ApexContents...)
+			merged = append(merged, apexInfo)
+		}
+		aliases = append(aliases, [2]string{apexName, mergedName})
+	}
+	return merged, aliases
+}
 
-		sort.Sort(byApexName(m.apexVariations))
+func CreateApexVariations(mctx BottomUpMutatorContext, module ApexModule) []Module {
+	base := module.apexModuleBase()
+	if len(base.apexVariations) > 0 {
+		base.checkApexAvailableProperty(mctx)
+
+		var apexVariations []ApexInfo
+		var aliases [][2]string
+		if !mctx.Module().(ApexModule).UniqueApexVariations() && !base.ApexProperties.UniqueApexVariationsForDeps {
+			apexVariations, aliases = mergeApexVariations(mctx, base.apexVariations)
+		} else {
+			apexVariations = base.apexVariations
+		}
+		// base.apexVariations is only needed to propagate the list of apexes from
+		// apexDepsMutator to apexMutator.  It is no longer accurate after
+		// mergeApexVariations, and won't be copied to all but the first created
+		// variant.  Clear it so it doesn't accidentally get used later.
+		base.apexVariations = nil
+
+		sort.Sort(byApexName(apexVariations))
 		variations := []string{}
 		variations = append(variations, "") // Original variation for platform
-		for _, apex := range m.apexVariations {
-			variations = append(variations, apex.ApexName)
+		for _, apex := range apexVariations {
+			variations = append(variations, apex.ApexVariationName)
 		}
 
 		defaultVariation := ""
 		mctx.SetDefaultDependencyVariation(&defaultVariation)
 
+		var inApex ApexMembership
+		for _, a := range apexVariations {
+			for _, apexContents := range a.ApexContents {
+				inApex = inApex.merge(apexContents.contents[mctx.ModuleName()])
+			}
+		}
+
+		base.ApexProperties.InAnyApex = true
+		base.ApexProperties.DirectlyInAnyApex = inApex == directlyInApex
+
 		modules := mctx.CreateVariations(variations...)
 		for i, mod := range modules {
 			platformVariation := i == 0
 			if platformVariation && !mctx.Host() && !mod.(ApexModule).AvailableFor(AvailableToPlatform) {
-				mod.SkipInstall()
+				// Do not install the module for platform, but still allow it to output
+				// uninstallable AndroidMk entries in certain cases when they have
+				// side effects.
+				mod.MakeUninstallable()
 			}
 			if !platformVariation {
-				mod.(ApexModule).apexModuleBase().ApexProperties.Info = m.apexVariations[i-1]
+				mctx.SetVariationProvider(mod, ApexInfoProvider, apexVariations[i-1])
 			}
 		}
+
+		for _, alias := range aliases {
+			mctx.CreateAliasVariation(alias[0], alias[1])
+		}
+
 		return modules
 	}
 	return nil
 }
 
-var apexData OncePer
-var apexNamesMapMutex sync.Mutex
-var apexNamesKey = NewOnceKey("apexNames")
+// UpdateUniqueApexVariationsForDeps sets UniqueApexVariationsForDeps if any dependencies
+// that are in the same APEX have unique APEX variations so that the module can link against
+// the right variant.
+func UpdateUniqueApexVariationsForDeps(mctx BottomUpMutatorContext, am ApexModule) {
+	// anyInSameApex returns true if the two ApexInfo lists contain any values in an InApexes list
+	// in common.  It is used instead of DepIsInSameApex because it needs to determine if the dep
+	// is in the same APEX due to being directly included, not only if it is included _because_ it
+	// is a dependency.
+	anyInSameApex := func(a, b []ApexInfo) bool {
+		collectApexes := func(infos []ApexInfo) []string {
+			var ret []string
+			for _, info := range infos {
+				ret = append(ret, info.InApexes...)
+			}
+			return ret
+		}
 
-// This structure maintains the global mapping in between modules and APEXes.
-// Examples:
-//
-// apexNamesMap()["foo"]["bar"] == true: module foo is directly depended on by APEX bar
-// apexNamesMap()["foo"]["bar"] == false: module foo is indirectly depended on by APEX bar
-// apexNamesMap()["foo"]["bar"] doesn't exist: foo is not built for APEX bar
-func apexNamesMap() map[string]map[string]bool {
-	return apexData.Once(apexNamesKey, func() interface{} {
-		return make(map[string]map[string]bool)
-	}).(map[string]map[string]bool)
-}
-
-// Update the map to mark that a module named moduleName is directly or indirectly
-// depended on by the specified APEXes. Directly depending means that a module
-// is explicitly listed in the build definition of the APEX via properties like
-// native_shared_libs, java_libs, etc.
-func UpdateApexDependency(apex ApexInfo, moduleName string, directDep bool) {
-	apexNamesMapMutex.Lock()
-	defer apexNamesMapMutex.Unlock()
-	apexesForModule, ok := apexNamesMap()[moduleName]
-	if !ok {
-		apexesForModule = make(map[string]bool)
-		apexNamesMap()[moduleName] = apexesForModule
-	}
-	apexesForModule[apex.ApexName] = apexesForModule[apex.ApexName] || directDep
-}
-
-// TODO(b/146393795): remove this when b/146393795 is fixed
-func ClearApexDependency() {
-	m := apexNamesMap()
-	for k := range m {
-		delete(m, k)
-	}
-}
-
-// Tests whether a module named moduleName is directly depended on by an APEX
-// named apexName.
-func DirectlyInApex(apexName string, moduleName string) bool {
-	apexNamesMapMutex.Lock()
-	defer apexNamesMapMutex.Unlock()
-	if apexNames, ok := apexNamesMap()[moduleName]; ok {
-		return apexNames[apexName]
-	}
-	return false
-}
-
-type hostContext interface {
-	Host() bool
-}
-
-// Tests whether a module named moduleName is directly depended on by any APEX.
-func DirectlyInAnyApex(ctx hostContext, moduleName string) bool {
-	if ctx.Host() {
-		// Host has no APEX.
-		return false
-	}
-	apexNamesMapMutex.Lock()
-	defer apexNamesMapMutex.Unlock()
-	if apexNames, ok := apexNamesMap()[moduleName]; ok {
-		for an := range apexNames {
-			if apexNames[an] {
+		aApexes := collectApexes(a)
+		bApexes := collectApexes(b)
+		sort.Strings(bApexes)
+		for _, aApex := range aApexes {
+			index := sort.SearchStrings(bApexes, aApex)
+			if index < len(bApexes) && bApexes[index] == aApex {
 				return true
 			}
 		}
+		return false
 	}
-	return false
+
+	mctx.VisitDirectDeps(func(dep Module) {
+		if depApexModule, ok := dep.(ApexModule); ok {
+			if anyInSameApex(depApexModule.apexModuleBase().apexVariations, am.apexModuleBase().apexVariations) &&
+				(depApexModule.UniqueApexVariations() ||
+					depApexModule.apexModuleBase().ApexProperties.UniqueApexVariationsForDeps) {
+				am.apexModuleBase().ApexProperties.UniqueApexVariationsForDeps = true
+			}
+		}
+	})
 }
 
-// Tests whether a module named module is depended on (including both
-// direct and indirect dependencies) by any APEX.
-func InAnyApex(moduleName string) bool {
-	apexNamesMapMutex.Lock()
-	defer apexNamesMapMutex.Unlock()
-	apexNames, ok := apexNamesMap()[moduleName]
-	return ok && len(apexNames) > 0
+// UpdateDirectlyInAnyApex uses the final module to store if any variant of this
+// module is directly in any APEX, and then copies the final value to all the modules.
+// It also copies the DirectlyInAnyApex value to any direct dependencies with a
+// CopyDirectlyInAnyApexTag dependency tag.
+func UpdateDirectlyInAnyApex(mctx BottomUpMutatorContext, am ApexModule) {
+	base := am.apexModuleBase()
+	// Copy DirectlyInAnyApex and InAnyApex from any direct dependencies with a
+	// CopyDirectlyInAnyApexTag dependency tag.
+	mctx.VisitDirectDeps(func(dep Module) {
+		if _, ok := mctx.OtherModuleDependencyTag(dep).(CopyDirectlyInAnyApexTag); ok {
+			depBase := dep.(ApexModule).apexModuleBase()
+			base.ApexProperties.DirectlyInAnyApex = depBase.ApexProperties.DirectlyInAnyApex
+			base.ApexProperties.InAnyApex = depBase.ApexProperties.InAnyApex
+		}
+	})
+
+	if base.ApexProperties.DirectlyInAnyApex {
+		// Variants of a module are always visited sequentially in order, so it is safe to
+		// write to another variant of this module.
+		// For a BottomUpMutator the PrimaryModule() is visited first and FinalModule() is
+		// visited last.
+		mctx.FinalModule().(ApexModule).apexModuleBase().ApexProperties.AnyVariantDirectlyInAnyApex = true
+	}
+
+	// If this is the FinalModule (last visited module) copy AnyVariantDirectlyInAnyApex to
+	// all the other variants
+	if am == mctx.FinalModule().(ApexModule) {
+		mctx.VisitAllModuleVariants(func(variant Module) {
+			variant.(ApexModule).apexModuleBase().ApexProperties.AnyVariantDirectlyInAnyApex =
+				base.ApexProperties.AnyVariantDirectlyInAnyApex
+		})
+	}
 }
 
-func GetApexesForModule(moduleName string) []string {
-	ret := []string{}
-	apexNamesMapMutex.Lock()
-	defer apexNamesMapMutex.Unlock()
-	if apexNames, ok := apexNamesMap()[moduleName]; ok {
-		for an := range apexNames {
-			ret = append(ret, an)
+type ApexMembership int
+
+const (
+	notInApex        ApexMembership = 0
+	indirectlyInApex                = iota
+	directlyInApex
+)
+
+// Each apexBundle has an apexContents, and modules in that apex have a provider containing the
+// apexContents of each apexBundle they are part of.
+type ApexContents struct {
+	ApexName string
+	contents map[string]ApexMembership
+}
+
+func NewApexContents(name string, contents map[string]ApexMembership) *ApexContents {
+	return &ApexContents{
+		ApexName: name,
+		contents: contents,
+	}
+}
+
+func (i ApexMembership) Add(direct bool) ApexMembership {
+	if direct || i == directlyInApex {
+		return directlyInApex
+	}
+	return indirectlyInApex
+}
+
+func (i ApexMembership) merge(other ApexMembership) ApexMembership {
+	if other == directlyInApex || i == directlyInApex {
+		return directlyInApex
+	}
+
+	if other == indirectlyInApex || i == indirectlyInApex {
+		return indirectlyInApex
+	}
+	return notInApex
+}
+
+func (ac *ApexContents) DirectlyInApex(name string) bool {
+	return ac.contents[name] == directlyInApex
+}
+
+func (ac *ApexContents) InApex(name string) bool {
+	return ac.contents[name] != notInApex
+}
+
+// Tests whether a module named moduleName is directly depended on by all APEXes
+// in an ApexInfo.
+func DirectlyInAllApexes(apexInfo ApexInfo, moduleName string) bool {
+	for _, contents := range apexInfo.ApexContents {
+		if !contents.DirectlyInApex(moduleName) {
+			return false
 		}
 	}
-	return ret
+	return true
 }
 
 func InitApexModule(m ApexModule) {
@@ -478,7 +631,13 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 }
 
 // TODO(b/158059172): remove minSdkVersion allowlist
-var minSdkVersionAllowlist = map[string]int{
+var minSdkVersionAllowlist = func(apiMap map[string]int) map[string]ApiLevel {
+	list := make(map[string]ApiLevel, len(apiMap))
+	for name, finalApiInt := range apiMap {
+		list[name] = uncheckedFinalApiLevel(finalApiInt)
+	}
+	return list
+}(map[string]int{
 	"adbd":                  30,
 	"android.net.ipsec.ike": 30,
 	"androidx-constraintlayout_constraintlayout-solver": 30,
@@ -547,7 +706,7 @@ var minSdkVersionAllowlist = map[string]int{
 	"statsd":                                            30,
 	"tensorflow_headers":                                30,
 	"xz-java":                                           29,
-}
+})
 
 // Function called while walking an APEX's payload dependencies.
 //
@@ -561,7 +720,7 @@ type UpdatableModule interface {
 }
 
 // CheckMinSdkVersion checks if every dependency of an updatable module sets min_sdk_version accordingly
-func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion int) {
+func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion ApiLevel) {
 	// do not enforce min_sdk_version for host
 	if ctx.Host() {
 		return
@@ -574,7 +733,7 @@ func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion int)
 
 	// do not enforce deps.min_sdk_version if APEX/APK doesn't set min_sdk_version or
 	// min_sdk_version is not finalized (e.g. current or codenames)
-	if minSdkVersion == FutureApiLevel {
+	if minSdkVersion.IsCurrent() {
 		return
 	}
 
@@ -589,7 +748,7 @@ func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion int)
 		}
 		if err := to.ShouldSupportSdkVersion(ctx, minSdkVersion); err != nil {
 			toName := ctx.OtherModuleName(to)
-			if ver, ok := minSdkVersionAllowlist[toName]; !ok || ver > minSdkVersion {
+			if ver, ok := minSdkVersionAllowlist[toName]; !ok || ver.GreaterThan(minSdkVersion) {
 				ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v. Dependency path: %s",
 					minSdkVersion, ctx.ModuleName(), err.Error(), ctx.GetPathString(false))
 				return false

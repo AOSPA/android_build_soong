@@ -53,14 +53,14 @@ func TestMain(m *testing.M) {
 
 func testContext(config android.Config) *android.TestContext {
 
-	ctx := android.NewTestArchContext()
+	ctx := android.NewTestArchContext(config)
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("tool", toolFactory)
 
 	registerGenruleBuildComponents(ctx)
 
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
-	ctx.Register(config)
+	ctx.Register()
 
 	return ctx
 }
@@ -718,6 +718,39 @@ func TestGenruleDefaults(t *testing.T) {
 	expectedSrcs := []string{"in1"}
 	if !reflect.DeepEqual(expectedSrcs, gen.properties.Srcs) {
 		t.Errorf("Expected srcs: %q, actual: %q", expectedSrcs, gen.properties.Srcs)
+	}
+}
+
+func TestGenruleWithBazel(t *testing.T) {
+	bp := `
+		genrule {
+				name: "foo",
+				out: ["one.txt", "two.txt"],
+				bazel_module: { label: "//foo/bar:bar" },
+		}
+	`
+
+	config := testConfig(bp, nil)
+	config.BazelContext = android.MockBazelContext{
+		AllFiles: map[string][]string{
+			"//foo/bar:bar": []string{"bazelone.txt", "bazeltwo.txt"}}}
+
+	ctx := testContext(config)
+	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
+	if errs == nil {
+		_, errs = ctx.PrepareBuildActions(config)
+	}
+	if errs != nil {
+		t.Fatal(errs)
+	}
+	gen := ctx.ModuleForTests("foo", "").Module().(*Module)
+
+	expectedOutputFiles := []string{"bazelone.txt", "bazeltwo.txt"}
+	if !reflect.DeepEqual(gen.outputFiles.Strings(), expectedOutputFiles) {
+		t.Errorf("Expected output files: %q, actual: %q", expectedOutputFiles, gen.outputFiles)
+	}
+	if !reflect.DeepEqual(gen.outputDeps.Strings(), expectedOutputFiles) {
+		t.Errorf("Expected output deps: %q, actual: %q", expectedOutputFiles, gen.outputDeps)
 	}
 }
 

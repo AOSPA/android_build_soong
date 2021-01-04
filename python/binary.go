@@ -65,7 +65,7 @@ type IntermPathProvider interface {
 }
 
 var (
-	stubTemplateHost = "build/soong/python/scripts/stub_template_host.txt"
+	StubTemplateHost = "build/soong/python/scripts/stub_template_host.txt"
 )
 
 func NewBinary(hod android.HostOrDeviceSupported) (*Module, *binaryDecorator) {
@@ -79,7 +79,7 @@ func NewBinary(hod android.HostOrDeviceSupported) (*Module, *binaryDecorator) {
 }
 
 func PythonBinaryHostFactory() android.Module {
-	module, _ := NewBinary(android.HostSupportedNoCross)
+	module, _ := NewBinary(android.HostSupported)
 
 	return module.Init()
 }

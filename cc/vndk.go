@@ -26,6 +26,8 @@ import (
 	"android/soong/android"
 	"android/soong/cc/config"
 	"android/soong/etc"
+
+	"github.com/google/blueprint"
 )
 
 const (
@@ -60,8 +62,8 @@ type VndkProperties struct {
 		// declared as a VNDK or VNDK-SP module. The vendor variant
 		// will be installed in /system instead of /vendor partition.
 		//
-		// `vendor_available` must be explicitly set to either true or
-		// false together with `vndk: {enabled: true}`.
+		// `vendor_available` and `product_available` must be explicitly
+		// set to either true or false together with `vndk: {enabled: true}`.
 		Enabled *bool
 
 		// declared as a VNDK-SP module, which is a subset of VNDK.
@@ -127,13 +129,16 @@ func (vndk *vndkdep) typeName() string {
 	return "native:vendor:vndkspext"
 }
 
-func (vndk *vndkdep) vndkCheckLinkType(ctx android.ModuleContext, to *Module, tag DependencyTag) {
+// VNDK link type check from a module with UseVndk() == true.
+func (vndk *vndkdep) vndkCheckLinkType(ctx android.BaseModuleContext, to *Module, tag blueprint.DependencyTag) {
 	if to.linker == nil {
 		return
 	}
 	if !vndk.isVndk() {
-		// Non-VNDK modules (those installed to /vendor, /product, or /system/product) can't depend
-		// on modules marked with vendor_available: false.
+		// Non-VNDK modules those installed to /vendor or /system/vendor
+		// can't depend on modules marked with vendor_available: false;
+		// or those installed to /product or /system/product can't depend
+		// on modules marked with product_available: false.
 		violation := false
 		if lib, ok := to.linker.(*llndkStubDecorator); ok && !Bool(lib.Properties.Vendor_available) {
 			violation = true
@@ -172,6 +177,7 @@ func (vndk *vndkdep) vndkCheckLinkType(ctx android.ModuleContext, to *Module, ta
 				to.Name())
 			return
 		}
+		// TODO(b/150902910): vndk-ext for product must check product_available.
 		if !Bool(to.VendorProperties.Vendor_available) {
 			ctx.ModuleErrorf(
 				"`extends` refers module %q which does not have `vendor_available: true`",
@@ -245,7 +251,7 @@ func vndkSpLibraries(config android.Config) map[string]string {
 }
 
 func isLlndkLibrary(baseModuleName string, config android.Config) bool {
-	_, ok := llndkLibraries(config)[baseModuleName]
+	_, ok := llndkLibraries(config)[strings.TrimSuffix(baseModuleName, llndkLibrarySuffix)]
 	return ok
 }
 
@@ -288,8 +294,8 @@ func setVndkMustUseVendorVariantListForTest(config android.Config, mustUseVendor
 
 func processLlndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 	lib := m.linker.(*llndkStubDecorator)
-	name := m.BaseModuleName()
-	filename := m.BaseModuleName() + ".so"
+	name := m.ImplementationModuleName(mctx)
+	filename := name + ".so"
 
 	vndkLibrariesLock.Lock()
 	defer vndkLibrariesLock.Unlock()
@@ -298,6 +304,7 @@ func processLlndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 	if !Bool(lib.Properties.Vendor_available) {
 		vndkPrivateLibraries(mctx.Config())[name] = filename
 	}
+
 	if mctx.OtherModuleExists(name) {
 		mctx.AddFarVariationDependencies(m.Target().Variations(), llndkImplDep, name)
 	}
@@ -310,7 +317,7 @@ func processVndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 		panic(err)
 	}
 
-	if m.HasStubsVariants() && name != "libz" {
+	if lib := m.library; lib != nil && lib.hasStubsVariants() && name != "libz" {
 		// b/155456180 libz is the ONLY exception here. We don't want to make
 		// libz an LLNDK library because we in general can't guarantee that
 		// libz will behave consistently especially about the compression.
@@ -335,12 +342,14 @@ func processVndkLibrary(mctx android.BottomUpMutatorContext, m *Module) {
 	} else {
 		vndkCoreLibraries(mctx.Config())[name] = filename
 	}
+	// As `vendor_available` and `product_available` has the same value for VNDK modules,
+	// we don't need to check both values.
 	if !Bool(m.VendorProperties.Vendor_available) {
 		vndkPrivateLibraries(mctx.Config())[name] = filename
 	}
 }
 
-// Sanity check for modules that mustn't be VNDK
+// Check for modules that mustn't be VNDK
 func shouldSkipVndkMutator(m *Module) bool {
 	if !m.Enabled() {
 		return true
@@ -503,16 +512,23 @@ func (txt *vndkLibrariesTxt) AndroidMkEntries() []android.AndroidMkEntries {
 	}}
 }
 
+// PrebuiltEtcModule interface
 func (txt *vndkLibrariesTxt) OutputFile() android.OutputPath {
 	return txt.outputFile
 }
 
-func (txt *vndkLibrariesTxt) OutputFiles(tag string) (android.Paths, error) {
-	return android.Paths{txt.outputFile}, nil
+// PrebuiltEtcModule interface
+func (txt *vndkLibrariesTxt) BaseDir() string {
+	return "etc"
 }
 
+// PrebuiltEtcModule interface
 func (txt *vndkLibrariesTxt) SubDir() string {
 	return ""
+}
+
+func (txt *vndkLibrariesTxt) OutputFiles(tag string) (android.Paths, error) {
+	return android.Paths{txt.outputFile}, nil
 }
 
 func VndkSnapshotSingleton() android.Singleton {
@@ -524,11 +540,16 @@ type vndkSnapshotSingleton struct {
 	vndkSnapshotZipFile android.OptionalPath
 }
 
-func isVndkSnapshotLibrary(config android.DeviceConfig, m *Module) (i snapshotLibraryInterface, vndkType string, isVndkSnapshotLib bool) {
+func isVndkSnapshotLibrary(config android.DeviceConfig, m *Module,
+	apexInfo android.ApexInfo) (i snapshotLibraryInterface, vndkType string, isVndkSnapshotLib bool) {
+
 	if m.Target().NativeBridge == android.NativeBridgeEnabled {
 		return nil, "", false
 	}
-	if !m.inVendor() || !m.installable() || m.isSnapshotPrebuilt() {
+	// !inVendor: There's product/vendor variants for VNDK libs. We only care about vendor variants.
+	// !installable: Snapshot only cares about "installable" modules.
+	// isSnapshotPrebuilt: Snapshotting a snapshot doesn't make sense.
+	if !m.inVendor() || !m.installable(apexInfo) || m.isSnapshotPrebuilt() {
 		return nil, "", false
 	}
 	l, ok := m.linker.(snapshotLibraryInterface)
@@ -608,7 +629,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 
 	var headers android.Paths
 
-	installVndkSnapshotLib := func(m *Module, l snapshotLibraryInterface, vndkType string) (android.Paths, bool) {
+	installVndkSnapshotLib := func(m *Module, vndkType string) (android.Paths, bool) {
 		var ret android.Paths
 
 		targetArch := "arch-" + m.Target().Arch.ArchType.String()
@@ -627,9 +648,10 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 				ExportedFlags       []string `json:",omitempty"`
 				RelativeInstallPath string   `json:",omitempty"`
 			}{}
-			prop.ExportedFlags = l.exportedFlags()
-			prop.ExportedDirs = l.exportedDirs().Strings()
-			prop.ExportedSystemDirs = l.exportedSystemDirs().Strings()
+			exportedInfo := ctx.ModuleProvider(m, FlagExporterInfoProvider).(FlagExporterInfo)
+			prop.ExportedFlags = exportedInfo.Flags
+			prop.ExportedDirs = exportedInfo.IncludeDirs.Strings()
+			prop.ExportedSystemDirs = exportedInfo.SystemIncludeDirs.Strings()
 			prop.RelativeInstallPath = m.RelativeInstallPath()
 
 			propOut := snapshotLibOut + ".json"
@@ -650,14 +672,16 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 			return
 		}
 
-		l, vndkType, ok := isVndkSnapshotLibrary(ctx.DeviceConfig(), m)
+		apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+
+		l, vndkType, ok := isVndkSnapshotLibrary(ctx.DeviceConfig(), m, apexInfo)
 		if !ok {
 			return
 		}
 
 		// install .so files for appropriate modules.
 		// Also install .json files if VNDK_SNAPSHOT_BUILD_ARTIFACTS
-		libs, ok := installVndkSnapshotLib(m, l, vndkType)
+		libs, ok := installVndkSnapshotLib(m, vndkType)
 		if !ok {
 			return
 		}
@@ -722,7 +746,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 	/*
 		module_paths.txt contains paths on which VNDK modules are defined.
 		e.g.,
-			libbase.so system/core/base
+			libbase.so system/libbase
 			libc.so bionic/libc
 			...
 	*/
@@ -814,14 +838,21 @@ func (c *vndkSnapshotSingleton) buildVndkLibrariesTxtFiles(ctx android.Singleton
 func (c *vndkSnapshotSingleton) MakeVars(ctx android.MakeVarsContext) {
 	// Make uses LLNDK_MOVED_TO_APEX_LIBRARIES to avoid installing libraries on /system if
 	// they been moved to an apex.
-	movedToApexLlndkLibraries := []string{}
-	for lib := range llndkLibraries(ctx.Config()) {
-		// Skip bionic libs, they are handled in different manner
-		if android.DirectlyInAnyApex(&notOnHostContext{}, lib) && !isBionic(lib) {
-			movedToApexLlndkLibraries = append(movedToApexLlndkLibraries, lib)
+	movedToApexLlndkLibraries := make(map[string]bool)
+	ctx.VisitAllModules(func(module android.Module) {
+		if m, ok := module.(*Module); ok {
+			if llndk, ok := m.linker.(*llndkStubDecorator); ok {
+				// Skip bionic libs, they are handled in different manner
+				name := llndk.implementationModuleName(m.BaseModuleName())
+				if llndk.movedToApex && !isBionic(name) {
+					movedToApexLlndkLibraries[name] = true
+				}
+			}
 		}
-	}
-	ctx.Strict("LLNDK_MOVED_TO_APEX_LIBRARIES", strings.Join(movedToApexLlndkLibraries, " "))
+	})
+
+	ctx.Strict("LLNDK_MOVED_TO_APEX_LIBRARIES",
+		strings.Join(android.SortedStringKeys(movedToApexLlndkLibraries), " "))
 
 	// Make uses LLNDK_LIBRARIES to determine which libraries to install.
 	// HWASAN is only part of the LL-NDK in builds in which libc depends on HWASAN.

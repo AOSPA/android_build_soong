@@ -29,7 +29,8 @@ func init() {
 
 var ccBinarySdkMemberType = &binarySdkMemberType{
 	SdkMemberTypeBase: android.SdkMemberTypeBase{
-		PropertyName: "native_binaries",
+		PropertyName:    "native_binaries",
+		HostOsDependent: true,
 	},
 }
 
@@ -39,15 +40,14 @@ type binarySdkMemberType struct {
 
 func (mt *binarySdkMemberType) AddDependencies(mctx android.BottomUpMutatorContext, dependencyTag blueprint.DependencyTag, names []string) {
 	targets := mctx.MultiTargets()
-	for _, lib := range names {
+	for _, bin := range names {
 		for _, target := range targets {
-			name, version := StubsLibNameAndVersion(lib)
-			if version == "" {
-				version = LatestStubsVersionFor(mctx.Config(), name)
+			variations := target.Variations()
+			if mctx.Device() {
+				variations = append(variations,
+					blueprint.Variation{Mutator: "image", Variation: android.CoreVariation})
 			}
-			mctx.AddFarVariationDependencies(append(target.Variations(), []blueprint.Variation{
-				{Mutator: "version", Variation: version},
-			}...), dependencyTag, name)
+			mctx.AddFarVariationDependencies(variations, dependencyTag, bin)
 		}
 	}
 }

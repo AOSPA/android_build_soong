@@ -72,6 +72,7 @@ type AndroidMkEntriesProvider interface {
 type AndroidMkEntries struct {
 	Class           string
 	SubName         string
+	OverrideName    string
 	DistFiles       TaggedDistFiles
 	OutputFile      OptionalPath
 	Disabled        bool
@@ -183,12 +184,15 @@ func (a *AndroidMkEntries) GetDistForGoals(mod blueprint.Module) []string {
 	name := amod.BaseModuleName()
 
 	var ret []string
+	var availableTaggedDists TaggedDistFiles
 
-	availableTaggedDists := TaggedDistFiles{}
 	if a.DistFiles != nil {
 		availableTaggedDists = a.DistFiles
 	} else if a.OutputFile.Valid() {
 		availableTaggedDists = MakeDefaultDistFiles(a.OutputFile.Path())
+	} else {
+		// Nothing dist-able for this module.
+		return nil
 	}
 
 	// Iterate over this module's dist structs, merged from the dist and dists properties.
@@ -270,6 +274,9 @@ func (a *AndroidMkEntries) fillInEntries(config Config, bpPath string, mod bluep
 	a.EntryMap = make(map[string][]string)
 	amod := mod.(Module).base()
 	name := amod.BaseModuleName()
+	if a.OverrideName != "" {
+		name = a.OverrideName
+	}
 
 	if a.Include == "" {
 		a.Include = "$(BUILD_PREBUILT)"
@@ -301,15 +308,16 @@ func (a *AndroidMkEntries) fillInEntries(config Config, bpPath string, mod bluep
 	host := false
 	switch amod.Os().Class {
 	case Host:
-		// Make cannot identify LOCAL_MODULE_HOST_ARCH:= common.
-		if amod.Arch().ArchType != Common {
-			a.SetString("LOCAL_MODULE_HOST_ARCH", archStr)
-		}
-		host = true
-	case HostCross:
-		// Make cannot identify LOCAL_MODULE_HOST_CROSS_ARCH:= common.
-		if amod.Arch().ArchType != Common {
-			a.SetString("LOCAL_MODULE_HOST_CROSS_ARCH", archStr)
+		if amod.Target().HostCross {
+			// Make cannot identify LOCAL_MODULE_HOST_CROSS_ARCH:= common.
+			if amod.Arch().ArchType != Common {
+				a.SetString("LOCAL_MODULE_HOST_CROSS_ARCH", archStr)
+			}
+		} else {
+			// Make cannot identify LOCAL_MODULE_HOST_ARCH:= common.
+			if amod.Arch().ArchType != Common {
+				a.SetString("LOCAL_MODULE_HOST_ARCH", archStr)
+			}
 		}
 		host = true
 	case Device:
@@ -356,9 +364,11 @@ func (a *AndroidMkEntries) fillInEntries(config Config, bpPath string, mod bluep
 	if amod.ArchSpecific() {
 		switch amod.Os().Class {
 		case Host:
-			prefix = "HOST_"
-		case HostCross:
-			prefix = "HOST_CROSS_"
+			if amod.Target().HostCross {
+				prefix = "HOST_CROSS_"
+			} else {
+				prefix = "HOST_"
+			}
 		case Device:
 			prefix = "TARGET_"
 
@@ -560,9 +570,11 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Mod
 	if amod.ArchSpecific() {
 		switch amod.Os().Class {
 		case Host:
-			prefix = "HOST_"
-		case HostCross:
-			prefix = "HOST_CROSS_"
+			if amod.Target().HostCross {
+				prefix = "HOST_CROSS_"
+			} else {
+				prefix = "HOST_"
+			}
 		case Device:
 			prefix = "TARGET_"
 
@@ -630,4 +642,22 @@ func shouldSkipAndroidMkProcessing(module *ModuleBase) bool {
 		module.commonProperties.SkipInstall ||
 		// Make does not understand LinuxBionic
 		module.Os() == LinuxBionic
+}
+
+func AndroidMkDataPaths(data []DataPath) []string {
+	var testFiles []string
+	for _, d := range data {
+		rel := d.SrcPath.Rel()
+		path := d.SrcPath.String()
+		if !strings.HasSuffix(path, rel) {
+			panic(fmt.Errorf("path %q does not end with %q", path, rel))
+		}
+		path = strings.TrimSuffix(path, rel)
+		testFileString := path + ":" + rel
+		if len(d.RelativeInstallPath) > 0 {
+			testFileString += ":" + d.RelativeInstallPath
+		}
+		testFiles = append(testFiles, testFileString)
+	}
+	return testFiles
 }

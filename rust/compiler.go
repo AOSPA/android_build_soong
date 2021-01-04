@@ -24,12 +24,24 @@ import (
 	"android/soong/rust/config"
 )
 
-func getEdition(compiler *baseCompiler) string {
+type RustLinkage int
+
+const (
+	DefaultLinkage RustLinkage = iota
+	RlibLinkage
+	DylibLinkage
+)
+
+func (compiler *baseCompiler) edition() string {
 	return proptools.StringDefault(compiler.Properties.Edition, config.DefaultEdition)
 }
 
 func (compiler *baseCompiler) setNoStdlibs() {
 	compiler.Properties.No_stdlibs = proptools.BoolPtr(true)
+}
+
+func (compiler *baseCompiler) disableLints() {
+	compiler.Properties.Lints = proptools.StringPtr("none")
 }
 
 func NewBaseCompiler(dir, dir64 string, location installLocation) *baseCompiler {
@@ -54,8 +66,14 @@ type BaseCompilerProperties struct {
 	// path to the source file that is the main entry point of the program (e.g. main.rs or lib.rs)
 	Srcs []string `android:"path,arch_variant"`
 
-	// whether to suppress the standard lint flags - default to false
-	No_lint *bool
+	// name of the lint set that should be used to validate this module.
+	//
+	// Possible values are "default" (for using a sensible set of lints
+	// depending on the module's location), "android" (for the strictest
+	// lint set that applies to all Android platform code), "vendor" (for
+	// a relaxed set) and "none" (for ignoring all lint warnings and
+	// errors). The default value is "default".
+	Lints *string
 
 	// flags to pass to rustc
 	Flags []string `android:"path,arch_variant"`
@@ -81,7 +99,10 @@ type BaseCompilerProperties struct {
 	// list of C static library dependencies
 	Static_libs []string `android:"arch_variant"`
 
-	// crate name, required for libraries. This must be the expected extern crate name used in source
+	// crate name, required for modules which produce Rust libraries: rust_library, rust_ffi and SourceProvider
+	// modules which create library variants (rust_bindgen). This must be the expected extern crate name used in
+	// source, and is required to conform to an enforced format matching library output files (if the output file is
+	// lib<someName><suffix>, the crate_name property must be <someName>).
 	Crate_name string `android:"arch_variant"`
 
 	// list of features to enable for this crate
@@ -116,12 +137,30 @@ type baseCompiler struct {
 	location installLocation
 
 	coverageOutputZipFile android.OptionalPath
-	unstrippedOutputFile  android.Path
 	distFile              android.OptionalPath
+	// Stripped output file. If Valid(), this file will be installed instead of outputFile.
+	strippedOutputFile android.OptionalPath
+}
+
+func (compiler *baseCompiler) Disabled() bool {
+	return false
+}
+
+func (compiler *baseCompiler) SetDisabled() {
+	panic("baseCompiler does not implement SetDisabled()")
 }
 
 func (compiler *baseCompiler) coverageOutputZipPath() android.OptionalPath {
 	panic("baseCompiler does not implement coverageOutputZipPath()")
+}
+
+func (compiler *baseCompiler) stdLinkage(ctx *depsContext) RustLinkage {
+	// For devices, we always link stdlibs in as dylibs by default.
+	if ctx.Device() {
+		return DylibLinkage
+	} else {
+		return RlibLinkage
+	}
 }
 
 var _ compiler = (*baseCompiler)(nil)
@@ -144,12 +183,14 @@ func (compiler *baseCompiler) featuresToFlags(features []string) []string {
 
 func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flags {
 
-	if !Bool(compiler.Properties.No_lint) {
-		flags.RustFlags = append(flags.RustFlags, config.RustcLintsForDir(ctx.ModuleDir()))
+	lintFlags, err := config.RustcLintsForDir(ctx.ModuleDir(), compiler.Properties.Lints)
+	if err != nil {
+		ctx.PropertyErrorf("lints", err.Error())
 	}
+	flags.RustFlags = append(flags.RustFlags, lintFlags)
 	flags.RustFlags = append(flags.RustFlags, compiler.Properties.Flags...)
 	flags.RustFlags = append(flags.RustFlags, compiler.featuresToFlags(compiler.Properties.Features)...)
-	flags.RustFlags = append(flags.RustFlags, "--edition="+getEdition(compiler))
+	flags.RustFlags = append(flags.RustFlags, "--edition="+compiler.edition())
 	flags.LinkFlags = append(flags.LinkFlags, compiler.Properties.Ld_flags...)
 	flags.GlobalRustFlags = append(flags.GlobalRustFlags, config.GlobalRustFlags...)
 	flags.GlobalRustFlags = append(flags.GlobalRustFlags, ctx.toolchain().ToolchainRustFlags())
@@ -188,22 +229,29 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 
 	if !Bool(compiler.Properties.No_stdlibs) {
 		for _, stdlib := range config.Stdlibs {
-			// If we're building for the primary host target, use the compiler's stdlibs
-			if ctx.Host() && ctx.TargetPrimary() {
+			// If we're building for the primary arch of the build host, use the compiler's stdlibs
+			if ctx.Target().Os == android.BuildOs && ctx.TargetPrimary() {
 				stdlib = stdlib + "_" + ctx.toolchain().RustTriple()
 			}
 
-			deps.Rustlibs = append(deps.Rustlibs, stdlib)
+			deps.Stdlibs = append(deps.Stdlibs, stdlib)
 		}
 	}
 	return deps
 }
 
-func (compiler *baseCompiler) bionicDeps(ctx DepsContext, deps Deps) Deps {
-	deps.SharedLibs = append(deps.SharedLibs, "liblog")
-	deps.SharedLibs = append(deps.SharedLibs, "libc")
-	deps.SharedLibs = append(deps.SharedLibs, "libm")
-	deps.SharedLibs = append(deps.SharedLibs, "libdl")
+func bionicDeps(deps Deps, static bool) Deps {
+	bionicLibs := []string{}
+	bionicLibs = append(bionicLibs, "liblog")
+	bionicLibs = append(bionicLibs, "libc")
+	bionicLibs = append(bionicLibs, "libm")
+	bionicLibs = append(bionicLibs, "libdl")
+
+	if static {
+		deps.StaticLibs = append(deps.StaticLibs, bionicLibs...)
+	} else {
+		deps.SharedLibs = append(deps.SharedLibs, bionicLibs...)
+	}
 
 	//TODO(b/141331117) libstd requires libgcc on Android
 	deps.StaticLibs = append(deps.StaticLibs, "libgcc")
@@ -234,8 +282,12 @@ func (compiler *baseCompiler) nativeCoverage() bool {
 	return false
 }
 
-func (compiler *baseCompiler) install(ctx ModuleContext, file android.Path) {
-	compiler.path = ctx.InstallFile(compiler.installDir(ctx), file.Base(), file)
+func (compiler *baseCompiler) install(ctx ModuleContext) {
+	path := ctx.RustModule().outputFile
+	if compiler.strippedOutputFile.Valid() {
+		path = compiler.strippedOutputFile
+	}
+	compiler.path = ctx.InstallFile(compiler.installDir(ctx), path.Path().Base(), path.Path())
 }
 
 func (compiler *baseCompiler) getStem(ctx ModuleContext) string {

@@ -252,7 +252,7 @@ func (l *linter) writeLintProjectXML(ctx android.ModuleContext,
 	return projectXMLPath, configXMLPath, cacheDir, homeDir, deps
 }
 
-// generateManifest adds a command to the rule to write a dummy manifest cat contains the
+// generateManifest adds a command to the rule to write a simple manifest that contains the
 // minSdkVersion and targetSdkVersion for modules (like java_library) that don't have a manifest.
 func (l *linter) generateManifest(ctx android.ModuleContext, rule *android.RuleBuilder) android.Path {
 	manifestPath := android.PathForModuleOut(ctx, "lint", "AndroidManifest.xml")
@@ -309,7 +309,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 	rule.Command().Text("mkdir -p").Flag(cacheDir.String()).Flag(homeDir.String())
 
 	var annotationsZipPath, apiVersionsXMLPath android.Path
-	if ctx.Config().UnbundledBuildUsePrebuiltSdks() {
+	if ctx.Config().AlwaysUsePrebuiltSdks() {
 		annotationsZipPath = android.PathForSource(ctx, "prebuilts/sdk/current/public/data/annotations.zip")
 		apiVersionsXMLPath = android.PathForSource(ctx, "prebuilts/sdk/current/public/data/api-versions.xml")
 	} else {
@@ -319,7 +319,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	cmd := rule.Command().
 		Text("(").
-		Flag("JAVA_OPTS=-Xmx2048m").
+		Flag("JAVA_OPTS=-Xmx3072m").
 		FlagWithArg("ANDROID_SDK_HOME=", homeDir.String()).
 		FlagWithInput("SDK_ANNOTATIONS=", annotationsZipPath).
 		FlagWithInput("LINT_OPTS=-DLINT_API_DATABASE=", apiVersionsXMLPath).
@@ -395,7 +395,7 @@ func (l *lintSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 }
 
 func (l *lintSingleton) copyLintDependencies(ctx android.SingletonContext) {
-	if ctx.Config().UnbundledBuildUsePrebuiltSdks() {
+	if ctx.Config().AlwaysUsePrebuiltSdks() {
 		return
 	}
 
@@ -451,10 +451,13 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 			return
 		}
 
-		if apex, ok := m.(android.ApexModule); ok && apex.NotAvailableForPlatform() && apex.IsForPlatform() {
-			// There are stray platform variants of modules in apexes that are not available for
-			// the platform, and they sometimes can't be built.  Don't depend on them.
-			return
+		if apex, ok := m.(android.ApexModule); ok && apex.NotAvailableForPlatform() {
+			apexInfo := ctx.ModuleProvider(m, android.ApexInfoProvider).(android.ApexInfo)
+			if apexInfo.IsForPlatform() {
+				// There are stray platform variants of modules in apexes that are not available for
+				// the platform, and they sometimes can't be built.  Don't depend on them.
+				return
+			}
 		}
 
 		if l, ok := m.(lintOutputsIntf); ok {
@@ -513,7 +516,7 @@ func lintZip(ctx android.BuilderContext, paths android.Paths, outputPath android
 	rule.Command().BuiltTool(ctx, "soong_zip").
 		FlagWithOutput("-o ", outputPath).
 		FlagWithArg("-C ", android.PathForIntermediates(ctx).String()).
-		FlagWithRspFileInputList("-l ", paths)
+		FlagWithRspFileInputList("-r ", paths)
 
 	rule.Build(pctx, ctx, outputPath.Base(), outputPath.Base())
 }

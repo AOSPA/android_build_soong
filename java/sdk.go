@@ -53,7 +53,7 @@ type sdkContext interface {
 
 func UseApiFingerprint(ctx android.BaseModuleContext) bool {
 	if ctx.Config().UnbundledBuild() &&
-		!ctx.Config().UnbundledBuildUsePrebuiltSdks() &&
+		!ctx.Config().AlwaysUsePrebuiltSdks() &&
 		ctx.Config().IsEnvTrue("UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT") {
 		return true
 	}
@@ -107,7 +107,7 @@ type sdkVersion int
 
 const (
 	// special version number for a not-yet-frozen SDK
-	sdkVersionCurrent sdkVersion = sdkVersion(android.FutureApiLevel)
+	sdkVersionCurrent sdkVersion = sdkVersion(android.FutureApiLevelInt)
 	// special version number to be used for SDK specs where version number doesn't
 	// make sense, e.g. "none", "", etc.
 	sdkVersionNone sdkVersion = sdkVersion(0)
@@ -131,6 +131,10 @@ func (v sdkVersion) String() string {
 		return strconv.Itoa(int(v))
 	}
 	return "(no version)"
+}
+
+func (v sdkVersion) ApiLevel(ctx android.EarlyModuleContext) android.ApiLevel {
+	return android.ApiLevelOrPanic(ctx, v.String())
 }
 
 // asNumberString directly converts the numeric value of this sdk version as a string.
@@ -191,19 +195,22 @@ func (s sdkSpec) prebuiltSdkAvailableForUnbundledBuild() bool {
 	return s.kind != sdkPrivate && s.kind != sdkNone && s.kind != sdkCorePlatform
 }
 
-// forPdkBuild converts this sdkSpec into another sdkSpec that is for the PDK builds.
-func (s sdkSpec) forPdkBuild(ctx android.EarlyModuleContext) sdkSpec {
-	// For PDK builds, use the latest SDK version instead of "current" or ""
-	if s.kind == sdkPrivate || s.kind == sdkPublic {
-		kind := s.kind
-		if kind == sdkPrivate {
-			// We don't have prebuilt SDK for private APIs, so use the public SDK
-			// instead. This looks odd, but that's how it has been done.
-			// TODO(b/148271073): investigate the need for this.
-			kind = sdkPublic
+func (s sdkSpec) forVendorPartition(ctx android.EarlyModuleContext) sdkSpec {
+	// If BOARD_CURRENT_API_LEVEL_FOR_VENDOR_MODULES has a numeric value,
+	// use it instead of "current" for the vendor partition.
+	currentSdkVersion := ctx.DeviceConfig().CurrentApiLevelForVendorModules()
+	if currentSdkVersion == "current" {
+		return s
+	}
+
+	if s.kind == sdkPublic || s.kind == sdkSystem {
+		if s.version.isCurrent() {
+			if i, err := strconv.Atoi(currentSdkVersion); err == nil {
+				version := sdkVersion(i)
+				return sdkSpec{s.kind, version, s.raw}
+			}
+			panic(fmt.Errorf("BOARD_CURRENT_API_LEVEL_FOR_VENDOR_MODULES must be either \"current\" or a number, but was %q", currentSdkVersion))
 		}
-		version := sdkVersion(LatestSdkVersionInt(ctx))
-		return sdkSpec{kind, version, s.raw}
 	}
 	return s
 }
@@ -212,10 +219,10 @@ func (s sdkSpec) forPdkBuild(ctx android.EarlyModuleContext) sdkSpec {
 func (s sdkSpec) usePrebuilt(ctx android.EarlyModuleContext) bool {
 	if s.version.isCurrent() {
 		// "current" can be built from source and be from prebuilt SDK
-		return ctx.Config().UnbundledBuildUsePrebuiltSdks()
+		return ctx.Config().AlwaysUsePrebuiltSdks()
 	} else if s.version.isNumbered() {
-		// sanity check
-		if s.kind != sdkPublic && s.kind != sdkSystem && s.kind != sdkTest {
+		// validation check
+		if s.kind != sdkPublic && s.kind != sdkSystem && s.kind != sdkTest && s.kind != sdkModule {
 			panic(fmt.Errorf("prebuilt SDK is not not available for sdkKind=%q", s.kind))
 			return false
 		}
@@ -233,13 +240,14 @@ func (s sdkSpec) effectiveVersion(ctx android.EarlyModuleContext) (sdkVersion, e
 	if !s.valid() {
 		return s.version, fmt.Errorf("invalid sdk version %q", s.raw)
 	}
-	if ctx.Config().IsPdkBuild() {
-		s = s.forPdkBuild(ctx)
+
+	if ctx.DeviceSpecific() || ctx.SocSpecific() {
+		s = s.forVendorPartition(ctx)
 	}
 	if s.version.isNumbered() {
 		return s.version, nil
 	}
-	return sdkVersion(ctx.Config().DefaultAppTargetSdkInt()), nil
+	return sdkVersion(ctx.Config().DefaultAppTargetSdk(ctx).FinalOrFutureInt()), nil
 }
 
 // effectiveVersionString converts an sdkSpec into the concrete version string that the module
@@ -247,8 +255,8 @@ func (s sdkSpec) effectiveVersion(ctx android.EarlyModuleContext) (sdkVersion, e
 // it returns the codename (P, Q, R, etc.)
 func (s sdkSpec) effectiveVersionString(ctx android.EarlyModuleContext) (string, error) {
 	ver, err := s.effectiveVersion(ctx)
-	if err == nil && int(ver) == ctx.Config().DefaultAppTargetSdkInt() {
-		return ctx.Config().DefaultAppTargetSdk(), nil
+	if err == nil && int(ver) == ctx.Config().DefaultAppTargetSdk(ctx).FinalOrFutureInt() {
+		return ctx.Config().DefaultAppTargetSdk(ctx).String(), nil
 	}
 	return ver.String(), err
 }
@@ -350,9 +358,10 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep 
 		return sdkDep{}
 	}
 
-	if ctx.Config().IsPdkBuild() {
-		sdkVersion = sdkVersion.forPdkBuild(ctx)
+	if ctx.DeviceSpecific() || ctx.SocSpecific() {
+		sdkVersion = sdkVersion.forVendorPartition(ctx)
 	}
+
 	if !sdkVersion.validateSystemSdk(ctx) {
 		return sdkDep{}
 	}
@@ -511,7 +520,7 @@ func sdkSingletonFactory() android.Singleton {
 type sdkSingleton struct{}
 
 func (sdkSingleton) GenerateBuildActions(ctx android.SingletonContext) {
-	if ctx.Config().UnbundledBuildUsePrebuiltSdks() || ctx.Config().IsPdkBuild() {
+	if ctx.Config().AlwaysUsePrebuiltSdks() {
 		return
 	}
 
@@ -631,10 +640,7 @@ func createAPIFingerprint(ctx android.SingletonContext) {
 
 	if ctx.Config().PlatformSdkCodename() == "REL" {
 		cmd.Text("echo REL >").Output(out)
-	} else if ctx.Config().IsPdkBuild() {
-		// TODO: get this from the PDK artifacts?
-		cmd.Text("echo PDK >").Output(out)
-	} else if !ctx.Config().UnbundledBuildUsePrebuiltSdks() {
+	} else if !ctx.Config().AlwaysUsePrebuiltSdks() {
 		in, err := ctx.GlobWithDeps("frameworks/base/api/*current.txt", nil)
 		if err != nil {
 			ctx.Errorf("error globbing API files: %s", err)
@@ -663,7 +669,7 @@ func ApiFingerprintPath(ctx android.PathContext) android.OutputPath {
 }
 
 func sdkMakeVars(ctx android.MakeVarsContext) {
-	if ctx.Config().UnbundledBuildUsePrebuiltSdks() || ctx.Config().IsPdkBuild() {
+	if ctx.Config().AlwaysUsePrebuiltSdks() {
 		return
 	}
 

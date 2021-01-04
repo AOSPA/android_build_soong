@@ -731,7 +731,7 @@ var visibilityTests = []struct {
 				}`),
 		},
 		expectedErrors: []string{
-			`module "libnamespace" variant "android_common": depends on //top:libexample which is not visible to this module`,
+			`module "libnamespace" variant "android_common": depends on //top:libexample which is not visible to this module\nYou may need to add "//namespace" to its visibility`,
 		},
 	},
 	{
@@ -760,7 +760,7 @@ var visibilityTests = []struct {
 				}`),
 		},
 		expectedErrors: []string{
-			`module "libnamespace" variant "android_common": depends on //top:libexample which is not visible to this module`,
+			`module "libnamespace" variant "android_common": depends on //top:libexample which is not visible to this module\nYou may need to add "//namespace" to its visibility`,
 		},
 	},
 	{
@@ -1168,7 +1168,7 @@ func testVisibility(buildDir string, fs map[string][]byte) (*TestContext, []erro
 	// Create a new config per test as visibility information is stored in the config.
 	config := TestArchConfig(buildDir, nil, "", fs)
 
-	ctx := NewTestArchContext()
+	ctx := NewTestArchContext(config)
 	ctx.RegisterModuleType("mock_library", newMockLibraryModule)
 	ctx.RegisterModuleType("mock_parent", newMockParentFactory)
 	ctx.RegisterModuleType("mock_defaults", defaultsFactory)
@@ -1180,7 +1180,7 @@ func testVisibility(buildDir string, fs map[string][]byte) (*TestContext, []erro
 	ctx.PreArchMutators(RegisterDefaultsPreArchMutators)
 	ctx.PreArchMutators(RegisterVisibilityRuleGatherer)
 	ctx.PostDepsMutators(RegisterVisibilityRuleEnforcer)
-	ctx.Register(config)
+	ctx.Register()
 
 	_, errs := ctx.ParseBlueprintsFiles(".")
 	if len(errs) > 0 {
@@ -1269,4 +1269,50 @@ func newMockParentFactory() Module {
 		}{m.properties.Child.Name, visibility})
 	})
 	return m
+}
+
+func testVisibilityRuleSet(t *testing.T, rules, extra, expected []string) {
+	t.Helper()
+	set := &visibilityRuleSet{rules}
+	err := set.Widen(extra)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	actual := set.Strings()
+	if !reflect.DeepEqual(actual, expected) {
+		t.Errorf("mismatching rules after extend: expected %#v, actual %#v", expected, actual)
+	}
+}
+
+func TestVisibilityRuleSet(t *testing.T) {
+	t.Run("extend empty", func(t *testing.T) {
+		testVisibilityRuleSet(t, nil, []string{"//foo"}, []string{"//foo"})
+	})
+	t.Run("extend", func(t *testing.T) {
+		testVisibilityRuleSet(t, []string{"//foo"}, []string{"//bar"}, []string{"//bar", "//foo"})
+	})
+	t.Run("extend duplicate", func(t *testing.T) {
+		testVisibilityRuleSet(t, []string{"//foo"}, []string{"//bar", "//foo"}, []string{"//bar", "//foo"})
+	})
+	t.Run("extend public", func(t *testing.T) {
+		testVisibilityRuleSet(t, []string{"//visibility:public"}, []string{"//foo"}, []string{"//visibility:public"})
+	})
+	t.Run("extend private", func(t *testing.T) {
+		testVisibilityRuleSet(t, []string{"//visibility:private"}, []string{"//foo"}, []string{"//foo"})
+	})
+	t.Run("extend with public", func(t *testing.T) {
+		testVisibilityRuleSet(t, []string{"//foo"}, []string{"//visibility:public"}, []string{"//visibility:public"})
+	})
+	t.Run("extend with private", func(t *testing.T) {
+		t.Helper()
+		set := &visibilityRuleSet{[]string{"//foo"}}
+		err := set.Widen([]string{"//visibility:private"})
+		expectedError := `"//visibility:private" does not widen the visibility`
+		if err == nil {
+			t.Errorf("missing error")
+		} else if err.Error() != expectedError {
+			t.Errorf("expected error %q found error %q", expectedError, err)
+		}
+	})
 }

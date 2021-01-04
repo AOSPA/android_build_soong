@@ -15,6 +15,7 @@ bootstrap_go_package {
         "apex.go",
         "api_levels.go",
         "arch.go",
+        "bazel_handler.go",
         "config.go",
         "csuite_config.go",
         "defaults.go",
@@ -24,6 +25,7 @@ bootstrap_go_package {
         "filegroup.go",
         "hooks.go",
         "image.go",
+        "makefile_goal.go",
         "makevars.go",
         "metrics.go",
         "module.go",
@@ -41,6 +43,7 @@ bootstrap_go_package {
         "prebuilt.go",
         "prebuilt_build_tool.go",
         "proto.go",
+        "queryview.go",
         "register.go",
         "rule_builder.go",
         "sandbox.go",
@@ -52,7 +55,6 @@ bootstrap_go_package {
         "util.go",
         "variable.go",
         "visibility.go",
-        "vts_config.go",
         "writedocs.go",
 
         // Lock down environment access last
@@ -61,6 +63,7 @@ bootstrap_go_package {
     testSrcs: [
         "android_test.go",
         "androidmk_test.go",
+        "apex_test.go",
         "arch_test.go",
         "config_test.go",
         "csuite_config_test.go",
@@ -80,6 +83,5 @@ bootstrap_go_package {
         "util_test.go",
         "variable_test.go",
         "visibility_test.go",
-        "vts_config_test.go",
     ],
 }

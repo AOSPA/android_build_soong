@@ -36,13 +36,17 @@ var soongDelveListen string
 var soongDelvePath string
 var soongDelveEnv []string
 var SdclangEnv map[string]string
+var QiifaBuildConfig string
 
 func init() {
 	// Delve support needs to read this environment variable very early, before NewConfig has created a way to
 	// access originalEnv with dependencies.  Store the value where soong_build can find it, it will manually
 	// ensure the dependencies are created.
 	soongDelveListen = os.Getenv("SOONG_DELVE")
-	soongDelvePath, _ = exec.LookPath("dlv")
+	soongDelvePath = os.Getenv("SOONG_DELVE_PATH")
+	if soongDelvePath == "" {
+		soongDelvePath, _ = exec.LookPath("dlv")
+	}
 
 	originalEnv = make(map[string]string)
 	soongDelveEnv = []string{}
@@ -51,13 +55,13 @@ func init() {
 		idx := strings.IndexRune(env, '=')
 		if idx != -1 {
 			originalEnv[env[:idx]] = env[idx+1:]
-			if env[:idx] != "SOONG_DELVE" {
+			if env[:idx] != "SOONG_DELVE" && env[:idx] != "SOONG_DELVE_PATH" {
 				soongDelveEnv = append(soongDelveEnv, env)
 			}
 			SdclangEnv[env[:idx]] = env[idx+1:]
 		}
 	}
-
+        QiifaBuildConfig = originalEnv["QIIFA_BUILD_CONFIG"]
 	// Clear the environment to prevent use of os.Getenv(), which would not provide dependencies on environment
 	// variable values.  The environment is available through ctx.Config().Getenv, ctx.Config().IsEnvTrue, etc.
 	os.Clearenv()

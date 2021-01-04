@@ -23,10 +23,7 @@ import (
 var (
 	ArmRustFlags            = []string{}
 	ArmArchFeatureRustFlags = map[string][]string{}
-	ArmLinkFlags            = []string{
-		"-Wl,--icf=safe",
-		"-Wl,-m,armelf",
-	}
+	ArmLinkFlags            = []string{}
 
 	ArmArchVariantRustFlags = map[string][]string{
 		"armv7-a":      []string{},
@@ -55,11 +52,12 @@ type toolchainArm struct {
 }
 
 func (t *toolchainArm) RustTriple() string {
-	return "arm-linux-androideabi"
+	return "armv7-linux-androideabi"
 }
 
 func (t *toolchainArm) ToolchainLinkFlags() string {
-	return "${config.DeviceGlobalLinkFlags} ${config.ArmToolchainLinkFlags}"
+	// Prepend the lld flags from cc_config so we stay in sync with cc
+	return "${config.DeviceGlobalLinkFlags} ${cc_config.ArmLldflags} ${config.ArmToolchainLinkFlags}"
 }
 
 func (t *toolchainArm) ToolchainRustFlags() string {

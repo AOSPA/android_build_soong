@@ -49,8 +49,8 @@ type bootImageConfig struct {
 	// Subdirectory where the image files are installed.
 	installSubdir string
 
-	// The names of jars that constitute this image.
-	modules []string
+	// A list of (location, jar) pairs for the Java modules in this image.
+	modules android.ConfiguredJarList
 
 	// File paths to jars.
 	dexPaths     android.WritablePaths // for this image
@@ -113,16 +113,16 @@ func (image bootImageConfig) moduleName(ctx android.PathContext, idx int) string
 	// Dexpreopt on the boot class path produces multiple files. The first dex file
 	// is converted into 'name'.art (to match the legacy assumption that 'name'.art
 	// exists), and the rest are converted to 'name'-<jar>.art.
-	_, m := android.SplitApexJarPair(ctx, image.modules[idx])
+	m := image.modules.Jar(idx)
 	name := image.stem
 	if idx != 0 || image.extends != nil {
-		name += "-" + stemOf(m)
+		name += "-" + android.ModuleStem(m)
 	}
 	return name
 }
 
 func (image bootImageConfig) firstModuleNameOrStem(ctx android.PathContext) string {
-	if len(image.modules) > 0 {
+	if image.modules.Len() > 0 {
 		return image.moduleName(ctx, 0)
 	} else {
 		return image.stem
@@ -130,8 +130,8 @@ func (image bootImageConfig) firstModuleNameOrStem(ctx android.PathContext) stri
 }
 
 func (image bootImageConfig) moduleFiles(ctx android.PathContext, dir android.OutputPath, exts ...string) android.OutputPaths {
-	ret := make(android.OutputPaths, 0, len(image.modules)*len(exts))
-	for i := range image.modules {
+	ret := make(android.OutputPaths, 0, image.modules.Len()*len(exts))
+	for i := 0; i < image.modules.Len(); i++ {
 		name := image.moduleName(ctx, i)
 		for _, ext := range exts {
 			ret = append(ret, dir.Join(ctx, name+ext))
@@ -238,6 +238,13 @@ func (d *dexpreoptBootJars) GenerateBuildActions(ctx android.SingletonContext) {
 	dumpOatRules(ctx, d.defaultBootImage)
 }
 
+func isHostdex(module android.Module) bool {
+	if lib, ok := module.(*Library); ok {
+		return Bool(lib.deviceProperties.Hostdex)
+	}
+	return false
+}
+
 // Inspect this module to see if it contains a bootclasspath dex jar.
 // Note that the same jar may occur in multiple modules.
 // This logic is tested in the apex package to avoid import cycle apex <-> java.
@@ -253,18 +260,19 @@ func getBootImageJar(ctx android.SingletonContext, image *bootImageConfig, modul
 	}
 
 	name := ctx.ModuleName(module)
-	index := android.IndexList(name, android.GetJarsFromApexJarPairs(ctx, image.modules))
+	index := image.modules.IndexOfJar(name)
 	if index == -1 {
 		return -1, nil
 	}
 
 	// Check that this module satisfies constraints for a particular boot image.
-	apex, isApexModule := module.(android.ApexModule)
-	fromUpdatableApex := isApexModule && apex.Updatable()
+	_, isApexModule := module.(android.ApexModule)
+	apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+	fromUpdatableApex := isApexModule && apexInfo.Updatable
 	if image.name == artBootImageName {
-		if isApexModule && strings.HasPrefix(apex.ApexName(), "com.android.art.") {
+		if isApexModule && len(apexInfo.InApexes) > 0 && allHavePrefix(apexInfo.InApexes, "com.android.art") {
 			// ok: found the jar in the ART apex
-		} else if isApexModule && apex.IsForPlatform() && Bool(module.(*Library).deviceProperties.Hostdex) {
+		} else if isApexModule && apexInfo.IsForPlatform() && isHostdex(module) {
 			// exception (skip and continue): special "hostdex" platform variant
 			return -1, nil
 		} else if name == "jacocoagent" && ctx.Config().IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK") {
@@ -272,17 +280,17 @@ func getBootImageJar(ctx android.SingletonContext, image *bootImageConfig, modul
 			return -1, nil
 		} else if fromUpdatableApex {
 			// error: this jar is part of an updatable apex other than ART
-			ctx.Errorf("module '%s' from updatable apex '%s' is not allowed in the ART boot image", name, apex.ApexName())
+			ctx.Errorf("module %q from updatable apexes %q is not allowed in the ART boot image", name, apexInfo.InApexes)
 		} else {
 			// error: this jar is part of the platform or a non-updatable apex
-			ctx.Errorf("module '%s' is not allowed in the ART boot image", name)
+			ctx.Errorf("module %q is not allowed in the ART boot image", name)
 		}
 	} else if image.name == frameworkBootImageName {
 		if !fromUpdatableApex {
 			// ok: this jar is part of the platform or a non-updatable apex
 		} else {
 			// error: this jar is part of an updatable apex
-			ctx.Errorf("module '%s' from updatable apex '%s' is not allowed in the framework boot image", name, apex.ApexName())
+			ctx.Errorf("module %q from updatable apexes %q is not allowed in the framework boot image", name, apexInfo.InApexes)
 		}
 	} else {
 		panic("unknown boot image: " + image.name)
@@ -291,11 +299,20 @@ func getBootImageJar(ctx android.SingletonContext, image *bootImageConfig, modul
 	return index, jar.DexJarBuildPath()
 }
 
+func allHavePrefix(list []string, prefix string) bool {
+	for _, s := range list {
+		if s != prefix && !strings.HasPrefix(s, prefix+".") {
+			return false
+		}
+	}
+	return true
+}
+
 // buildBootImage takes a bootImageConfig, creates rules to build it, and returns the image.
 func buildBootImage(ctx android.SingletonContext, image *bootImageConfig) *bootImageConfig {
 	// Collect dex jar paths for the boot image modules.
 	// This logic is tested in the apex package to avoid import cycle apex <-> java.
-	bootDexJars := make(android.Paths, len(image.modules))
+	bootDexJars := make(android.Paths, image.modules.Len())
 	ctx.VisitAllModules(func(module android.Module) {
 		if i, j := getBootImageJar(ctx, image, module); i != -1 {
 			bootDexJars[i] = j
@@ -306,7 +323,7 @@ func buildBootImage(ctx android.SingletonContext, image *bootImageConfig) *bootI
 	// Ensure all modules were converted to paths
 	for i := range bootDexJars {
 		if bootDexJars[i] == nil {
-			_, m := android.SplitApexJarPair(ctx, image.modules[i])
+			m := image.modules.Jar(i)
 			if ctx.Config().AllowMissingDependencies() {
 				missingDeps = append(missingDeps, m)
 				bootDexJars[i] = android.PathForOutput(ctx, "missing")
@@ -505,7 +522,7 @@ func bootImageProfileRule(ctx android.SingletonContext, image *bootImageConfig, 
 	globalSoong := dexpreopt.GetCachedGlobalSoongConfig(ctx)
 	global := dexpreopt.GetGlobalConfig(ctx)
 
-	if global.DisableGenerateProfile || ctx.Config().IsPdkBuild() || ctx.Config().UnbundledBuild() {
+	if global.DisableGenerateProfile || ctx.Config().UnbundledBuild() {
 		return nil
 	}
 	profile := ctx.Config().Once(bootImageProfileRuleKey, func() interface{} {
@@ -560,7 +577,7 @@ func bootFrameworkProfileRule(ctx android.SingletonContext, image *bootImageConf
 	globalSoong := dexpreopt.GetCachedGlobalSoongConfig(ctx)
 	global := dexpreopt.GetGlobalConfig(ctx)
 
-	if global.DisableGenerateProfile || ctx.Config().IsPdkBuild() || ctx.Config().UnbundledBuild() {
+	if global.DisableGenerateProfile || ctx.Config().UnbundledBuild() {
 		return nil
 	}
 	return ctx.Config().Once(bootFrameworkProfileRuleKey, func() interface{} {
@@ -602,13 +619,13 @@ func bootFrameworkProfileRule(ctx android.SingletonContext, image *bootImageConf
 var bootFrameworkProfileRuleKey = android.NewOnceKey("bootFrameworkProfileRule")
 
 func updatableBcpPackagesRule(ctx android.SingletonContext, image *bootImageConfig, missingDeps []string) android.WritablePath {
-	if ctx.Config().IsPdkBuild() || ctx.Config().UnbundledBuild() {
+	if ctx.Config().UnbundledBuild() {
 		return nil
 	}
 
 	return ctx.Config().Once(updatableBcpPackagesRuleKey, func() interface{} {
 		global := dexpreopt.GetGlobalConfig(ctx)
-		updatableModules := android.GetJarsFromApexJarPairs(ctx, global.UpdatableBootJars)
+		updatableModules := global.UpdatableBootJars.CopyOfJars()
 
 		// Collect `permitted_packages` for updatable boot jars.
 		var updatablePackages []string

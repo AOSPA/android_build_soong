@@ -39,6 +39,20 @@ func testSdkWithCc(t *testing.T, bp string) *testSdkResult {
 
 // Contains tests for SDK members provided by the cc package.
 
+func TestSingleDeviceOsAssumption(t *testing.T) {
+	// Mock a module with DeviceSupported() == true.
+	s := &sdk{}
+	android.InitAndroidArchModule(s, android.DeviceSupported, android.MultilibCommon)
+
+	osTypes := s.getPossibleOsTypes()
+	if len(osTypes) != 1 {
+		// The snapshot generation assumes there is a single device OS. If more are
+		// added it might need to disable them by default, like it does for host
+		// OS'es.
+		t.Errorf("expected a single device OS, got %v", osTypes)
+	}
+}
+
 func TestSdkIsCompileMultilibBoth(t *testing.T) {
 	result := testSdkWithCc(t, `
 		sdk {
@@ -73,7 +87,6 @@ func TestSdkCompileMultilibOverride(t *testing.T) {
 	result := testSdkWithCc(t, `
 		sdk {
 			name: "mysdk",
-			device_supported: false,
 			host_supported: true,
 			native_shared_libs: ["sdkmember"],
 			compile_multilib: "64",
@@ -81,7 +94,6 @@ func TestSdkCompileMultilibOverride(t *testing.T) {
 
 		cc_library_shared {
 			name: "sdkmember",
-			device_supported: false,
 			host_supported: true,
 			srcs: ["Test.cpp"],
 			stl: "none",
@@ -96,14 +108,21 @@ func TestSdkCompileMultilibOverride(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_sdkmember@current",
     sdk_member_name: "sdkmember",
-    device_supported: false,
+    visibility: ["//visibility:public"],
     host_supported: true,
     installable: false,
     stl: "none",
     compile_multilib: "64",
-    arch: {
-        x86_64: {
-            srcs: ["x86_64/lib/sdkmember.so"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        android_arm64: {
+            srcs: ["android/arm64/lib/sdkmember.so"],
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+            srcs: ["linux_glibc/x86_64/lib/sdkmember.so"],
         },
     },
 }
@@ -111,31 +130,43 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "sdkmember",
     prefer: false,
-    device_supported: false,
+    visibility: ["//visibility:public"],
     host_supported: true,
     stl: "none",
     compile_multilib: "64",
-    arch: {
-        x86_64: {
-            srcs: ["x86_64/lib/sdkmember.so"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        android_arm64: {
+            srcs: ["android/arm64/lib/sdkmember.so"],
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+            srcs: ["linux_glibc/x86_64/lib/sdkmember.so"],
         },
     },
 }
 
 sdk_snapshot {
     name: "mysdk@current",
-    device_supported: false,
+    visibility: ["//visibility:public"],
     host_supported: true,
     native_shared_libs: ["mysdk_sdkmember@current"],
+    compile_multilib: "64",
     target: {
-        linux_glibc: {
-            compile_multilib: "64",
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
         },
     },
 }
 `),
 		checkAllCopyRules(`
-.intermediates/sdkmember/linux_glibc_x86_64_shared/sdkmember.so -> x86_64/lib/sdkmember.so
+.intermediates/sdkmember/android_arm64_armv8-a_shared/sdkmember.so -> android/arm64/lib/sdkmember.so
+.intermediates/sdkmember/linux_glibc_x86_64_shared/sdkmember.so -> linux_glibc/x86_64/lib/sdkmember.so
 `))
 }
 
@@ -233,11 +264,11 @@ func TestBasicSdkWithCc(t *testing.T) {
 		}
 	`)
 
-	sdkMemberV1 := result.ModuleForTests("sdkmember_mysdk_1", "android_arm64_armv8-a_shared_myapex").Rule("toc").Output
-	sdkMemberV2 := result.ModuleForTests("sdkmember_mysdk_2", "android_arm64_armv8-a_shared_myapex2").Rule("toc").Output
+	sdkMemberV1 := result.ModuleForTests("sdkmember_mysdk_1", "android_arm64_armv8-a_shared_apex10000_mysdk_1").Rule("toc").Output
+	sdkMemberV2 := result.ModuleForTests("sdkmember_mysdk_2", "android_arm64_armv8-a_shared_apex10000_mysdk_2").Rule("toc").Output
 
-	cpplibForMyApex := result.ModuleForTests("mycpplib", "android_arm64_armv8-a_shared_myapex")
-	cpplibForMyApex2 := result.ModuleForTests("mycpplib", "android_arm64_armv8-a_shared_myapex2")
+	cpplibForMyApex := result.ModuleForTests("mycpplib", "android_arm64_armv8-a_shared_apex10000_mysdk_1")
+	cpplibForMyApex2 := result.ModuleForTests("mycpplib", "android_arm64_armv8-a_shared_apex10000_mysdk_2")
 
 	// Depending on the uses_sdks value, different libs are linked
 	ensureListContains(t, pathsToStrings(cpplibForMyApex.Rule("ld").Implicits), sdkMemberV1.String())
@@ -308,6 +339,9 @@ func TestSnapshotWithObject(t *testing.T) {
 		cc_object {
 			name: "crtobj",
 			stl: "none",
+			sanitize: {
+				never: true,
+			},
 		}
 	`)
 
@@ -318,8 +352,12 @@ func TestSnapshotWithObject(t *testing.T) {
 cc_prebuilt_object {
     name: "mysdk_crtobj@current",
     sdk_member_name: "crtobj",
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
+    sanitize: {
+        never: true,
+    },
     arch: {
         arm64: {
             srcs: ["arm64/lib/crtobj.o"],
@@ -333,8 +371,12 @@ cc_prebuilt_object {
 cc_prebuilt_object {
     name: "crtobj",
     prefer: false,
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
+    sanitize: {
+        never: true,
+    },
     arch: {
         arm64: {
             srcs: ["arm64/lib/crtobj.o"],
@@ -347,6 +389,7 @@ cc_prebuilt_object {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     native_objects: ["mysdk_crtobj@current"],
 }
 `),
@@ -394,8 +437,10 @@ include/Test.h -> include/include/Test.h
 	)
 }
 
-// Verify that when the shared library has some common and some arch specific properties that the generated
-// snapshot is optimized properly.
+// Verify that when the shared library has some common and some arch specific
+// properties that the generated snapshot is optimized properly. Substruct
+// handling is tested with the sanitize clauses (but note there's a lot of
+// built-in logic in sanitize.go that can affect those flags).
 func TestSnapshotWithCcSharedLibraryCommonProperties(t *testing.T) {
 	result := testSdkWithCc(t, `
 		sdk {
@@ -410,9 +455,17 @@ func TestSnapshotWithCcSharedLibraryCommonProperties(t *testing.T) {
 				"aidl/foo/bar/Test.aidl",
 			],
 			export_include_dirs: ["include"],
+			sanitize: {
+				fuzzer: false,
+				integer_overflow: true,
+				diag: { undefined: false },
+			},
 			arch: {
 				arm64: {
 					export_system_include_dirs: ["arm64/include"],
+					sanitize: {
+						integer_overflow: false,
+					},
 				},
 			},
 			stl: "none",
@@ -426,17 +479,30 @@ func TestSnapshotWithCcSharedLibraryCommonProperties(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     installable: false,
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
+    sanitize: {
+        fuzzer: false,
+        diag: {
+            undefined: false,
+        },
+    },
     arch: {
         arm64: {
             srcs: ["arm64/lib/mynativelib.so"],
             export_system_include_dirs: ["arm64/include/arm64/include"],
+            sanitize: {
+                integer_overflow: false,
+            },
         },
         arm: {
             srcs: ["arm/lib/mynativelib.so"],
+            sanitize: {
+                integer_overflow: true,
+            },
         },
     },
 }
@@ -444,22 +510,36 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
+    sanitize: {
+        fuzzer: false,
+        diag: {
+            undefined: false,
+        },
+    },
     arch: {
         arm64: {
             srcs: ["arm64/lib/mynativelib.so"],
             export_system_include_dirs: ["arm64/include/arm64/include"],
+            sanitize: {
+                integer_overflow: false,
+            },
         },
         arm: {
             srcs: ["arm/lib/mynativelib.so"],
+            sanitize: {
+                integer_overflow: true,
+            },
         },
     },
 }
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     native_shared_libs: ["mysdk_mynativelib@current"],
 }
 `),
@@ -494,6 +574,7 @@ func TestSnapshotWithCcBinary(t *testing.T) {
 cc_prebuilt_binary {
     name: "mymodule_exports_mynativebinary@current",
     sdk_member_name: "mynativebinary",
+    visibility: ["//visibility:public"],
     installable: false,
     compile_multilib: "both",
     arch: {
@@ -509,6 +590,7 @@ cc_prebuilt_binary {
 cc_prebuilt_binary {
     name: "mynativebinary",
     prefer: false,
+    visibility: ["//visibility:public"],
     compile_multilib: "both",
     arch: {
         arm64: {
@@ -522,6 +604,7 @@ cc_prebuilt_binary {
 
 module_exports_snapshot {
     name: "mymodule_exports@current",
+    visibility: ["//visibility:public"],
     native_binaries: ["mymodule_exports_mynativebinary@current"],
 }
 `),
@@ -570,24 +653,31 @@ func TestMultipleHostOsTypesSnapshotWithCcBinary(t *testing.T) {
 cc_prebuilt_binary {
     name: "myexports_mynativebinary@current",
     sdk_member_name: "mynativebinary",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     installable: false,
     stl: "none",
     target: {
+        host: {
+            enabled: false,
+        },
         linux_glibc: {
             compile_multilib: "both",
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/bin/mynativebinary"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/bin/mynativebinary"],
         },
         windows: {
             compile_multilib: "64",
         },
         windows_x86_64: {
+            enabled: true,
             srcs: ["windows/x86_64/bin/mynativebinary.exe"],
         },
     },
@@ -596,23 +686,30 @@ cc_prebuilt_binary {
 cc_prebuilt_binary {
     name: "mynativebinary",
     prefer: false,
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     stl: "none",
     target: {
+        host: {
+            enabled: false,
+        },
         linux_glibc: {
             compile_multilib: "both",
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/bin/mynativebinary"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/bin/mynativebinary"],
         },
         windows: {
             compile_multilib: "64",
         },
         windows_x86_64: {
+            enabled: true,
             srcs: ["windows/x86_64/bin/mynativebinary.exe"],
         },
     },
@@ -620,12 +717,25 @@ cc_prebuilt_binary {
 
 module_exports_snapshot {
     name: "myexports@current",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     native_binaries: ["myexports_mynativebinary@current"],
     target: {
         windows: {
             compile_multilib: "64",
+        },
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+        windows_x86_64: {
+            enabled: true,
         },
     },
 }
@@ -634,6 +744,159 @@ module_exports_snapshot {
 .intermediates/mynativebinary/linux_glibc_x86_64/mynativebinary -> linux_glibc/x86_64/bin/mynativebinary
 .intermediates/mynativebinary/linux_glibc_x86/mynativebinary -> linux_glibc/x86/bin/mynativebinary
 .intermediates/mynativebinary/windows_x86_64/mynativebinary.exe -> windows/x86_64/bin/mynativebinary.exe
+`),
+	)
+}
+
+func TestSnapshotWithSingleHostOsType(t *testing.T) {
+	ctx, config := testSdkContext(`
+		cc_defaults {
+			name: "mydefaults",
+			device_supported: false,
+			host_supported: true,
+			compile_multilib: "64",
+			target: {
+				host: {
+					enabled: false,
+				},
+				linux_bionic: {
+					enabled: true,
+				},
+			},
+		}
+
+		module_exports {
+			name: "myexports",
+			defaults: ["mydefaults"],
+			native_shared_libs: ["mynativelib"],
+			native_binaries: ["mynativebinary"],
+			compile_multilib: "64",  // The built-in default in sdk.go overrides mydefaults.
+		}
+
+		cc_library {
+			name: "mynativelib",
+			defaults: ["mydefaults"],
+			srcs: [
+				"Test.cpp",
+			],
+			stl: "none",
+		}
+
+		cc_binary {
+			name: "mynativebinary",
+			defaults: ["mydefaults"],
+			srcs: [
+				"Test.cpp",
+			],
+			stl: "none",
+		}
+	`, ccTestFs, []android.OsType{android.LinuxBionic})
+
+	result := runTests(t, ctx, config)
+
+	result.CheckSnapshot("myexports", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+cc_prebuilt_binary {
+    name: "myexports_mynativebinary@current",
+    sdk_member_name: "mynativebinary",
+    visibility: ["//visibility:public"],
+    device_supported: false,
+    host_supported: true,
+    installable: false,
+    stl: "none",
+    compile_multilib: "64",
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_bionic_x86_64: {
+            enabled: true,
+            srcs: ["x86_64/bin/mynativebinary"],
+        },
+    },
+}
+
+cc_prebuilt_binary {
+    name: "mynativebinary",
+    prefer: false,
+    visibility: ["//visibility:public"],
+    device_supported: false,
+    host_supported: true,
+    stl: "none",
+    compile_multilib: "64",
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_bionic_x86_64: {
+            enabled: true,
+            srcs: ["x86_64/bin/mynativebinary"],
+        },
+    },
+}
+
+cc_prebuilt_library_shared {
+    name: "myexports_mynativelib@current",
+    sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
+    device_supported: false,
+    host_supported: true,
+    installable: false,
+    stl: "none",
+    compile_multilib: "64",
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_bionic_x86_64: {
+            enabled: true,
+            srcs: ["x86_64/lib/mynativelib.so"],
+        },
+    },
+}
+
+cc_prebuilt_library_shared {
+    name: "mynativelib",
+    prefer: false,
+    visibility: ["//visibility:public"],
+    device_supported: false,
+    host_supported: true,
+    stl: "none",
+    compile_multilib: "64",
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_bionic_x86_64: {
+            enabled: true,
+            srcs: ["x86_64/lib/mynativelib.so"],
+        },
+    },
+}
+
+module_exports_snapshot {
+    name: "myexports@current",
+    visibility: ["//visibility:public"],
+    device_supported: false,
+    host_supported: true,
+    native_binaries: ["myexports_mynativebinary@current"],
+    native_shared_libs: ["myexports_mynativelib@current"],
+    compile_multilib: "64",
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_bionic_x86_64: {
+            enabled: true,
+        },
+    },
+}
+`),
+		checkAllCopyRules(`
+.intermediates/mynativebinary/linux_bionic_x86_64/mynativebinary -> x86_64/bin/mynativebinary
+.intermediates/mynativelib/linux_bionic_x86_64_shared/mynativelib.so -> x86_64/lib/mynativelib.so
 `),
 	)
 }
@@ -669,6 +932,7 @@ func TestSnapshotWithCcStaticNocrtBinary(t *testing.T) {
 cc_prebuilt_binary {
     name: "mymodule_exports_linker@current",
     sdk_member_name: "linker",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     installable: false,
@@ -676,11 +940,16 @@ cc_prebuilt_binary {
     compile_multilib: "both",
     static_executable: true,
     nocrt: true,
-    arch: {
-        x86_64: {
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["x86_64/bin/linker"],
         },
-        x86: {
+        linux_glibc_x86: {
+            enabled: true,
             srcs: ["x86/bin/linker"],
         },
     },
@@ -689,17 +958,23 @@ cc_prebuilt_binary {
 cc_prebuilt_binary {
     name: "linker",
     prefer: false,
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     stl: "none",
     compile_multilib: "both",
     static_executable: true,
     nocrt: true,
-    arch: {
-        x86_64: {
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["x86_64/bin/linker"],
         },
-        x86: {
+        linux_glibc_x86: {
+            enabled: true,
             srcs: ["x86/bin/linker"],
         },
     },
@@ -707,9 +982,21 @@ cc_prebuilt_binary {
 
 module_exports_snapshot {
     name: "mymodule_exports@current",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     native_binaries: ["mymodule_exports_linker@current"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 `),
 		checkAllCopyRules(`
@@ -748,6 +1035,7 @@ func TestSnapshotWithCcSharedLibrary(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     apex_available: [
         "apex1",
         "apex2",
@@ -771,6 +1059,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     apex_available: [
         "apex1",
         "apex2",
@@ -792,6 +1081,7 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     native_shared_libs: ["mysdk_mynativelib@current"],
 }
 `),
@@ -876,6 +1166,7 @@ func TestSnapshotWithCcSharedLibrarySharedLibs(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     installable: false,
     stl: "none",
     compile_multilib: "both",
@@ -896,6 +1187,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
     shared_libs: [
@@ -915,6 +1207,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mysdk_myothernativelib@current",
     sdk_member_name: "myothernativelib",
+    visibility: ["//visibility:public"],
     installable: false,
     stl: "none",
     compile_multilib: "both",
@@ -932,6 +1225,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "myothernativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
     system_shared_libs: ["libm"],
@@ -948,6 +1242,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mysdk_mysystemnativelib@current",
     sdk_member_name: "mysystemnativelib",
+    visibility: ["//visibility:public"],
     installable: false,
     stl: "none",
     compile_multilib: "both",
@@ -964,6 +1259,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mysystemnativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
     arch: {
@@ -978,6 +1274,7 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     native_shared_libs: [
         "mysdk_mynativelib@current",
         "mysdk_myothernativelib@current",
@@ -1029,6 +1326,7 @@ func TestHostSnapshotWithCcSharedLibrary(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     installable: false,
@@ -1036,12 +1334,17 @@ cc_prebuilt_library_shared {
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
-    arch: {
-        x86_64: {
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["x86_64/lib/mynativelib.so"],
             export_include_dirs: ["x86_64/include_gen/mynativelib"],
         },
-        x86: {
+        linux_glibc_x86: {
+            enabled: true,
             srcs: ["x86/lib/mynativelib.so"],
             export_include_dirs: ["x86/include_gen/mynativelib"],
         },
@@ -1051,18 +1354,24 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     sdk_version: "minimum",
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
-    arch: {
-        x86_64: {
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["x86_64/lib/mynativelib.so"],
             export_include_dirs: ["x86_64/include_gen/mynativelib"],
         },
-        x86: {
+        linux_glibc_x86: {
+            enabled: true,
             srcs: ["x86/lib/mynativelib.so"],
             export_include_dirs: ["x86/include_gen/mynativelib"],
         },
@@ -1071,9 +1380,21 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     native_shared_libs: ["mysdk_mynativelib@current"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 `),
 		checkAllCopyRules(`
@@ -1127,24 +1448,31 @@ func TestMultipleHostOsTypesSnapshotWithCcSharedLibrary(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     installable: false,
     stl: "none",
     target: {
+        host: {
+            enabled: false,
+        },
         linux_glibc: {
             compile_multilib: "both",
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/lib/mynativelib.so"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/lib/mynativelib.so"],
         },
         windows: {
             compile_multilib: "64",
         },
         windows_x86_64: {
+            enabled: true,
             srcs: ["windows/x86_64/lib/mynativelib.dll"],
         },
     },
@@ -1153,23 +1481,30 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     stl: "none",
     target: {
+        host: {
+            enabled: false,
+        },
         linux_glibc: {
             compile_multilib: "both",
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/lib/mynativelib.so"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/lib/mynativelib.so"],
         },
         windows: {
             compile_multilib: "64",
         },
         windows_x86_64: {
+            enabled: true,
             srcs: ["windows/x86_64/lib/mynativelib.dll"],
         },
     },
@@ -1177,12 +1512,25 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     native_shared_libs: ["mysdk_mynativelib@current"],
     target: {
         windows: {
             compile_multilib: "64",
+        },
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+        windows_x86_64: {
+            enabled: true,
         },
     },
 }
@@ -1223,6 +1571,7 @@ func TestSnapshotWithCcStaticLibrary(t *testing.T) {
 cc_prebuilt_library_static {
     name: "myexports_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     installable: false,
     stl: "none",
     compile_multilib: "both",
@@ -1242,6 +1591,7 @@ cc_prebuilt_library_static {
 cc_prebuilt_library_static {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
@@ -1259,6 +1609,7 @@ cc_prebuilt_library_static {
 
 module_exports_snapshot {
     name: "myexports@current",
+    visibility: ["//visibility:public"],
     native_static_libs: ["myexports_mynativelib@current"],
 }
 `),
@@ -1308,18 +1659,24 @@ func TestHostSnapshotWithCcStaticLibrary(t *testing.T) {
 cc_prebuilt_library_static {
     name: "myexports_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     installable: false,
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
-    arch: {
-        x86_64: {
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["x86_64/lib/mynativelib.a"],
             export_include_dirs: ["x86_64/include_gen/mynativelib"],
         },
-        x86: {
+        linux_glibc_x86: {
+            enabled: true,
             srcs: ["x86/lib/mynativelib.a"],
             export_include_dirs: ["x86/include_gen/mynativelib"],
         },
@@ -1329,17 +1686,23 @@ cc_prebuilt_library_static {
 cc_prebuilt_library_static {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
-    arch: {
-        x86_64: {
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["x86_64/lib/mynativelib.a"],
             export_include_dirs: ["x86_64/include_gen/mynativelib"],
         },
-        x86: {
+        linux_glibc_x86: {
+            enabled: true,
             srcs: ["x86/lib/mynativelib.a"],
             export_include_dirs: ["x86/include_gen/mynativelib"],
         },
@@ -1348,9 +1711,21 @@ cc_prebuilt_library_static {
 
 module_exports_snapshot {
     name: "myexports@current",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     native_static_libs: ["myexports_mynativelib@current"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 `),
 		checkAllCopyRules(`
@@ -1381,6 +1756,8 @@ func TestSnapshotWithCcLibrary(t *testing.T) {
 			],
 			export_include_dirs: ["include"],
 			stl: "none",
+			recovery_available: true,
+			vendor_available: true,
 		}
 	`)
 
@@ -1391,7 +1768,10 @@ func TestSnapshotWithCcLibrary(t *testing.T) {
 cc_prebuilt_library {
     name: "myexports_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     installable: false,
+    recovery_available: true,
+    vendor_available: true,
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
@@ -1418,6 +1798,9 @@ cc_prebuilt_library {
 cc_prebuilt_library {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
+    recovery_available: true,
+    vendor_available: true,
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
@@ -1443,6 +1826,7 @@ cc_prebuilt_library {
 
 module_exports_snapshot {
     name: "myexports@current",
+    visibility: ["//visibility:public"],
     native_libs: ["myexports_mynativelib@current"],
 }
 `),
@@ -1492,14 +1876,19 @@ func TestHostSnapshotWithMultiLib64(t *testing.T) {
 cc_prebuilt_library_static {
     name: "myexports_mynativelib@current",
     sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     installable: false,
     stl: "none",
     compile_multilib: "64",
     export_include_dirs: ["include/include"],
-    arch: {
-        x86_64: {
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["x86_64/lib/mynativelib.a"],
             export_include_dirs: ["x86_64/include_gen/mynativelib"],
         },
@@ -1509,13 +1898,18 @@ cc_prebuilt_library_static {
 cc_prebuilt_library_static {
     name: "mynativelib",
     prefer: false,
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     stl: "none",
     compile_multilib: "64",
     export_include_dirs: ["include/include"],
-    arch: {
-        x86_64: {
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["x86_64/lib/mynativelib.a"],
             export_include_dirs: ["x86_64/include_gen/mynativelib"],
         },
@@ -1524,12 +1918,17 @@ cc_prebuilt_library_static {
 
 module_exports_snapshot {
     name: "myexports@current",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     native_static_libs: ["myexports_mynativelib@current"],
+    compile_multilib: "64",
     target: {
-        linux_glibc: {
-            compile_multilib: "64",
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
         },
     },
 }`),
@@ -1564,6 +1963,7 @@ func TestSnapshotWithCcHeadersLibrary(t *testing.T) {
 cc_prebuilt_library_headers {
     name: "mysdk_mynativeheaders@current",
     sdk_member_name: "mynativeheaders",
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
@@ -1572,6 +1972,7 @@ cc_prebuilt_library_headers {
 cc_prebuilt_library_headers {
     name: "mynativeheaders",
     prefer: false,
+    visibility: ["//visibility:public"],
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
@@ -1579,6 +1980,7 @@ cc_prebuilt_library_headers {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     native_header_libs: ["mysdk_mynativeheaders@current"],
 }
 `),
@@ -1613,28 +2015,64 @@ func TestHostSnapshotWithCcHeadersLibrary(t *testing.T) {
 cc_prebuilt_library_headers {
     name: "mysdk_mynativeheaders@current",
     sdk_member_name: "mynativeheaders",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 
 cc_prebuilt_library_headers {
     name: "mynativeheaders",
     prefer: false,
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/include"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
     native_header_libs: ["mysdk_mynativeheaders@current"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 `),
 		checkAllCopyRules(`
@@ -1674,16 +2112,26 @@ func TestDeviceAndHostSnapshotWithCcHeadersLibrary(t *testing.T) {
 cc_prebuilt_library_headers {
     name: "mysdk_mynativeheaders@current",
     sdk_member_name: "mynativeheaders",
+    visibility: ["//visibility:public"],
     host_supported: true,
     stl: "none",
     compile_multilib: "both",
     export_system_include_dirs: ["common_os/include/include"],
     target: {
+        host: {
+            enabled: false,
+        },
         android: {
             export_include_dirs: ["android/include/include-android"],
         },
         linux_glibc: {
             export_include_dirs: ["linux_glibc/include/include-host"],
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
         },
     },
 }
@@ -1691,24 +2139,46 @@ cc_prebuilt_library_headers {
 cc_prebuilt_library_headers {
     name: "mynativeheaders",
     prefer: false,
+    visibility: ["//visibility:public"],
     host_supported: true,
     stl: "none",
     compile_multilib: "both",
     export_system_include_dirs: ["common_os/include/include"],
     target: {
+        host: {
+            enabled: false,
+        },
         android: {
             export_include_dirs: ["android/include/include-android"],
         },
         linux_glibc: {
             export_include_dirs: ["linux_glibc/include/include-host"],
         },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
     },
 }
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     host_supported: true,
     native_header_libs: ["mysdk_mynativeheaders@current"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 `),
 		checkAllCopyRules(`
@@ -1749,6 +2219,7 @@ func TestSystemSharedLibPropagation(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_sslnil@current",
     sdk_member_name: "sslnil",
+    visibility: ["//visibility:public"],
     installable: false,
     compile_multilib: "both",
     arch: {
@@ -1764,6 +2235,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "sslnil",
     prefer: false,
+    visibility: ["//visibility:public"],
     compile_multilib: "both",
     arch: {
         arm64: {
@@ -1778,6 +2250,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mysdk_sslempty@current",
     sdk_member_name: "sslempty",
+    visibility: ["//visibility:public"],
     installable: false,
     compile_multilib: "both",
     system_shared_libs: [],
@@ -1794,6 +2267,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "sslempty",
     prefer: false,
+    visibility: ["//visibility:public"],
     compile_multilib: "both",
     system_shared_libs: [],
     arch: {
@@ -1809,6 +2283,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mysdk_sslnonempty@current",
     sdk_member_name: "sslnonempty",
+    visibility: ["//visibility:public"],
     installable: false,
     compile_multilib: "both",
     system_shared_libs: ["mysdk_sslnil@current"],
@@ -1825,6 +2300,7 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "sslnonempty",
     prefer: false,
+    visibility: ["//visibility:public"],
     compile_multilib: "both",
     system_shared_libs: ["sslnil"],
     arch: {
@@ -1839,6 +2315,7 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     native_shared_libs: [
         "mysdk_sslnil@current",
         "mysdk_sslempty@current",
@@ -1872,10 +2349,14 @@ sdk_snapshot {
 cc_prebuilt_library_shared {
     name: "mysdk_sslvariants@current",
     sdk_member_name: "sslvariants",
+    visibility: ["//visibility:public"],
     host_supported: true,
     installable: false,
     compile_multilib: "both",
     target: {
+        host: {
+            enabled: false,
+        },
         android: {
             system_shared_libs: [],
         },
@@ -1886,9 +2367,11 @@ cc_prebuilt_library_shared {
             srcs: ["android/arm/lib/sslvariants.so"],
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/lib/sslvariants.so"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/lib/sslvariants.so"],
         },
     },
@@ -1897,9 +2380,13 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "sslvariants",
     prefer: false,
+    visibility: ["//visibility:public"],
     host_supported: true,
     compile_multilib: "both",
     target: {
+        host: {
+            enabled: false,
+        },
         android: {
             system_shared_libs: [],
         },
@@ -1910,9 +2397,11 @@ cc_prebuilt_library_shared {
             srcs: ["android/arm/lib/sslvariants.so"],
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/lib/sslvariants.so"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/lib/sslvariants.so"],
         },
     },
@@ -1920,8 +2409,20 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     host_supported: true,
     native_shared_libs: ["mysdk_sslvariants@current"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 `))
 }
@@ -1954,10 +2455,15 @@ func TestStubsLibrary(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_stubslib@current",
     sdk_member_name: "stubslib",
+    visibility: ["//visibility:public"],
     installable: false,
     compile_multilib: "both",
     stubs: {
-        versions: ["3"],
+        versions: [
+            "1",
+            "2",
+            "3",
+        ],
     },
     arch: {
         arm64: {
@@ -1972,9 +2478,14 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "stubslib",
     prefer: false,
+    visibility: ["//visibility:public"],
     compile_multilib: "both",
     stubs: {
-        versions: ["3"],
+        versions: [
+            "1",
+            "2",
+            "3",
+        ],
     },
     arch: {
         arm64: {
@@ -1988,6 +2499,7 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     native_shared_libs: ["mysdk_stubslib@current"],
 }
 `))
@@ -2024,13 +2536,21 @@ func TestDeviceAndHostSnapshotWithStubsLibrary(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_stubslib@current",
     sdk_member_name: "stubslib",
+    visibility: ["//visibility:public"],
     host_supported: true,
     installable: false,
     compile_multilib: "both",
     stubs: {
-        versions: ["3"],
+        versions: [
+            "1",
+            "2",
+            "3",
+        ],
     },
     target: {
+        host: {
+            enabled: false,
+        },
         android_arm64: {
             srcs: ["android/arm64/lib/stubslib.so"],
         },
@@ -2038,9 +2558,11 @@ cc_prebuilt_library_shared {
             srcs: ["android/arm/lib/stubslib.so"],
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/lib/stubslib.so"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/lib/stubslib.so"],
         },
     },
@@ -2049,12 +2571,20 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "stubslib",
     prefer: false,
+    visibility: ["//visibility:public"],
     host_supported: true,
     compile_multilib: "both",
     stubs: {
-        versions: ["3"],
+        versions: [
+            "1",
+            "2",
+            "3",
+        ],
     },
     target: {
+        host: {
+            enabled: false,
+        },
         android_arm64: {
             srcs: ["android/arm64/lib/stubslib.so"],
         },
@@ -2062,9 +2592,11 @@ cc_prebuilt_library_shared {
             srcs: ["android/arm/lib/stubslib.so"],
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/lib/stubslib.so"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/lib/stubslib.so"],
         },
     },
@@ -2072,8 +2604,20 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     host_supported: true,
     native_shared_libs: ["mysdk_stubslib@current"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 `))
 }
@@ -2100,11 +2644,15 @@ func TestUniqueHostSoname(t *testing.T) {
 cc_prebuilt_library_shared {
     name: "mysdk_mylib@current",
     sdk_member_name: "mylib",
+    visibility: ["//visibility:public"],
     host_supported: true,
     installable: false,
     unique_host_soname: true,
     compile_multilib: "both",
     target: {
+        host: {
+            enabled: false,
+        },
         android_arm64: {
             srcs: ["android/arm64/lib/mylib.so"],
         },
@@ -2112,9 +2660,11 @@ cc_prebuilt_library_shared {
             srcs: ["android/arm/lib/mylib.so"],
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/lib/mylib-host.so"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/lib/mylib-host.so"],
         },
     },
@@ -2123,10 +2673,14 @@ cc_prebuilt_library_shared {
 cc_prebuilt_library_shared {
     name: "mylib",
     prefer: false,
+    visibility: ["//visibility:public"],
     host_supported: true,
     unique_host_soname: true,
     compile_multilib: "both",
     target: {
+        host: {
+            enabled: false,
+        },
         android_arm64: {
             srcs: ["android/arm64/lib/mylib.so"],
         },
@@ -2134,9 +2688,11 @@ cc_prebuilt_library_shared {
             srcs: ["android/arm/lib/mylib.so"],
         },
         linux_glibc_x86_64: {
+            enabled: true,
             srcs: ["linux_glibc/x86_64/lib/mylib-host.so"],
         },
         linux_glibc_x86: {
+            enabled: true,
             srcs: ["linux_glibc/x86/lib/mylib-host.so"],
         },
     },
@@ -2144,8 +2700,20 @@ cc_prebuilt_library_shared {
 
 sdk_snapshot {
     name: "mysdk@current",
+    visibility: ["//visibility:public"],
     host_supported: true,
     native_shared_libs: ["mysdk_mylib@current"],
+    target: {
+        host: {
+            enabled: false,
+        },
+        linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_glibc_x86: {
+            enabled: true,
+        },
+    },
 }
 `),
 		checkAllCopyRules(`
@@ -2154,5 +2722,77 @@ sdk_snapshot {
 .intermediates/mylib/linux_glibc_x86_64_shared/mylib-host.so -> linux_glibc/x86_64/lib/mylib-host.so
 .intermediates/mylib/linux_glibc_x86_shared/mylib-host.so -> linux_glibc/x86/lib/mylib-host.so
 `),
+	)
+}
+
+func TestNoSanitizerMembers(t *testing.T) {
+	result := testSdkWithCc(t, `
+		sdk {
+			name: "mysdk",
+			native_shared_libs: ["mynativelib"],
+		}
+
+		cc_library_shared {
+			name: "mynativelib",
+			srcs: ["Test.cpp"],
+			export_include_dirs: ["include"],
+			arch: {
+				arm64: {
+					export_system_include_dirs: ["arm64/include"],
+					sanitize: {
+						hwaddress: true,
+					},
+				},
+			},
+		}
+	`)
+
+	result.CheckSnapshot("mysdk", "",
+		checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+cc_prebuilt_library_shared {
+    name: "mysdk_mynativelib@current",
+    sdk_member_name: "mynativelib",
+    visibility: ["//visibility:public"],
+    installable: false,
+    compile_multilib: "both",
+    export_include_dirs: ["include/include"],
+    arch: {
+        arm64: {
+            export_system_include_dirs: ["arm64/include/arm64/include"],
+        },
+        arm: {
+            srcs: ["arm/lib/mynativelib.so"],
+        },
+    },
+}
+
+cc_prebuilt_library_shared {
+    name: "mynativelib",
+    prefer: false,
+    visibility: ["//visibility:public"],
+    compile_multilib: "both",
+    export_include_dirs: ["include/include"],
+    arch: {
+        arm64: {
+            export_system_include_dirs: ["arm64/include/arm64/include"],
+        },
+        arm: {
+            srcs: ["arm/lib/mynativelib.so"],
+        },
+    },
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    visibility: ["//visibility:public"],
+    native_shared_libs: ["mysdk_mynativelib@current"],
+}
+`),
+		checkAllCopyRules(`
+include/Test.h -> include/include/Test.h
+arm64/include/Arm64Test.h -> arm64/include/arm64/include/Arm64Test.h
+.intermediates/mynativelib/android_arm_armv7-a-neon_shared/mynativelib.so -> arm/lib/mynativelib.so`),
 	)
 }

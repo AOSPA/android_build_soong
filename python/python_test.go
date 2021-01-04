@@ -301,7 +301,7 @@ var (
 				filepath.Join("dir", "file2.py"):       nil,
 				filepath.Join("dir", "bin.py"):         nil,
 				filepath.Join("dir", "file4.py"):       nil,
-				stubTemplateHost: []byte(`PYTHON_BINARY = '%interpreter%'
+				StubTemplateHost: []byte(`PYTHON_BINARY = '%interpreter%'
 				MAIN_FILE = '%main%'`),
 			},
 			expectedBinaries: []pyModule{
@@ -329,15 +329,13 @@ func TestPythonModule(t *testing.T) {
 	for _, d := range data {
 		t.Run(d.desc, func(t *testing.T) {
 			config := android.TestConfig(buildDir, nil, "", d.mockFiles)
-			ctx := android.NewTestContext()
-			ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-				ctx.BottomUp("version_split", versionSplitMutator()).Parallel()
-			})
+			ctx := android.NewTestContext(config)
+			ctx.PreDepsMutators(RegisterPythonPreDepsMutators)
 			ctx.RegisterModuleType("python_library_host", PythonLibraryHostFactory)
 			ctx.RegisterModuleType("python_binary_host", PythonBinaryHostFactory)
 			ctx.RegisterModuleType("python_defaults", defaultsFactory)
 			ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
-			ctx.Register(config)
+			ctx.Register()
 			_, testErrs := ctx.ParseBlueprintsFiles(bpFile)
 			android.FailIfErrored(t, testErrs)
 			_, actErrs := ctx.PrepareBuildActions(config)
@@ -397,10 +395,11 @@ func expectModule(t *testing.T, ctx *android.TestContext, buildDir, name, varian
 
 	if !reflect.DeepEqual(actualPyRunfiles, expectedPyRunfiles) {
 		testErrs = append(testErrs, errors.New(fmt.Sprintf(
-			`binary "%s" variant "%s" has unexpected pyRunfiles: %q!`,
+			`binary "%s" variant "%s" has unexpected pyRunfiles: %q! (expected: %q)`,
 			base.Name(),
 			base.properties.Actual_version,
-			actualPyRunfiles)))
+			actualPyRunfiles,
+			expectedPyRunfiles)))
 	}
 
 	if base.srcsZip.String() != strings.Replace(expectedSrcsZip, "@prefix@", buildDir, 1) {

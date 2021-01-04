@@ -30,7 +30,6 @@ func TestClasspath(t *testing.T) {
 	var classpathTestcases = []struct {
 		name       string
 		unbundled  bool
-		pdk        bool
 		moduleType string
 		host       android.OsClass
 		properties string
@@ -217,35 +216,6 @@ func TestClasspath(t *testing.T) {
 		},
 
 		{
-			name:           "pdk default",
-			pdk:            true,
-			bootclasspath:  []string{`""`},
-			system:         "sdk_public_30_system_modules",
-			java8classpath: []string{"prebuilts/sdk/30/public/android.jar", "prebuilts/sdk/tools/core-lambda-stubs.jar"},
-			java9classpath: []string{"prebuilts/sdk/30/public/android.jar", "prebuilts/sdk/tools/core-lambda-stubs.jar"},
-			aidl:           "-pprebuilts/sdk/30/public/framework.aidl",
-		},
-		{
-			name:           "pdk current",
-			pdk:            true,
-			properties:     `sdk_version: "current",`,
-			bootclasspath:  []string{`""`},
-			system:         "sdk_public_30_system_modules",
-			java8classpath: []string{"prebuilts/sdk/30/public/android.jar", "prebuilts/sdk/tools/core-lambda-stubs.jar"},
-			java9classpath: []string{"prebuilts/sdk/30/public/android.jar", "prebuilts/sdk/tools/core-lambda-stubs.jar"},
-			aidl:           "-pprebuilts/sdk/30/public/framework.aidl",
-		},
-		{
-			name:           "pdk 29",
-			pdk:            true,
-			properties:     `sdk_version: "29",`,
-			bootclasspath:  []string{`""`},
-			system:         "sdk_public_30_system_modules",
-			java8classpath: []string{"prebuilts/sdk/30/public/android.jar", "prebuilts/sdk/tools/core-lambda-stubs.jar"},
-			java9classpath: []string{"prebuilts/sdk/30/public/android.jar", "prebuilts/sdk/tools/core-lambda-stubs.jar"},
-			aidl:           "-pprebuilts/sdk/30/public/framework.aidl",
-		},
-		{
 			name:           "module_current",
 			properties:     `sdk_version: "module_current",`,
 			bootclasspath:  []string{"android_module_lib_stubs_current", "core-lambda-stubs"},
@@ -384,11 +354,9 @@ func TestClasspath(t *testing.T) {
 				config := testConfig(nil, bpJava8, nil)
 				if testcase.unbundled {
 					config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
+					config.TestProductVariables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
 				}
-				if testcase.pdk {
-					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
-				}
-				ctx := testContext()
+				ctx := testContext(config)
 				run(t, ctx, config)
 
 				checkClasspath(t, ctx, true /* isJava8 */)
@@ -407,11 +375,9 @@ func TestClasspath(t *testing.T) {
 				config := testConfig(nil, bp, nil)
 				if testcase.unbundled {
 					config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
+					config.TestProductVariables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
 				}
-				if testcase.pdk {
-					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
-				}
-				ctx := testContext()
+				ctx := testContext(config)
 				run(t, ctx, config)
 
 				checkClasspath(t, ctx, false /* isJava8 */)
@@ -433,11 +399,9 @@ func TestClasspath(t *testing.T) {
 
 				if testcase.unbundled {
 					config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
+					config.TestProductVariables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
 				}
-				if testcase.pdk {
-					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
-				}
-				ctx := testContext()
+				ctx := testContext(config)
 				run(t, ctx, config)
 
 				checkClasspath(t, ctx, true /* isJava8 */)
@@ -451,11 +415,9 @@ func TestClasspath(t *testing.T) {
 
 				if testcase.unbundled {
 					config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
+					config.TestProductVariables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
 				}
-				if testcase.pdk {
-					config.TestProductVariables.Pdk = proptools.BoolPtr(true)
-				}
-				ctx := testContext()
+				ctx := testContext(config)
 				run(t, ctx, config)
 
 				checkClasspath(t, ctx, false /* isJava8 */)

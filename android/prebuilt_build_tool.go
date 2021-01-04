@@ -14,10 +14,7 @@
 
 package android
 
-import (
-	"path"
-	"path/filepath"
-)
+import "path/filepath"
 
 func init() {
 	RegisterModuleType("prebuilt_build_tool", prebuiltBuildToolFactory)
@@ -29,6 +26,10 @@ type prebuiltBuildToolProperties struct {
 
 	// Extra files that should trigger rules using this tool to rebuild
 	Deps []string `android:"path,arch_variant"`
+
+	// Create a make variable with the specified name that contains the path to
+	// this prebuilt built tool, relative to the root of the source tree.
+	Export_to_make_var *string
 }
 
 type prebuiltBuildTool struct {
@@ -59,15 +60,9 @@ func (t *prebuiltBuildTool) GenerateAndroidBuildActions(ctx ModuleContext) {
 	installedPath := PathForModuleOut(ctx, t.ModuleBase.Name())
 	deps := PathsForModuleSrc(ctx, t.properties.Deps)
 
-	var relPath string
-	if filepath.IsAbs(installedPath.String()) {
-		relPath = filepath.Join(absSrcDir, sourcePath.String())
-	} else {
-		var err error
-		relPath, err = filepath.Rel(path.Dir(installedPath.String()), sourcePath.String())
-		if err != nil {
-			ctx.ModuleErrorf("Unable to generate symlink between %q and %q: %s", installedPath.String(), sourcePath.String(), err)
-		}
+	var fromPath = sourcePath.String()
+	if !filepath.IsAbs(fromPath) {
+		fromPath = "$$PWD/" + fromPath
 	}
 
 	ctx.Build(pctx, BuildParams{
@@ -76,11 +71,17 @@ func (t *prebuiltBuildTool) GenerateAndroidBuildActions(ctx ModuleContext) {
 		Input:     sourcePath,
 		Implicits: deps,
 		Args: map[string]string{
-			"fromPath": relPath,
+			"fromPath": fromPath,
 		},
 	})
 
 	t.toolPath = OptionalPathForPath(installedPath)
+}
+
+func (t *prebuiltBuildTool) MakeVars(ctx MakeVarsModuleContext) {
+	if makeVar := String(t.properties.Export_to_make_var); makeVar != "" {
+		ctx.StrictRaw(makeVar, t.toolPath.String())
+	}
 }
 
 func (t *prebuiltBuildTool) HostToolPath() OptionalPath {

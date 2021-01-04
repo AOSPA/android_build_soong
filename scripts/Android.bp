@@ -1,4 +1,20 @@
 python_binary_host {
+    name: "check_boot_jars",
+    main: "check_boot_jars/check_boot_jars.py",
+    srcs: [
+        "check_boot_jars/check_boot_jars.py",
+    ],
+    version: {
+        py2: {
+            enabled: true,
+        },
+        py3: {
+            enabled: false,
+        },
+    },
+}
+
+python_binary_host {
     name: "manifest_fixer",
     main: "manifest_fixer.py",
     srcs: [
@@ -204,5 +220,24 @@ python_binary_host {
     srcs: [
         "gen-kotlin-build-file.py",
         "ninja_rsp.py",
+    ],
+}
+
+python_binary_host {
+    name: "conv_linker_config",
+    srcs: [
+        "conv_linker_config.py",
+    ],
+    version: {
+        py2: {
+            enabled: false,
+        },
+        py3: {
+            enabled: true,
+            embedded_launcher: true,
+        },
+    },
+    libs: [
+        "linker_config_proto",
     ],
 }

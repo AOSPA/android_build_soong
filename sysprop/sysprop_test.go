@@ -57,7 +57,7 @@ func TestMain(m *testing.M) {
 
 func testContext(config android.Config) *android.TestContext {
 
-	ctx := android.NewTestArchContext()
+	ctx := android.NewTestArchContext(config)
 	java.RegisterJavaBuildComponents(ctx)
 	java.RegisterAppBuildComponents(ctx)
 	java.RegisterSystemModulesBuildComponents(ctx)
@@ -67,6 +67,8 @@ func testContext(config android.Config) *android.TestContext {
 		ctx.BottomUp("sysprop_deps", syspropDepsMutator).Parallel()
 	})
 
+	android.RegisterPrebuiltMutators(ctx)
+
 	cc.RegisterRequiredBuildComponentsForTest(ctx)
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("sysprop_java", java.SyspropMutator).Parallel()
@@ -74,7 +76,7 @@ func testContext(config android.Config) *android.TestContext {
 
 	ctx.RegisterModuleType("sysprop_library", syspropLibraryFactory)
 
-	ctx.Register(config)
+	ctx.Register()
 
 	return ctx
 }
@@ -101,6 +103,8 @@ func testConfig(env map[string]string, bp string, fs map[string][]byte) android.
 		"api/sysprop-platform-on-product-latest.txt":  nil,
 		"api/sysprop-vendor-current.txt":              nil,
 		"api/sysprop-vendor-latest.txt":               nil,
+		"api/sysprop-vendor-on-product-current.txt":   nil,
+		"api/sysprop-vendor-on-product-latest.txt":    nil,
 		"api/sysprop-odm-current.txt":                 nil,
 		"api/sysprop-odm-latest.txt":                  nil,
 		"framework/aidl/a.aidl":                       nil,
@@ -180,8 +184,15 @@ func TestSyspropLibrary(t *testing.T) {
 			srcs: ["com/android/VendorProperties.sysprop"],
 			api_packages: ["com.android"],
 			property_owner: "Vendor",
+			vendor: true,
+		}
+
+		sysprop_library {
+			name: "sysprop-vendor-on-product",
+			srcs: ["com/android/VendorProperties.sysprop"],
+			api_packages: ["com.android"],
+			property_owner: "Vendor",
 			product_specific: true,
-			vendor_available: true,
 		}
 
 		sysprop_library {
@@ -211,7 +222,7 @@ func TestSyspropLibrary(t *testing.T) {
 			srcs: ["c.java"],
 			sdk_version: "system_current",
 			product_specific: true,
-			libs: ["sysprop-platform", "sysprop-vendor"],
+			libs: ["sysprop-platform", "sysprop-vendor-on-product"],
 		}
 
 		java_library {
@@ -238,7 +249,7 @@ func TestSyspropLibrary(t *testing.T) {
 			name: "cc-client-product",
 			srcs: ["d.cpp"],
 			product_specific: true,
-			static_libs: ["sysprop-platform-on-product", "sysprop-vendor"],
+			static_libs: ["sysprop-platform-on-product", "sysprop-vendor-on-product"],
 		}
 
 		cc_library {
@@ -266,6 +277,7 @@ func TestSyspropLibrary(t *testing.T) {
 			system_shared_libs: [],
 			recovery_available: true,
 			host_supported: true,
+			llndk_stubs: "liblog.llndk",
 		}
 
 		cc_binary_host {
@@ -274,7 +286,7 @@ func TestSyspropLibrary(t *testing.T) {
 		}
 
 		llndk_library {
-			name: "liblog",
+			name: "liblog.llndk",
 			symbol_file: "",
 		}
 
@@ -286,6 +298,12 @@ func TestSyspropLibrary(t *testing.T) {
 		java_library {
 			name: "sysprop-library-stub-vendor",
 			soc_specific: true,
+			sdk_version: "core_current",
+		}
+
+		java_library {
+			name: "sysprop-library-stub-product",
+			product_specific: true,
 			sdk_version: "core_current",
 		}
 		`)
@@ -315,13 +333,14 @@ func TestSyspropLibrary(t *testing.T) {
 				expectedApexAvailableOnLibrary, library.ApexProperties.Apex_available)
 		}
 
-		// core variant of vendor-owned sysprop_library is for product
-		ctx.ModuleForTests("libsysprop-vendor", variant)
+		// product variant of vendor-owned sysprop_library
+		ctx.ModuleForTests("libsysprop-vendor-on-product", variant)
 	}
 
 	ctx.ModuleForTests("sysprop-platform", "android_common")
 	ctx.ModuleForTests("sysprop-platform_public", "android_common")
 	ctx.ModuleForTests("sysprop-vendor", "android_common")
+	ctx.ModuleForTests("sysprop-vendor-on-product", "android_common")
 
 	// Check for exported includes
 	coreVariant := "android_arm64_armv8-a_static"
@@ -334,7 +353,7 @@ func TestSyspropLibrary(t *testing.T) {
 	platformOnProductPath := "libsysprop-platform-on-product/android_arm64_armv8-a_static/gen/sysprop/public/include"
 
 	vendorInternalPath := "libsysprop-vendor/android_vendor.VER_arm64_armv8-a_static/gen/sysprop/include"
-	vendorPublicPath := "libsysprop-vendor/android_arm64_armv8-a_static/gen/sysprop/public/include"
+	vendorPublicPath := "libsysprop-vendor-on-product/android_arm64_armv8-a_static/gen/sysprop/public/include"
 
 	platformClient := ctx.ModuleForTests("cc-client-platform", coreVariant)
 	platformFlags := platformClient.Rule("cc").Args["cFlags"]

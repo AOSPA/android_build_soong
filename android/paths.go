@@ -58,10 +58,11 @@ type ModuleInstallPathContext interface {
 	InstallInTestcases() bool
 	InstallInSanitizerDir() bool
 	InstallInRamdisk() bool
+	InstallInVendorRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallBypassMake() bool
-	InstallForceOS() *OsType
+	InstallForceOS() (*OsType, *ArchType)
 }
 
 var _ ModuleInstallPathContext = ModuleContext(nil)
@@ -86,13 +87,13 @@ var _ moduleErrorf = blueprint.ModuleContext(nil)
 // attempts ctx.ModuleErrorf for a better error message first, then falls
 // back to ctx.Errorf.
 func reportPathError(ctx PathContext, err error) {
-	reportPathErrorf(ctx, "%s", err.Error())
+	ReportPathErrorf(ctx, "%s", err.Error())
 }
 
-// reportPathErrorf will register an error with the attached context. It
+// ReportPathErrorf will register an error with the attached context. It
 // attempts ctx.ModuleErrorf for a better error message first, then falls
 // back to ctx.Errorf.
-func reportPathErrorf(ctx PathContext, format string, args ...interface{}) {
+func ReportPathErrorf(ctx PathContext, format string, args ...interface{}) {
 	if mctx, ok := ctx.(moduleErrorf); ok {
 		mctx.ModuleErrorf(format, args...)
 	} else if ectx, ok := ctx.(errorfContext); ok {
@@ -155,7 +156,7 @@ func GenPathWithExt(ctx ModuleContext, subdir string, p Path, ext string) Module
 	if path, ok := p.(genPathProvider); ok {
 		return path.genPathWithExt(ctx, subdir, ext)
 	}
-	reportPathErrorf(ctx, "Tried to create generated file from unsupported path: %s(%s)", reflect.TypeOf(p).Name(), p)
+	ReportPathErrorf(ctx, "Tried to create generated file from unsupported path: %s(%s)", reflect.TypeOf(p).Name(), p)
 	return PathForModuleGen(ctx)
 }
 
@@ -165,7 +166,7 @@ func ObjPathWithExt(ctx ModuleContext, subdir string, p Path, ext string) Module
 	if path, ok := p.(objPathProvider); ok {
 		return path.objPathWithExt(ctx, subdir, ext)
 	}
-	reportPathErrorf(ctx, "Tried to create object file from unsupported path: %s (%s)", reflect.TypeOf(p).Name(), p)
+	ReportPathErrorf(ctx, "Tried to create object file from unsupported path: %s (%s)", reflect.TypeOf(p).Name(), p)
 	return PathForModuleObj(ctx)
 }
 
@@ -176,7 +177,7 @@ func ResPathWithName(ctx ModuleContext, p Path, name string) ModuleResPath {
 	if path, ok := p.(resPathProvider); ok {
 		return path.resPathWithName(ctx, name)
 	}
-	reportPathErrorf(ctx, "Tried to create res file from unsupported path: %s (%s)", reflect.TypeOf(p).Name(), p)
+	ReportPathErrorf(ctx, "Tried to create res file from unsupported path: %s (%s)", reflect.TypeOf(p).Name(), p)
 	return PathForModuleRes(ctx)
 }
 
@@ -416,9 +417,9 @@ func expandOneSrcPath(ctx ModuleContext, s string, expandedExcludes []string) (P
 	} else {
 		p := pathForModuleSrc(ctx, s)
 		if exists, _, err := ctx.Config().fs.Exists(p.String()); err != nil {
-			reportPathErrorf(ctx, "%s: %s", p, err.Error())
+			ReportPathErrorf(ctx, "%s: %s", p, err.Error())
 		} else if !exists && !ctx.Config().testAllowNonExistentPaths {
-			reportPathErrorf(ctx, "module source path %q does not exist", p)
+			ReportPathErrorf(ctx, "module source path %q does not exist", p)
 		}
 
 		if InList(p.String(), expandedExcludes) {
@@ -445,7 +446,7 @@ func pathsForModuleSrcFromFullPath(ctx EarlyModuleContext, paths []string, incDi
 		}
 		path := filepath.Clean(p)
 		if !strings.HasPrefix(path, prefix) {
-			reportPathErrorf(ctx, "Path %q is not in module source directory %q", p, prefix)
+			ReportPathErrorf(ctx, "Path %q is not in module source directory %q", p, prefix)
 			continue
 		}
 
@@ -801,7 +802,7 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 	}
 
 	if pathtools.IsGlob(path.String()) {
-		reportPathErrorf(ctx, "path may not contain a glob: %s", path.String())
+		ReportPathErrorf(ctx, "path may not contain a glob: %s", path.String())
 	}
 
 	if modCtx, ok := ctx.(ModuleContext); ok && ctx.Config().AllowMissingDependencies() {
@@ -813,9 +814,9 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 			modCtx.AddMissingDependencies([]string{path.String()})
 		}
 	} else if exists, _, err := ctx.Config().fs.Exists(path.String()); err != nil {
-		reportPathErrorf(ctx, "%s: %s", path, err.Error())
+		ReportPathErrorf(ctx, "%s: %s", path, err.Error())
 	} else if !exists && !ctx.Config().testAllowNonExistentPaths {
-		reportPathErrorf(ctx, "source path %q does not exist", path)
+		ReportPathErrorf(ctx, "source path %q does not exist", path)
 	}
 	return path
 }
@@ -831,7 +832,7 @@ func ExistentPathForSource(ctx PathContext, pathComponents ...string) OptionalPa
 	}
 
 	if pathtools.IsGlob(path.String()) {
-		reportPathErrorf(ctx, "path may not contain a glob: %s", path.String())
+		ReportPathErrorf(ctx, "path may not contain a glob: %s", path.String())
 		return OptionalPath{}
 	}
 
@@ -876,17 +877,17 @@ func (p SourcePath) OverlayPath(ctx ModuleContext, path Path) OptionalPath {
 	if srcPath, ok := path.(SourcePath); ok {
 		relDir = srcPath.path
 	} else {
-		reportPathErrorf(ctx, "Cannot find relative path for %s(%s)", reflect.TypeOf(path).Name(), path)
+		ReportPathErrorf(ctx, "Cannot find relative path for %s(%s)", reflect.TypeOf(path).Name(), path)
 		return OptionalPath{}
 	}
 	dir := filepath.Join(p.config.srcDir, p.path, relDir)
 	// Use Glob so that we are run again if the directory is added.
 	if pathtools.IsGlob(dir) {
-		reportPathErrorf(ctx, "Path may not contain a glob: %s", dir)
+		ReportPathErrorf(ctx, "Path may not contain a glob: %s", dir)
 	}
 	paths, err := ctx.GlobWithDeps(dir, nil)
 	if err != nil {
-		reportPathErrorf(ctx, "glob: %s", err.Error())
+		ReportPathErrorf(ctx, "glob: %s", err.Error())
 		return OptionalPath{}
 	}
 	if len(paths) == 0 {
@@ -977,7 +978,7 @@ func (p OutputPath) Join(ctx PathContext, paths ...string) OutputPath {
 // ReplaceExtension creates a new OutputPath with the extension replaced with ext.
 func (p OutputPath) ReplaceExtension(ctx PathContext, ext string) OutputPath {
 	if strings.Contains(ext, "/") {
-		reportPathErrorf(ctx, "extension %q cannot contain /", ext)
+		ReportPathErrorf(ctx, "extension %q cannot contain /", ext)
 	}
 	ret := PathForOutput(ctx, pathtools.ReplaceExtension(p.path, ext))
 	ret.rel = pathtools.ReplaceExtension(p.rel, ext)
@@ -1030,10 +1031,10 @@ func PathForModuleSrc(ctx ModuleContext, pathComponents ...string) Path {
 		}
 		return nil
 	} else if len(paths) == 0 {
-		reportPathErrorf(ctx, "%q produced no files, expected exactly one", p)
+		ReportPathErrorf(ctx, "%q produced no files, expected exactly one", p)
 		return nil
 	} else if len(paths) > 1 {
-		reportPathErrorf(ctx, "%q produced %d files, expected exactly one", p, len(paths))
+		ReportPathErrorf(ctx, "%q produced %d files, expected exactly one", p, len(paths))
 	}
 	return paths[0]
 }
@@ -1236,7 +1237,12 @@ func PathForModuleRes(ctx ModuleContext, pathComponents ...string) ModuleResPath
 type InstallPath struct {
 	basePath
 
-	baseDir string // "../" for Make paths to convert "out/soong" to "out", "" for Soong paths
+	// partitionDir is the part of the InstallPath that is automatically determined according to the context.
+	// For example, it is host/<os>-<arch> for host modules, and target/product/<device>/<partition> for device modules.
+	partitionDir string
+
+	// makePath indicates whether this path is for Soong (false) or Make (true).
+	makePath bool
 }
 
 func (p InstallPath) buildDir() string {
@@ -1249,7 +1255,23 @@ var _ WritablePath = InstallPath{}
 func (p InstallPath) writablePath() {}
 
 func (p InstallPath) String() string {
-	return filepath.Join(p.config.buildDir, p.baseDir, p.path)
+	if p.makePath {
+		// Make path starts with out/ instead of out/soong.
+		return filepath.Join(p.config.buildDir, "../", p.path)
+	} else {
+		return filepath.Join(p.config.buildDir, p.path)
+	}
+}
+
+// PartitionDir returns the path to the partition where the install path is rooted at. It is
+// out/soong/target/product/<device>/<partition> for device modules, and out/soong/host/<os>-<arch> for host modules.
+// The ./soong is dropped if the install path is for Make.
+func (p InstallPath) PartitionDir() string {
+	if p.makePath {
+		return filepath.Join(p.config.buildDir, "../", p.partitionDir)
+	} else {
+		return filepath.Join(p.config.buildDir, p.partitionDir)
+	}
 }
 
 // Join creates a new InstallPath with paths... joined with the current path. The
@@ -1270,7 +1292,7 @@ func (p InstallPath) withRel(rel string) InstallPath {
 // ToMakePath returns a new InstallPath that points to Make's install directory instead of Soong's,
 // i.e. out/ instead of out/soong/.
 func (p InstallPath) ToMakePath() InstallPath {
-	p.baseDir = "../"
+	p.makePath = true
 	return p
 }
 
@@ -1278,12 +1300,17 @@ func (p InstallPath) ToMakePath() InstallPath {
 // module appended with paths...
 func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string) InstallPath {
 	os := ctx.Os()
-	if forceOS := ctx.InstallForceOS(); forceOS != nil {
+	arch := ctx.Arch().ArchType
+	forceOS, forceArch := ctx.InstallForceOS()
+	if forceOS != nil {
 		os = *forceOS
+	}
+	if forceArch != nil {
+		arch = *forceArch
 	}
 	partition := modulePartition(ctx, os)
 
-	ret := pathForInstall(ctx, os, partition, ctx.Debug(), pathComponents...)
+	ret := pathForInstall(ctx, os, arch, partition, ctx.Debug(), pathComponents...)
 
 	if ctx.InstallBypassMake() && ctx.Config().EmbeddedInMake() {
 		ret = ret.ToMakePath()
@@ -1292,46 +1319,55 @@ func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string
 	return ret
 }
 
-func pathForInstall(ctx PathContext, os OsType, partition string, debug bool,
+func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string, debug bool,
 	pathComponents ...string) InstallPath {
 
-	var outPaths []string
+	var partionPaths []string
 
 	if os.Class == Device {
-		outPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
+		partionPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
 	} else {
-		switch os {
-		case Linux:
-			outPaths = []string{"host", "linux-x86", partition}
-		case LinuxBionic:
-			// TODO: should this be a separate top level, or shared with linux-x86?
-			outPaths = []string{"host", "linux_bionic-x86", partition}
-		default:
-			outPaths = []string{"host", os.String() + "-x86", partition}
+		osName := os.String()
+		if os == Linux {
+			// instead of linux_glibc
+			osName = "linux"
 		}
+		// SOONG_HOST_OUT is set to out/host/$(HOST_OS)-$(HOST_PREBUILT_ARCH)
+		// and HOST_PREBUILT_ARCH is forcibly set to x86 even on x86_64 hosts. We don't seem
+		// to have a plan to fix it (see the comment in build/make/core/envsetup.mk).
+		// Let's keep using x86 for the existing cases until we have a need to support
+		// other architectures.
+		archName := arch.String()
+		if os.Class == Host && (arch == X86_64 || arch == Common) {
+			archName = "x86"
+		}
+		partionPaths = []string{"host", osName + "-" + archName, partition}
 	}
 	if debug {
-		outPaths = append([]string{"debug"}, outPaths...)
+		partionPaths = append([]string{"debug"}, partionPaths...)
 	}
-	outPaths = append(outPaths, pathComponents...)
 
-	path, err := validatePath(outPaths...)
+	partionPath, err := validatePath(partionPaths...)
 	if err != nil {
 		reportPathError(ctx, err)
 	}
 
-	ret := InstallPath{basePath{path, ctx.Config(), ""}, ""}
+	base := InstallPath{
+		basePath:     basePath{partionPath, ctx.Config(), ""},
+		partitionDir: partionPath,
+		makePath:     false,
+	}
 
-	return ret
+	return base.Join(ctx, pathComponents...)
 }
 
 func pathForNdkOrSdkInstall(ctx PathContext, prefix string, paths []string) InstallPath {
-	paths = append([]string{prefix}, paths...)
-	path, err := validatePath(paths...)
-	if err != nil {
-		reportPathError(ctx, err)
+	base := InstallPath{
+		basePath:     basePath{prefix, ctx.Config(), ""},
+		partitionDir: prefix,
+		makePath:     false,
 	}
-	return InstallPath{basePath{path, ctx.Config(), ""}, ""}
+	return base.Join(ctx, paths...)
 }
 
 func PathForNdkInstall(ctx PathContext, paths ...string) InstallPath {
@@ -1361,6 +1397,19 @@ func modulePartition(ctx ModuleInstallPathContext, os OsType) string {
 				partition = "recovery/root/first_stage_ramdisk"
 			} else {
 				partition = "ramdisk"
+			}
+			if !ctx.InstallInRoot() {
+				partition += "/system"
+			}
+		} else if ctx.InstallInVendorRamdisk() {
+			// The module is only available after switching root into
+			// /first_stage_ramdisk. To expose the module before switching root
+			// on a device without a dedicated recovery partition, install the
+			// recovery variant.
+			if ctx.DeviceConfig().BoardMoveRecoveryResourcesToVendorBoot() {
+				partition = "vendor-ramdisk/first_stage_ramdisk"
+			} else {
+				partition = "vendor-ramdisk"
 			}
 			if !ctx.InstallInRoot() {
 				partition += "/system"
@@ -1447,7 +1496,7 @@ func validatePath(pathComponents ...string) (string, error) {
 
 func PathForPhony(ctx PathContext, phony string) WritablePath {
 	if strings.ContainsAny(phony, "$/") {
-		reportPathErrorf(ctx, "Phony target contains invalid character ($ or /): %s", phony)
+		ReportPathErrorf(ctx, "Phony target contains invalid character ($ or /): %s", phony)
 	}
 	return PhonyPath{basePath{phony, ctx.Config(), ""}}
 }
@@ -1508,12 +1557,78 @@ func PathContextForTesting(config Config) PathContext {
 	}
 }
 
+type testModuleInstallPathContext struct {
+	baseModuleContext
+
+	inData          bool
+	inTestcases     bool
+	inSanitizerDir  bool
+	inRamdisk       bool
+	inVendorRamdisk bool
+	inRecovery      bool
+	inRoot          bool
+	forceOS         *OsType
+	forceArch       *ArchType
+}
+
+func (m testModuleInstallPathContext) Config() Config {
+	return m.baseModuleContext.config
+}
+
+func (testModuleInstallPathContext) AddNinjaFileDeps(deps ...string) {}
+
+func (m testModuleInstallPathContext) InstallInData() bool {
+	return m.inData
+}
+
+func (m testModuleInstallPathContext) InstallInTestcases() bool {
+	return m.inTestcases
+}
+
+func (m testModuleInstallPathContext) InstallInSanitizerDir() bool {
+	return m.inSanitizerDir
+}
+
+func (m testModuleInstallPathContext) InstallInRamdisk() bool {
+	return m.inRamdisk
+}
+
+func (m testModuleInstallPathContext) InstallInVendorRamdisk() bool {
+	return m.inVendorRamdisk
+}
+
+func (m testModuleInstallPathContext) InstallInRecovery() bool {
+	return m.inRecovery
+}
+
+func (m testModuleInstallPathContext) InstallInRoot() bool {
+	return m.inRoot
+}
+
+func (m testModuleInstallPathContext) InstallBypassMake() bool {
+	return false
+}
+
+func (m testModuleInstallPathContext) InstallForceOS() (*OsType, *ArchType) {
+	return m.forceOS, m.forceArch
+}
+
+// Construct a minimal ModuleInstallPathContext for testing. Note that baseModuleContext is
+// default-initialized, which leaves blueprint.baseModuleContext set to nil, so methods that are
+// delegated to it will panic.
+func ModuleInstallPathContextForTesting(config Config) ModuleInstallPathContext {
+	ctx := &testModuleInstallPathContext{}
+	ctx.config = config
+	ctx.os = Android
+	return ctx
+}
+
 // Rel performs the same function as filepath.Rel, but reports errors to a PathContext, and reports an error if
 // targetPath is not inside basePath.
 func Rel(ctx PathContext, basePath string, targetPath string) string {
 	rel, isRel := MaybeRel(ctx, basePath, targetPath)
 	if !isRel {
-		reportPathErrorf(ctx, "path %q is not under path %q", targetPath, basePath)
+		ReportPathErrorf(ctx, "path %q is not under path %q", targetPath, basePath)
 		return ""
 	}
 	return rel

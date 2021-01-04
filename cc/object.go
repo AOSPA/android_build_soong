@@ -55,6 +55,10 @@ type ObjectLinkerProperties struct {
 
 	// if set, the path to a linker script to pass to ld -r when combining multiple object files.
 	Linker_script *string `android:"path,arch_variant"`
+
+	// Indicates that this module is a CRT object. CRT objects will be split
+	// into a variant per-API level between min_sdk_version and current.
+	Crt *bool
 }
 
 func newObject() *Module {
@@ -92,11 +96,6 @@ func (object *objectLinker) linkerProps() []interface{} {
 func (*objectLinker) linkerInit(ctx BaseModuleContext) {}
 
 func (object *objectLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
-	if ctx.useVndk() && ctx.toolchain().Bionic() {
-		// Needed for VNDK builds where bionic headers aren't automatically added.
-		deps.LateSharedLibs = append(deps.LateSharedLibs, "libc")
-	}
-
 	deps.HeaderLibs = append(deps.HeaderLibs, object.Properties.Header_libs...)
 	deps.ObjFiles = append(deps.ObjFiles, object.Properties.Objs...)
 	return deps
@@ -161,4 +160,8 @@ func (object *objectLinker) coverageOutputFilePath() android.OptionalPath {
 
 func (object *objectLinker) object() bool {
 	return true
+}
+
+func (object *objectLinker) isCrt() bool {
+	return Bool(object.Properties.Crt)
 }

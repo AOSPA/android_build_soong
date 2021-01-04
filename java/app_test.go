@@ -59,7 +59,7 @@ func testAppConfig(env map[string]string, bp string, fs map[string][]byte) andro
 func testApp(t *testing.T, bp string) *android.TestContext {
 	config := testAppConfig(nil, bp, nil)
 
-	ctx := testContext()
+	ctx := testContext(config)
 
 	run(t, ctx, config)
 
@@ -161,11 +161,11 @@ func TestAndroidAppSet(t *testing.T) {
 		t.Errorf("wrong partition value: '%s', expected 'system'", s)
 	}
 	mkEntries := android.AndroidMkEntriesForTest(t, config, "", module.Module())[0]
-	actualMaster := mkEntries.EntryMap["LOCAL_APK_SET_MASTER_FILE"]
-	expectedMaster := []string{"foo.apk"}
-	if !reflect.DeepEqual(actualMaster, expectedMaster) {
-		t.Errorf("Unexpected LOCAL_APK_SET_MASTER_FILE value: '%s', expected: '%s',",
-			actualMaster, expectedMaster)
+	actualInstallFile := mkEntries.EntryMap["LOCAL_APK_SET_INSTALL_FILE"]
+	expectedInstallFile := []string{"foo.apk"}
+	if !reflect.DeepEqual(actualInstallFile, expectedInstallFile) {
+		t.Errorf("Unexpected LOCAL_APK_SET_INSTALL_FILE value: '%s', expected: '%s',",
+			actualInstallFile, expectedInstallFile)
 	}
 }
 
@@ -220,7 +220,7 @@ func TestAndroidAppSet_Variants(t *testing.T) {
 		config.TestProductVariables.AAPTPrebuiltDPI = test.aaptPrebuiltDPI
 		config.TestProductVariables.Platform_sdk_version = &test.sdkVersion
 		config.Targets[android.Android] = test.targets
-		ctx := testContext()
+		ctx := testContext(config)
 		run(t, ctx, config)
 		module := ctx.ModuleForTests("foo", "android_common")
 		const packedSplitApks = "foo.zip"
@@ -533,16 +533,6 @@ func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
 			system_shared_libs: [],
 			sdk_version: "29",
 		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtbegin_so.29",
-			sdk_version: "29",
-		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtend_so.29",
-			sdk_version: "29",
-		}
 	`
 	fs := map[string][]byte{
 		"prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtbegin_so.o": nil,
@@ -555,16 +545,28 @@ func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
 
 	inputs := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_sdk_shared").Description("link").Implicits
 	var crtbeginFound, crtendFound bool
+	expectedCrtBegin := ctx.ModuleForTests("crtbegin_so",
+		"android_arm64_armv8-a_sdk_29").Rule("partialLd").Output
+	expectedCrtEnd := ctx.ModuleForTests("crtend_so",
+		"android_arm64_armv8-a_sdk_29").Rule("partialLd").Output
+	implicits := []string{}
 	for _, input := range inputs {
-		switch input.String() {
-		case "prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtbegin_so.o":
+		implicits = append(implicits, input.String())
+		if strings.HasSuffix(input.String(), expectedCrtBegin.String()) {
 			crtbeginFound = true
-		case "prebuilts/ndk/current/platforms/android-29/arch-arm64/usr/lib/crtend_so.o":
+		} else if strings.HasSuffix(input.String(), expectedCrtEnd.String()) {
 			crtendFound = true
 		}
 	}
-	if !crtbeginFound || !crtendFound {
-		t.Error("should link with ndk_crtbegin_so.29 and ndk_crtend_so.29")
+	if !crtbeginFound {
+		t.Error(fmt.Sprintf(
+			"expected implicit with suffix %q, have the following implicits:\n%s",
+			expectedCrtBegin, strings.Join(implicits, "\n")))
+	}
+	if !crtendFound {
+		t.Error(fmt.Sprintf(
+			"expected implicit with suffix %q, have the following implicits:\n%s",
+			expectedCrtEnd, strings.Join(implicits, "\n")))
 	}
 }
 
@@ -655,7 +657,7 @@ func TestResourceDirs(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			config := testConfig(nil, fmt.Sprintf(bp, testCase.prop), fs)
-			ctx := testContext()
+			ctx := testContext(config)
 			run(t, ctx, config)
 
 			module := ctx.ModuleForTests("foo", "android_common")
@@ -846,19 +848,17 @@ func TestAndroidResources(t *testing.T) {
 				"lib": {
 					buildDir + "/.intermediates/lib2/android_common/package-res.apk",
 					"lib/res/res/values/strings.xml",
-					"device/vendor/blah/overlay/lib/res/values/strings.xml",
 				},
 			},
 
 			rroDirs: map[string][]string{
 				"foo": {
 					"device:device/vendor/blah/overlay/foo/res",
-					// Enforce RRO on "foo" could imply RRO on static dependencies, but for now it doesn't.
-					// "device/vendor/blah/overlay/lib/res",
 					"product:product/vendor/blah/overlay/foo/res",
+					"device:device/vendor/blah/overlay/lib/res",
 				},
 				"bar": nil,
-				"lib": nil,
+				"lib": {"device:device/vendor/blah/overlay/lib/res"},
 			},
 		},
 		{
@@ -973,7 +973,7 @@ func TestAndroidResources(t *testing.T) {
 				config.TestProductVariables.EnforceRROExcludedOverlays = testCase.enforceRROExcludedOverlays
 			}
 
-			ctx := testContext()
+			ctx := testContext(config)
 			run(t, ctx, config)
 
 			resourceListToFiles := func(module android.TestingModule, list []string) (files []string) {
@@ -1038,6 +1038,35 @@ func TestAndroidResources(t *testing.T) {
 	}
 }
 
+func checkSdkVersion(t *testing.T, config android.Config, expectedSdkVersion string) {
+	ctx := testContext(config)
+
+	run(t, ctx, config)
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+	link := foo.Output("package-res.apk")
+	linkFlags := strings.Split(link.Args["flags"], " ")
+	min := android.IndexList("--min-sdk-version", linkFlags)
+	target := android.IndexList("--target-sdk-version", linkFlags)
+
+	if min == -1 || target == -1 || min == len(linkFlags)-1 || target == len(linkFlags)-1 {
+		t.Fatalf("missing --min-sdk-version or --target-sdk-version in link flags: %q", linkFlags)
+	}
+
+	gotMinSdkVersion := linkFlags[min+1]
+	gotTargetSdkVersion := linkFlags[target+1]
+
+	if gotMinSdkVersion != expectedSdkVersion {
+		t.Errorf("incorrect --min-sdk-version, expected %q got %q",
+			expectedSdkVersion, gotMinSdkVersion)
+	}
+
+	if gotTargetSdkVersion != expectedSdkVersion {
+		t.Errorf("incorrect --target-sdk-version, expected %q got %q",
+			expectedSdkVersion, gotTargetSdkVersion)
+	}
+}
+
 func TestAppSdkVersion(t *testing.T) {
 	testCases := []struct {
 		name                  string
@@ -1047,6 +1076,7 @@ func TestAppSdkVersion(t *testing.T) {
 		platformSdkFinal      bool
 		expectedMinSdkVersion string
 		platformApis          bool
+		activeCodenames       []string
 	}{
 		{
 			name:                  "current final SDK",
@@ -1063,6 +1093,7 @@ func TestAppSdkVersion(t *testing.T) {
 			platformSdkCodename:   "OMR1",
 			platformSdkFinal:      false,
 			expectedMinSdkVersion: "OMR1",
+			activeCodenames:       []string{"OMR1"},
 		},
 		{
 			name:                  "default final SDK",
@@ -1081,11 +1112,14 @@ func TestAppSdkVersion(t *testing.T) {
 			platformSdkCodename:   "OMR1",
 			platformSdkFinal:      false,
 			expectedMinSdkVersion: "OMR1",
+			activeCodenames:       []string{"OMR1"},
 		},
 		{
 			name:                  "14",
 			sdkVersion:            "14",
 			expectedMinSdkVersion: "14",
+			platformSdkCodename:   "S",
+			activeCodenames:       []string{"S"},
 		},
 	}
 
@@ -1106,35 +1140,74 @@ func TestAppSdkVersion(t *testing.T) {
 				config := testAppConfig(nil, bp, nil)
 				config.TestProductVariables.Platform_sdk_version = &test.platformSdkInt
 				config.TestProductVariables.Platform_sdk_codename = &test.platformSdkCodename
+				config.TestProductVariables.Platform_version_active_codenames = test.activeCodenames
 				config.TestProductVariables.Platform_sdk_final = &test.platformSdkFinal
+				checkSdkVersion(t, config, test.expectedMinSdkVersion)
 
-				ctx := testContext()
-
-				run(t, ctx, config)
-
-				foo := ctx.ModuleForTests("foo", "android_common")
-				link := foo.Output("package-res.apk")
-				linkFlags := strings.Split(link.Args["flags"], " ")
-				min := android.IndexList("--min-sdk-version", linkFlags)
-				target := android.IndexList("--target-sdk-version", linkFlags)
-
-				if min == -1 || target == -1 || min == len(linkFlags)-1 || target == len(linkFlags)-1 {
-					t.Fatalf("missing --min-sdk-version or --target-sdk-version in link flags: %q", linkFlags)
-				}
-
-				gotMinSdkVersion := linkFlags[min+1]
-				gotTargetSdkVersion := linkFlags[target+1]
-
-				if gotMinSdkVersion != test.expectedMinSdkVersion {
-					t.Errorf("incorrect --min-sdk-version, expected %q got %q",
-						test.expectedMinSdkVersion, gotMinSdkVersion)
-				}
-
-				if gotTargetSdkVersion != test.expectedMinSdkVersion {
-					t.Errorf("incorrect --target-sdk-version, expected %q got %q",
-						test.expectedMinSdkVersion, gotTargetSdkVersion)
-				}
 			})
+		}
+	}
+}
+
+func TestVendorAppSdkVersion(t *testing.T) {
+	testCases := []struct {
+		name                                  string
+		sdkVersion                            string
+		platformSdkInt                        int
+		platformSdkCodename                   string
+		platformSdkFinal                      bool
+		deviceCurrentApiLevelForVendorModules string
+		expectedMinSdkVersion                 string
+	}{
+		{
+			name:                                  "current final SDK",
+			sdkVersion:                            "current",
+			platformSdkInt:                        29,
+			platformSdkCodename:                   "REL",
+			platformSdkFinal:                      true,
+			deviceCurrentApiLevelForVendorModules: "29",
+			expectedMinSdkVersion:                 "29",
+		},
+		{
+			name:                                  "current final SDK",
+			sdkVersion:                            "current",
+			platformSdkInt:                        29,
+			platformSdkCodename:                   "REL",
+			platformSdkFinal:                      true,
+			deviceCurrentApiLevelForVendorModules: "28",
+			expectedMinSdkVersion:                 "28",
+		},
+		{
+			name:                                  "current final SDK",
+			sdkVersion:                            "current",
+			platformSdkInt:                        29,
+			platformSdkCodename:                   "Q",
+			platformSdkFinal:                      false,
+			deviceCurrentApiLevelForVendorModules: "28",
+			expectedMinSdkVersion:                 "28",
+		},
+	}
+
+	for _, moduleType := range []string{"android_app", "android_library"} {
+		for _, sdkKind := range []string{"", "system_"} {
+			for _, test := range testCases {
+				t.Run(moduleType+" "+test.name, func(t *testing.T) {
+					bp := fmt.Sprintf(`%s {
+						name: "foo",
+						srcs: ["a.java"],
+						sdk_version: "%s%s",
+						vendor: true,
+					}`, moduleType, sdkKind, test.sdkVersion)
+
+					config := testAppConfig(nil, bp, nil)
+					config.TestProductVariables.Platform_sdk_version = &test.platformSdkInt
+					config.TestProductVariables.Platform_sdk_codename = &test.platformSdkCodename
+					config.TestProductVariables.Platform_sdk_final = &test.platformSdkFinal
+					config.TestProductVariables.DeviceCurrentApiLevelForVendorModules = &test.deviceCurrentApiLevelForVendorModules
+					config.TestProductVariables.DeviceSystemSdkVersions = []string{"28", "29"}
+					checkSdkVersion(t, config, test.expectedMinSdkVersion)
+				})
+			}
 		}
 	}
 }
@@ -1560,7 +1633,7 @@ func TestCertificates(t *testing.T) {
 			if test.certificateOverride != "" {
 				config.TestProductVariables.CertificateOverrides = []string{test.certificateOverride}
 			}
-			ctx := testContext()
+			ctx := testContext(config)
 
 			run(t, ctx, config)
 			foo := ctx.ModuleForTests("foo", "android_common")
@@ -1625,7 +1698,7 @@ func TestRequestV4SigningFlag(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			config := testAppConfig(nil, test.bp, nil)
-			ctx := testContext()
+			ctx := testContext(config)
 
 			run(t, ctx, config)
 			foo := ctx.ModuleForTests("foo", "android_common")
@@ -1685,7 +1758,7 @@ func TestPackageNameOverride(t *testing.T) {
 			if test.packageNameOverride != "" {
 				config.TestProductVariables.PackageNameOverrides = []string{test.packageNameOverride}
 			}
-			ctx := testContext()
+			ctx := testContext(config)
 
 			run(t, ctx, config)
 			foo := ctx.ModuleForTests("foo", "android_common")
@@ -1720,7 +1793,7 @@ func TestInstrumentationTargetOverridden(t *testing.T) {
 		`
 	config := testAppConfig(nil, bp, nil)
 	config.TestProductVariables.ManifestPackageNameOverrides = []string{"foo:org.dandroid.bp"}
-	ctx := testContext()
+	ctx := testContext(config)
 
 	run(t, ctx, config)
 
@@ -2343,7 +2416,7 @@ func TestAndroidAppImport_DpiVariants(t *testing.T) {
 		config := testAppConfig(nil, bp, nil)
 		config.TestProductVariables.AAPTPreferredConfig = test.aaptPreferredConfig
 		config.TestProductVariables.AAPTPrebuiltDPI = test.aaptPrebuiltDPI
-		ctx := testContext()
+		ctx := testContext(config)
 
 		run(t, ctx, config)
 
@@ -2663,10 +2736,24 @@ func TestUsesLibraries(t *testing.T) {
 			sdk_version: "current",
 		}
 
+		java_sdk_library {
+			name: "runtime-library",
+			srcs: ["a.java"],
+			sdk_version: "current",
+		}
+
+		java_library {
+			name: "static-runtime-helper",
+			srcs: ["a.java"],
+			libs: ["runtime-library"],
+			sdk_version: "current",
+		}
+
 		android_app {
 			name: "app",
 			srcs: ["a.java"],
 			libs: ["qux", "quuz.stubs"],
+			static_libs: ["static-runtime-helper"],
 			uses_libs: ["foo"],
 			sdk_version: "current",
 			optional_uses_libs: [
@@ -2679,7 +2766,7 @@ func TestUsesLibraries(t *testing.T) {
 			name: "prebuilt",
 			apk: "prebuilts/apk/app.apk",
 			certificate: "platform",
-			uses_libs: ["foo"],
+			uses_libs: ["foo", "android.test.runner"],
 			optional_uses_libs: [
 				"bar",
 				"baz",
@@ -2690,7 +2777,7 @@ func TestUsesLibraries(t *testing.T) {
 	config := testAppConfig(nil, bp, nil)
 	config.TestProductVariables.MissingUsesLibraries = []string{"baz"}
 
-	ctx := testContext()
+	ctx := testContext(config)
 
 	run(t, ctx, config)
 
@@ -2699,11 +2786,10 @@ func TestUsesLibraries(t *testing.T) {
 
 	// Test that implicit dependencies on java_sdk_library instances are passed to the manifest.
 	manifestFixerArgs := app.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
-	if w := "--uses-library qux"; !strings.Contains(manifestFixerArgs, w) {
-		t.Errorf("unexpected manifest_fixer args: wanted %q in %q", w, manifestFixerArgs)
-	}
-	if w := "--uses-library quuz"; !strings.Contains(manifestFixerArgs, w) {
-		t.Errorf("unexpected manifest_fixer args: wanted %q in %q", w, manifestFixerArgs)
+	for _, w := range []string{"qux", "quuz", "runtime-library"} {
+		if !strings.Contains(manifestFixerArgs, "--uses-library "+w) {
+			t.Errorf("unexpected manifest_fixer args: wanted %q in %q", w, manifestFixerArgs)
+		}
 	}
 
 	// Test that all libraries are verified
@@ -2718,7 +2804,7 @@ func TestUsesLibraries(t *testing.T) {
 
 	cmd = prebuilt.Rule("verify_uses_libraries").RuleParams.Command
 
-	if w := `uses_library_names="foo"`; !strings.Contains(cmd, w) {
+	if w := `uses_library_names="foo android.test.runner"`; !strings.Contains(cmd, w) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 
@@ -2726,16 +2812,51 @@ func TestUsesLibraries(t *testing.T) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 
-	// Test that only present libraries are preopted
+	// Test that all present libraries are preopted, including implicit SDK dependencies, possibly stubs
 	cmd = app.Rule("dexpreopt").RuleParams.Command
+	w := `--target-context-for-sdk any ` +
+		`PCL[/system/framework/foo.jar]#` +
+		`PCL[/system/framework/quuz.jar]#` +
+		`PCL[/system/framework/qux.jar]#` +
+		`PCL[/system/framework/runtime-library.jar]#` +
+		`PCL[/system/framework/bar.jar]`
+	if !strings.Contains(cmd, w) {
+		t.Errorf("wanted %q in %q", w, cmd)
+	}
 
-	if w := `--target-classpath-for-sdk any /system/framework/foo.jar:/system/framework/bar.jar`; !strings.Contains(cmd, w) {
+	// Test conditional context for target SDK version 28.
+	if w := `--target-context-for-sdk 28` +
+		` PCL[/system/framework/org.apache.http.legacy.jar] `; !strings.Contains(cmd, w) {
+		t.Errorf("wanted %q in %q", w, cmd)
+	}
+
+	// Test conditional context for target SDK version 29.
+	if w := `--target-context-for-sdk 29` +
+		` PCL[/system/framework/android.hidl.base-V1.0-java.jar]` +
+		`#PCL[/system/framework/android.hidl.manager-V1.0-java.jar] `; !strings.Contains(cmd, w) {
+		t.Errorf("wanted %q in %q", w, cmd)
+	}
+
+	// Test conditional context for target SDK version 30.
+	// "android.test.mock" is absent because "android.test.runner" is not used.
+	if w := `--target-context-for-sdk 30` +
+		` PCL[/system/framework/android.test.base.jar] `; !strings.Contains(cmd, w) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 
 	cmd = prebuilt.Rule("dexpreopt").RuleParams.Command
+	if w := `--target-context-for-sdk any` +
+		` PCL[/system/framework/foo.jar]` +
+		`#PCL[/system/framework/android.test.runner.jar]` +
+		`#PCL[/system/framework/bar.jar] `; !strings.Contains(cmd, w) {
+		t.Errorf("wanted %q in %q", w, cmd)
+	}
 
-	if w := `--target-classpath-for-sdk any /system/framework/foo.jar:/system/framework/bar.jar`; !strings.Contains(cmd, w) {
+	// Test conditional context for target SDK version 30.
+	// "android.test.mock" is present because "android.test.runner" is used.
+	if w := `--target-context-for-sdk 30` +
+		` PCL[/system/framework/android.test.base.jar]` +
+		`#PCL[/system/framework/android.test.mock.jar] `; !strings.Contains(cmd, w) {
 		t.Errorf("wanted %q in %q", w, cmd)
 	}
 }
@@ -3005,9 +3126,10 @@ func TestUncompressDex(t *testing.T) {
 		config := testAppConfig(nil, bp, nil)
 		if unbundled {
 			config.TestProductVariables.Unbundled_build = proptools.BoolPtr(true)
+			config.TestProductVariables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
 		}
 
-		ctx := testContext()
+		ctx := testContext(config)
 
 		run(t, ctx, config)
 
@@ -3087,7 +3209,7 @@ func TestRuntimeResourceOverlay(t *testing.T) {
 		}
 		`
 	config := testAppConfig(nil, bp, fs)
-	ctx := testContext()
+	ctx := testContext(config)
 	run(t, ctx, config)
 
 	m := ctx.ModuleForTests("foo", "android_common")
@@ -3287,5 +3409,147 @@ func TestOverrideRuntimeResourceOverlay(t *testing.T) {
 		checkAapt2LinkFlag(t, aapt2Flags, "rename-manifest-package", expected.packageFlag)
 		checkAapt2LinkFlag(t, aapt2Flags, "rename-resources-package", "")
 		checkAapt2LinkFlag(t, aapt2Flags, "rename-overlay-target-package", expected.targetPackageFlag)
+	}
+}
+
+func TestEnforceRRO_propagatesToDependencies(t *testing.T) {
+	testCases := []struct {
+		name                    string
+		enforceRROTargets       []string
+		enforceRROExemptTargets []string
+		rroDirs                 map[string][]string
+	}{
+		{
+			name:                    "no RRO",
+			enforceRROTargets:       nil,
+			enforceRROExemptTargets: nil,
+			rroDirs: map[string][]string{
+				"foo": nil,
+				"bar": nil,
+			},
+		},
+		{
+			name:                    "enforce RRO on all",
+			enforceRROTargets:       []string{"*"},
+			enforceRROExemptTargets: nil,
+			rroDirs: map[string][]string{
+				"foo": {"product/vendor/blah/overlay/lib2/res"},
+				"bar": {"product/vendor/blah/overlay/lib2/res"},
+			},
+		},
+		{
+			name:                    "enforce RRO on foo",
+			enforceRROTargets:       []string{"foo"},
+			enforceRROExemptTargets: nil,
+			rroDirs: map[string][]string{
+				"foo": {"product/vendor/blah/overlay/lib2/res"},
+				"bar": {"product/vendor/blah/overlay/lib2/res"},
+			},
+		},
+		{
+			name:                    "enforce RRO on foo, bar exempted",
+			enforceRROTargets:       []string{"foo"},
+			enforceRROExemptTargets: []string{"bar"},
+			rroDirs: map[string][]string{
+				"foo": {"product/vendor/blah/overlay/lib2/res"},
+				"bar": nil,
+			},
+		},
+	}
+
+	productResourceOverlays := []string{
+		"product/vendor/blah/overlay",
+	}
+
+	fs := map[string][]byte{
+		"lib2/res/values/strings.xml":                             nil,
+		"product/vendor/blah/overlay/lib2/res/values/strings.xml": nil,
+	}
+
+	bp := `
+			android_app {
+				name: "foo",
+				sdk_version: "current",
+				resource_dirs: [],
+				static_libs: ["lib"],
+			}
+
+			android_app {
+				name: "bar",
+				sdk_version: "current",
+				resource_dirs: [],
+				static_libs: ["lib"],
+			}
+
+			android_library {
+				name: "lib",
+				sdk_version: "current",
+				resource_dirs: [],
+				static_libs: ["lib2"],
+			}
+
+			android_library {
+				name: "lib2",
+				sdk_version: "current",
+				resource_dirs: ["lib2/res"],
+			}
+		`
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			config := testAppConfig(nil, bp, fs)
+			config.TestProductVariables.ProductResourceOverlays = productResourceOverlays
+			if testCase.enforceRROTargets != nil {
+				config.TestProductVariables.EnforceRROTargets = testCase.enforceRROTargets
+			}
+			if testCase.enforceRROExemptTargets != nil {
+				config.TestProductVariables.EnforceRROExemptedTargets = testCase.enforceRROExemptTargets
+			}
+
+			ctx := testContext(config)
+			run(t, ctx, config)
+
+			modules := []string{"foo", "bar"}
+			for _, moduleName := range modules {
+				module := ctx.ModuleForTests(moduleName, "android_common")
+				mkEntries := android.AndroidMkEntriesForTest(t, config, "", module.Module())[0]
+				actualRRODirs := mkEntries.EntryMap["LOCAL_SOONG_PRODUCT_RRO_DIRS"]
+				if !reflect.DeepEqual(actualRRODirs, testCase.rroDirs[moduleName]) {
+					t.Errorf("exected %s LOCAL_SOONG_PRODUCT_RRO_DIRS entry: %v\ngot:%q",
+						moduleName, testCase.rroDirs[moduleName], actualRRODirs)
+				}
+			}
+		})
+	}
+}
+
+func TestExportedProguardFlagFiles(t *testing.T) {
+	ctx, _ := testJava(t, `
+		android_app {
+			name: "foo",
+			sdk_version: "current",
+			static_libs: ["lib1"],
+		}
+
+		android_library {
+			name: "lib1",
+			sdk_version: "current",
+			optimize: {
+				proguard_flags_files: ["lib1proguard.cfg"],
+			}
+		}
+	`)
+
+	m := ctx.ModuleForTests("foo", "android_common")
+	hasLib1Proguard := false
+	for _, s := range m.Rule("java.r8").Implicits.Strings() {
+		if s == "lib1proguard.cfg" {
+			hasLib1Proguard = true
+			break
+		}
+	}
+
+	if !hasLib1Proguard {
+		t.Errorf("App does not use library proguard config")
 	}
 }

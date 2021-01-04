@@ -43,7 +43,7 @@ var (
 
 	zipFiles = pctx.AndroidStaticRule("SnapshotZipFiles",
 		blueprint.RuleParams{
-			Command: `${config.SoongZipCmd} -C $basedir -l $out.rsp -o $out`,
+			Command: `${config.SoongZipCmd} -C $basedir -r $out.rsp -o $out`,
 			CommandDeps: []string{
 				"${config.SoongZipCmd}",
 			},
@@ -262,7 +262,7 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 		memberCtx := &memberContext{ctx, builder, memberType, member.name}
 
 		prebuiltModule := memberType.AddPrebuiltModule(memberCtx, member)
-		s.createMemberSnapshot(memberCtx, member, prebuiltModule)
+		s.createMemberSnapshot(memberCtx, member, prebuiltModule.(*bpModule))
 	}
 
 	// Create a transformer that will transform an unversioned module into a versioned module.
@@ -300,7 +300,7 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 	snapshotModule.AddProperty("name", snapshotName)
 
 	// Make sure that the snapshot has the same visibility as the sdk.
-	visibility := android.EffectiveVisibilityRules(ctx, s)
+	visibility := android.EffectiveVisibilityRules(ctx, s).Strings()
 	if len(visibility) != 0 {
 		snapshotModule.AddProperty("visibility", visibility)
 	}
@@ -323,22 +323,66 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 	// Add properties common to all os types.
 	s.addMemberPropertiesToPropertySet(builder, snapshotModule, commonDynamicMemberProperties)
 
-	// Iterate over the os types in a fixed order.
+	// Optimize other per-variant properties, besides the dynamic member lists.
+	type variantProperties struct {
+		Compile_multilib string `android:"arch_variant"`
+	}
+	var variantPropertiesContainers []propertiesContainer
+	variantToProperties := make(map[*sdk]*variantProperties)
+	for _, sdkVariant := range sdkVariants {
+		props := &variantProperties{
+			Compile_multilib: sdkVariant.multilibUsages.String(),
+		}
+		variantPropertiesContainers = append(variantPropertiesContainers, &dynamicMemberPropertiesContainer{sdkVariant, props})
+		variantToProperties[sdkVariant] = props
+	}
+	commonVariantProperties := variantProperties{}
+	extractor = newCommonValueExtractor(commonVariantProperties)
+	extractCommonProperties(ctx, extractor, &commonVariantProperties, variantPropertiesContainers)
+	if commonVariantProperties.Compile_multilib != "" && commonVariantProperties.Compile_multilib != "both" {
+		// Compile_multilib defaults to both so only needs to be set when it's
+		// specified and not both.
+		snapshotModule.AddProperty("compile_multilib", commonVariantProperties.Compile_multilib)
+	}
+
 	targetPropertySet := snapshotModule.AddPropertySet("target")
+
+	// Iterate over the os types in a fixed order.
 	for _, osType := range s.getPossibleOsTypes() {
 		if sdkVariant, ok := osTypeToMemberProperties[osType]; ok {
 			osPropertySet := targetPropertySet.AddPropertySet(sdkVariant.Target().Os.Name)
 
-			// Compile_multilib defaults to both and must always be set to both on the
-			// device and so only needs to be set when targeted at the host and is neither
-			// unspecified or both.
-			multilib := sdkVariant.multilibUsages
-			if (osType.Class == android.Host || osType.Class == android.HostCross) &&
-				multilib != multilibNone && multilib != multilibBoth {
-				osPropertySet.AddProperty("compile_multilib", multilib.String())
+			variantProps := variantToProperties[sdkVariant]
+			if variantProps.Compile_multilib != "" && variantProps.Compile_multilib != "both" {
+				osPropertySet.AddProperty("compile_multilib", variantProps.Compile_multilib)
 			}
 
 			s.addMemberPropertiesToPropertySet(builder, osPropertySet, sdkVariant.dynamicMemberTypeListProperties)
+		}
+	}
+
+	// If host is supported and any member is host OS dependent then disable host
+	// by default, so that we can enable each host OS variant explicitly. This
+	// avoids problems with implicitly enabled OS variants when the snapshot is
+	// used, which might be different from this run (e.g. different build OS).
+	if s.HostSupported() {
+		var supportedHostTargets []string
+		for _, memberRef := range memberRefs {
+			if memberRef.memberType.IsHostOsDependent() && memberRef.variant.Target().Os.Class == android.Host {
+				targetString := memberRef.variant.Target().Os.String() + "_" + memberRef.variant.Target().Arch.ArchType.String()
+				if !android.InList(targetString, supportedHostTargets) {
+					supportedHostTargets = append(supportedHostTargets, targetString)
+				}
+			}
+		}
+		if len(supportedHostTargets) > 0 {
+			hostPropertySet := targetPropertySet.AddPropertySet("host")
+			hostPropertySet.AddProperty("enabled", false)
+		}
+		// Enable the <os>_<arch> variant explicitly when we've disabled it by default on host.
+		for _, hostTarget := range supportedHostTargets {
+			propertySet := targetPropertySet.AddPropertySet(hostTarget)
+			propertySet.AddProperty("enabled", true)
 		}
 	}
 
@@ -677,7 +721,15 @@ func (s *snapshotBuilder) AddPrebuiltModule(member android.SdkMember, moduleType
 	} else {
 		// Extract visibility information from a member variant. All variants have the same
 		// visibility so it doesn't matter which one is used.
-		visibility := android.EffectiveVisibilityRules(s.ctx, variant)
+		visibilityRules := android.EffectiveVisibilityRules(s.ctx, variant)
+
+		// Add any additional visibility rules needed for the prebuilts to reference each other.
+		err := visibilityRules.Widen(s.sdk.properties.Prebuilt_visibility)
+		if err != nil {
+			s.ctx.PropertyErrorf("prebuilt_visibility", "%s", err)
+		}
+
+		visibility := visibilityRules.Strings()
 		if len(visibility) != 0 {
 			m.AddProperty("visibility", visibility)
 		}
@@ -688,7 +740,7 @@ func (s *snapshotBuilder) AddPrebuiltModule(member android.SdkMember, moduleType
 
 	for _, variant := range member.Variants() {
 		osClass := variant.Target().Os.Class
-		if osClass == android.Host || osClass == android.HostCross {
+		if osClass == android.Host {
 			hostSupported = true
 		} else if osClass == android.Device {
 			deviceSupported = true
@@ -934,7 +986,7 @@ func newOsTypeSpecificInfo(ctx android.SdkMemberContext, osType android.OsType, 
 			archTypeName := archType.Name
 
 			archVariants := variantsByArchName[archTypeName]
-			archInfo := newArchSpecificInfo(ctx, archType, osSpecificVariantPropertiesFactory, archVariants)
+			archInfo := newArchSpecificInfo(ctx, archType, osType, osSpecificVariantPropertiesFactory, archVariants)
 
 			osInfo.archInfos = append(osInfo.archInfos, archInfo)
 		}
@@ -975,9 +1027,12 @@ func (osInfo *osTypeSpecificInfo) addToPropertySet(ctx *memberContext, bpModule 
 	var osPropertySet android.BpPropertySet
 	var archPropertySet android.BpPropertySet
 	var archOsPrefix string
-	if osInfo.Properties.Base().Os_count == 1 {
-		// There is only one os type present in the variants so don't bother
-		// with adding target specific properties.
+	if osInfo.Properties.Base().Os_count == 1 &&
+		(osInfo.osType.Class == android.Device || !ctx.memberType.IsHostOsDependent()) {
+		// There is only one OS type present in the variants and it shouldn't have a
+		// variant-specific target. The latter is the case if it's either for device
+		// where there is only one OS (android), or for host and the member type
+		// isn't host OS dependent.
 
 		// Create a structure that looks like:
 		// module_type {
@@ -1034,7 +1089,7 @@ func (osInfo *osTypeSpecificInfo) addToPropertySet(ctx *memberContext, bpModule 
 
 func (osInfo *osTypeSpecificInfo) isHostVariant() bool {
 	osClass := osInfo.osType.Class
-	return osClass == android.Host || osClass == android.HostCross
+	return osClass == android.Host
 }
 
 var _ isHostVariant = (*osTypeSpecificInfo)(nil)
@@ -1047,6 +1102,7 @@ type archTypeSpecificInfo struct {
 	baseInfo
 
 	archType android.ArchType
+	osType   android.OsType
 
 	linkInfos []*linkTypeSpecificInfo
 }
@@ -1055,10 +1111,10 @@ var _ propertiesContainer = (*archTypeSpecificInfo)(nil)
 
 // Create a new archTypeSpecificInfo for the specified arch type and its properties
 // structures populated with information from the variants.
-func newArchSpecificInfo(ctx android.SdkMemberContext, archType android.ArchType, variantPropertiesFactory variantPropertiesFactoryFunc, archVariants []android.Module) *archTypeSpecificInfo {
+func newArchSpecificInfo(ctx android.SdkMemberContext, archType android.ArchType, osType android.OsType, variantPropertiesFactory variantPropertiesFactoryFunc, archVariants []android.Module) *archTypeSpecificInfo {
 
 	// Create an arch specific info into which the variant properties can be copied.
-	archInfo := &archTypeSpecificInfo{archType: archType}
+	archInfo := &archTypeSpecificInfo{archType: archType, osType: osType}
 
 	// Create the properties into which the arch type specific properties will be
 	// added.
@@ -1122,6 +1178,10 @@ func (archInfo *archTypeSpecificInfo) optimizeProperties(ctx *memberContext, com
 func (archInfo *archTypeSpecificInfo) addToPropertySet(ctx *memberContext, archPropertySet android.BpPropertySet, archOsPrefix string) {
 	archTypeName := archInfo.archType.Name
 	archTypePropertySet := archPropertySet.AddPropertySet(archOsPrefix + archTypeName)
+	// Enable the <os>_<arch> variant explicitly when we've disabled it by default on host.
+	if ctx.memberType.IsHostOsDependent() && archInfo.osType.Class == android.Host {
+		archTypePropertySet.AddProperty("enabled", true)
+	}
 	addSdkMemberPropertiesToSet(ctx, archInfo.Properties, archTypePropertySet)
 
 	for _, linkInfo := range archInfo.linkInfos {
@@ -1184,7 +1244,7 @@ func (m *memberContext) Name() string {
 	return m.name
 }
 
-func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModule android.BpModule) {
+func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModule *bpModule) {
 
 	memberType := member.memberType
 
@@ -1238,6 +1298,18 @@ func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModu
 	// added.
 	targetPropertySet := bpModule.AddPropertySet("target")
 
+	// If the member is host OS dependent and has host_supported then disable by
+	// default and enable each host OS variant explicitly. This avoids problems
+	// with implicitly enabled OS variants when the snapshot is used, which might
+	// be different from this run (e.g. different build OS).
+	if ctx.memberType.IsHostOsDependent() {
+		hostSupported := bpModule.getValue("host_supported") == true // Missing means false.
+		if hostSupported {
+			hostPropertySet := targetPropertySet.AddPropertySet("host")
+			hostPropertySet.AddProperty("enabled", false)
+		}
+	}
+
 	// Iterate over the os types in a fixed order.
 	for _, osType := range s.getPossibleOsTypes() {
 		osInfo := osTypeToInfo[osType]
@@ -1259,7 +1331,7 @@ func (s *sdk) getPossibleOsTypes() []android.OsType {
 			}
 		}
 		if s.HostSupported() {
-			if osType.Class == android.Host || osType.Class == android.HostCross {
+			if osType.Class == android.Host {
 				osTypes = append(osTypes, osType)
 			}
 		}
@@ -1284,7 +1356,8 @@ type isHostVariant interface {
 
 // A property that can be optimized by the commonValueExtractor.
 type extractorProperty struct {
-	// The name of the field for this property.
+	// The name of the field for this property. It is a "."-separated path for
+	// fields in non-anonymous substructs.
 	name string
 
 	// Filter that can use metadata associated with the properties being optimized
@@ -1321,18 +1394,18 @@ type commonValueExtractor struct {
 func newCommonValueExtractor(propertiesStruct interface{}) *commonValueExtractor {
 	structType := getStructValue(reflect.ValueOf(propertiesStruct)).Type()
 	extractor := &commonValueExtractor{}
-	extractor.gatherFields(structType, nil)
+	extractor.gatherFields(structType, nil, "")
 	return extractor
 }
 
 // Gather the fields from the supplied structure type from which common values will
 // be extracted.
 //
-// This is recursive function. If it encounters an embedded field (no field name)
-// that is a struct then it will recurse into that struct passing in the accessor
-// for the field. That will then be used in the accessors for the fields in the
-// embedded struct.
-func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingStructAccessor fieldAccessorFunc) {
+// This is recursive function. If it encounters a struct then it will recurse
+// into it, passing in the accessor for the field and the struct name as prefix
+// for the nested fields. That will then be used in the accessors for the fields
+// in the embedded struct.
+func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingStructAccessor fieldAccessorFunc, namePrefix string) {
 	for f := 0; f < structType.NumField(); f++ {
 		field := structType.Field(f)
 		if field.PkgPath != "" {
@@ -1362,7 +1435,7 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 		// Save a copy of the field index for use in the function.
 		fieldIndex := f
 
-		name := field.Name
+		name := namePrefix + field.Name
 
 		fieldGetter := func(value reflect.Value) reflect.Value {
 			if containingStructAccessor != nil {
@@ -1384,9 +1457,15 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 			return value.Field(fieldIndex)
 		}
 
-		if field.Type.Kind() == reflect.Struct && field.Anonymous {
-			// Gather fields from the embedded structure.
-			e.gatherFields(field.Type, fieldGetter)
+		if field.Type.Kind() == reflect.Struct {
+			// Gather fields from the nested or embedded structure.
+			var subNamePrefix string
+			if field.Anonymous {
+				subNamePrefix = namePrefix
+			} else {
+				subNamePrefix = name + "."
+			}
+			e.gatherFields(field.Type, fieldGetter, subNamePrefix)
 		} else {
 			property := extractorProperty{
 				name,
@@ -1450,7 +1529,8 @@ func (c dynamicMemberPropertiesContainer) String() string {
 // Iterates over each exported field (capitalized name) and checks to see whether they
 // have the same value (using DeepEquals) across all the input properties. If it does not then no
 // change is made. Otherwise, the common value is stored in the field in the commonProperties
-// and the field in each of the input properties structure is set to its default value.
+// and the field in each of the input properties structure is set to its default value. Nested
+// structs are visited recursively and their non-struct fields are compared.
 func (e *commonValueExtractor) extractCommonProperties(commonProperties interface{}, inputPropertiesSlice interface{}) error {
 	commonPropertiesValue := reflect.ValueOf(commonProperties)
 	commonStructValue := commonPropertiesValue.Elem()

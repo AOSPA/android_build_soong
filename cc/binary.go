@@ -83,7 +83,7 @@ func binaryHostFactory() android.Module {
 type binaryDecorator struct {
 	*baseLinker
 	*baseInstaller
-	stripper
+	stripper Stripper
 
 	Properties BinaryLinkerProperties
 
@@ -130,34 +130,12 @@ func (binary *binaryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	deps = binary.baseLinker.linkerDeps(ctx, deps)
 	if ctx.toolchain().Bionic() {
 		if !Bool(binary.baseLinker.Properties.Nocrt) {
-			if !ctx.useSdk() {
-				if binary.static() {
-					deps.CrtBegin = "crtbegin_static"
-				} else {
-					deps.CrtBegin = "crtbegin_dynamic"
-				}
-				deps.CrtEnd = "crtend_android"
+			if binary.static() {
+				deps.CrtBegin = "crtbegin_static"
 			} else {
-				// TODO(danalbert): Add generation of crt objects.
-				// For `sdk_version: "current"`, we don't actually have a
-				// freshly generated set of CRT objects. Use the last stable
-				// version.
-				version := ctx.sdkVersion()
-				if version == "current" {
-					version = getCurrentNdkPrebuiltVersion(ctx)
-				}
-
-				if binary.static() {
-					deps.CrtBegin = "ndk_crtbegin_static." + version
-				} else {
-					if binary.static() {
-						deps.CrtBegin = "ndk_crtbegin_static." + version
-					} else {
-						deps.CrtBegin = "ndk_crtbegin_dynamic." + version
-					}
-					deps.CrtEnd = "ndk_crtend_android." + version
-				}
+				deps.CrtBegin = "crtbegin_dynamic"
 			}
+			deps.CrtEnd = "crtend_android"
 		}
 
 		if binary.static() {
@@ -273,7 +251,7 @@ func (binary *binaryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Flags
 				} else {
 					switch ctx.Os() {
 					case android.Android:
-						if ctx.bootstrap() && !ctx.inRecovery() && !ctx.inRamdisk() {
+						if ctx.bootstrap() && !ctx.inRecovery() && !ctx.inRamdisk() && !ctx.inVendorRamdisk() {
 							flags.DynamicLinker = "/system/bin/bootstrap/linker"
 						} else {
 							flags.DynamicLinker = "/system/bin/linker"
@@ -339,14 +317,14 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 	}
 
 	builderFlags := flagsToBuilderFlags(flags)
-
-	if binary.stripper.needsStrip(ctx) {
+	stripFlags := flagsToStripFlags(flags)
+	if binary.stripper.NeedsStrip(ctx) {
 		if ctx.Darwin() {
-			builderFlags.stripUseGnuStrip = true
+			stripFlags.StripUseGnuStrip = true
 		}
 		strippedOutputFile := outputFile
 		outputFile = android.PathForModuleOut(ctx, "unstripped", fileName)
-		binary.stripper.stripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile, builderFlags)
+		binary.stripper.StripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile, stripFlags)
 	}
 
 	binary.unstrippedOutputFile = outputFile
@@ -355,7 +333,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		afterPrefixSymbols := outputFile
 		outputFile = android.PathForModuleOut(ctx, "unprefixed", fileName)
 		TransformBinaryPrefixSymbols(ctx, String(binary.Properties.Prefix_symbols), outputFile,
-			flagsToBuilderFlags(flags), afterPrefixSymbols)
+			builderFlags, afterPrefixSymbols)
 	}
 
 	outputFile = maybeInjectBoringSSLHash(ctx, outputFile, binary.Properties.Inject_bssl_hash, fileName)
@@ -369,10 +347,10 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 			versionedOutputFile := android.PathForModuleOut(ctx, "versioned", fileName)
 			binary.distFiles = android.MakeDefaultDistFiles(versionedOutputFile)
 
-			if binary.stripper.needsStrip(ctx) {
+			if binary.stripper.NeedsStrip(ctx) {
 				out := android.PathForModuleOut(ctx, "versioned-stripped", fileName)
 				binary.distFiles = android.MakeDefaultDistFiles(out)
-				binary.stripper.stripExecutableOrSharedLib(ctx, versionedOutputFile, out, builderFlags)
+				binary.stripper.StripExecutableOrSharedLib(ctx, versionedOutputFile, out, stripFlags)
 			}
 
 			binary.injectVersionSymbol(ctx, outputFile, versionedOutputFile)
@@ -467,7 +445,10 @@ func (binary *binaryDecorator) install(ctx ModuleContext, file android.Path) {
 	// The original path becomes a symlink to the corresponding file in the
 	// runtime APEX.
 	translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled
-	if InstallToBootstrap(ctx.baseModuleName(), ctx.Config()) && !translatedArch && ctx.apexName() == "" && !ctx.inRamdisk() && !ctx.inRecovery() {
+	if InstallToBootstrap(ctx.baseModuleName(), ctx.Config()) && !ctx.Host() && ctx.directlyInAnyApex() &&
+		!translatedArch && ctx.apexVariationName() == "" && !ctx.inRamdisk() && !ctx.inRecovery() &&
+		!ctx.inVendorRamdisk() {
+
 		if ctx.Device() && isBionic(ctx.baseModuleName()) {
 			binary.installSymlinkToRuntimeApex(ctx, file)
 		}

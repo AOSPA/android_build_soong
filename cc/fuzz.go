@@ -38,6 +38,9 @@ type FuzzConfig struct {
 	// Specify whether this fuzz target was submitted by a researcher. Defaults
 	// to false.
 	Researcher_submitted *bool `json:"researcher_submitted,omitempty"`
+	// Specify who should be acknowledged for CVEs in the Android Security
+	// Bulletin.
+	Acknowledgement []string `json:"acknowledgement,omitempty"`
 }
 
 func (f *FuzzConfig) String() string {
@@ -164,17 +167,32 @@ func collectAllSharedDependencies(ctx android.SingletonContext, module android.M
 // that should be installed in the fuzz target output directories. This function
 // returns true, unless:
 //  - The module is not a shared library, or
-//  - The module is a header, stub, or vendor-linked library.
+//  - The module is a header, stub, or vendor-linked library, or
+//  - The module is a prebuilt and its source is available, or
+//  - The module is a versioned member of an SDK snapshot.
 func isValidSharedDependency(dependency android.Module) bool {
 	// TODO(b/144090547): We should be parsing these modules using
 	// ModuleDependencyTag instead of the current brute-force checking.
 
-	if linkable, ok := dependency.(LinkableInterface); !ok || // Discard non-linkables.
-		!linkable.CcLibraryInterface() || !linkable.Shared() || // Discard static libs.
-		linkable.UseVndk() || // Discard vendor linked libraries.
+	linkable, ok := dependency.(LinkableInterface)
+	if !ok || !linkable.CcLibraryInterface() {
+		// Discard non-linkables.
+		return false
+	}
+
+	if !linkable.Shared() {
+		// Discard static libs.
+		return false
+	}
+
+	if linkable.UseVndk() {
+		// Discard vendor linked libraries.
+		return false
+	}
+
+	if lib := moduleLibraryInterface(dependency); lib != nil && lib.buildStubs() && linkable.CcLibrary() {
 		// Discard stubs libs (only CCLibrary variants). Prebuilt libraries should not
 		// be excluded on the basis of they're not CCLibrary()'s.
-		(linkable.CcLibrary() && linkable.BuildStubs()) {
 		return false
 	}
 
@@ -185,6 +203,20 @@ func isValidSharedDependency(dependency android.Module) bool {
 		if _, isLLndkStubLibrary := ccLibrary.linker.(*stubDecorator); isLLndkStubLibrary {
 			return false
 		}
+	}
+
+	// If the same library is present both as source and a prebuilt we must pick
+	// only one to avoid a conflict. Always prefer the source since the prebuilt
+	// probably won't be built with sanitizers enabled.
+	if prebuilt, ok := dependency.(android.PrebuiltInterface); ok &&
+		prebuilt.Prebuilt() != nil && prebuilt.Prebuilt().SourceExists() {
+		return false
+	}
+
+	// Discard versioned members of SDK snapshots, because they will conflict with
+	// unversioned ones.
+	if sdkMember, ok := dependency.(android.SdkAware); ok && !sdkMember.ContainingSdk().Unversioned() {
+		return false
 	}
 
 	return true
@@ -369,10 +401,10 @@ func (s *fuzzPackager) GenerateBuildActions(ctx android.SingletonContext) {
 			return
 		}
 
-		// Discard ramdisk + recovery modules, they're duplicates of
+		// Discard ramdisk + vendor_ramdisk + recovery modules, they're duplicates of
 		// fuzz targets we're going to package anyway.
 		if !ccModule.Enabled() || ccModule.Properties.PreventInstall ||
-			ccModule.InRamdisk() || ccModule.InRecovery() {
+			ccModule.InRamdisk() || ccModule.InVendorRamdisk() || ccModule.InRecovery() {
 			return
 		}
 
@@ -402,7 +434,7 @@ func (s *fuzzPackager) GenerateBuildActions(ctx android.SingletonContext) {
 			command := builder.Command().BuiltTool(ctx, "soong_zip").
 				Flag("-j").
 				FlagWithOutput("-o ", corpusZip)
-			command.FlagWithRspFileInputList("-l ", fuzzModule.corpus)
+			command.FlagWithRspFileInputList("-r ", fuzzModule.corpus)
 			files = append(files, fileToZip{corpusZip, ""})
 		}
 

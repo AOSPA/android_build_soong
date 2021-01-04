@@ -19,12 +19,16 @@ package config
 // has VndkUseCoreVariant set.
 var VndkMustUseVendorVariantList = []string{
 	"android.hardware.automotive.occupant_awareness-ndk_platform",
+	"android.hardware.gnss-unstable-ndk_platform",
 	"android.hardware.light-ndk_platform",
 	"android.hardware.identity-ndk_platform",
 	"android.hardware.nfc@1.2",
 	"android.hardware.power-ndk_platform",
+	"android.hardware.power.stats-ndk_platform",
+	"android.hardware.power.stats-unstable-ndk_platform",
 	"android.hardware.rebootescrow-ndk_platform",
 	"android.hardware.vibrator-ndk_platform",
+	"android.system.keystore2-unstable-ndk_platform",
 	"libbinder",
 	"libcrypto",
 	"libexpat",
@@ -47,4 +51,5 @@ var VndkMustUseVendorVariantList = []string{
 	"libstagefright_xmlparser",
 	"libui",
 	"libxml2",
+	"libmedia_helper",//Remove it from the list once the workaround patch is cleared in S
 }

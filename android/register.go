@@ -81,10 +81,11 @@ func RegisterPreSingletonType(name string, factory SingletonFactory) {
 
 type Context struct {
 	*blueprint.Context
+	config Config
 }
 
-func NewContext() *Context {
-	ctx := &Context{blueprint.NewContext()}
+func NewContext(config Config) *Context {
+	ctx := &Context{blueprint.NewContext(), config}
 	ctx.SetSrcDir(absSrcDir)
 	return ctx
 }
@@ -103,6 +104,8 @@ func (ctx *Context) Register() {
 	}
 
 	registerMutators(ctx.Context, preArch, preDeps, postDeps, finalDeps)
+
+	ctx.RegisterSingletonType("bazeldeps", SingletonFactoryAdaptor(BazelSingleton))
 
 	// Register phony just before makevars so it can write out its phony rules as Make rules
 	ctx.RegisterSingletonType("phony", SingletonFactoryAdaptor(phonySingletonFactory))
@@ -155,7 +158,7 @@ type RegistrationContext interface {
 // Extracting the actual registration into a separate RegisterBuildComponents(ctx) function
 // allows it to be used to initialize test context, e.g.
 //
-//   ctx := android.NewTestContext()
+//   ctx := android.NewTestContext(config)
 //   RegisterBuildComponents(ctx)
 var InitRegistrationContext RegistrationContext = &initRegistrationContext{
 	moduleTypes:    make(map[string]ModuleFactory),

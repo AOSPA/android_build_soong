@@ -63,6 +63,8 @@ func init() {
 	pctx.HostBinToolVariable("jsonmodify", "jsonmodify")
 	pctx.HostBinToolVariable("conv_apex_manifest", "conv_apex_manifest")
 	pctx.HostBinToolVariable("extract_apks", "extract_apks")
+	pctx.HostBinToolVariable("make_f2fs", "make_f2fs")
+	pctx.HostBinToolVariable("sload_f2fs", "sload_f2fs")
 }
 
 var (
@@ -116,12 +118,12 @@ var (
 			`--payload_type image ` +
 			`--key ${key} ${opt_flags} ${image_dir} ${out} `,
 		CommandDeps: []string{"${apexer}", "${avbtool}", "${e2fsdroid}", "${merge_zips}",
-			"${mke2fs}", "${resize2fs}", "${sefcontext_compile}",
+			"${mke2fs}", "${resize2fs}", "${sefcontext_compile}", "${make_f2fs}", "${sload_f2fs}",
 			"${soong_zip}", "${zipalign}", "${aapt2}", "prebuilts/sdk/current/public/android.jar"},
 		Rspfile:        "${out}.copy_commands",
 		RspfileContent: "${copy_commands}",
 		Description:    "APEX ${image_dir} => ${out}",
-	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key", "opt_flags", "manifest")
+	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key", "opt_flags", "manifest", "payload_fs_type")
 
 	zipApexRule = pctx.StaticRule("zipApexRule", blueprint.RuleParams{
 		Command: `rm -rf ${image_dir} && mkdir -p ${image_dir} && ` +
@@ -193,7 +195,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 	// collect jniLibs. Notice that a.filesInfo is already sorted
 	var jniLibs []string
 	for _, fi := range a.filesInfo {
-		if fi.isJniLib {
+		if fi.isJniLib && !android.InList(fi.Stem(), jniLibs) {
 			jniLibs = append(jniLibs, fi.Stem())
 		}
 	}
@@ -212,7 +214,8 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 		},
 	})
 
-	if a.minSdkVersion(ctx) == android.SdkVersion_Android10 {
+	minSdkVersion := a.minSdkVersion(ctx)
+	if minSdkVersion.EqualTo(android.SdkVersion_Android10) {
 		// b/143654022 Q apexd can't understand newly added keys in apex_manifest.json
 		// prepare stripped-down version so that APEX modules built from R+ can be installed to Q
 		a.manifestJsonOut = android.PathForModuleOut(ctx, "apex_manifest.json")
@@ -255,15 +258,34 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) {
 
 	output := android.PathForModuleOut(ctx, "file_contexts")
 	rule := android.NewRuleBuilder()
-	// remove old file
-	rule.Command().Text("rm").FlagWithOutput("-f ", output)
-	// copy file_contexts
-	rule.Command().Text("cat").Input(fileContexts).Text(">>").Output(output)
-	// new line
-	rule.Command().Text("echo").Text(">>").Output(output)
-	// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-	rule.Command().Text("echo").Flag("/apex_manifest\\\\.pb u:object_r:system_file:s0").Text(">>").Output(output)
-	rule.Command().Text("echo").Flag("/ u:object_r:system_file:s0").Text(">>").Output(output)
+
+	if a.properties.ApexType == imageApex {
+		// remove old file
+		rule.Command().Text("rm").FlagWithOutput("-f ", output)
+		// copy file_contexts
+		rule.Command().Text("cat").Input(fileContexts).Text(">>").Output(output)
+		// new line
+		rule.Command().Text("echo").Text(">>").Output(output)
+		// force-label /apex_manifest.pb and / as system_file so that apexd can read them
+		rule.Command().Text("echo").Flag("/apex_manifest\\\\.pb u:object_r:system_file:s0").Text(">>").Output(output)
+		rule.Command().Text("echo").Flag("/ u:object_r:system_file:s0").Text(">>").Output(output)
+	} else {
+		// For flattened apexes, install path should be prepended.
+		// File_contexts file should be emiited to make via LOCAL_FILE_CONTEXTS
+		// so that it can be merged into file_contexts.bin
+		apexPath := android.InstallPathToOnDevicePath(ctx, a.installDir.Join(ctx, a.Name()))
+		apexPath = strings.ReplaceAll(apexPath, ".", `\\.`)
+		// remove old file
+		rule.Command().Text("rm").FlagWithOutput("-f ", output)
+		// copy file_contexts
+		rule.Command().Text("awk").Text(`'/object_r/{printf("` + apexPath + `%s\n", $0)}'`).Input(fileContexts).Text(">").Output(output)
+		// new line
+		rule.Command().Text("echo").Text(">>").Output(output)
+		// force-label /apex_manifest.pb and / as system_file so that apexd can read them
+		rule.Command().Text("echo").Flag(apexPath + `/apex_manifest\\.pb u:object_r:system_file:s0`).Text(">>").Output(output)
+		rule.Command().Text("echo").Flag(apexPath + "/ u:object_r:system_file:s0").Text(">>").Output(output)
+	}
+
 	rule.Build(pctx, ctx, "file_contexts."+a.Name(), "Generate file_contexts")
 
 	a.fileContexts = output.OutputPath
@@ -283,6 +305,10 @@ func (a *apexBundle) buildNoticeFiles(ctx android.ModuleContext, apexFileName st
 
 		return true
 	})
+
+	for _, fi := range a.filesInfo {
+		noticeFiles = append(noticeFiles, fi.noticeFiles...)
+	}
 
 	if len(noticeFiles) == 0 {
 		return android.NoticeOutputs{}
@@ -420,7 +446,8 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	var emitCommands []string
 	imageContentFile := android.PathForModuleOut(ctx, "content.txt")
 	emitCommands = append(emitCommands, "echo ./apex_manifest.pb >> "+imageContentFile.String())
-	if a.minSdkVersion(ctx) == android.SdkVersion_Android10 {
+	minSdkVersion := a.minSdkVersion(ctx)
+	if minSdkVersion.EqualTo(android.SdkVersion_Android10) {
 		emitCommands = append(emitCommands, "echo ./apex_manifest.json >> "+imageContentFile.String())
 	}
 	for _, fi := range a.filesInfo {
@@ -526,13 +553,16 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			optFlags = append(optFlags, "--android_manifest "+androidManifestFile.String())
 		}
 
-		targetSdkVersion := ctx.Config().DefaultAppTargetSdk()
-		// TODO(b/157078772): propagate min_sdk_version to apexer.
-		minSdkVersion := ctx.Config().DefaultAppTargetSdk()
+		moduleMinSdkVersion := a.minSdkVersion(ctx)
+		minSdkVersion := moduleMinSdkVersion.String()
 
-		if a.minSdkVersion(ctx) == android.SdkVersion_Android10 {
-			minSdkVersion = strconv.Itoa(a.minSdkVersion(ctx))
+		// bundletool doesn't understand what "current" is. We need to transform it to codename
+		if moduleMinSdkVersion.IsCurrent() {
+			minSdkVersion = ctx.Config().DefaultAppTargetSdk(ctx).String()
 		}
+		// apex module doesn't have a concept of target_sdk_version, hence for the time being
+		// targetSdkVersion == default targetSdkVersion of the branch.
+		targetSdkVersion := strconv.Itoa(ctx.Config().DefaultAppTargetSdk(ctx).FinalOrFutureInt())
 
 		if java.UseApiFingerprint(ctx) {
 			targetSdkVersion = ctx.Config().PlatformSdkCodename() + fmt.Sprintf(".$$(cat %s)", java.ApiFingerprintPath(ctx).String())
@@ -560,7 +590,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			ctx.PropertyErrorf("test_only_no_hashtree", "not available")
 			return
 		}
-		if a.minSdkVersion(ctx) > android.SdkVersion_Android10 || a.testOnlyShouldSkipHashtreeGeneration() {
+		if moduleMinSdkVersion.GreaterThan(android.SdkVersion_Android10) || a.testOnlyShouldSkipHashtreeGeneration() {
 			// Apexes which are supposed to be installed in builtin dirs(/system, etc)
 			// don't need hashtree for activation. Therefore, by removing hashtree from
 			// apex bundle (filesystem image in it, to be specific), we can save storage.
@@ -577,10 +607,12 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			optFlags = append(optFlags, "--do_not_check_keyname")
 		}
 
-		if a.minSdkVersion(ctx) == android.SdkVersion_Android10 {
+		if moduleMinSdkVersion == android.SdkVersion_Android10 {
 			implicitInputs = append(implicitInputs, a.manifestJsonOut)
 			optFlags = append(optFlags, "--manifest_json "+a.manifestJsonOut.String())
 		}
+
+		optFlags = append(optFlags, "--payload_fs_type "+a.payloadFsType.string())
 
 		ctx.Build(pctx, android.BuildParams{
 			Rule:        apexRule,
@@ -648,7 +680,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		a.container_certificate_file,
 		a.container_private_key_file,
 	}
-	if ctx.Config().IsEnvTrue("RBE_SIGNAPK") {
+	if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_SIGNAPK") {
 		rule = java.SignapkRE
 		args["implicits"] = strings.Join(implicits.Strings(), ",")
 		args["outCommaList"] = a.outputFile.String()
@@ -679,14 +711,7 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 	// instead of `android.PathForOutput`) to return the correct path to the flattened
 	// APEX (as its contents is installed by Make, not Soong).
 	factx := flattenedApexContext{ctx}
-	apexBundleName := a.Name()
-	a.outputFile = android.PathForModuleInstall(&factx, "apex", apexBundleName)
-
-	if a.installable() {
-		installPath := android.PathForModuleInstall(ctx, "apex", apexBundleName)
-		devicePath := android.InstallPathToOnDevicePath(ctx, installPath)
-		addFlattenedFileContextsInfos(ctx, apexBundleName+":"+devicePath+":"+a.fileContexts.String())
-	}
+	a.outputFile = android.PathForModuleInstall(&factx, "apex", a.Name())
 	a.buildFilesInfo(ctx)
 }
 
