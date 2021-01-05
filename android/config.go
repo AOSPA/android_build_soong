@@ -1293,6 +1293,10 @@ func (c *config) FlattenApex() bool {
 	return Bool(c.productVariables.Flatten_apex)
 }
 
+func (c *config) CompressedApex() bool {
+	return Bool(c.productVariables.CompressedApex)
+}
+
 func (c *config) EnforceSystemCertificate() bool {
 	return Bool(c.productVariables.EnforceSystemCertificate)
 }
@@ -1339,10 +1343,6 @@ func (c *config) ProductPublicSepolicyDirs() []string {
 
 func (c *config) ProductPrivateSepolicyDirs() []string {
 	return c.productVariables.ProductPrivateSepolicyDirs
-}
-
-func (c *config) ProductCompatibleProperty() bool {
-	return Bool(c.productVariables.ProductCompatibleProperty)
 }
 
 func (c *config) MissingUsesLibraries() []string {
