@@ -1302,3 +1302,11 @@ func (c *deviceConfig) DeviceSecondaryArchVariant() string {
 func (c *deviceConfig) BoardUsesRecoveryAsBoot() bool {
 	return Bool(c.config.productVariables.BoardUsesRecoveryAsBoot)
 }
+
+func (c *deviceConfig) DirectedVendorSnapshot() bool {
+	return c.config.productVariables.DirectedVendorSnapshot
+}
+
+func (c *deviceConfig) VendorSnapshotModules() map[string]bool {
+	return c.config.productVariables.VendorSnapshotModules
+}
