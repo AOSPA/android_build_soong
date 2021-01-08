@@ -102,7 +102,7 @@ func createIncludeDirsRules() []Rule {
 func createTrebleRules() []Rule {
 	return []Rule{
 		NeverAllow().
-			In("vendor", "device").
+			In("device").
 			With("vndk.enabled", "true").
 			Without("vendor", "true").
 			Without("product_specific", "true").
