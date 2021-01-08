@@ -20,9 +20,10 @@ import (
 	"testing"
 )
 
-func testConfigWithBootJars(bp string, bootJars []string) android.Config {
+func testConfigWithBootJars(bp string, bootJars []string, prebuiltHiddenApiDir *string) android.Config {
 	config := testConfig(nil, bp, nil)
 	config.TestProductVariables.BootJars = bootJars
+	config.TestProductVariables.PrebuiltHiddenApiDir = prebuiltHiddenApiDir
 	return config
 }
 
@@ -32,10 +33,10 @@ func testContextWithHiddenAPI() *android.TestContext {
 	return ctx
 }
 
-func testHiddenAPI(t *testing.T, bp string, bootJars []string) (*android.TestContext, android.Config) {
+func testHiddenAPI(t *testing.T, bp string, bootJars []string, prebuiltHiddenApiDir *string) (*android.TestContext, android.Config) {
 	t.Helper()
 
-	config := testConfigWithBootJars(bp, bootJars)
+	config := testConfigWithBootJars(bp, bootJars, prebuiltHiddenApiDir)
 	ctx := testContextWithHiddenAPI()
 
 	run(t, ctx, config)
@@ -50,7 +51,7 @@ func TestHiddenAPISingleton(t *testing.T) {
 			srcs: ["a.java"],
 			compile_dex: true,
 	}
-	`, []string{"foo"})
+	`, []string{"foo"}, nil)
 
 	hiddenAPI := ctx.SingletonForTests("hiddenapi")
 	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
@@ -67,7 +68,7 @@ func TestHiddenAPISingletonWithPrebuilt(t *testing.T) {
 			jars: ["a.jar"],
 			compile_dex: true,
 	}
-	`, []string{"foo"})
+	`, []string{"foo"}, nil)
 
 	hiddenAPI := ctx.SingletonForTests("hiddenapi")
 	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
@@ -91,7 +92,7 @@ func TestHiddenAPISingletonWithPrebuiltUseSource(t *testing.T) {
 			compile_dex: true,
 			prefer: false,
 	}
-	`, []string{"foo"})
+	`, []string{"foo"}, nil)
 
 	hiddenAPI := ctx.SingletonForTests("hiddenapi")
 	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
@@ -120,7 +121,7 @@ func TestHiddenAPISingletonWithPrebuiltOverrideSource(t *testing.T) {
 			compile_dex: true,
 			prefer: true,
 	}
-	`, []string{"foo"})
+	`, []string{"foo"}, nil)
 
 	hiddenAPI := ctx.SingletonForTests("hiddenapi")
 	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
@@ -132,5 +133,50 @@ func TestHiddenAPISingletonWithPrebuiltOverrideSource(t *testing.T) {
 	fromSourceJarArg := "--boot-dex=" + buildDir + "/.intermediates/foo/android_common/aligned/foo.jar"
 	if strings.Contains(hiddenapiRule.RuleParams.Command, fromSourceJarArg) {
 		t.Errorf("Did not expect %s in hiddenapi command, but it was present: %s", fromSourceJarArg, hiddenapiRule.RuleParams.Command)
+	}
+}
+
+func TestHiddenAPISingletonWithPrebuiltCsvFile(t *testing.T) {
+
+	// The idea behind this test is to ensure that when the build is
+	// confugured with a PrebuiltHiddenApiDir that the rules for the
+	// hiddenapi singleton copy the prebuilts to the typical output
+	// location, and then use that output location for the hiddenapi encode
+	// dex step.
+
+	// Where to find the prebuilt hiddenapi files:
+	prebuiltHiddenApiDir := "path/to/prebuilt/hiddenapi"
+
+	ctx, _ := testHiddenAPI(t, `
+		java_import {
+			name: "foo",
+			jars: ["a.jar"],
+			compile_dex: true,
+	}
+	`, []string{"foo"}, &prebuiltHiddenApiDir)
+
+	expectedCpInput := prebuiltHiddenApiDir + "/hiddenapi-flags.csv"
+	expectedCpOutput := buildDir + "/hiddenapi/hiddenapi-flags.csv"
+	expectedFlagsCsv := buildDir + "/hiddenapi/hiddenapi-flags.csv"
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+
+	hiddenAPI := ctx.SingletonForTests("hiddenapi")
+	cpRule := hiddenAPI.Rule("Cp")
+	actualCpInput := cpRule.BuildParams.Input
+	actualCpOutput := cpRule.BuildParams.Output
+	encodeDexRule := foo.Rule("hiddenAPIEncodeDex")
+	actualFlagsCsv := encodeDexRule.BuildParams.Args["flagsCsv"]
+
+	if actualCpInput.String() != expectedCpInput {
+		t.Errorf("Prebuilt hiddenapi cp rule input mismatch, actual: %s, expected: %s", actualCpInput, expectedCpInput)
+	}
+
+	if actualCpOutput.String() != expectedCpOutput {
+		t.Errorf("Prebuilt hiddenapi cp rule output mismatch, actual: %s, expected: %s", actualCpOutput, expectedCpOutput)
+	}
+
+	if actualFlagsCsv != expectedFlagsCsv {
+		t.Errorf("Prebuilt hiddenapi encode dex rule flags csv mismatch, actual: %s, expected: %s", actualFlagsCsv, expectedFlagsCsv)
 	}
 }
