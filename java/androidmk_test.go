@@ -169,3 +169,25 @@ func TestDistWithTag(t *testing.T) {
 		t.Errorf("did not expect explicit DistFile, got %v", without_tag_entries[0].DistFile)
 	}
 }
+
+func TestImportSoongDexJar(t *testing.T) {
+	ctx, config := testJava(t, `
+		java_import {
+			name: "my-java-import",
+			jars: ["a.jar"],
+			prefer: true,
+			compile_dex: true,
+		}
+	`)
+
+	mod := ctx.ModuleForTests("my-java-import", "android_common").Module()
+	entries := android.AndroidMkEntriesForTest(t, config, "", mod)[0]
+	expectedSoongDexJar := buildDir + "/.intermediates/my-java-import/android_common/dex/my-java-import.jar"
+	actualSoongDexJar := entries.EntryMap["LOCAL_SOONG_DEX_JAR"]
+
+	if len(actualSoongDexJar) != 1 {
+		t.Errorf("LOCAL_SOONG_DEX_JAR incorrect len %d", len(actualSoongDexJar))
+	} else if actualSoongDexJar[0] != expectedSoongDexJar {
+		t.Errorf("LOCAL_SOONG_DEX_JAR mismatch, actual: %s, expected: %s", actualSoongDexJar[0], expectedSoongDexJar)
+	}
+}
