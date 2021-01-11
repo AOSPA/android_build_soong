@@ -1766,6 +1766,7 @@ type javaDependency interface {
 }
 
 var _ javaDependency = (*java.Library)(nil)
+var _ javaDependency = (*java.Import)(nil)
 var _ javaDependency = (*java.SdkLibrary)(nil)
 var _ javaDependency = (*java.DexImport)(nil)
 var _ javaDependency = (*java.SdkLibraryImport)(nil)
@@ -2055,7 +2056,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				}
 			case javaLibTag:
 				switch child.(type) {
-				case *java.Library, *java.SdkLibrary, *java.DexImport, *java.SdkLibraryImport:
+				case *java.Library, *java.SdkLibrary, *java.DexImport, *java.SdkLibraryImport, *java.Import:
 					af := apexFileForJavaLibrary(ctx, child.(javaDependency), child.(android.Module))
 					if !af.Ok() {
 						ctx.PropertyErrorf("java_libs", "%q is not configured to be compiled into dex", depName)
