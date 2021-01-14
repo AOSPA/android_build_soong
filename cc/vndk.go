@@ -616,7 +616,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 
 		libPath := m.outputFile.Path()
 		snapshotLibOut := filepath.Join(snapshotArchDir, targetArch, "shared", vndkType, libPath.Base())
-		ret = append(ret, copyFile(ctx, libPath, snapshotLibOut))
+		ret = append(ret, copyFileRule(ctx, libPath, snapshotLibOut))
 
 		if ctx.Config().VndkSnapshotBuildArtifacts() {
 			prop := struct {
@@ -637,7 +637,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 				ctx.Errorf("json marshal to %q failed: %#v", propOut, err)
 				return nil, false
 			}
-			ret = append(ret, writeStringToFile(ctx, string(j), propOut))
+			ret = append(ret, writeStringToFileRule(ctx, string(j), propOut))
 		}
 		return ret, true
 	}
@@ -671,7 +671,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 			// skip already copied notice file
 			if _, ok := noticeBuilt[noticeName]; !ok {
 				noticeBuilt[noticeName] = true
-				snapshotOutputs = append(snapshotOutputs, copyFile(
+				snapshotOutputs = append(snapshotOutputs, copyFileRule(
 					ctx, m.NoticeFile().Path(), filepath.Join(noticeDir, noticeName)))
 			}
 		}
@@ -683,7 +683,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 
 	// install all headers after removing duplicates
 	for _, header := range android.FirstUniquePaths(headers) {
-		snapshotOutputs = append(snapshotOutputs, copyFile(
+		snapshotOutputs = append(snapshotOutputs, copyFileRule(
 			ctx, header, filepath.Join(includeDir, header.String())))
 	}
 
@@ -693,7 +693,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		if !ok || !m.Enabled() || m.Name() == vndkUsingCoreVariantLibrariesTxt {
 			return
 		}
-		snapshotOutputs = append(snapshotOutputs, copyFile(
+		snapshotOutputs = append(snapshotOutputs, copyFileRule(
 			ctx, m.OutputFile(), filepath.Join(configsDir, m.Name())))
 	})
 
@@ -714,7 +714,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 			txtBuilder.WriteString(" ")
 			txtBuilder.WriteString(m[k])
 		}
-		return writeStringToFile(ctx, txtBuilder.String(), path)
+		return writeStringToFileRule(ctx, txtBuilder.String(), path)
 	}
 
 	/*
