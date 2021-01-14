@@ -121,3 +121,41 @@ func makeSymlinkCmd(linkDirOnDevice string, linkName string, target string) stri
 	return "mkdir -p " + dir + " && " +
 		"ln -sf " + target + " " + filepath.Join(dir, linkName)
 }
+
+func copyFileRule(ctx android.SingletonContext, path android.Path, out string) android.OutputPath {
+	outPath := android.PathForOutput(ctx, out)
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        android.Cp,
+		Input:       path,
+		Output:      outPath,
+		Description: "Cp " + out,
+		Args: map[string]string{
+			"cpFlags": "-f -L",
+		},
+	})
+	return outPath
+}
+
+func combineNoticesRule(ctx android.SingletonContext, paths android.Paths, out string) android.OutputPath {
+	outPath := android.PathForOutput(ctx, out)
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        android.Cat,
+		Inputs:      paths,
+		Output:      outPath,
+		Description: "combine notices for " + out,
+	})
+	return outPath
+}
+
+func writeStringToFileRule(ctx android.SingletonContext, content, out string) android.OutputPath {
+	outPath := android.PathForOutput(ctx, out)
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        android.WriteFile,
+		Output:      outPath,
+		Description: "WriteFile " + out,
+		Args: map[string]string{
+			"content": content,
+		},
+	})
+	return outPath
+}

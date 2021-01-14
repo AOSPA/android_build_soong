@@ -73,30 +73,3 @@ func shouldCollectHeadersForSnapshot(ctx android.ModuleContext, m *Module) bool 
 	}
 	return false
 }
-
-func copyFile(ctx android.SingletonContext, path android.Path, out string) android.OutputPath {
-	outPath := android.PathForOutput(ctx, out)
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.Cp,
-		Input:       path,
-		Output:      outPath,
-		Description: "Cp " + out,
-		Args: map[string]string{
-			"cpFlags": "-f -L",
-		},
-	})
-	return outPath
-}
-
-func writeStringToFile(ctx android.SingletonContext, content, out string) android.OutputPath {
-	outPath := android.PathForOutput(ctx, out)
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.WriteFile,
-		Output:      outPath,
-		Description: "WriteFile " + out,
-		Args: map[string]string{
-			"content": content,
-		},
-	})
-	return outPath
-}
