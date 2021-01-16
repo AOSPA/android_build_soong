@@ -32,11 +32,12 @@ var pctx = android.NewPackageContext("android/soong/rust")
 func init() {
 	// Only allow rust modules to be defined for certain projects
 
-	android.AddNeverAllowRules(
+	// Temporarily disable allow list
+	/*  android.AddNeverAllowRules(
 		android.NeverAllow().
 			NotIn(config.RustAllowedPaths...).
 			ModuleType(config.RustModuleTypes...))
-
+	*/
 	android.RegisterModuleType("rust_defaults", defaultsFactory)
 	android.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
