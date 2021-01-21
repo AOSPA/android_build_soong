@@ -473,6 +473,7 @@ func CreateTestContext() *android.TestContext {
 	ctx.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
 	ctx.RegisterSingletonType("vendor-fake-snapshot", VendorFakeSnapshotSingleton)
 	ctx.RegisterSingletonType("recovery-snapshot", RecoverySnapshotSingleton)
+	ctx.RegisterSingletonType("ramdisk-snapshot", RamdiskSnapshotSingleton)
 
 	return ctx
 }

@@ -91,6 +91,7 @@ type snapshotImage interface {
 
 type vendorSnapshotImage struct{}
 type recoverySnapshotImage struct{}
+type ramdiskSnapshotImage struct{}
 
 func (vendorSnapshotImage) init() {
 	android.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
@@ -298,12 +299,105 @@ func (recoverySnapshotImage) excludeFromDirectedSnapshot(cfg android.DeviceConfi
 	return !cfg.RecoverySnapshotModules()[name]
 }
 
+func (ramdiskSnapshotImage) init() {
+	android.RegisterSingletonType("ramdisk-snapshot", RamdiskSnapshotSingleton)
+	android.RegisterModuleType("ramdisk_snapshot_shared", RamdiskSnapshotSharedFactory)
+	android.RegisterModuleType("ramdisk_snapshot_static", RamdiskSnapshotStaticFactory)
+	android.RegisterModuleType("ramdisk_snapshot_header", RamdiskSnapshotHeaderFactory)
+	android.RegisterModuleType("ramdisk_snapshot_binary", RamdiskSnapshotBinaryFactory)
+	android.RegisterModuleType("ramdisk_snapshot_object", RamdiskSnapshotObjectFactory)
+}
+
+func (ramdiskSnapshotImage) shouldGenerateSnapshot(ctx android.SingletonContext) bool {
+	// RAMDISK_SNAPSHOT_VERSION must be set to 'current' in order to generate a
+	// snapshot.
+	return ctx.DeviceConfig().RamdiskSnapshotVersion() == "current"
+}
+
+func (ramdiskSnapshotImage) inImage(m *Module) func() bool {
+	return m.InRamdisk
+}
+
+func (ramdiskSnapshotImage) available(m *Module) *bool {
+	return m.Properties.Ramdisk_available
+}
+
+func (ramdiskSnapshotImage) isProprietaryPath(dir string) bool {
+	return isRamdiskProprietaryPath(dir)
+}
+
+// ramdisk snapshot does NOT treat vndk specially.
+func (ramdiskSnapshotImage) includeVndk() bool {
+	return false
+}
+
+func (ramdiskSnapshotImage) excludeFromSnapshot(m *Module) bool {
+	return m.ExcludeFromRamdiskSnapshot()
+}
+
+func (ramdiskSnapshotImage) getSnapshotMap(m *Module, cfg android.Config) *snapshotMap {
+	if lib, ok := m.linker.(libraryInterface); ok {
+		if lib.static() {
+			return ramdiskSnapshotStaticLibs(cfg)
+		} else if lib.shared() {
+			return ramdiskSnapshotSharedLibs(cfg)
+		} else {
+			// header
+			return ramdiskSnapshotHeaderLibs(cfg)
+		}
+	} else if m.binary() {
+		return ramdiskSnapshotBinaries(cfg)
+	} else if m.object() {
+		return ramdiskSnapshotObjects(cfg)
+	} else {
+		return nil
+	}
+}
+
+func (ramdiskSnapshotImage) getMutex() *sync.Mutex {
+	return &ramdiskSnapshotsLock
+}
+
+func (ramdiskSnapshotImage) suffixModules(config android.Config) map[string]bool {
+	return ramdiskSuffixModules(config)
+}
+
+func (ramdiskSnapshotImage) shouldBeAddedToSuffixModules(module *Module) bool {
+	return proptools.BoolDefault(module.Properties.Ramdisk_available, false)
+}
+
+func (ramdiskSnapshotImage) isUsingSnapshot(cfg android.DeviceConfig) bool {
+	ramdiskSnapshotVersion := cfg.RamdiskSnapshotVersion()
+	return ramdiskSnapshotVersion != "current" && ramdiskSnapshotVersion != ""
+}
+
+func (ramdiskSnapshotImage) skipModuleMutator(ctx android.BottomUpMutatorContext) bool {
+	module, ok := ctx.Module().(*Module)
+	return !ok || !module.InRamdisk()
+}
+
+func (ramdiskSnapshotImage) skipSourceMutator(ctx android.BottomUpMutatorContext) bool {
+	module, ok := ctx.Module().(*Module)
+	return !ok || !module.InRamdisk()
+}
+
+func (ramdiskSnapshotImage) excludeFromDirectedSnapshot(cfg android.DeviceConfig, name string) bool {
+	// If we're using full snapshot, not directed snapshot, capture every module
+	if !cfg.DirectedRamdiskSnapshot() {
+		return false
+	}
+	// Else, checks if name is in RAMDSIK_SNAPSHOT_MODULES.
+	return !cfg.RamdiskSnapshotModules()[name]
+}
+
 var vendorSnapshotImageSingleton vendorSnapshotImage
 var recoverySnapshotImageSingleton recoverySnapshotImage
+var ramdiskSnapshotImageSingleton ramdiskSnapshotImage
 
 func init() {
 	vendorSnapshotImageSingleton.init()
 	recoverySnapshotImageSingleton.init()
+	ramdiskSnapshotImageSingleton.init()
 }
 
 const (
@@ -320,6 +414,14 @@ const (
 	recoverySnapshotStaticSuffix = ".recovery_static."
 	recoverySnapshotBinarySuffix = ".recovery_binary."
 	recoverySnapshotObjectSuffix = ".recovery_object."
+)
+
+const (
+	ramdiskSnapshotHeaderSuffix = ".ramdisk_header."
+	ramdiskSnapshotSharedSuffix = ".ramdisk_shared."
+	ramdiskSnapshotStaticSuffix = ".ramdisk_static."
+	ramdiskSnapshotBinarySuffix = ".ramdisk_binary."
+	ramdiskSnapshotObjectSuffix = ".ramdisk_object."
 )
 
 var (
@@ -340,6 +442,15 @@ var (
 	recoverySnapshotSharedLibsKey = android.NewOnceKey("recoverySnapshotSharedLibs")
 	recoverySnapshotBinariesKey   = android.NewOnceKey("recoverySnapshotBinaries")
 	recoverySnapshotObjectsKey    = android.NewOnceKey("recoverySnapshotObjects")
+)
+var (
+	ramdiskSnapshotsLock         sync.Mutex
+	ramdiskSuffixModulesKey      = android.NewOnceKey("ramdiskSuffixModules")
+	ramdiskSnapshotHeaderLibsKey = android.NewOnceKey("ramdiskSnapshotHeaderLibs")
+	ramdiskSnapshotStaticLibsKey = android.NewOnceKey("ramdiskSnapshotStaticLibs")
+	ramdiskSnapshotSharedLibsKey = android.NewOnceKey("ramdiskSnapshotSharedLibs")
+	ramdiskSnapshotBinariesKey   = android.NewOnceKey("ramdiskSnapshotBinaries")
+	ramdiskSnapshotObjectsKey    = android.NewOnceKey("ramdiskSnapshotObjects")
 )
 
 // vendorSuffixModules holds names of modules whose vendor variants should have the vendor suffix.
@@ -420,6 +531,43 @@ func recoverySnapshotBinaries(config android.Config) *snapshotMap {
 
 func recoverySnapshotObjects(config android.Config) *snapshotMap {
 	return config.Once(recoverySnapshotObjectsKey, func() interface{} {
+		return newSnapshotMap()
+	}).(*snapshotMap)
+}
+
+
+func ramdiskSuffixModules(config android.Config) map[string]bool {
+	return config.Once(ramdiskSuffixModulesKey, func() interface{} {
+		return make(map[string]bool)
+	}).(map[string]bool)
+}
+
+func ramdiskSnapshotHeaderLibs(config android.Config) *snapshotMap {
+	return config.Once(ramdiskSnapshotHeaderLibsKey, func() interface{} {
+		return newSnapshotMap()
+	}).(*snapshotMap)
+}
+
+func ramdiskSnapshotSharedLibs(config android.Config) *snapshotMap {
+	return config.Once(ramdiskSnapshotSharedLibsKey, func() interface{} {
+		return newSnapshotMap()
+	}).(*snapshotMap)
+}
+
+func ramdiskSnapshotStaticLibs(config android.Config) *snapshotMap {
+	return config.Once(ramdiskSnapshotStaticLibsKey, func() interface{} {
+		return newSnapshotMap()
+	}).(*snapshotMap)
+}
+
+func ramdiskSnapshotBinaries(config android.Config) *snapshotMap {
+	return config.Once(ramdiskSnapshotBinariesKey, func() interface{} {
+		return newSnapshotMap()
+	}).(*snapshotMap)
+}
+
+func ramdiskSnapshotObjects(config android.Config) *snapshotMap {
+	return config.Once(ramdiskSnapshotObjectsKey, func() interface{} {
 		return newSnapshotMap()
 	}).(*snapshotMap)
 }
@@ -573,8 +721,9 @@ func (p *snapshotLibraryDecorator) link(ctx ModuleContext, flags Flags, deps Pat
 		p.androidMkSuffix = vendorSuffix
 	} else if m.InRecovery() && recoverySuffixModules(ctx.Config())[m.BaseModuleName()] {
 		p.androidMkSuffix = recoverySuffix
-	}
-
+	} else if m.InRamdisk() && ramdiskSuffixModules(ctx.Config())[m.BaseModuleName()] {
+		p.androidMkSuffix = ramdiskSuffix
+        }
 	if p.header() {
 		return p.libraryDecorator.link(ctx, flags, deps, objs)
 	}
@@ -691,6 +840,16 @@ func RecoverySnapshotSharedFactory() android.Module {
 	return module.Init()
 }
 
+// ramdisk_snapshot_shared is a special prebuilt shared library which is auto-generated by
+// development/vendor_snapshot/update.py. As a part of ramdisk snapshot, ramdisk_snapshot_shared
+// overrides the ramdisk variant of the cc shared library with the same name, if BOARD_VNDK_VERSION
+// is set.
+func RamdiskSnapshotSharedFactory() android.Module {
+	module, prebuilt := snapshotLibraryFactory(ramdiskSnapshotSharedSuffix)
+	prebuilt.libraryDecorator.BuildOnlyShared()
+	return module.Init()
+}
+
 // vendor_snapshot_static is a special prebuilt static library which is auto-generated by
 // development/vendor_snapshot/update.py. As a part of vendor snapshot, vendor_snapshot_static
 // overrides the vendor variant of the cc static library with the same name, if BOARD_VNDK_VERSION
@@ -711,6 +870,16 @@ func RecoverySnapshotStaticFactory() android.Module {
 	return module.Init()
 }
 
+// ramdisk_snapshot_static is a special prebuilt static library which is auto-generated by
+// development/vendor_snapshot/update.py. As a part of ramdisk snapshot, ramdisk_snapshot_static
+// overrides the ramdisk variant of the cc static library with the same name, if BOARD_VNDK_VERSION
+// is set.
+func RamdiskSnapshotStaticFactory() android.Module {
+	module, prebuilt := snapshotLibraryFactory(ramdiskSnapshotStaticSuffix)
+	prebuilt.libraryDecorator.BuildOnlyStatic()
+	return module.Init()
+}
+
 // vendor_snapshot_header is a special header library which is auto-generated by
 // development/vendor_snapshot/update.py. As a part of vendor snapshot, vendor_snapshot_header
 // overrides the vendor variant of the cc header library with the same name, if BOARD_VNDK_VERSION
@@ -727,6 +896,16 @@ func VendorSnapshotHeaderFactory() android.Module {
 // is set.
 func RecoverySnapshotHeaderFactory() android.Module {
 	module, prebuilt := snapshotLibraryFactory(recoverySnapshotHeaderSuffix)
+	prebuilt.libraryDecorator.HeaderOnly()
+	return module.Init()
+}
+
+// ramdisk_snapshot_header is a special header library which is auto-generated by
+// development/vendor_snapshot/update.py. As a part of ramdisk snapshot, ramdisk_snapshot_header
+// overrides the ramdisk variant of the cc header library with the same name, if BOARD_VNDK_VERSION
+// is set.
+func RamdiskSnapshotHeaderFactory() android.Module {
+	module, prebuilt := snapshotLibraryFactory(ramdiskSnapshotHeaderSuffix)
 	prebuilt.libraryDecorator.HeaderOnly()
 	return module.Init()
 }
@@ -778,6 +957,8 @@ func (p *snapshotBinaryDecorator) link(ctx ModuleContext, flags Flags, deps Path
 		p.androidMkSuffix = vendorSuffix
 	} else if m.InRecovery() && recoverySuffixModules(ctx.Config())[m.BaseModuleName()] {
 		p.androidMkSuffix = recoverySuffix
+	} else if m.InRamdisk() && ramdiskSuffixModules(ctx.Config())[m.BaseModuleName()] {
+		p.androidMkSuffix = ramdiskSuffix
 
 	}
 
@@ -809,6 +990,13 @@ func VendorSnapshotBinaryFactory() android.Module {
 // overrides the recovery variant of the cc binary with the same name, if BOARD_VNDK_VERSION is set.
 func RecoverySnapshotBinaryFactory() android.Module {
 	return snapshotBinaryFactory(recoverySnapshotBinarySuffix)
+}
+
+// ramdisk_snapshot_binary is a special prebuilt executable binary which is auto-generated by
+// development/vendor_snapshot/update.py. As a part of ramdisk snapshot, ramdisk_snapshot_binary
+// overrides the ramdisk variant of the cc binary with the same name, if BOARD_VNDK_VERSION is set.
+func RamdiskSnapshotBinaryFactory() android.Module {
+	return snapshotBinaryFactory(ramdiskSnapshotBinarySuffix)
 }
 
 func snapshotBinaryFactory(suffix string) android.Module {
@@ -877,6 +1065,8 @@ func (p *snapshotObjectLinker) link(ctx ModuleContext, flags Flags, deps PathDep
 		p.androidMkSuffix = vendorSuffix
 	} else if m.InRecovery() && recoverySuffixModules(ctx.Config())[m.BaseModuleName()] {
 		p.androidMkSuffix = recoverySuffix
+	}else if m.InRamdisk() && ramdiskSuffixModules(ctx.Config())[m.BaseModuleName()] {
+		p.androidMkSuffix = ramdiskSuffix
 	}
 
 	return android.PathForModuleSrc(ctx, *p.properties.Src)
@@ -921,7 +1111,23 @@ func RecoverySnapshotObjectFactory() android.Module {
 	module.AddProperties(&prebuilt.properties)
 	return module.Init()
 }
+// ramdisk_snapshot_object is a special prebuilt compiled object file which is auto-generated by
+// development/vendor_snapshot/update.py. As a part of ramdisk snapshot, ramdisk_snapshot_object
+// overrides the recovery variant of the cc object with the same name, if BOARD_VNDK_VERSION is set.
+func RamdiskSnapshotObjectFactory() android.Module {
+	module := newObject()
 
+	prebuilt := &snapshotObjectLinker{
+		objectLinker: objectLinker{
+			baseLinker: NewBaseLinker(nil),
+		},
+	}
+	module.linker = prebuilt
+
+	prebuilt.init(module, ramdiskSnapshotObjectSuffix)
+	module.AddProperties(&prebuilt.properties)
+	return module.Init()
+}
 type snapshotInterface interface {
 	matchesWithDevice(config android.DeviceConfig) bool
 }
@@ -950,6 +1156,10 @@ func VendorSnapshotMutator(ctx android.BottomUpMutatorContext) {
 
 func RecoverySnapshotMutator(ctx android.BottomUpMutatorContext) {
 	snapshotMutator(ctx, recoverySnapshotImageSingleton)
+}
+
+func RamdiskSnapshotMutator(ctx android.BottomUpMutatorContext) {
+	snapshotMutator(ctx, ramdiskSnapshotImageSingleton)
 }
 
 func snapshotMutator(ctx android.BottomUpMutatorContext, image snapshotImage) {
@@ -995,6 +1205,9 @@ func VendorSnapshotSourceMutator(ctx android.BottomUpMutatorContext) {
 
 func RecoverySnapshotSourceMutator(ctx android.BottomUpMutatorContext) {
 	snapshotSourceMutator(ctx, recoverySnapshotImageSingleton)
+}
+func RamdiskSnapshotSourceMutator(ctx android.BottomUpMutatorContext) {
+	snapshotSourceMutator(ctx, ramdiskSnapshotImageSingleton)
 }
 
 func snapshotSourceMutator(ctx android.BottomUpMutatorContext, image snapshotImage) {
