@@ -126,13 +126,14 @@ type variableProperties struct {
 		}
 
 		Arc struct {
-			Cflags       []string
-			Exclude_srcs []string
-			Include_dirs []string
-			Shared_libs  []string
-			Static_libs  []string
-			Srcs         []string
-		}
+			Cflags            []string `android:"arch_variant"`
+			Exclude_srcs      []string `android:"arch_variant"`
+			Include_dirs      []string `android:"arch_variant"`
+			Shared_libs       []string `android:"arch_variant"`
+			Static_libs       []string `android:"arch_variant"`
+			Srcs              []string `android:"arch_variant"`
+			Whole_static_libs []string `android:"arch_variant"`
+		} `android:"arch_variant"`
 
 		Flatten_apex struct {
 			Enabled *bool
@@ -357,8 +358,9 @@ type productVariables struct {
 	Ndk_abis               *bool `json:",omitempty"`
 	Exclude_draft_ndk_apis *bool `json:",omitempty"`
 
-	Flatten_apex *bool `json:",omitempty"`
-	Aml_abis     *bool `json:",omitempty"`
+	Flatten_apex   *bool `json:",omitempty"`
+	CompressedApex *bool `json:",omitempty"`
+	Aml_abis       *bool `json:",omitempty"`
 
 	DexpreoptGlobalConfig *string `json:",omitempty"`
 
@@ -375,7 +377,6 @@ type productVariables struct {
 
 	ProductPublicSepolicyDirs  []string `json:",omitempty"`
 	ProductPrivateSepolicyDirs []string `json:",omitempty"`
-	ProductCompatibleProperty  *bool    `json:",omitempty"`
 
 	ProductVndkVersion *string `json:",omitempty"`
 

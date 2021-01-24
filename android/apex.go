@@ -153,13 +153,12 @@ type ApexModule interface {
 	// run.
 	DirectlyInAnyApex() bool
 
-	// Returns true in the primary variant of a module if _any_ variant of the module is
-	// directly in any apex. This includes host, arch, asan, etc. variants. It is unused in any
-	// variant that is not the primary variant. Ideally this wouldn't be used, as it incorrectly
-	// mixes arch variants if only one arch is in an apex, but a few places depend on it, for
-	// example when an ASAN variant is created before the apexMutator. Call this after
-	// apex.apexMutator is run.
-	AnyVariantDirectlyInAnyApex() bool
+	// NotInPlatform tells whether or not this module is included in an APEX and therefore
+	// shouldn't be exposed to the platform (i.e. outside of the APEX) directly. A module is
+	// considered to be included in an APEX either when there actually is an APEX that
+	// explicitly has the module as its dependency or the module is not available to the
+	// platform, which indicates that the module belongs to at least one or more other APEXes.
+	NotInPlatform() bool
 
 	// Tests if this module could have APEX variants. Even when a module type implements
 	// ApexModule interface, APEX variants are created only for the module instances that return
@@ -221,7 +220,12 @@ type ApexProperties struct {
 	// See ApexModule.DirectlyInAnyApex()
 	DirectlyInAnyApex bool `blueprint:"mutated"`
 
-	// See ApexModule.AnyVariantDirectlyInAnyApex()
+	// AnyVariantDirectlyInAnyApex is true in the primary variant of a module if _any_ variant
+	// of the module is directly in any apex. This includes host, arch, asan, etc. variants. It
+	// is unused in any variant that is not the primary variant. Ideally this wouldn't be used,
+	// as it incorrectly mixes arch variants if only one arch is in an apex, but a few places
+	// depend on it, for example when an ASAN variant is created before the apexMutator. Call
+	// this after apex.apexMutator is run.
 	AnyVariantDirectlyInAnyApex bool `blueprint:"mutated"`
 
 	// See ApexModule.NotAvailableForPlatform()
@@ -249,6 +253,12 @@ type CopyDirectlyInAnyApexTag interface {
 	CopyDirectlyInAnyApex()
 }
 
+// Interface that identifies dependencies to skip Apex dependency check
+type SkipApexAllowedDependenciesCheck interface {
+	// Returns true to skip the Apex dependency check, which limits the allowed dependency in build.
+	SkipApexAllowedDependenciesCheck() bool
+}
+
 // ApexModuleBase provides the default implementation for the ApexModule interface. APEX-aware
 // modules are expected to include this struct and call InitApexModule().
 type ApexModuleBase struct {
@@ -257,7 +267,7 @@ type ApexModuleBase struct {
 	canHaveApexVariants bool
 
 	apexInfos     []ApexInfo
-	apexInfosLock sync.Mutex // protects apexInfos during parallel apexDepsMutator
+	apexInfosLock sync.Mutex // protects apexInfos during parallel apexInfoMutator
 }
 
 // Initializes ApexModuleBase struct. Not calling this (even when inheriting from ApexModuleBase)
@@ -302,8 +312,8 @@ func (m *ApexModuleBase) DirectlyInAnyApex() bool {
 }
 
 // Implements ApexModule
-func (m *ApexModuleBase) AnyVariantDirectlyInAnyApex() bool {
-	return m.ApexProperties.AnyVariantDirectlyInAnyApex
+func (m *ApexModuleBase) NotInPlatform() bool {
+	return m.ApexProperties.AnyVariantDirectlyInAnyApex || !m.AvailableFor(AvailableToPlatform)
 }
 
 // Implements ApexModule
@@ -442,7 +452,7 @@ func CreateApexVariations(mctx BottomUpMutatorContext, module ApexModule) []Modu
 	} else {
 		apexInfos = base.apexInfos
 	}
-	// base.apexInfos is only needed to propagate the list of apexes from apexDepsMutator to
+	// base.apexInfos is only needed to propagate the list of apexes from apexInfoMutator to
 	// apexMutator. It is no longer accurate after mergeApexVariations, and won't be copied to
 	// all but the first created variant. Clear it so it doesn't accidentally get used later.
 	base.apexInfos = nil
