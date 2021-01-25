@@ -305,17 +305,17 @@ func apiCheckEnabled(ctx android.ModuleContext, apiToCheck ApiToCheck, apiVersio
 }
 
 func ignoreMissingModules(ctx android.BottomUpMutatorContext, apiToCheck *ApiToCheck) {
-	api_file := String(apiToCheck.Api_file)
-	removed_api_file := String(apiToCheck.Removed_api_file)
+	apiFile := String(apiToCheck.Api_file)
+	removedApiFile := String(apiToCheck.Removed_api_file)
 
-	api_module := android.SrcIsModule(api_file)
-	removed_api_module := android.SrcIsModule(removed_api_file)
+	apiModule := android.SrcIsModule(apiFile)
+	removedApiModule := android.SrcIsModule(removedApiFile)
 
-	if api_module == "" || removed_api_module == "" {
+	if apiModule == "" || removedApiModule == "" {
 		return
 	}
 
-	if ctx.OtherModuleExists(api_module) || ctx.OtherModuleExists(removed_api_module) {
+	if ctx.OtherModuleExists(apiModule) || ctx.OtherModuleExists(removedApiModule) {
 		return
 	}
 
@@ -1082,6 +1082,10 @@ func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 	// If requested clear any properties that provide information about the latest version
 	// of an API and which reference non-existent modules.
 	if Bool(d.properties.Check_api.Ignore_missing_latest_api) {
+		previousApi := android.SrcIsModule(String(d.properties.Previous_api))
+		if previousApi != "" && !ctx.OtherModuleExists(previousApi) {
+			d.properties.Previous_api = nil
+		}
 		ignoreMissingModules(ctx, &d.properties.Check_api.Last_released)
 
 		// If the new_since references a module, e.g. :module-latest-api and the module

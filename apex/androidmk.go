@@ -360,7 +360,11 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				fmt.Fprintln(w, "LOCAL_MODULE_CLASS := ETC") // do we need a new class?
 				fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", a.outputFile.String())
 				fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", a.installDir.ToMakePath().String())
-				fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", name+apexType.suffix())
+				stemSuffix := apexType.suffix()
+				if a.isCompressed {
+					stemSuffix = ".capex"
+				}
+				fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", name+stemSuffix)
 				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !a.installable())
 
 				// Because apex writes .mk with Custom(), we need to write manually some common properties
@@ -420,6 +424,15 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				}
 				for _, dist := range data.Entries.GetDistForGoals(a) {
 					fmt.Fprintf(w, dist)
+				}
+
+				if a.coverageOutputPath.String() != "" {
+					goal := "apps_only"
+					distFile := a.coverageOutputPath.String()
+					fmt.Fprintf(w, "ifneq (,$(filter $(my_register_name),$(TARGET_BUILD_APPS)))\n"+
+						" $(call dist-for-goals,%s,%s:ndk_apis_usedby_apex/$(notdir %s))\n"+
+						"endif",
+						goal, distFile, distFile)
 				}
 			}
 		}}
