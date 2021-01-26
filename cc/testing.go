@@ -110,6 +110,16 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 		}
 
 		toolchain_library {
+			name: "libunwind",
+			defaults: ["linux_bionic_supported"],
+			vendor_available: true,
+			product_available: true,
+			recovery_available: true,
+			native_bridge_supported: true,
+			src: "",
+		}
+
+		toolchain_library {
 			name: "libclang_rt.fuzzer-arm-android",
 			vendor_available: true,
 			product_available: true,
@@ -299,7 +309,7 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 		llndk_library {
 			name: "libft2.llndk",
 			symbol_file: "",
-			vendor_available: false,
+			private: true,
 			sdk_version: "current",
 		}
 		cc_library {
@@ -445,6 +455,14 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			stl: "none",
 			system_shared_libs: [],
 		}
+
+		cc_library_static {
+			name: "note_memtag_heap_async",
+		}
+
+		cc_library_static {
+			name: "note_memtag_heap_sync",
+		}
 	`
 
 	supportLinuxBionic := false
@@ -568,15 +586,16 @@ func CreateTestContext(config android.Config) *android.TestContext {
 	ctx.RegisterModuleType("vendor_public_library", vendorPublicLibraryFactory)
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
-	ctx.RegisterModuleType("vndk_libraries_txt", VndkLibrariesTxtFactory)
 	ctx.RegisterModuleType("vendor_snapshot_shared", VendorSnapshotSharedFactory)
 	ctx.RegisterModuleType("vendor_snapshot_static", VendorSnapshotStaticFactory)
 	ctx.RegisterModuleType("vendor_snapshot_binary", VendorSnapshotBinaryFactory)
+	RegisterVndkLibraryTxtTypes(ctx)
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	android.RegisterPrebuiltMutators(ctx)
 	RegisterRequiredBuildComponentsForTest(ctx)
 	ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 	ctx.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
+	ctx.RegisterSingletonType("vendor-fake-snapshot", VendorFakeSnapshotSingleton)
 	ctx.RegisterSingletonType("recovery-snapshot", RecoverySnapshotSingleton)
 
 	return ctx

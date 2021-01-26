@@ -451,24 +451,39 @@ func (l *libraryDecorator) collectHeadersForSnapshot(ctx android.ModuleContext) 
 			}
 			continue
 		}
-		exts := headerExts
-		// Glob all files under this special directory, because of C++ headers.
-		if strings.HasPrefix(dir, "external/libcxx/include") {
-			exts = []string{""}
+		glob, err := ctx.GlobWithDeps(dir+"/**/*", nil)
+		if err != nil {
+			ctx.ModuleErrorf("glob failed: %#v", err)
+			return
 		}
-		for _, ext := range exts {
-			glob, err := ctx.GlobWithDeps(dir+"/**/*"+ext, nil)
-			if err != nil {
-				ctx.ModuleErrorf("glob failed: %#v", err)
-				return
-			}
-			for _, header := range glob {
-				if strings.HasSuffix(header, "/") {
+		isLibcxx := strings.HasPrefix(dir, "external/libcxx/include")
+		j := 0
+		for i, header := range glob {
+			if isLibcxx {
+				// Glob all files under this special directory, because of C++ headers with no
+				// extension.
+				if !strings.HasSuffix(header, "/") {
 					continue
 				}
-				ret = append(ret, android.PathForSource(ctx, header))
+			} else {
+				// Filter out only the files with extensions that are headers.
+				found := false
+				for _, ext := range headerExts {
+					if strings.HasSuffix(header, ext) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					continue
+				}
 			}
+			if i != j {
+				glob[j] = glob[i]
+			}
+			j++
 		}
+		glob = glob[:j]
 	}
 
 	// Collect generated headers
@@ -1336,17 +1351,13 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 	if library.baseCompiler.hasSrcExt(".sysprop") {
 		dir := android.PathForModuleGen(ctx, "sysprop", "include")
 		if library.Properties.Sysprop.Platform != nil {
-			isClientProduct := ctx.ProductSpecific() && !ctx.useVndk()
-			isClientVendor := ctx.useVndk()
 			isOwnerPlatform := Bool(library.Properties.Sysprop.Platform)
 
 			// If the owner is different from the user, expose public header. That is,
 			// 1) if the user is product (as owner can only be platform / vendor)
-			// 2) if one is platform and the other is vendor
-			// Exceptions are ramdisk and recovery. They are not enforced at all. So
-			// they always use internal header.
-			if !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() &&
-				(isClientProduct || (isOwnerPlatform == isClientVendor)) {
+			// 2) if the owner is platform and the client is vendor
+			// We don't care Platform -> Vendor dependency as it's already forbidden.
+			if ctx.Device() && (ctx.ProductSpecific() || (isOwnerPlatform && ctx.inVendor())) {
 				dir = android.PathForModuleGen(ctx, "sysprop/public", "include")
 			}
 		}
@@ -1756,12 +1767,9 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 
 		isLLNDK := false
 		if m, ok := mctx.Module().(*Module); ok {
-			isLLNDK = m.IsLlndk()
 			// Don't count the vestigial llndk_library module as isLLNDK, it needs a static
 			// variant so that a cc_library_prebuilt can depend on it.
-			if _, ok := m.linker.(*llndkStubDecorator); ok {
-				isLLNDK = false
-			}
+			isLLNDK = m.IsLlndk() && !isVestigialLLNDKModule(m)
 		}
 		buildStatic := library.BuildStaticVariant() && !isLLNDK
 		buildShared := library.BuildSharedVariant()
@@ -1873,9 +1881,8 @@ func CanBeOrLinkAgainstVersionVariants(module interface {
 	Host() bool
 	InRamdisk() bool
 	InVendorRamdisk() bool
-	InRecovery() bool
 }) bool {
-	return !module.Host() && !module.InRamdisk() && !module.InVendorRamdisk() && !module.InRecovery()
+	return !module.Host() && !module.InRamdisk() && !module.InVendorRamdisk()
 }
 
 func CanBeVersionVariant(module interface {

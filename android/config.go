@@ -1026,6 +1026,10 @@ func (c *config) HasMultilibConflict(arch ArchType) bool {
 	return c.multilibConflicts[arch]
 }
 
+func (c *config) PrebuiltHiddenApiDir(ctx PathContext) string {
+	return String(c.productVariables.PrebuiltHiddenApiDir)
+}
+
 func (c *deviceConfig) Arches() []Arch {
 	var arches []Arch
 	for _, target := range c.config.Targets[Android] {
@@ -1051,6 +1055,10 @@ func (c *deviceConfig) VendorPath() string {
 
 func (c *deviceConfig) VndkVersion() string {
 	return String(c.config.productVariables.DeviceVndkVersion)
+}
+
+func (c *deviceConfig) RecoverySnapshotVersion() string {
+	return String(c.config.productVariables.RecoverySnapshotVersion)
 }
 
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
@@ -1273,6 +1281,27 @@ func (c *config) CFIEnabledForPath(path string) bool {
 	return HasAnyPrefix(path, c.productVariables.CFIIncludePaths)
 }
 
+func (c *config) MemtagHeapDisabledForPath(path string) bool {
+	if len(c.productVariables.MemtagHeapExcludePaths) == 0 {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.MemtagHeapExcludePaths)
+}
+
+func (c *config) MemtagHeapAsyncEnabledForPath(path string) bool {
+	if len(c.productVariables.MemtagHeapAsyncIncludePaths) == 0 {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.MemtagHeapAsyncIncludePaths)
+}
+
+func (c *config) MemtagHeapSyncEnabledForPath(path string) bool {
+	if len(c.productVariables.MemtagHeapSyncIncludePaths) == 0 {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.MemtagHeapSyncIncludePaths)
+}
+
 func (c *config) VendorConfig(name string) VendorConfig {
 	return soongconfig.Config(c.productVariables.VendorVars[name])
 }
@@ -1291,6 +1320,10 @@ func (c *config) ExcludeDraftNdkApis() bool {
 
 func (c *config) FlattenApex() bool {
 	return Bool(c.productVariables.Flatten_apex)
+}
+
+func (c *config) ForceApexSymlinkOptimization() bool {
+	return Bool(c.productVariables.ForceApexSymlinkOptimization)
 }
 
 func (c *config) CompressedApex() bool {
@@ -1379,6 +1412,26 @@ func (c *deviceConfig) BoardKernelModuleInterfaceVersions() []string {
 
 func (c *deviceConfig) BoardMoveRecoveryResourcesToVendorBoot() bool {
 	return Bool(c.config.productVariables.BoardMoveRecoveryResourcesToVendorBoot)
+}
+
+func (c *deviceConfig) PlatformSepolicyVersion() string {
+	return String(c.config.productVariables.PlatformSepolicyVersion)
+}
+
+func (c *deviceConfig) BoardSepolicyVers() string {
+	return String(c.config.productVariables.BoardSepolicyVers)
+}
+
+func (c *deviceConfig) BoardReqdMaskPolicy() []string {
+	return c.config.productVariables.BoardReqdMaskPolicy
+}
+
+func (c *deviceConfig) DirectedVendorSnapshot() bool {
+	return c.config.productVariables.DirectedVendorSnapshot
+}
+
+func (c *deviceConfig) VendorSnapshotModules() map[string]bool {
+	return c.config.productVariables.VendorSnapshotModules
 }
 
 // The ConfiguredJarList struct provides methods for handling a list of (apex, jar) pairs.

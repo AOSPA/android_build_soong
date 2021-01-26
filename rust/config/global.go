@@ -24,7 +24,7 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust/config")
 
 var (
-	RustDefaultVersion = "1.48.0"
+	RustDefaultVersion = "1.49.0"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2018"
 	Stdlibs            = []string{
@@ -44,6 +44,7 @@ var (
 	GlobalRustFlags = []string{
 		"--remap-path-prefix $$(pwd)=",
 		"-C codegen-units=1",
+		"-C debuginfo=2",
 		"-C opt-level=3",
 		"-C relocation-model=pic",
 	}
