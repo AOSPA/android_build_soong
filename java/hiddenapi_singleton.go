@@ -163,7 +163,6 @@ func stubFlagsRule(ctx android.SingletonContext) {
 						return
 					}
 				}
-
 				bootDexJars = append(bootDexJars, jar)
 			}
 		}
