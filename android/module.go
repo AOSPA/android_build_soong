@@ -232,6 +232,8 @@ type Module interface {
 	InstallBypassMake() bool
 	SkipInstall()
 	IsSkipInstall() bool
+	ReplacedByPrebuilt()
+	IsReplacedByPrebuilt() bool
 	ExportedToMake() bool
 	InitRc() Paths
 	VintfFragments() Paths
@@ -513,6 +515,9 @@ type commonProperties struct {
 	CommonOSVariant bool `blueprint:"mutated"`
 
 	SkipInstall bool `blueprint:"mutated"`
+
+	// Whether the module has been replaced by a prebuilt
+	ReplacedByPrebuilt bool `blueprint:"mutated"`
 
 	// Disabled by mutators. If set to true, it overrides Enabled property.
 	ForcedDisabled bool `blueprint:"mutated"`
@@ -972,6 +977,15 @@ func (m *ModuleBase) SkipInstall() {
 
 func (m *ModuleBase) IsSkipInstall() bool {
 	return m.commonProperties.SkipInstall == true
+}
+
+func (m *ModuleBase) ReplacedByPrebuilt() {
+	m.commonProperties.ReplacedByPrebuilt = true
+	m.SkipInstall()
+}
+
+func (m *ModuleBase) IsReplacedByPrebuilt() bool {
+	return m.commonProperties.ReplacedByPrebuilt
 }
 
 func (m *ModuleBase) ExportedToMake() bool {
