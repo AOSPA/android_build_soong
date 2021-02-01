@@ -296,8 +296,8 @@ func checkSnapshotExclude(t *testing.T, ctx *android.TestContext, singleton andr
 
 func checkWriteFileOutput(t *testing.T, params android.TestingBuildParams, expected []string) {
 	t.Helper()
-	assertString(t, params.Rule.String(), android.WriteFile.String())
-	actual := strings.FieldsFunc(strings.ReplaceAll(params.Args["content"], "\\n", "\n"), func(r rune) bool { return r == '\n' })
+	content := android.ContentFromFileRuleForTests(t, params)
+	actual := strings.FieldsFunc(content, func(r rune) bool { return r == '\n' })
 	assertArrayString(t, actual, expected)
 }
 
@@ -1551,6 +1551,8 @@ func TestVendorSnapshotExcludeInVendorProprietaryPathErrors(t *testing.T) {
 	android.CheckErrorsAgainstExpectations(t, errs, []string{
 		`module "libvendor\{.+,image:vendor.+,arch:arm64_.+\}" in vendor proprietary path "device" may not use "exclude_from_vendor_snapshot: true"`,
 		`module "libvendor\{.+,image:vendor.+,arch:arm_.+\}" in vendor proprietary path "device" may not use "exclude_from_vendor_snapshot: true"`,
+		`module "libvendor\{.+,image:vendor.+,arch:arm64_.+\}" in vendor proprietary path "device" may not use "exclude_from_vendor_snapshot: true"`,
+		`module "libvendor\{.+,image:vendor.+,arch:arm_.+\}" in vendor proprietary path "device" may not use "exclude_from_vendor_snapshot: true"`,
 	})
 }
 
@@ -1595,6 +1597,132 @@ func TestVendorSnapshotExcludeWithVendorAvailable(t *testing.T) {
 		`module "libinclude\{.+,image:vendor.+,arch:arm64_.+\}" may not use both "vendor_available: true" and "exclude_from_vendor_snapshot: true"`,
 		`module "libinclude\{.+,image:vendor.+,arch:arm_.+\}" may not use both "vendor_available: true" and "exclude_from_vendor_snapshot: true"`,
 	})
+}
+
+func TestRecoverySnapshotCapture(t *testing.T) {
+	bp := `
+	cc_library {
+		name: "libvndk",
+		vendor_available: true,
+		recovery_available: true,
+		product_available: true,
+		vndk: {
+			enabled: true,
+		},
+		nocrt: true,
+	}
+
+	cc_library {
+		name: "librecovery",
+		recovery: true,
+		nocrt: true,
+	}
+
+	cc_library {
+		name: "librecovery_available",
+		recovery_available: true,
+		nocrt: true,
+	}
+
+	cc_library_headers {
+		name: "librecovery_headers",
+		recovery_available: true,
+		nocrt: true,
+	}
+
+	cc_binary {
+		name: "recovery_bin",
+		recovery: true,
+		nocrt: true,
+	}
+
+	cc_binary {
+		name: "recovery_available_bin",
+		recovery_available: true,
+		nocrt: true,
+	}
+
+	toolchain_library {
+		name: "libb",
+		recovery_available: true,
+		src: "libb.a",
+	}
+
+	cc_object {
+		name: "obj",
+		recovery_available: true,
+	}
+`
+	config := TestConfig(buildDir, android.Android, nil, bp, nil)
+	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
+	config.TestProductVariables.Platform_vndk_version = StringPtr("VER")
+	ctx := testCcWithConfig(t, config)
+
+	// Check Recovery snapshot output.
+
+	snapshotDir := "recovery-snapshot"
+	snapshotVariantPath := filepath.Join(buildDir, snapshotDir, "arm64")
+	snapshotSingleton := ctx.SingletonForTests("recovery-snapshot")
+
+	var jsonFiles []string
+
+	for _, arch := range [][]string{
+		[]string{"arm64", "armv8-a"},
+	} {
+		archType := arch[0]
+		archVariant := arch[1]
+		archDir := fmt.Sprintf("arch-%s-%s", archType, archVariant)
+
+		// For shared libraries, only recovery_available modules are captured.
+		sharedVariant := fmt.Sprintf("android_recovery_%s_%s_shared", archType, archVariant)
+		sharedDir := filepath.Join(snapshotVariantPath, archDir, "shared")
+		checkSnapshot(t, ctx, snapshotSingleton, "libvndk", "libvndk.so", sharedDir, sharedVariant)
+		checkSnapshot(t, ctx, snapshotSingleton, "librecovery", "librecovery.so", sharedDir, sharedVariant)
+		checkSnapshot(t, ctx, snapshotSingleton, "librecovery_available", "librecovery_available.so", sharedDir, sharedVariant)
+		jsonFiles = append(jsonFiles,
+			filepath.Join(sharedDir, "libvndk.so.json"),
+			filepath.Join(sharedDir, "librecovery.so.json"),
+			filepath.Join(sharedDir, "librecovery_available.so.json"))
+
+		// For static libraries, all recovery:true and recovery_available modules are captured.
+		staticVariant := fmt.Sprintf("android_recovery_%s_%s_static", archType, archVariant)
+		staticDir := filepath.Join(snapshotVariantPath, archDir, "static")
+		checkSnapshot(t, ctx, snapshotSingleton, "libb", "libb.a", staticDir, staticVariant)
+		checkSnapshot(t, ctx, snapshotSingleton, "librecovery", "librecovery.a", staticDir, staticVariant)
+		checkSnapshot(t, ctx, snapshotSingleton, "librecovery_available", "librecovery_available.a", staticDir, staticVariant)
+		jsonFiles = append(jsonFiles,
+			filepath.Join(staticDir, "libb.a.json"),
+			filepath.Join(staticDir, "librecovery.a.json"),
+			filepath.Join(staticDir, "librecovery_available.a.json"))
+
+		// For binary executables, all recovery:true and recovery_available modules are captured.
+		if archType == "arm64" {
+			binaryVariant := fmt.Sprintf("android_recovery_%s_%s", archType, archVariant)
+			binaryDir := filepath.Join(snapshotVariantPath, archDir, "binary")
+			checkSnapshot(t, ctx, snapshotSingleton, "recovery_bin", "recovery_bin", binaryDir, binaryVariant)
+			checkSnapshot(t, ctx, snapshotSingleton, "recovery_available_bin", "recovery_available_bin", binaryDir, binaryVariant)
+			jsonFiles = append(jsonFiles,
+				filepath.Join(binaryDir, "recovery_bin.json"),
+				filepath.Join(binaryDir, "recovery_available_bin.json"))
+		}
+
+		// For header libraries, all vendor:true and vendor_available modules are captured.
+		headerDir := filepath.Join(snapshotVariantPath, archDir, "header")
+		jsonFiles = append(jsonFiles, filepath.Join(headerDir, "librecovery_headers.json"))
+
+		// For object modules, all vendor:true and vendor_available modules are captured.
+		objectVariant := fmt.Sprintf("android_recovery_%s_%s", archType, archVariant)
+		objectDir := filepath.Join(snapshotVariantPath, archDir, "object")
+		checkSnapshot(t, ctx, snapshotSingleton, "obj", "obj.o", objectDir, objectVariant)
+		jsonFiles = append(jsonFiles, filepath.Join(objectDir, "obj.o.json"))
+	}
+
+	for _, jsonFile := range jsonFiles {
+		// verify all json files exist
+		if snapshotSingleton.MaybeOutput(jsonFile).Rule == nil {
+			t.Errorf("%q expected but not found", jsonFile)
+		}
+	}
 }
 
 func TestDoubleLoadableDepError(t *testing.T) {
@@ -2785,114 +2913,6 @@ func TestMakeLinkType(t *testing.T) {
 	}
 }
 
-var (
-	str11 = "01234567891"
-	str10 = str11[:10]
-	str9  = str11[:9]
-	str5  = str11[:5]
-	str4  = str11[:4]
-)
-
-var splitListForSizeTestCases = []struct {
-	in   []string
-	out  [][]string
-	size int
-}{
-	{
-		in:   []string{str10},
-		out:  [][]string{{str10}},
-		size: 10,
-	},
-	{
-		in:   []string{str9},
-		out:  [][]string{{str9}},
-		size: 10,
-	},
-	{
-		in:   []string{str5},
-		out:  [][]string{{str5}},
-		size: 10,
-	},
-	{
-		in:   []string{str11},
-		out:  nil,
-		size: 10,
-	},
-	{
-		in:   []string{str10, str10},
-		out:  [][]string{{str10}, {str10}},
-		size: 10,
-	},
-	{
-		in:   []string{str9, str10},
-		out:  [][]string{{str9}, {str10}},
-		size: 10,
-	},
-	{
-		in:   []string{str10, str9},
-		out:  [][]string{{str10}, {str9}},
-		size: 10,
-	},
-	{
-		in:   []string{str5, str4},
-		out:  [][]string{{str5, str4}},
-		size: 10,
-	},
-	{
-		in:   []string{str5, str4, str5},
-		out:  [][]string{{str5, str4}, {str5}},
-		size: 10,
-	},
-	{
-		in:   []string{str5, str4, str5, str4},
-		out:  [][]string{{str5, str4}, {str5, str4}},
-		size: 10,
-	},
-	{
-		in:   []string{str5, str4, str5, str5},
-		out:  [][]string{{str5, str4}, {str5}, {str5}},
-		size: 10,
-	},
-	{
-		in:   []string{str5, str5, str5, str4},
-		out:  [][]string{{str5}, {str5}, {str5, str4}},
-		size: 10,
-	},
-	{
-		in:   []string{str9, str11},
-		out:  nil,
-		size: 10,
-	},
-	{
-		in:   []string{str11, str9},
-		out:  nil,
-		size: 10,
-	},
-}
-
-func TestSplitListForSize(t *testing.T) {
-	for _, testCase := range splitListForSizeTestCases {
-		out, _ := splitListForSize(android.PathsForTesting(testCase.in...), testCase.size)
-
-		var outStrings [][]string
-
-		if len(out) > 0 {
-			outStrings = make([][]string, len(out))
-			for i, o := range out {
-				outStrings[i] = o.Strings()
-			}
-		}
-
-		if !reflect.DeepEqual(outStrings, testCase.out) {
-			t.Errorf("incorrect output:")
-			t.Errorf("     input: %#v", testCase.in)
-			t.Errorf("      size: %d", testCase.size)
-			t.Errorf("  expected: %#v", testCase.out)
-			t.Errorf("       got: %#v", outStrings)
-		}
-	}
-}
-
 var staticLinkDepOrderTestCases = []struct {
 	// This is a string representation of a map[moduleName][]moduleDependency .
 	// It models the dependencies declared in an Android.bp file.
@@ -3938,6 +3958,101 @@ func TestEmptyWholeStaticLibsAllowMissingDependencies(t *testing.T) {
 	libfoo := ctx.ModuleForTests("libfoo", "android_arm64_armv8-a_static").Output("libfoo.a")
 	if g, w := libfoo.Inputs.Strings(), libbar.Output.String(); !android.InList(w, g) {
 		t.Errorf("Expected libfoo.a to depend on %q, got %q", w, g)
+	}
+
+}
+
+func TestInstallSharedLibs(t *testing.T) {
+	bp := `
+		cc_binary {
+			name: "bin",
+			host_supported: true,
+			shared_libs: ["libshared"],
+			runtime_libs: ["libruntime"],
+			srcs: [":gen"],
+		}
+
+		cc_library_shared {
+			name: "libshared",
+			host_supported: true,
+			shared_libs: ["libtransitive"],
+		}
+
+		cc_library_shared {
+			name: "libtransitive",
+			host_supported: true,
+		}
+
+		cc_library_shared {
+			name: "libruntime",
+			host_supported: true,
+		}
+
+		cc_binary_host {
+			name: "tool",
+			srcs: ["foo.cpp"],
+		}
+
+		genrule {
+			name: "gen",
+			tools: ["tool"],
+			out: ["gen.cpp"],
+			cmd: "$(location tool) $(out)",
+		}
+	`
+
+	config := TestConfig(buildDir, android.Android, nil, bp, nil)
+	ctx := testCcWithConfig(t, config)
+
+	hostBin := ctx.ModuleForTests("bin", config.BuildOSTarget.String()).Description("install")
+	hostShared := ctx.ModuleForTests("libshared", config.BuildOSTarget.String()+"_shared").Description("install")
+	hostRuntime := ctx.ModuleForTests("libruntime", config.BuildOSTarget.String()+"_shared").Description("install")
+	hostTransitive := ctx.ModuleForTests("libtransitive", config.BuildOSTarget.String()+"_shared").Description("install")
+	hostTool := ctx.ModuleForTests("tool", config.BuildOSTarget.String()).Description("install")
+
+	if g, w := hostBin.Implicits.Strings(), hostShared.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected host bin dependency %q, got %q", w, g)
+	}
+
+	if g, w := hostBin.Implicits.Strings(), hostTransitive.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected host bin dependency %q, got %q", w, g)
+	}
+
+	if g, w := hostShared.Implicits.Strings(), hostTransitive.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected host bin dependency %q, got %q", w, g)
+	}
+
+	if g, w := hostBin.Implicits.Strings(), hostRuntime.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected host bin dependency %q, got %q", w, g)
+	}
+
+	if g, w := hostBin.Implicits.Strings(), hostTool.Output.String(); android.InList(w, g) {
+		t.Errorf("expected no host bin dependency %q, got %q", w, g)
+	}
+
+	deviceBin := ctx.ModuleForTests("bin", "android_arm64_armv8-a").Description("install")
+	deviceShared := ctx.ModuleForTests("libshared", "android_arm64_armv8-a_shared").Description("install")
+	deviceTransitive := ctx.ModuleForTests("libtransitive", "android_arm64_armv8-a_shared").Description("install")
+	deviceRuntime := ctx.ModuleForTests("libruntime", "android_arm64_armv8-a_shared").Description("install")
+
+	if g, w := deviceBin.OrderOnly.Strings(), deviceShared.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected device bin dependency %q, got %q", w, g)
+	}
+
+	if g, w := deviceBin.OrderOnly.Strings(), deviceTransitive.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected device bin dependency %q, got %q", w, g)
+	}
+
+	if g, w := deviceShared.OrderOnly.Strings(), deviceTransitive.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected device bin dependency %q, got %q", w, g)
+	}
+
+	if g, w := deviceBin.OrderOnly.Strings(), deviceRuntime.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected device bin dependency %q, got %q", w, g)
+	}
+
+	if g, w := deviceBin.OrderOnly.Strings(), hostTool.Output.String(); android.InList(w, g) {
+		t.Errorf("expected no device bin dependency %q, got %q", w, g)
 	}
 
 }

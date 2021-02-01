@@ -30,16 +30,33 @@ import (
 	"android/soong/ui/status"
 )
 
+// This uses Android.bp files and various tools to generate <builddir>/build.ninja.
+//
+// However, the execution of <builddir>/build.ninja happens later in build/soong/ui/build/build.go#Build()
+//
+// We want to rely on as few prebuilts as possible, so there is some bootstrapping here.
+//
+// "Microfactory" is a tool for compiling Go code. We use it to build two other tools:
+// - minibp, used to generate build.ninja files. This is really build/blueprint/bootstrap/command.go#Main()
+// - bpglob, used during incremental builds to identify files in a glob that have changed
+//
+// In reality, several build.ninja files are generated and/or used during the bootstrapping and build process.
+// See build/blueprint/bootstrap/doc.go for more information.
+//
 func runSoong(ctx Context, config Config) {
 	ctx.BeginTrace(metrics.RunSoong, "soong")
 	defer ctx.EndTrace()
 
+	// Use an anonymous inline function for tracing purposes (this pattern is used several times below).
 	func() {
 		ctx.BeginTrace(metrics.RunSoong, "blueprint bootstrap")
 		defer ctx.EndTrace()
 
+		// Use validations to depend on tests.
 		args := []string{"-n"}
+
 		if !config.skipSoongTests {
+			// Run tests.
 			args = append(args, "-t")
 		}
 
@@ -113,20 +130,6 @@ func runSoong(ctx Context, config Config) {
 		}
 	}()
 
-	func() {
-		ctx.BeginTrace(metrics.RunSoong, "QSSI_violators")
-		defer ctx.EndTrace()
-
-		cmd := Command(ctx, config, config.PrebuiltBuildTool("qssi"),
-			"vendor/qcom/opensource/core-utils/build/QSSI_violators")
-
-		cmd.Sandbox = soongSandbox
-		err := cmd.Run()
-		if err != nil {
-			ctx.Verboseln("QSSI_violators returned error...")
-		}
-	}()
-
 	ninja := func(name, file string) {
 		ctx.BeginTrace(metrics.RunSoong, name)
 		defer ctx.EndTrace()
@@ -147,12 +150,22 @@ func runSoong(ctx Context, config Config) {
 			"-j", strconv.Itoa(config.Parallel()),
 			"--frontend_file", fifo,
 			"-f", filepath.Join(config.SoongOutDir(), file))
+
+		// For Bazel mixed builds.
+		cmd.Environment.Set("BAZEL_PATH", "./tools/bazel")
+		cmd.Environment.Set("BAZEL_HOME", filepath.Join(config.BazelOutDir(), "bazelhome"))
+		cmd.Environment.Set("BAZEL_OUTPUT_BASE", filepath.Join(config.BazelOutDir(), "output"))
+		cmd.Environment.Set("BAZEL_WORKSPACE", absPath(ctx, "."))
+
 		cmd.Environment.Set("SOONG_SANDBOX_SOONG_BUILD", "true")
 		cmd.Sandbox = soongSandbox
 		cmd.RunAndStreamOrFatal()
 	}
 
+	// This build generates .bootstrap/build.ninja, which is used in the next step.
 	ninja("minibootstrap", ".minibootstrap/build.ninja")
+
+	// This build generates <builddir>/build.ninja, which is used later by build/soong/ui/build/build.go#Build().
 	ninja("bootstrap", ".bootstrap/build.ninja")
 
 	soongBuildMetrics := loadSoongBuildMetrics(ctx, config)
@@ -160,7 +173,7 @@ func runSoong(ctx Context, config Config) {
 
 	distGzipFile(ctx, config, config.SoongNinjaFile(), "soong")
 
-	if !config.SkipMake() {
+	if !config.SkipKati() {
 		distGzipFile(ctx, config, config.SoongAndroidMk(), "soong")
 		distGzipFile(ctx, config, config.SoongMakeVarsMk(), "soong")
 	}

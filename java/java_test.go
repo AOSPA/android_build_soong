@@ -15,6 +15,7 @@
 package java
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -29,7 +30,6 @@ import (
 	"android/soong/android"
 	"android/soong/cc"
 	"android/soong/dexpreopt"
-	"android/soong/genrule"
 	"android/soong/python"
 )
 
@@ -80,7 +80,6 @@ func testContext(config android.Config) *android.TestContext {
 	RegisterSystemModulesBuildComponents(ctx)
 	ctx.RegisterModuleType("java_plugin", PluginFactory)
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
-	ctx.RegisterModuleType("genrule", genrule.GenRuleFactory)
 	ctx.RegisterModuleType("python_binary_host", python.PythonBinaryHostFactory)
 	RegisterDocsBuildComponents(ctx)
 	RegisterStubsBuildComponents(ctx)
@@ -92,8 +91,8 @@ func testContext(config android.Config) *android.TestContext {
 
 	ctx.PreDepsMutators(python.RegisterPythonPreDepsMutators)
 	ctx.PostDepsMutators(android.RegisterOverridePostDepsMutators)
-	ctx.RegisterPreSingletonType("overlay", android.SingletonFactoryAdaptor(OverlaySingletonFactory))
-	ctx.RegisterPreSingletonType("sdk_versions", android.SingletonFactoryAdaptor(sdkPreSingletonFactory))
+	ctx.RegisterPreSingletonType("overlay", android.SingletonFactoryAdaptor(ctx.Context, OverlaySingletonFactory))
+	ctx.RegisterPreSingletonType("sdk_versions", android.SingletonFactoryAdaptor(ctx.Context, sdkPreSingletonFactory))
 
 	android.RegisterPrebuiltMutators(ctx)
 
@@ -202,7 +201,7 @@ func TestJavaLinkType(t *testing.T) {
 		}
 	`)
 
-	testJavaError(t, "Adjust sdk_version: property of the source or target module so that target module is built with the same or smaller API set than the source.", `
+	testJavaError(t, "consider adjusting sdk_version: OR platform_apis:", `
 		java_library {
 			name: "foo",
 			srcs: ["a.java"],
@@ -246,7 +245,7 @@ func TestJavaLinkType(t *testing.T) {
 		}
 	`)
 
-	testJavaError(t, "Adjust sdk_version: property of the source or target module so that target module is built with the same or smaller API set than the source.", `
+	testJavaError(t, "consider adjusting sdk_version: OR platform_apis:", `
 		java_library {
 			name: "foo",
 			srcs: ["a.java"],
@@ -314,8 +313,9 @@ func TestSimple(t *testing.T) {
 
 func TestExportedPlugins(t *testing.T) {
 	type Result struct {
-		library    string
-		processors string
+		library        string
+		processors     string
+		disableTurbine bool
 	}
 	var tests = []struct {
 		name    string
@@ -374,6 +374,18 @@ func TestExportedPlugins(t *testing.T) {
 				{library: "foo", processors: "-processor com.android.TestPlugin,com.android.TestPlugin2"},
 			},
 		},
+		{
+			name: "Exports plugin to with generates_api to dependee",
+			extra: `
+				java_library{name: "exports", exported_plugins: ["plugin_generates_api"]}
+				java_library{name: "foo", srcs: ["a.java"], libs: ["exports"]}
+				java_library{name: "bar", srcs: ["a.java"], static_libs: ["exports"]}
+			`,
+			results: []Result{
+				{library: "foo", processors: "-processor com.android.TestPlugin", disableTurbine: true},
+				{library: "bar", processors: "-processor com.android.TestPlugin", disableTurbine: true},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -383,12 +395,22 @@ func TestExportedPlugins(t *testing.T) {
 					name: "plugin",
 					processor_class: "com.android.TestPlugin",
 				}
+				java_plugin {
+					name: "plugin_generates_api",
+					generates_api: true,
+					processor_class: "com.android.TestPlugin",
+				}
 			`+test.extra)
 
 			for _, want := range test.results {
 				javac := ctx.ModuleForTests(want.library, "android_common").Rule("javac")
 				if javac.Args["processor"] != want.processors {
 					t.Errorf("For library %v, expected %v, found %v", want.library, want.processors, javac.Args["processor"])
+				}
+				turbine := ctx.ModuleForTests(want.library, "android_common").MaybeRule("turbine")
+				disableTurbine := turbine.BuildParams.Rule == nil
+				if disableTurbine != want.disableTurbine {
+					t.Errorf("For library %v, expected disableTurbine %v, found %v", want.library, want.disableTurbine, disableTurbine)
 				}
 			}
 		})
@@ -622,6 +644,35 @@ func assertDeepEquals(t *testing.T, message string, expected interface{}, actual
 	}
 }
 
+func TestPrebuiltStubsSources(t *testing.T) {
+	test := func(t *testing.T, sourcesPath string, expectedInputs []string) {
+		ctx, _ := testJavaWithFS(t, fmt.Sprintf(`
+prebuilt_stubs_sources {
+  name: "stubs-source",
+	srcs: ["%s"],
+}`, sourcesPath), map[string][]byte{
+			"stubs/sources/pkg/A.java": nil,
+			"stubs/sources/pkg/B.java": nil,
+		})
+
+		zipSrc := ctx.ModuleForTests("stubs-source", "android_common").Rule("zip_src")
+		if expected, actual := expectedInputs, zipSrc.Inputs.Strings(); !reflect.DeepEqual(expected, actual) {
+			t.Errorf("mismatch of inputs to soong_zip: expected %q, actual %q", expected, actual)
+		}
+	}
+
+	t.Run("empty/missing directory", func(t *testing.T) {
+		test(t, "empty-directory", []string{})
+	})
+
+	t.Run("non-empty set of sources", func(t *testing.T) {
+		test(t, "stubs/sources", []string{
+			"stubs/sources/pkg/A.java",
+			"stubs/sources/pkg/B.java",
+		})
+	})
+}
+
 func TestJavaSdkLibraryImport(t *testing.T) {
 	ctx, _ := testJava(t, `
 		java_library {
@@ -752,6 +803,165 @@ func TestJavaSdkLibraryImport_Preferred(t *testing.T) {
 		`sdklib.impl`,
 		`sdklib.xml`,
 	})
+}
+
+func TestJavaSdkLibraryEnforce(t *testing.T) {
+	partitionToBpOption := func(partition string) string {
+		switch partition {
+		case "system":
+			return ""
+		case "vendor":
+			return "soc_specific: true,"
+		case "product":
+			return "product_specific: true,"
+		default:
+			panic("Invalid partition group name: " + partition)
+		}
+	}
+
+	type testConfigInfo struct {
+		libraryType                string
+		fromPartition              string
+		toPartition                string
+		enforceVendorInterface     bool
+		enforceProductInterface    bool
+		enforceJavaSdkLibraryCheck bool
+		allowList                  []string
+	}
+
+	createTestConfig := func(info testConfigInfo) android.Config {
+		bpFileTemplate := `
+			java_library {
+				name: "foo",
+				srcs: ["foo.java"],
+				libs: ["bar"],
+				sdk_version: "current",
+				%s
+			}
+
+			%s {
+				name: "bar",
+				srcs: ["bar.java"],
+				sdk_version: "current",
+				%s
+			}
+		`
+
+		bpFile := fmt.Sprintf(bpFileTemplate,
+			partitionToBpOption(info.fromPartition),
+			info.libraryType,
+			partitionToBpOption(info.toPartition))
+
+		config := testConfig(nil, bpFile, nil)
+		configVariables := config.TestProductVariables
+
+		configVariables.EnforceProductPartitionInterface = proptools.BoolPtr(info.enforceProductInterface)
+		if info.enforceVendorInterface {
+			configVariables.DeviceVndkVersion = proptools.StringPtr("current")
+		}
+		configVariables.EnforceInterPartitionJavaSdkLibrary = proptools.BoolPtr(info.enforceJavaSdkLibraryCheck)
+		configVariables.InterPartitionJavaLibraryAllowList = info.allowList
+
+		return config
+	}
+
+	isValidDependency := func(configInfo testConfigInfo) bool {
+		if configInfo.enforceVendorInterface == false {
+			return true
+		}
+
+		if configInfo.enforceJavaSdkLibraryCheck == false {
+			return true
+		}
+
+		if inList("bar", configInfo.allowList) {
+			return true
+		}
+
+		if configInfo.libraryType == "java_library" {
+			if configInfo.fromPartition != configInfo.toPartition {
+				if !configInfo.enforceProductInterface &&
+					((configInfo.fromPartition == "system" && configInfo.toPartition == "product") ||
+						(configInfo.fromPartition == "product" && configInfo.toPartition == "system")) {
+					return true
+				}
+				return false
+			}
+		}
+
+		return true
+	}
+
+	errorMessage := "is not allowed across the partitions"
+
+	allPartitionCombinations := func() [][2]string {
+		var result [][2]string
+		partitions := []string{"system", "vendor", "product"}
+
+		for _, fromPartition := range partitions {
+			for _, toPartition := range partitions {
+				result = append(result, [2]string{fromPartition, toPartition})
+			}
+		}
+
+		return result
+	}
+
+	allFlagCombinations := func() [][3]bool {
+		var result [][3]bool
+		flagValues := [2]bool{false, true}
+
+		for _, vendorInterface := range flagValues {
+			for _, productInterface := range flagValues {
+				for _, enableEnforce := range flagValues {
+					result = append(result, [3]bool{vendorInterface, productInterface, enableEnforce})
+				}
+			}
+		}
+
+		return result
+	}
+
+	for _, libraryType := range []string{"java_library", "java_sdk_library"} {
+		for _, partitionValues := range allPartitionCombinations() {
+			for _, flagValues := range allFlagCombinations() {
+				testInfo := testConfigInfo{
+					libraryType:                libraryType,
+					fromPartition:              partitionValues[0],
+					toPartition:                partitionValues[1],
+					enforceVendorInterface:     flagValues[0],
+					enforceProductInterface:    flagValues[1],
+					enforceJavaSdkLibraryCheck: flagValues[2],
+				}
+
+				if isValidDependency(testInfo) {
+					testJavaWithConfig(t, createTestConfig(testInfo))
+				} else {
+					testJavaErrorWithConfig(t, errorMessage, createTestConfig(testInfo))
+				}
+			}
+		}
+	}
+
+	testJavaWithConfig(t, createTestConfig(testConfigInfo{
+		libraryType:                "java_library",
+		fromPartition:              "vendor",
+		toPartition:                "system",
+		enforceVendorInterface:     true,
+		enforceProductInterface:    true,
+		enforceJavaSdkLibraryCheck: true,
+		allowList:                  []string{"bar"},
+	}))
+
+	testJavaErrorWithConfig(t, errorMessage, createTestConfig(testConfigInfo{
+		libraryType:                "java_library",
+		fromPartition:              "vendor",
+		toPartition:                "system",
+		enforceVendorInterface:     true,
+		enforceProductInterface:    true,
+		enforceJavaSdkLibraryCheck: true,
+		allowList:                  []string{"foo"},
+	}))
 }
 
 func TestDefaults(t *testing.T) {
@@ -1379,8 +1589,8 @@ func TestJarGenrules(t *testing.T) {
 	baz := ctx.ModuleForTests("baz", "android_common").Output("javac/baz.jar")
 	barCombined := ctx.ModuleForTests("bar", "android_common").Output("combined/bar.jar")
 
-	if len(jargen.Inputs) != 1 || jargen.Inputs[0].String() != foo.Output.String() {
-		t.Errorf("expected jargen inputs [%q], got %q", foo.Output.String(), jargen.Inputs.Strings())
+	if g, w := jargen.Implicits.Strings(), foo.Output.String(); !android.InList(w, g) {
+		t.Errorf("expected jargen inputs [%q], got %q", w, g)
 	}
 
 	if !strings.Contains(bar.Args["classpath"], jargen.Output.String()) {
@@ -1593,8 +1803,8 @@ func TestJavaSdkLibrary(t *testing.T) {
 	// test if baz has exported SDK lib names foo and bar to qux
 	qux := ctx.ModuleForTests("qux", "android_common")
 	if quxLib, ok := qux.Module().(*Library); ok {
-		sdkLibs := android.SortedStringKeys(quxLib.ExportedSdkLibs())
-		if w := []string{"bar", "foo", "fred", "quuz"}; !reflect.DeepEqual(w, sdkLibs) {
+		sdkLibs := quxLib.ClassLoaderContexts().UsesLibs()
+		if w := []string{"foo", "bar", "fred", "quuz"}; !reflect.DeepEqual(w, sdkLibs) {
 			t.Errorf("qux should export %q but exports %q", w, sdkLibs)
 		}
 	}

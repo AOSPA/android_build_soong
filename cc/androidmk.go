@@ -210,15 +210,29 @@ func (library *libraryDecorator) androidMkWriteExportedFlags(entries *android.An
 }
 
 func (library *libraryDecorator) androidMkEntriesWriteAdditionalDependenciesForSourceAbiDiff(entries *android.AndroidMkEntries) {
-	if library.sAbiDiff.Valid() && !library.static() {
-		entries.AddStrings("LOCAL_ADDITIONAL_DEPENDENCIES", library.sAbiDiff.String())
+	if library.sAbiOutputFile.Valid() {
+		entries.SetString("LOCAL_ADDITIONAL_DEPENDENCIES",
+			"$(LOCAL_ADDITIONAL_DEPENDENCIES) "+library.sAbiOutputFile.String())
+		if library.sAbiDiff.Valid() && !library.static() {
+			entries.SetString("LOCAL_ADDITIONAL_DEPENDENCIES",
+				"$(LOCAL_ADDITIONAL_DEPENDENCIES) "+library.sAbiDiff.String())
+			entries.SetString("HEADER_ABI_DIFFS",
+				"$(HEADER_ABI_DIFFS) "+library.sAbiDiff.String())
+		}
 	}
 }
 
 // TODO(ccross): remove this once apex/androidmk.go is converted to AndroidMkEntries
 func (library *libraryDecorator) androidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Writer) {
-	if library.sAbiDiff.Valid() && !library.static() {
-		fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES +=", library.sAbiDiff.String())
+	if library.sAbiOutputFile.Valid() {
+		fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_ADDITIONAL_DEPENDENCIES) ",
+			library.sAbiOutputFile.String())
+		if library.sAbiDiff.Valid() && !library.static() {
+			fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_ADDITIONAL_DEPENDENCIES) ",
+				library.sAbiDiff.String())
+			fmt.Fprintln(w, "HEADER_ABI_DIFFS := $(HEADER_ABI_DIFFS) ",
+				library.sAbiDiff.String())
+		}
 	}
 }
 
@@ -337,8 +351,7 @@ func (benchmark *benchmarkDecorator) AndroidMkEntries(ctx AndroidMkContext, entr
 	entries.Class = "NATIVE_TESTS"
 	entries.ExtraEntries = append(entries.ExtraEntries, func(entries *android.AndroidMkEntries) {
 		if len(benchmark.Properties.Test_suites) > 0 {
-			entries.SetString("LOCAL_COMPATIBILITY_SUITE",
-				strings.Join(benchmark.Properties.Test_suites, " "))
+			entries.AddCompatibilityTestSuites(benchmark.Properties.Test_suites...)
 		}
 		if benchmark.testConfig != nil {
 			entries.SetString("LOCAL_FULL_TEST_CONFIG", benchmark.testConfig.String())
@@ -363,8 +376,7 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 	}
 	entries.ExtraEntries = append(entries.ExtraEntries, func(entries *android.AndroidMkEntries) {
 		if len(test.Properties.Test_suites) > 0 {
-			entries.SetString("LOCAL_COMPATIBILITY_SUITE",
-				strings.Join(test.Properties.Test_suites, " "))
+			entries.AddCompatibilityTestSuites(test.Properties.Test_suites...)
 		}
 		if test.testConfig != nil {
 			entries.SetString("LOCAL_FULL_TEST_CONFIG", test.testConfig.String())
@@ -373,6 +385,9 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 			entries.SetBool("LOCAL_DISABLE_AUTO_GENERATE_TEST_CONFIG", true)
 		}
 		entries.AddStrings("LOCAL_TEST_MAINLINE_MODULES", test.Properties.Test_mainline_modules...)
+		if Bool(test.Properties.Test_options.Unit_test) {
+			entries.SetBool("LOCAL_IS_UNIT_TEST", true)
+		}
 	})
 
 	androidMkWriteTestData(test.data, ctx, entries)
@@ -508,7 +523,7 @@ func (c *vndkPrebuiltLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, en
 	})
 }
 
-func (c *vendorSnapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
+func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	// Each vendor snapshot is exported to androidMk only when BOARD_VNDK_VERSION != current
 	// and the version of the prebuilt is same as BOARD_VNDK_VERSION.
 	if c.shared() {
@@ -552,7 +567,7 @@ func (c *vendorSnapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, 
 	})
 }
 
-func (c *vendorSnapshotBinaryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
+func (c *snapshotBinaryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.Class = "EXECUTABLES"
 
 	if c.androidMkVendorSuffix {
@@ -566,7 +581,7 @@ func (c *vendorSnapshotBinaryDecorator) AndroidMkEntries(ctx AndroidMkContext, e
 	})
 }
 
-func (c *vendorSnapshotObjectLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
+func (c *snapshotObjectLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.Class = "STATIC_LIBRARIES"
 
 	if c.androidMkVendorSuffix {

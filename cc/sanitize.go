@@ -169,8 +169,14 @@ type SanitizeUserProps struct {
 		Cfi              *bool    `android:"arch_variant"`
 		Integer_overflow *bool    `android:"arch_variant"`
 		Misc_undefined   []string `android:"arch_variant"`
-		No_recover       []string
-	}
+		No_recover       []string `android:"arch_variant"`
+	} `android:"arch_variant"`
+
+	// Sanitizers to run with flag configuration specified
+	Config struct {
+		// Enables CFI support flags for assembly-heavy libraries
+		Cfi_assembly_support *bool `android:"arch_variant"`
+	} `android:"arch_variant"`
 
 	// value to pass to -fsanitize-recover=
 	Recover []string
@@ -579,6 +585,9 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 		flags.Local.CFlags = append(flags.Local.CFlags, cfiCflags...)
 		flags.Local.AsFlags = append(flags.Local.AsFlags, cfiAsflags...)
+		if Bool(sanitize.Properties.Sanitize.Config.Cfi_assembly_support) {
+			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize-cfi-canonical-jump-tables")
+		}
 		// Only append the default visibility flag if -fvisibility has not already been set
 		// to hidden.
 		if !inList("-fvisibility=hidden", flags.Local.CFlags) {
@@ -883,7 +892,7 @@ func sanitizerRuntimeDepsMutator(mctx android.TopDownMutatorContext) {
 				return true
 			}
 
-			if p, ok := d.linker.(*vendorSnapshotLibraryDecorator); ok {
+			if p, ok := d.linker.(*snapshotLibraryDecorator); ok {
 				if Bool(p.properties.Sanitize_minimal_dep) {
 					c.sanitize.Properties.MinimalRuntimeDep = true
 				}

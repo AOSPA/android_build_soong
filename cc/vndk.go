@@ -487,14 +487,7 @@ func (txt *vndkLibrariesTxt) GenerateAndroidBuildActions(ctx android.ModuleConte
 	}
 
 	txt.outputFile = android.PathForModuleOut(ctx, filename).OutputPath
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.WriteFile,
-		Output:      txt.outputFile,
-		Description: "Writing " + txt.outputFile.String(),
-		Args: map[string]string{
-			"content": strings.Join(list, "\\n"),
-		},
-	})
+	android.WriteFileRule(ctx, txt.outputFile, strings.Join(list, "\n"))
 
 	installPath := android.PathForModuleInstall(ctx, "etc")
 	ctx.InstallFile(installPath, filename, txt.outputFile)
@@ -734,7 +727,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		var txtBuilder strings.Builder
 		for idx, k := range android.SortedStringKeys(m) {
 			if idx > 0 {
-				txtBuilder.WriteString("\\n")
+				txtBuilder.WriteString("\n")
 			}
 			txtBuilder.WriteString(k)
 			txtBuilder.WriteString(" ")
@@ -769,7 +762,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 	})
 
 	zipPath := android.PathForOutput(ctx, snapshotDir, "android-vndk-"+ctx.DeviceConfig().DeviceArch()+".zip")
-	zipRule := android.NewRuleBuilder()
+	zipRule := android.NewRuleBuilder(pctx, ctx)
 
 	// filenames in rspfile from FlagWithRspFileInputList might be single-quoted. Remove it with xargs
 	snapshotOutputList := android.PathForOutput(ctx, snapshotDir, "android-vndk-"+ctx.DeviceConfig().DeviceArch()+"_list")
@@ -782,12 +775,12 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 	zipRule.Temporary(snapshotOutputList)
 
 	zipRule.Command().
-		BuiltTool(ctx, "soong_zip").
+		BuiltTool("soong_zip").
 		FlagWithOutput("-o ", zipPath).
 		FlagWithArg("-C ", android.PathForOutput(ctx, snapshotDir).String()).
 		FlagWithInput("-l ", snapshotOutputList)
 
-	zipRule.Build(pctx, ctx, zipPath.String(), "vndk snapshot "+zipPath.String())
+	zipRule.Build(zipPath.String(), "vndk snapshot "+zipPath.String())
 	zipRule.DeleteTemporaryFiles()
 	c.vndkSnapshotZipFile = android.OptionalPathForPath(zipPath)
 }
@@ -825,14 +818,7 @@ func (c *vndkSnapshotSingleton) buildVndkLibrariesTxtFiles(ctx android.Singleton
 	merged = append(merged, addPrefix(filterOutLibClangRt(vndkcore), "VNDK-core: ")...)
 	merged = append(merged, addPrefix(vndkprivate, "VNDK-private: ")...)
 	c.vndkLibrariesFile = android.PathForOutput(ctx, "vndk", "vndk.libraries.txt")
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.WriteFile,
-		Output:      c.vndkLibrariesFile,
-		Description: "Writing " + c.vndkLibrariesFile.String(),
-		Args: map[string]string{
-			"content": strings.Join(merged, "\\n"),
-		},
-	})
+	android.WriteFileRule(ctx, c.vndkLibrariesFile, strings.Join(merged, "\n"))
 }
 
 func (c *vndkSnapshotSingleton) MakeVars(ctx android.MakeVarsContext) {

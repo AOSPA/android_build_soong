@@ -106,13 +106,14 @@ func newTestRustCtx(t *testing.T, bp string) *testRustCtx {
 // useMockedFs setup a default mocked filesystem for the test environment.
 func (tctx *testRustCtx) useMockedFs() {
 	tctx.fs = map[string][]byte{
-		"foo.rs":     nil,
-		"foo.c":      nil,
-		"src/bar.rs": nil,
-		"src/any.h":  nil,
-		"buf.proto":  nil,
-		"liby.so":    nil,
-		"libz.so":    nil,
+		"foo.rs":      nil,
+		"foo.c":       nil,
+		"src/bar.rs":  nil,
+		"src/any.h":   nil,
+		"proto.proto": nil,
+		"buf.proto":   nil,
+		"liby.so":     nil,
+		"libz.so":     nil,
 	}
 }
 
@@ -120,6 +121,7 @@ func (tctx *testRustCtx) useMockedFs() {
 // attributes of the testRustCtx.
 func (tctx *testRustCtx) generateConfig() {
 	tctx.bp = tctx.bp + GatherRequiredDepsForTest()
+	tctx.bp = tctx.bp + cc.GatherRequiredDepsForTest(android.NoOsType)
 	cc.GatherRequiredFilesForTest(tctx.fs)
 	config := android.TestArchConfig(buildDir, tctx.env, tctx.bp, tctx.fs)
 	tctx.config = &config
@@ -285,6 +287,12 @@ func TestSourceProviderDeps(t *testing.T) {
 			cmd: "$(location) -o $(out) $(in)",
 			srcs: ["src/any.h"],
 			out: ["src/any.rs"],
+		}
+		rust_binary_host {
+			name: "any_rust_binary",
+			srcs: [
+				"foo.rs",
+			],
 		}
 		rust_bindgen {
 			name: "libbindings",

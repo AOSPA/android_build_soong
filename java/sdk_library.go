@@ -435,8 +435,23 @@ type sdkLibraryProperties struct {
 	// If set to true, the path of dist files is apistubs/core. Defaults to false.
 	Core_lib *bool
 
-	// don't create dist rules.
-	No_dist *bool `blueprint:"mutated"`
+	// If set to true then don't create dist rules.
+	No_dist *bool
+
+	// The stem for the artifacts that are copied to the dist, if not specified
+	// then defaults to the base module name.
+	//
+	// For each scope the following artifacts are copied to the apistubs/<scope>
+	// directory in the dist.
+	// * stubs impl jar -> <dist-stem>.jar
+	// * API specification file -> api/<dist-stem>.txt
+	// * Removed API specification file -> api/<dist-stem>-removed.txt
+	//
+	// Also used to construct the name of the filegroup (created by prebuilt_apis)
+	// that references the latest released API and remove API specification files.
+	// * API specification filegroup -> <dist-stem>.api.<scope>.latest
+	// * Removed API specification filegroup -> <dist-stem>-removed.api.<scope>.latest
+	Dist_stem *string
 
 	// indicates whether system and test apis should be generated.
 	Generate_system_and_test_apis bool `blueprint:"mutated"`
@@ -1109,12 +1124,16 @@ func (module *SdkLibrary) sdkVersionForStubsLibrary(mctx android.EarlyModuleCont
 	}
 }
 
+func (module *SdkLibrary) distStem() string {
+	return proptools.StringDefault(module.sdkLibraryProperties.Dist_stem, module.BaseModuleName())
+}
+
 func (module *SdkLibrary) latestApiFilegroupName(apiScope *apiScope) string {
-	return ":" + module.BaseModuleName() + ".api." + apiScope.name + ".latest"
+	return ":" + module.distStem() + ".api." + apiScope.name + ".latest"
 }
 
 func (module *SdkLibrary) latestRemovedApiFilegroupName(apiScope *apiScope) string {
-	return ":" + module.BaseModuleName() + "-removed.api." + apiScope.name + ".latest"
+	return ":" + module.distStem() + "-removed.api." + apiScope.name + ".latest"
 }
 
 func childModuleVisibility(childVisibility []string) []string {
@@ -1220,7 +1239,7 @@ func (module *SdkLibrary) createStubsLibrary(mctx android.DefaultableHookContext
 	// Dist the class jar artifact for sdk builds.
 	if !Bool(module.sdkLibraryProperties.No_dist) {
 		props.Dist.Targets = []string{"sdk", "win_sdk"}
-		props.Dist.Dest = proptools.StringPtr(fmt.Sprintf("%v.jar", module.BaseModuleName()))
+		props.Dist.Dest = proptools.StringPtr(fmt.Sprintf("%v.jar", module.distStem()))
 		props.Dist.Dir = proptools.StringPtr(module.apiDistPath(apiScope))
 		props.Dist.Tag = proptools.StringPtr(".jar")
 	}
@@ -1262,11 +1281,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 			Include_dirs       []string
 			Local_include_dirs []string
 		}
-		Dist struct {
-			Targets []string
-			Dest    *string
-			Dir     *string
-		}
+		Dists []android.Dist
 	}{}
 
 	// The stubs source processing uses the same compile time classpath when extracting the
@@ -1366,11 +1381,23 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		}
 	}
 
-	// Dist the api txt artifact for sdk builds.
 	if !Bool(module.sdkLibraryProperties.No_dist) {
-		props.Dist.Targets = []string{"sdk", "win_sdk"}
-		props.Dist.Dest = proptools.StringPtr(fmt.Sprintf("%v.txt", module.BaseModuleName()))
-		props.Dist.Dir = proptools.StringPtr(path.Join(module.apiDistPath(apiScope), "api"))
+		// Dist the api txt and removed api txt artifacts for sdk builds.
+		distDir := proptools.StringPtr(path.Join(module.apiDistPath(apiScope), "api"))
+		for _, p := range []struct {
+			tag     string
+			pattern string
+		}{
+			{tag: ".api.txt", pattern: "%s.txt"},
+			{tag: ".removed-api.txt", pattern: "%s-removed.txt"},
+		} {
+			props.Dists = append(props.Dists, android.Dist{
+				Targets: []string{"sdk", "win_sdk"},
+				Dir:     distDir,
+				Dest:    proptools.StringPtr(fmt.Sprintf(p.pattern, module.distStem())),
+				Tag:     proptools.StringPtr(p.tag),
+			})
+		}
 	}
 
 	mctx.CreateModule(DroidstubsFactory, &props)
@@ -1474,10 +1501,6 @@ func (module *SdkLibrary) SdkImplementationJars(ctx android.BaseModuleContext, s
 	return module.sdkJars(ctx, sdkVersion, false /*headerJars*/)
 }
 
-func (module *SdkLibrary) SetNoDist() {
-	module.sdkLibraryProperties.No_dist = proptools.BoolPtr(true)
-}
-
 var javaSdkLibrariesKey = android.NewOnceKey("javaSdkLibraries")
 
 func javaSdkLibraries(config android.Config) *[]string {
@@ -1505,12 +1528,10 @@ func (module *SdkLibrary) CreateInternalModules(mctx android.DefaultableHookCont
 	}
 
 	// If this builds against standard libraries (i.e. is not part of the core libraries)
-	// then assume it provides both system and test apis. Otherwise, assume it does not and
-	// also assume it does not contribute to the dist build.
+	// then assume it provides both system and test apis.
 	sdkDep := decodeSdkDep(mctx, sdkContext(&module.Library))
 	hasSystemAndTestApis := sdkDep.hasStandardLibs()
 	module.sdkLibraryProperties.Generate_system_and_test_apis = hasSystemAndTestApis
-	module.sdkLibraryProperties.No_dist = proptools.BoolPtr(!hasSystemAndTestApis)
 
 	missing_current_api := false
 
@@ -2155,12 +2176,12 @@ func (module *sdkLibraryXml) GenerateAndroidBuildActions(ctx android.ModuleConte
 	xmlContent := fmt.Sprintf(permissionsTemplate, libName, module.implPath(ctx))
 
 	module.outputFilePath = android.PathForModuleOut(ctx, libName+".xml").OutputPath
-	rule := android.NewRuleBuilder()
+	rule := android.NewRuleBuilder(pctx, ctx)
 	rule.Command().
 		Text("/bin/bash -c \"echo -e '" + xmlContent + "'\" > ").
 		Output(module.outputFilePath)
 
-	rule.Build(pctx, ctx, "java_sdk_xml", "Permission XML")
+	rule.Build("java_sdk_xml", "Permission XML")
 
 	module.installDirPath = android.PathForModuleInstall(ctx, "etc", module.SubDir())
 }
@@ -2292,11 +2313,10 @@ func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberCo
 			scopeSet.AddProperty("jars", jars)
 
 			// Merge the stubs source jar into the snapshot zip so that when it is unpacked
-			// the source files are also unpacked. Use a glob so that if the directory is missing
-			// (because there are no stubs sources for this scope) it will not fail.
+			// the source files are also unpacked.
 			snapshotRelativeDir := filepath.Join(scopeDir, ctx.Name()+"_stub_sources")
 			ctx.SnapshotBuilder().UnzipToSnapshot(properties.StubsSrcJar, snapshotRelativeDir)
-			scopeSet.AddProperty("stub_srcs", []string{snapshotRelativeDir + "/**/*.java"})
+			scopeSet.AddProperty("stub_srcs", []string{snapshotRelativeDir})
 
 			if properties.CurrentApiFile != nil {
 				currentApiSnapshotPath := filepath.Join(scopeDir, ctx.Name()+".txt")

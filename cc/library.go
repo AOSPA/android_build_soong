@@ -585,7 +585,7 @@ func (library *libraryDecorator) classifySourceAbiDump(ctx ModuleContext) string
                 return ""
         }
 	// Return NDK if the library is both NDK and LLNDK.
-	if ctx.isNdk() {
+	if ctx.isNdk(ctx.Config()) {
 		return "NDK"
 	}
 	if ctx.isLlndkPublic(ctx.Config()) {
@@ -918,9 +918,9 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 		}
 	}
 
-	TransformObjToStaticLib(ctx, library.objects.objFiles, deps.WholeStaticLibsFromPrebuilts, builderFlags, outputFile, objs.tidyFiles)
+	transformObjToStaticLib(ctx, library.objects.objFiles, deps.WholeStaticLibsFromPrebuilts, builderFlags, outputFile, objs.tidyFiles)
 
-	library.coverageOutputFile = TransformCoverageFilesToZip(ctx, library.objects, ctx.ModuleName())
+	library.coverageOutputFile = transformCoverageFilesToZip(ctx, library.objects, ctx.ModuleName())
 
 	ctx.CheckbuildFile(outputFile)
 
@@ -995,7 +995,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	// depending on a table of contents file instead of the library itself.
 	tocFile := outputFile.ReplaceExtension(ctx, flags.Toolchain.ShlibSuffix()[1:]+".toc")
 	library.tocFile = android.OptionalPathForPath(tocFile)
-	TransformSharedObjectToToc(ctx, outputFile, tocFile, builderFlags)
+	transformSharedObjectToToc(ctx, outputFile, tocFile, builderFlags)
 
 	stripFlags := flagsToStripFlags(flags)
 	if library.stripper.NeedsStrip(ctx) {
@@ -1040,7 +1040,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 
 	if Bool(library.Properties.Sort_bss_symbols_by_size) {
 		unsortedOutputFile := android.PathForModuleOut(ctx, "unsorted", fileName)
-		TransformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
+		transformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
 			deps.StaticLibs, deps.LateStaticLibs, deps.WholeStaticLibs,
 			linkerDeps, deps.CrtBegin, deps.CrtEnd, false, builderFlags, unsortedOutputFile, implicitOutputs)
 
@@ -1050,7 +1050,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 		linkerDeps = append(linkerDeps, symbolOrderingFile)
 	}
 
-	TransformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
+	transformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
 		deps.StaticLibs, deps.LateStaticLibs, deps.WholeStaticLibs,
 		linkerDeps, deps.CrtBegin, deps.CrtEnd, false, builderFlags, outputFile, implicitOutputs)
 
@@ -1060,7 +1060,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	objs.sAbiDumpFiles = append(objs.sAbiDumpFiles, deps.StaticLibObjs.sAbiDumpFiles...)
 	objs.sAbiDumpFiles = append(objs.sAbiDumpFiles, deps.WholeStaticLibObjs.sAbiDumpFiles...)
 
-	library.coverageOutputFile = TransformCoverageFilesToZip(ctx, objs, library.getLibName(ctx))
+	library.coverageOutputFile = transformCoverageFilesToZip(ctx, objs, library.getLibName(ctx))
 	library.linkSAbiDumpFiles(ctx, objs, fileName, unstrippedOutputFile)
 
 	var staticAnalogue *StaticLibraryInfo
@@ -1120,7 +1120,7 @@ func (library *libraryDecorator) coverageOutputFilePath() android.OptionalPath {
 
 func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
 	// The logic must be consistent with classifySourceAbiDump.
-	isNdk := ctx.isNdk()
+	isNdk := ctx.isNdk(ctx.Config())
 	isLlndkOrVndk := ctx.isLlndkPublic(ctx.Config()) || (ctx.useVndk() && ctx.isVndk())
 
 	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isLlndkOrVndk, false)
@@ -1136,7 +1136,7 @@ func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.
 		return refAbiDumpTextFile.Path()
 	}
 	if refAbiDumpGzipFile.Valid() {
-		return UnzipRefDump(ctx, refAbiDumpGzipFile.Path(), fileName)
+		return unzipRefDump(ctx, refAbiDumpGzipFile.Path(), fileName)
 	}
 	return nil
 }
@@ -1162,7 +1162,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 			SourceAbiFlags = append(SourceAbiFlags, "-I"+reexportedInclude)
 		}
 		exportedHeaderFlags := strings.Join(SourceAbiFlags, " ")
-		library.sAbiOutputFile = TransformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags,
+		library.sAbiOutputFile = transformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags,
 			android.OptionalPathForModuleSrc(ctx, library.symbolFileForAbiCheck(ctx)),
 			library.Properties.Header_abi_checker.Exclude_symbol_versions,
 			library.Properties.Header_abi_checker.Exclude_symbol_tags)
@@ -1171,10 +1171,10 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 
 		refAbiDumpFile := getRefAbiDumpFile(ctx, vndkVersion, fileName)
 		if refAbiDumpFile != nil && !library.isTechPackageLibrary {
-			library.sAbiDiff = SourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
+			library.sAbiDiff = sourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
 				refAbiDumpFile, fileName, exportedHeaderFlags,
 				Bool(library.Properties.Header_abi_checker.Check_all_apis),
-				ctx.isLlndk(ctx.Config()), ctx.isNdk(), ctx.isVndkExt())
+				ctx.isLlndk(ctx.Config()), ctx.isNdk(ctx.Config()), ctx.isVndkExt())
 		}
 	}
 }
@@ -1223,15 +1223,21 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 		}
 	}
 
+	// If the library is sysprop_library, expose either public or internal header selectively.
 	if library.baseCompiler.hasSrcExt(".sysprop") {
 		dir := android.PathForModuleGen(ctx, "sysprop", "include")
 		if library.Properties.Sysprop.Platform != nil {
-			isProduct := ctx.ProductSpecific() && !ctx.useVndk()
-			isVendor := ctx.useVndk()
+			isClientProduct := ctx.ProductSpecific() && !ctx.useVndk()
+			isClientVendor := ctx.useVndk()
 			isOwnerPlatform := Bool(library.Properties.Sysprop.Platform)
 
+			// If the owner is different from the user, expose public header. That is,
+			// 1) if the user is product (as owner can only be platform / vendor)
+			// 2) if one is platform and the other is vendor
+			// Exceptions are ramdisk and recovery. They are not enforced at all. So
+			// they always use internal header.
 			if !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() &&
-				(isProduct || (isOwnerPlatform == isVendor)) {
+				(isClientProduct || (isOwnerPlatform == isClientVendor)) {
 				dir = android.PathForModuleGen(ctx, "sysprop/public", "include")
 			}
 		}
@@ -1769,13 +1775,13 @@ func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.Modu
 		hashedOutputfile := outputFile
 		outputFile = android.PathForModuleOut(ctx, "unhashed", fileName)
 
-		rule := android.NewRuleBuilder()
+		rule := android.NewRuleBuilder(pctx, ctx)
 		rule.Command().
-			BuiltTool(ctx, "bssl_inject_hash").
+			BuiltTool("bssl_inject_hash").
 			Flag("-sha256").
 			FlagWithInput("-in-object ", outputFile).
 			FlagWithOutput("-o ", hashedOutputfile)
-		rule.Build(pctx, ctx, "injectCryptoHash", "inject crypto hash")
+		rule.Build("injectCryptoHash", "inject crypto hash")
 	}
 
 	return outputFile

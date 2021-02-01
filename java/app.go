@@ -565,9 +565,8 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	aaptLinkFlags = append(aaptLinkFlags, a.additionalAaptFlags...)
 
 	a.aapt.splitNames = a.appProperties.Package_splits
-	a.aapt.sdkLibraries = a.exportedSdkLibs
 	a.aapt.LoggingParent = String(a.overridableAppProperties.Logging_parent)
-	a.aapt.buildActions(ctx, sdkContext(a), aaptLinkFlags...)
+	a.aapt.buildActions(ctx, sdkContext(a), a.classLoaderContexts, aaptLinkFlags...)
 
 	// apps manifests are handled by aapt, don't let Module see them
 	a.properties.Manifest = nil
@@ -601,7 +600,7 @@ func (a *AndroidApp) installPath(ctx android.ModuleContext) android.InstallPath 
 	return android.PathForModuleInstall(ctx, installDir, a.installApkName+".apk")
 }
 
-func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext, sdkLibs dexpreopt.LibraryPaths) android.Path {
+func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) android.Path {
 	a.dexpreopter.installPath = a.installPath(ctx)
 	if a.dexProperties.Uncompress_dex == nil {
 		// If the value was not force-set by the user, use reasonable default based on the module.
@@ -609,12 +608,8 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext, sdkLibs dexpreop
 	}
 	a.dexpreopter.uncompressedDex = *a.dexProperties.Uncompress_dex
 	a.dexpreopter.enforceUsesLibs = a.usesLibrary.enforceUsesLibraries()
-	a.dexpreopter.usesLibs = a.usesLibrary.usesLibraryProperties.Uses_libs
-	a.dexpreopter.optionalUsesLibs = a.usesLibrary.presentOptionalUsesLibs(ctx)
-	a.dexpreopter.libraryPaths = a.usesLibrary.usesLibraryPaths(ctx)
-	a.dexpreopter.libraryPaths.AddLibraryPaths(sdkLibs)
+	a.dexpreopter.classLoaderContexts = a.classLoaderContexts
 	a.dexpreopter.manifestFile = a.mergedManifestFile
-	a.exportedSdkLibs = make(dexpreopt.LibraryPaths)
 
 	if ctx.ModuleName() != "framework-res" {
 		a.Module.compile(ctx, a.aaptSrcJar)
@@ -784,6 +779,8 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		a.aapt.noticeFile = a.noticeOutputs.HtmlGzOutput
 	}
 
+	a.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
+
 	// Process all building blocks, from AAPT to certificates.
 	a.aaptBuildActions(ctx)
 
@@ -791,7 +788,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.usesLibrary.freezeEnforceUsesLibraries()
 
 	// Add implicit SDK libraries to <uses-library> list.
-	for _, usesLib := range android.SortedStringKeys(a.aapt.sdkLibraries) {
+	for _, usesLib := range a.classLoaderContexts.UsesLibs() {
 		a.usesLibrary.addLib(usesLib, inList(usesLib, dexpreopt.OptionalCompatUsesLibs))
 	}
 
@@ -808,7 +805,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.linter.resources = a.aapt.resourceFiles
 	a.linter.buildModuleReportZip = ctx.Config().UnbundledBuildApps()
 
-	dexJarFile := a.dexBuildActions(ctx, a.aapt.sdkLibraries)
+	dexJarFile := a.dexBuildActions(ctx)
 
 	jniLibs, certificateDeps := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
 	jniJarFile := a.jniBuildActions(jniLibs, ctx)
@@ -893,7 +890,7 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 
 		if IsJniDepTag(tag) || cc.IsSharedDepTag(tag) {
 			if dep, ok := module.(*cc.Module); ok {
-				if dep.IsNdk() || dep.IsStubs() {
+				if dep.IsNdk(ctx.Config()) || dep.IsStubs() {
 					return false
 				}
 
@@ -1118,8 +1115,8 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 	}
 
 	fixedConfig := android.PathForModuleOut(ctx, "test_config_fixer", "AndroidTest.xml")
-	rule := android.NewRuleBuilder()
-	command := rule.Command().BuiltTool(ctx, "test_config_fixer").Input(testConfig).Output(fixedConfig)
+	rule := android.NewRuleBuilder(pctx, ctx)
+	command := rule.Command().BuiltTool("test_config_fixer").Input(testConfig).Output(fixedConfig)
 	fixNeeded := false
 
 	if ctx.ModuleName() != a.installApkName {
@@ -1134,7 +1131,7 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 	}
 
 	if fixNeeded {
-		rule.Build(pctx, ctx, "fix_test_config", "fix test config")
+		rule.Build("fix_test_config", "fix test config")
 		return fixedConfig
 	}
 	return testConfig
@@ -1443,15 +1440,15 @@ func (a *AndroidAppImport) uncompressEmbeddedJniLibs(
 		})
 		return
 	}
-	rule := android.NewRuleBuilder()
+	rule := android.NewRuleBuilder(pctx, ctx)
 	rule.Command().
 		Textf(`if (zipinfo %s 'lib/*.so' 2>/dev/null | grep -v ' stor ' >/dev/null) ; then`, inputPath).
-		BuiltTool(ctx, "zip2zip").
+		BuiltTool("zip2zip").
 		FlagWithInput("-i ", inputPath).
 		FlagWithOutput("-o ", outputPath).
 		FlagWithArg("-0 ", "'lib/**/*.so'").
 		Textf(`; else cp -f %s %s; fi`, inputPath, outputPath)
-	rule.Build(pctx, ctx, "uncompress-embedded-jni-libs", "Uncompress embedded JIN libs")
+	rule.Build("uncompress-embedded-jni-libs", "Uncompress embedded JIN libs")
 }
 
 // Returns whether this module should have the dex file stored uncompressed in the APK.
@@ -1470,15 +1467,15 @@ func (a *AndroidAppImport) shouldUncompressDex(ctx android.ModuleContext) bool {
 
 func (a *AndroidAppImport) uncompressDex(
 	ctx android.ModuleContext, inputPath android.Path, outputPath android.OutputPath) {
-	rule := android.NewRuleBuilder()
+	rule := android.NewRuleBuilder(pctx, ctx)
 	rule.Command().
 		Textf(`if (zipinfo %s '*.dex' 2>/dev/null | grep -v ' stor ' >/dev/null) ; then`, inputPath).
-		BuiltTool(ctx, "zip2zip").
+		BuiltTool("zip2zip").
 		FlagWithInput("-i ", inputPath).
 		FlagWithOutput("-o ", outputPath).
 		FlagWithArg("-0 ", "'classes*.dex'").
 		Textf(`; else cp -f %s %s; fi`, inputPath, outputPath)
-	rule.Build(pctx, ctx, "uncompress-dex", "Uncompress dex files")
+	rule.Build("uncompress-dex", "Uncompress dex files")
 }
 
 func (a *AndroidAppImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -1540,9 +1537,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	a.dexpreopter.uncompressedDex = a.shouldUncompressDex(ctx)
 
 	a.dexpreopter.enforceUsesLibs = a.usesLibrary.enforceUsesLibraries()
-	a.dexpreopter.usesLibs = a.usesLibrary.usesLibraryProperties.Uses_libs
-	a.dexpreopter.optionalUsesLibs = a.usesLibrary.presentOptionalUsesLibs(ctx)
-	a.dexpreopter.libraryPaths = a.usesLibrary.usesLibraryPaths(ctx)
+	a.dexpreopter.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
 
 	dexOutput := a.dexpreopter.dexpreopt(ctx, jnisUncompressed)
 	if a.dexpreopter.uncompressedDex {
@@ -1852,7 +1847,7 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 		aaptLinkFlags = append(aaptLinkFlags,
 			"--rename-overlay-target-package "+*r.overridableProperties.Target_package_name)
 	}
-	r.aapt.buildActions(ctx, r, aaptLinkFlags...)
+	r.aapt.buildActions(ctx, r, nil, aaptLinkFlags...)
 
 	// Sign the built package
 	_, certificates := collectAppDeps(ctx, r, false, false)
@@ -1976,17 +1971,18 @@ func (u *usesLibrary) presentOptionalUsesLibs(ctx android.BaseModuleContext) []s
 	return optionalUsesLibs
 }
 
-// usesLibraryPaths returns a map of module names of shared library dependencies to the paths
+// Returns a map of module names of shared library dependencies to the paths
 // to their dex jars on host and on device.
-func (u *usesLibrary) usesLibraryPaths(ctx android.ModuleContext) dexpreopt.LibraryPaths {
-	usesLibPaths := make(dexpreopt.LibraryPaths)
+func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext) dexpreopt.ClassLoaderContextMap {
+	clcMap := make(dexpreopt.ClassLoaderContextMap)
 
 	if !ctx.Config().UnbundledBuild() {
 		ctx.VisitDirectDeps(func(m android.Module) {
-			if _, ok := ctx.OtherModuleDependencyTag(m).(usesLibraryDependencyTag); ok {
+			if tag, ok := ctx.OtherModuleDependencyTag(m).(usesLibraryDependencyTag); ok {
 				dep := ctx.OtherModuleName(m)
 				if lib, ok := m.(Dependency); ok {
-					usesLibPaths.AddLibraryPath(ctx, dep, lib.DexJarBuildPath(), lib.DexJarInstallPath())
+					clcMap.AddContextForSdk(ctx, tag.sdkVersion, dep,
+						lib.DexJarBuildPath(), lib.DexJarInstallPath(), lib.ClassLoaderContexts())
 				} else if ctx.Config().AllowMissingDependencies() {
 					ctx.AddMissingDependencies([]string{dep})
 				} else {
@@ -1996,7 +1992,7 @@ func (u *usesLibrary) usesLibraryPaths(ctx android.ModuleContext) dexpreopt.Libr
 		})
 	}
 
-	return usesLibPaths
+	return clcMap
 }
 
 // enforceUsesLibraries returns true of <uses-library> tags should be checked against uses_libs and optional_uses_libs
@@ -2019,8 +2015,8 @@ func (u *usesLibrary) freezeEnforceUsesLibraries() {
 func (u *usesLibrary) verifyUsesLibrariesManifest(ctx android.ModuleContext, manifest android.Path) android.Path {
 	outputFile := android.PathForModuleOut(ctx, "manifest_check", "AndroidManifest.xml")
 
-	rule := android.NewRuleBuilder()
-	cmd := rule.Command().BuiltTool(ctx, "manifest_check").
+	rule := android.NewRuleBuilder(pctx, ctx)
+	cmd := rule.Command().BuiltTool("manifest_check").
 		Flag("--enforce-uses-libraries").
 		Input(manifest).
 		FlagWithOutput("-o ", outputFile)
@@ -2033,7 +2029,7 @@ func (u *usesLibrary) verifyUsesLibrariesManifest(ctx android.ModuleContext, man
 		cmd.FlagWithArg("--optional-uses-library ", lib)
 	}
 
-	rule.Build(pctx, ctx, "verify_uses_libraries", "verify <uses-library>")
+	rule.Build("verify_uses_libraries", "verify <uses-library>")
 
 	return outputFile
 }
@@ -2043,7 +2039,7 @@ func (u *usesLibrary) verifyUsesLibrariesManifest(ctx android.ModuleContext, man
 func (u *usesLibrary) verifyUsesLibrariesAPK(ctx android.ModuleContext, apk android.Path) android.Path {
 	outputFile := android.PathForModuleOut(ctx, "verify_uses_libraries", apk.Base())
 
-	rule := android.NewRuleBuilder()
+	rule := android.NewRuleBuilder(pctx, ctx)
 	aapt := ctx.Config().HostToolPath(ctx, "aapt")
 	rule.Command().
 		Textf("aapt_binary=%s", aapt.String()).Implicit(aapt).
@@ -2052,7 +2048,7 @@ func (u *usesLibrary) verifyUsesLibrariesAPK(ctx android.ModuleContext, apk andr
 		Tool(android.PathForSource(ctx, "build/make/core/verify_uses_libraries.sh")).Input(apk)
 	rule.Command().Text("cp -f").Input(apk).Output(outputFile)
 
-	rule.Build(pctx, ctx, "verify_uses_libraries", "verify <uses-library>")
+	rule.Build("verify_uses_libraries", "verify <uses-library>")
 
 	return outputFile
 }

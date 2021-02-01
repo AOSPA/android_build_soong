@@ -85,7 +85,6 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 	} else {
 		entriesList = append(entriesList, android.AndroidMkEntries{
 			Class:      "JAVA_LIBRARIES",
-			DistFiles:  library.distFiles,
 			OutputFile: android.OptionalPathForPath(library.outputFile),
 			Include:    "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
 			ExtraEntries: []android.AndroidMkExtraEntriesFunc{
@@ -115,7 +114,7 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 						entries.SetPath("LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR", library.jacocoReportClassesFile)
 					}
 
-					entries.AddStrings("LOCAL_EXPORT_SDK_LIBRARIES", android.SortedStringKeys(library.exportedSdkLibs)...)
+					entries.AddStrings("LOCAL_EXPORT_SDK_LIBRARIES", library.classLoaderContexts.UsesLibs()...)
 
 					if len(library.additionalCheckedModules) != 0 {
 						entries.AddStrings("LOCAL_ADDITIONAL_CHECKED_MODULE", library.additionalCheckedModules.Strings()...)
@@ -140,9 +139,9 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 func testSuiteComponent(entries *android.AndroidMkEntries, test_suites []string) {
 	entries.SetString("LOCAL_MODULE_TAGS", "tests")
 	if len(test_suites) > 0 {
-		entries.AddStrings("LOCAL_COMPATIBILITY_SUITE", test_suites...)
+		entries.AddCompatibilityTestSuites(test_suites...)
 	} else {
-		entries.SetString("LOCAL_COMPATIBILITY_SUITE", "null-suite")
+		entries.AddCompatibilityTestSuites("null-suite")
 	}
 }
 
@@ -160,6 +159,9 @@ func (j *Test) AndroidMkEntries() []android.AndroidMkEntries {
 			entries.SetString("LOCAL_DISABLE_AUTO_GENERATE_TEST_CONFIG", "true")
 		}
 		entries.AddStrings("LOCAL_TEST_MAINLINE_MODULES", j.testProperties.Test_mainline_modules...)
+		if Bool(j.testProperties.Test_options.Unit_test) {
+			entries.SetBool("LOCAL_IS_UNIT_TEST", true)
+		}
 	})
 
 	return entriesList
@@ -521,17 +523,12 @@ func (dstubs *Droidstubs) AndroidMkEntries() []android.AndroidMkEntries {
 	// Note that dstubs.apiFile can be also be nil if WITHOUT_CHECKS_API is true.
 	// TODO(b/146727827): Revert when we do not need to generate stubs and API separately.
 
-	var distFiles android.TaggedDistFiles
-	if dstubs.apiFile != nil {
-		distFiles = android.MakeDefaultDistFiles(dstubs.apiFile)
-	}
 	outputFile := android.OptionalPathForPath(dstubs.stubsSrcJar)
 	if !outputFile.Valid() {
 		outputFile = android.OptionalPathForPath(dstubs.apiFile)
 	}
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "JAVA_LIBRARIES",
-		DistFiles:  distFiles,
 		OutputFile: outputFile,
 		Include:    "$(BUILD_SYSTEM)/soong_droiddoc_prebuilt.mk",
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{

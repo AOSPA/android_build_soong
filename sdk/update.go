@@ -92,7 +92,7 @@ func (gc *generatedContents) Printfln(format string, args ...interface{}) {
 }
 
 func (gf *generatedFile) build(pctx android.PackageContext, ctx android.BuilderContext, implicits android.Paths) {
-	rb := android.NewRuleBuilder()
+	rb := android.NewRuleBuilder(pctx, ctx)
 
 	content := gf.content.String()
 
@@ -108,7 +108,7 @@ func (gf *generatedFile) build(pctx android.PackageContext, ctx android.BuilderC
 		Text("| sed 's/\\\\n/\\n/g' >").Output(gf.path)
 	rb.Command().
 		Text("chmod a+x").Output(gf.path)
-	rb.Build(pctx, ctx, gf.path.Base(), "Build "+gf.path.Base())
+	rb.Build(gf.path.Base(), "Build "+gf.path.Base())
 }
 
 // Collect all the members.
@@ -735,6 +735,24 @@ func (s *snapshotBuilder) AddPrebuiltModule(member android.SdkMember, moduleType
 		}
 	}
 
+	// Where available copy apex_available properties from the member.
+	if apexAware, ok := variant.(interface{ ApexAvailable() []string }); ok {
+		apexAvailable := apexAware.ApexAvailable()
+		if len(apexAvailable) == 0 {
+			// //apex_available:platform is the default.
+			apexAvailable = []string{android.AvailableToPlatform}
+		}
+
+		// Add in any baseline apex available settings.
+		apexAvailable = append(apexAvailable, apex.BaselineApexAvailable(member.Name())...)
+
+		// Remove duplicates and sort.
+		apexAvailable = android.FirstUniqueStrings(apexAvailable)
+		sort.Strings(apexAvailable)
+
+		m.AddProperty("apex_available", apexAvailable)
+	}
+
 	deviceSupported := false
 	hostSupported := false
 
@@ -748,22 +766,6 @@ func (s *snapshotBuilder) AddPrebuiltModule(member android.SdkMember, moduleType
 	}
 
 	addHostDeviceSupportedProperties(deviceSupported, hostSupported, m)
-
-	// Where available copy apex_available properties from the member.
-	if apexAware, ok := variant.(interface{ ApexAvailable() []string }); ok {
-		apexAvailable := apexAware.ApexAvailable()
-
-		// Add in any baseline apex available settings.
-		apexAvailable = append(apexAvailable, apex.BaselineApexAvailable(member.Name())...)
-
-		if len(apexAvailable) > 0 {
-			// Remove duplicates and sort.
-			apexAvailable = android.FirstUniqueStrings(apexAvailable)
-			sort.Strings(apexAvailable)
-
-			m.AddProperty("apex_available", apexAvailable)
-		}
-	}
 
 	// Disable installation in the versioned module of those modules that are ever installable.
 	if installable, ok := variant.(interface{ EverInstallable() bool }); ok {

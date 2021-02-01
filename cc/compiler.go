@@ -366,7 +366,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		if ctx.Device() {
 			flags.Global.CommonFlags = append(flags.Global.CommonFlags,
-				fmt.Sprintf("-D__ANDROID_SDK_VERSION__=%d",
+				fmt.Sprintf("-D__ANDROID_APEX_MIN_SDK_VERSION__=%d",
 					ctx.apexSdkVersion().FinalOrFutureInt()))
 		}
 	}
@@ -649,7 +649,7 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 func compileObjs(ctx android.ModuleContext, flags builderFlags,
 	subdir string, srcFiles, pathDeps android.Paths, cFlagsDeps android.Paths) Objects {
 
-	return TransformSourceToObj(ctx, subdir, srcFiles, flags, pathDeps, cFlagsDeps)
+	return transformSourceToObj(ctx, subdir, srcFiles, flags, pathDeps, cFlagsDeps)
 }
 
 var thirdPartyDirPrefixExceptions = []*regexp.Regexp{
@@ -686,6 +686,9 @@ type RustBindgenClangProperties struct {
 
 	// list of shared libraries that provide headers for this binding.
 	Shared_libs []string `android:"arch_variant"`
+
+	// List of libraries which export include paths required for this module
+	Header_libs []string `android:"arch_variant,variant_prepend"`
 
 	// list of clang flags required to correctly interpret the headers.
 	Cflags []string `android:"arch_variant"`

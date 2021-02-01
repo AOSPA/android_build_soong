@@ -138,6 +138,8 @@ type WritablePath interface {
 	// the writablePath method doesn't directly do anything,
 	// but it allows a struct to distinguish between whether or not it implements the WritablePath interface
 	writablePath()
+
+	ReplaceExtension(ctx PathContext, ext string) OutputPath
 }
 
 type genPathProvider interface {
@@ -665,7 +667,7 @@ func (p DirectorySortedPaths) PathsInDirectory(dir string) Paths {
 	return Paths(ret)
 }
 
-// WritablePaths is a slice of WritablePaths, used for multiple outputs.
+// WritablePaths is a slice of WritablePath, used for multiple outputs.
 type WritablePaths []WritablePath
 
 // Strings returns the string forms of the writable paths.
@@ -1249,6 +1251,10 @@ func (p InstallPath) buildDir() string {
 	return p.config.buildDir
 }
 
+func (p InstallPath) ReplaceExtension(ctx PathContext, ext string) OutputPath {
+	panic("Not implemented")
+}
+
 var _ Path = InstallPath{}
 var _ WritablePath = InstallPath{}
 
@@ -1312,7 +1318,7 @@ func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string
 
 	ret := pathForInstall(ctx, os, arch, partition, ctx.Debug(), pathComponents...)
 
-	if ctx.InstallBypassMake() && ctx.Config().EmbeddedInMake() {
+	if ctx.InstallBypassMake() && ctx.Config().KatiEnabled() {
 		ret = ret.ToMakePath()
 	}
 
@@ -1509,6 +1515,10 @@ func (p PhonyPath) writablePath() {}
 
 func (p PhonyPath) buildDir() string {
 	return p.config.buildDir
+}
+
+func (p PhonyPath) ReplaceExtension(ctx PathContext, ext string) OutputPath {
+	panic("Not implemented")
 }
 
 var _ Path = PhonyPath{}

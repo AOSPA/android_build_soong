@@ -32,11 +32,12 @@ var pctx = android.NewPackageContext("android/soong/rust")
 func init() {
 	// Only allow rust modules to be defined for certain projects
 
-	android.AddNeverAllowRules(
+	// Temporarily disable allow list
+	/*  android.AddNeverAllowRules(
 		android.NeverAllow().
 			NotIn(config.RustAllowedPaths...).
 			ModuleType(config.RustModuleTypes...))
-
+	*/
 	android.RegisterModuleType("rust_defaults", defaultsFactory)
 	android.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
@@ -74,6 +75,7 @@ type BaseProperties struct {
 type Module struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	android.ApexModuleBase
 
 	Properties BaseProperties
 
@@ -88,6 +90,8 @@ type Module struct {
 	subAndroidMkOnce map[SubAndroidMkProvider]bool
 
 	outputFile android.OptionalPath
+
+	hideApexVariantFromMake bool
 }
 
 func (mod *Module) OutputFiles(tag string) (android.Paths, error) {
@@ -508,6 +512,7 @@ func (mod *Module) Init() android.Module {
 	}
 
 	android.InitAndroidArchModule(mod, mod.hod, mod.multilib)
+	android.InitApexModule(mod)
 
 	android.InitDefaultableModule(mod)
 	return mod
@@ -605,6 +610,11 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		ModuleContext: actx,
 	}
 
+	apexInfo := actx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	if !apexInfo.IsForPlatform() {
+		mod.hideApexVariantFromMake = true
+	}
+
 	toolchain := mod.toolchain(ctx)
 
 	if !toolchain.Supported() {
@@ -685,6 +695,14 @@ type dependencyTag struct {
 	proc_macro bool
 }
 
+// InstallDepNeeded returns true for rlibs, dylibs, and proc macros so that they or their transitive
+// dependencies (especially C/C++ shared libs) are installed as dependencies of a rust binary.
+func (d dependencyTag) InstallDepNeeded() bool {
+	return d.library || d.proc_macro
+}
+
+var _ android.InstallNeededDependencyTag = dependencyTag{}
+
 var (
 	customBindgenDepTag = dependencyTag{name: "customBindgenTag"}
 	rlibDepTag          = dependencyTag{name: "rlibTag", library: true}
@@ -693,6 +711,11 @@ var (
 	testPerSrcDepTag    = dependencyTag{name: "rust_unit_tests"}
 	sourceDepTag        = dependencyTag{name: "source"}
 )
+
+func IsDylibDepTag(depTag blueprint.DependencyTag) bool {
+	tag, ok := depTag.(dependencyTag)
+	return ok && tag == dylibDepTag
+}
 
 type autoDep struct {
 	variation string
@@ -1050,6 +1073,58 @@ func (mod *Module) HostToolPath() android.OptionalPath {
 		return android.OptionalPathForPath(binary.baseCompiler.path)
 	}
 	return android.OptionalPath{}
+}
+
+var _ android.ApexModule = (*Module)(nil)
+
+func (mod *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion android.ApiLevel) error {
+	return nil
+}
+
+func (mod *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
+	depTag := ctx.OtherModuleDependencyTag(dep)
+
+	if ccm, ok := dep.(*cc.Module); ok {
+		if ccm.HasStubsVariants() {
+			if cc.IsSharedDepTag(depTag) {
+				// dynamic dep to a stubs lib crosses APEX boundary
+				return false
+			}
+			if cc.IsRuntimeDepTag(depTag) {
+				// runtime dep to a stubs lib also crosses APEX boundary
+				return false
+			}
+
+			if cc.IsHeaderDepTag(depTag) {
+				return false
+			}
+		}
+		if mod.Static() && cc.IsSharedDepTag(depTag) {
+			// shared_lib dependency from a static lib is considered as crossing
+			// the APEX boundary because the dependency doesn't actually is
+			// linked; the dependency is used only during the compilation phase.
+			return false
+		}
+	}
+
+	if depTag == procMacroDepTag {
+		return false
+	}
+
+	return true
+}
+
+// Overrides ApexModule.IsInstallabeToApex()
+func (mod *Module) IsInstallableToApex() bool {
+	if mod.compiler != nil {
+		if lib, ok := mod.compiler.(*libraryDecorator); ok && (lib.shared() || lib.dylib()) {
+			return true
+		}
+		if _, ok := mod.compiler.(*binaryDecorator); ok {
+			return true
+		}
+	}
+	return false
 }
 
 var Bool = proptools.Bool
