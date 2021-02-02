@@ -197,21 +197,8 @@ func isRecoveryProprietaryModule(ctx android.BaseModuleContext) bool {
 	return false
 }
 
-// Determine if a module is going to be included in vendor snapshot or not.
-//
-// Targets of vendor snapshot are "vendor: true" or "vendor_available: true" modules in
-// AOSP. They are not guaranteed to be compatible with older vendor images. (e.g. might
-// depend on newer VNDK) So they are captured as vendor snapshot To build older vendor
-// image and newer system image altogether.
-func isVendorSnapshotModule(m *Module, inVendorProprietaryPath bool) bool {
-	return isSnapshotModule(m, inVendorProprietaryPath, vendorSnapshotImageSingleton)
-}
-
-func isRecoverySnapshotModule(m *Module, inRecoveryProprietaryPath bool) bool {
-	return isSnapshotModule(m, inRecoveryProprietaryPath, recoverySnapshotImageSingleton)
-}
-
-func isSnapshotModule(m *Module, inProprietaryPath bool, image snapshotImage) bool {
+// Determines if the module is a candidate for snapshot.
+func isSnapshotAware(cfg android.DeviceConfig, m *Module, inProprietaryPath bool, image snapshotImage) bool {
 	if !m.Enabled() || m.Properties.HideFromMake {
 		return false
 	}
@@ -249,6 +236,10 @@ func isSnapshotModule(m *Module, inProprietaryPath bool, image snapshotImage) bo
 		return false
 	}
 	if _, ok := m.linker.(*llndkHeadersDecorator); ok {
+		return false
+	}
+	// If we are using directed snapshot AND we have to exclude this module, skip this
+	if image.excludeFromDirectedSnapshot(cfg, m.BaseModuleName()) {
 		return false
 	}
 
@@ -538,7 +529,7 @@ func (c *snapshotSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 			}
 		}
 
-		if !isSnapshotModule(m, inProprietaryPath, c.image) {
+		if !isSnapshotAware(ctx.DeviceConfig(), m, inProprietaryPath, c.image) {
 			return
 		}
 
