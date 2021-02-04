@@ -58,7 +58,13 @@ func (s *snapshotMap) get(name string, arch android.ArchType) (snapshot string, 
 	return snapshot, found
 }
 
-func isSnapshotAware(ctx android.ModuleContext, m *Module) bool {
+// shouldCollectHeadersForSnapshot determines if the module is a possible candidate for snapshot.
+// If it's true, collectHeadersForSnapshot will be called in GenerateAndroidBuildActions.
+func shouldCollectHeadersForSnapshot(ctx android.ModuleContext, m *Module) bool {
+	if ctx.DeviceConfig().VndkVersion() != "current" &&
+		ctx.DeviceConfig().RecoverySnapshotVersion() != "current" {
+		return false
+	}
 	if _, _, ok := isVndkSnapshotLibrary(ctx.DeviceConfig(), m); ok {
 		return ctx.Config().VndkSnapshotBuildArtifacts()
 	} else if isVendorSnapshotModule(m, isVendorProprietaryPath(ctx.ModuleDir())) ||
@@ -66,31 +72,4 @@ func isSnapshotAware(ctx android.ModuleContext, m *Module) bool {
 		return true
 	}
 	return false
-}
-
-func copyFile(ctx android.SingletonContext, path android.Path, out string) android.OutputPath {
-	outPath := android.PathForOutput(ctx, out)
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.Cp,
-		Input:       path,
-		Output:      outPath,
-		Description: "Cp " + out,
-		Args: map[string]string{
-			"cpFlags": "-f -L",
-		},
-	})
-	return outPath
-}
-
-func writeStringToFile(ctx android.SingletonContext, content, out string) android.OutputPath {
-	outPath := android.PathForOutput(ctx, out)
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.WriteFile,
-		Output:      outPath,
-		Description: "WriteFile " + out,
-		Args: map[string]string{
-			"content": content,
-		},
-	})
-	return outPath
 }
