@@ -103,6 +103,12 @@ func (ctx *TestContext) RegisterModuleType(name string, factory ModuleFactory) {
 	ctx.Context.RegisterModuleType(name, ModuleFactoryAdaptor(factory))
 }
 
+func (ctx *TestContext) RegisterSingletonModuleType(name string, factory SingletonModuleFactory) {
+	s, m := SingletonModuleFactoryAdaptor(name, factory)
+	ctx.RegisterSingletonType(name, s)
+	ctx.RegisterModuleType(name, m)
+}
+
 func (ctx *TestContext) RegisterSingletonType(name string, factory SingletonFactory) {
 	ctx.Context.RegisterSingletonType(name, SingletonFactoryAdaptor(ctx.Context, factory))
 }
@@ -463,7 +469,14 @@ func AndroidMkDataForTest(t *testing.T, config Config, bpPath string, mod bluepr
 //
 // The build and source paths should be distinguishable based on their contents.
 func NormalizePathForTesting(path Path) string {
+	if path == nil {
+		return "<nil path>"
+	}
 	p := path.String()
+	// Allow absolute paths to /dev/
+	if strings.HasPrefix(p, "/dev/") {
+		return p
+	}
 	if w, ok := path.(WritablePath); ok {
 		rel, err := filepath.Rel(w.buildDir(), p)
 		if err != nil {

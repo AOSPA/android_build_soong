@@ -29,7 +29,9 @@ import (
 	"android/soong/android"
 	"android/soong/bpf"
 	"android/soong/cc"
+	"android/soong/dexpreopt"
 	prebuilt_etc "android/soong/etc"
+	"android/soong/filesystem"
 	"android/soong/java"
 	"android/soong/python"
 	"android/soong/rust"
@@ -95,6 +97,9 @@ type apexBundleProperties struct {
 
 	// List of BPF programs inside this APEX bundle.
 	Bpfs []string
+
+	// List of filesystem images that are embedded inside this APEX bundle.
+	Filesystems []string
 
 	// Name of the apex_key module that provides the private key to sign this APEX bundle.
 	Key *string
@@ -163,6 +168,10 @@ type apexBundleProperties struct {
 	// Whenever apex_payload.img of the APEX should not be dm-verity signed. Should be only
 	// used in tests.
 	Test_only_unsigned_payload *bool
+
+	// Whenever apex should be compressed, regardless of product flag used. Should be only
+	// used in tests.
+	Test_only_force_compression *bool
 
 	IsCoverageVariant bool `blueprint:"mutated"`
 
@@ -432,6 +441,8 @@ type apexFile struct {
 	transitiveDep bool
 	isJniLib      bool
 
+	multilib string
+
 	// TODO(jiyong): remove this
 	module android.Module
 }
@@ -451,6 +462,7 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 		ret.requiredModuleNames = module.RequiredModuleNames()
 		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
 		ret.hostRequiredModuleNames = module.HostRequiredModuleNames()
+		ret.multilib = module.Target().Arch.ArchType.Multilib
 	}
 	return ret
 }
@@ -530,6 +542,7 @@ var (
 	bpfTag         = dependencyTag{name: "bpf", payload: true}
 	certificateTag = dependencyTag{name: "certificate"}
 	executableTag  = dependencyTag{name: "executable", payload: true}
+	fsTag          = dependencyTag{name: "filesystem", payload: true}
 	javaLibTag     = dependencyTag{name: "javaLib", payload: true}
 	jniLibTag      = dependencyTag{name: "jniLib", payload: true}
 	keyTag         = dependencyTag{name: "key"}
@@ -709,10 +722,17 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
 	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, bpfTag, a.properties.Bpfs...)
+	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
 
-	// With EMMA_INSTRUMENT_FRAMEWORK=true the ART boot image includes jacoco library.
-	if a.artApex && ctx.Config().IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK") {
-		ctx.AddFarVariationDependencies(commonVariation, javaLibTag, "jacocoagent")
+	if a.artApex {
+		// With EMMA_INSTRUMENT_FRAMEWORK=true the ART boot image includes jacoco library.
+		if ctx.Config().IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK") {
+			ctx.AddFarVariationDependencies(commonVariation, javaLibTag, "jacocoagent")
+		}
+		// The ART boot image depends on dex2oat to compile it.
+		if !java.SkipDexpreoptBootJars(ctx) {
+			dexpreopt.RegisterToolDeps(ctx)
+		}
 	}
 
 	// Dependencies for signing
@@ -1235,6 +1255,11 @@ func (a *apexBundle) testOnlyShouldSkipPayloadSign() bool {
 	return proptools.Bool(a.properties.Test_only_unsigned_payload)
 }
 
+// See the test_only_force_compression property
+func (a *apexBundle) testOnlyShouldForceCompression() bool {
+	return proptools.Bool(a.properties.Test_only_force_compression)
+}
+
 // These functions are interfacing with cc/sanitizer.go. The entire APEX (along with all of its
 // members) can be sanitized, either forcibly, or by the global configuration. For some of the
 // sanitizers, extra dependencies can be forcibly added as well.
@@ -1413,6 +1438,7 @@ type javaModule interface {
 }
 
 var _ javaModule = (*java.Library)(nil)
+var _ javaModule = (*java.Import)(nil)
 var _ javaModule = (*java.SdkLibrary)(nil)
 var _ javaModule = (*java.DexImport)(nil)
 var _ javaModule = (*java.SdkLibraryImport)(nil)
@@ -1481,7 +1507,12 @@ func apexFileForBpfProgram(ctx android.BaseModuleContext, builtFile android.Path
 	return newApexFile(ctx, builtFile, builtFile.Base(), dirInApex, etc, bpfProgram)
 }
 
-// WalyPayloadDeps visits dependencies that contributes to the payload of this APEX. For each of the
+func apexFileForFilesystem(ctx android.BaseModuleContext, buildFile android.Path, fs filesystem.Filesystem) apexFile {
+	dirInApex := filepath.Join("etc", "fs")
+	return newApexFile(ctx, buildFile, buildFile.Base(), dirInApex, etc, fs)
+}
+
+// WalkPayloadDeps visits dependencies that contributes to the payload of this APEX. For each of the
 // visited module, the `do` callback is executed. Returning true in the callback continues the visit
 // to the child modules. Returning false makes the visit to continue in the sibling or the parent
 // modules. This is used in check* functions below.
@@ -1498,6 +1529,9 @@ func (a *apexBundle) WalkPayloadDeps(ctx android.ModuleContext, do android.Paylo
 			return false
 		}
 		if dt, ok := depTag.(dependencyTag); ok && !dt.payload {
+			return false
+		}
+		if depTag == dexpreopt.Dex2oatDepTag {
 			return false
 		}
 
@@ -1609,7 +1643,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				}
 			case javaLibTag:
 				switch child.(type) {
-				case *java.Library, *java.SdkLibrary, *java.DexImport, *java.SdkLibraryImport:
+				case *java.Library, *java.SdkLibrary, *java.DexImport, *java.SdkLibraryImport, *java.Import:
 					af := apexFileForJavaModule(ctx, child.(javaModule))
 					if !af.ok() {
 						ctx.PropertyErrorf("java_libs", "%q is not configured to be compiled into dex", depName)
@@ -1654,6 +1688,12 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					}
 				} else {
 					ctx.PropertyErrorf("bpfs", "%q is not a bpf module", depName)
+				}
+			case fsTag:
+				if fs, ok := child.(filesystem.Filesystem); ok {
+					filesInfo = append(filesInfo, apexFileForFilesystem(ctx, fs.OutputPath(), fs))
+				} else {
+					ctx.PropertyErrorf("filesystems", "%q is not a filesystem module", depName)
 				}
 			case prebuiltTag:
 				if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
@@ -1815,10 +1855,10 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		return
 	}
 
-	// Specific to the ART apex: dexpreopt artifacts for libcore Java libraries. Build rules are
-	// generated by the dexpreopt singleton, and here we access build artifacts via the global
-	// boot image config.
 	if a.artApex {
+		// Specific to the ART apex: dexpreopt artifacts for libcore Java libraries. Build rules are
+		// generated by the dexpreopt singleton, and here we access build artifacts via the global
+		// boot image config.
 		for arch, files := range java.DexpreoptedArtApexJars(ctx) {
 			dirInApex := filepath.Join("javalib", arch.String())
 			for _, f := range files {
@@ -1826,6 +1866,11 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				af := newApexFile(ctx, f, localModule, dirInApex, etc, nil)
 				filesInfo = append(filesInfo, af)
 			}
+		}
+		// Call GetGlobalSoongConfig to initialize it, which may be necessary if dexpreopt is
+		// disabled for libraries/apps, but boot images are still needed.
+		if !java.SkipDexpreoptBootJars(ctx) {
+			dexpreopt.GetGlobalSoongConfig(ctx)
 		}
 	}
 
@@ -1913,9 +1958,11 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		a.linkToSystemLib = false
 	}
 
+	forced := ctx.Config().ForceApexSymlinkOptimization()
+
 	// We don't need the optimization for updatable APEXes, as it might give false signal
-	// to the system health when the APEXes are still bundled (b/149805758)
-	if a.Updatable() && a.properties.ApexType == imageApex {
+	// to the system health when the APEXes are still bundled (b/149805758).
+	if !forced && a.Updatable() && a.properties.ApexType == imageApex {
 		a.linkToSystemLib = false
 	}
 
@@ -2832,7 +2879,7 @@ func makeApexAvailableBaseline() map[string][]string {
 		"libprofile-clang-extras_ndk",
 		"libprofile-extras",
 		"libprofile-extras_ndk",
-		"libunwind_llvm",
+		"libunwind",
 	}
 	return m
 }

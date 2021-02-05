@@ -101,6 +101,7 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("GLOBAL_CLANG_CPPFLAGS_NO_OVERRIDE", "")
 
 	ctx.Strict("BOARD_VNDK_VERSION", ctx.DeviceConfig().VndkVersion())
+	ctx.Strict("RECOVERY_SNAPSHOT_VERSION", ctx.DeviceConfig().RecoverySnapshotVersion())
 
 	// Filter vendor_public_library that are exported to make
 	exportedVendorPublicLibraries := []string{}
@@ -154,16 +155,6 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 
 	ctx.Strict("SOONG_STRIP_PATH", "${stripPath}")
 	ctx.Strict("XZ", "${xzCmd}")
-
-	nativeHelperIncludeFlags, err := ctx.Eval("${config.CommonNativehelperInclude}")
-	if err != nil {
-		panic(err)
-	}
-	nativeHelperIncludes, nativeHelperSystemIncludes := splitSystemIncludes(ctx, nativeHelperIncludeFlags)
-	if len(nativeHelperSystemIncludes) > 0 {
-		panic("native helper may not have any system includes")
-	}
-	ctx.Strict("JNI_H_INCLUDE", strings.Join(nativeHelperIncludes, " "))
 
 	includeFlags, err := ctx.Eval("${config.CommonGlobalIncludes}")
 	if err != nil {

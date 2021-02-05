@@ -123,6 +123,9 @@ type BaseCompilerProperties struct {
 
 		// whether to generate traces (for systrace) for this interface
 		Generate_traces *bool
+
+		// list of flags that will be passed to the AIDL compiler
+		Flags []string
 	}
 
 	Renderscript struct {
@@ -401,7 +404,12 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	target := "-target " + tc.ClangTriple()
 	if ctx.Os().Class == android.Device {
-		version := ctx.sdkVersion()
+		// When built for the non-updateble part of platform, minSdkVersion doesn't matter.
+		// It matters only when building we are building for modules that can be unbundled.
+		version := "current"
+		if !ctx.isForPlatform() || ctx.isSdkVariant() {
+			version = ctx.minSdkVersion()
+		}
 		if version == "" || version == "current" {
 			target += strconv.Itoa(android.FutureApiLevelInt)
 		} else {
@@ -521,6 +529,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	}
 
 	if compiler.hasSrcExt(".aidl") {
+		flags.aidlFlags = append(flags.aidlFlags, compiler.Properties.Aidl.Flags...)
 		if len(compiler.Properties.Aidl.Local_include_dirs) > 0 {
 			localAidlIncludeDirs := android.PathsForModuleSrc(ctx, compiler.Properties.Aidl.Local_include_dirs)
 			flags.aidlFlags = append(flags.aidlFlags, includeDirsToFlags(localAidlIncludeDirs))
