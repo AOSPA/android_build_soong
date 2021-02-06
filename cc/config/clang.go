@@ -94,6 +94,7 @@ var ClangLibToolingUnknownCflags = sorted([]string{})
 // `modernize-*`.
 var ClangTidyDisableChecks = []string{
 	"misc-no-recursion",
+	"readability-function-cognitive-complexity", // http://b/175055536
 }
 
 func init() {
@@ -140,6 +141,13 @@ func init() {
 		// Warnings from clang-10
 		// Nested and array designated initialization is nice to have.
 		"-Wno-c99-designator",
+
+		// Calls to the APIs that are newer than the min sdk version of the caller should be
+		// guarded with __builtin_available.
+		"-Wunguarded-availability",
+		// This macro allows the bionic versioning.h to indirectly determine whether the
+		// option -Wunguarded-availability is on or not.
+		"-D__ANDROID_UNGUARDED_AVAILABILITY__",
 	}, " "))
 
 	pctx.StaticVariable("ClangExtraCppflags", strings.Join([]string{
@@ -190,6 +198,8 @@ func init() {
 		"-Wno-pessimizing-move",                     // http://b/154270751
 		// New warnings to be fixed after clang-r399163
 		"-Wno-non-c-typedef-for-linkage", // http://b/161304145
+		// New warnings to be fixed after clang-r407598
+		"-Wno-string-concatenation", // http://b/175068488
 	}, " "))
 
 	// Extra cflags for external third-party projects to disable warnings that
