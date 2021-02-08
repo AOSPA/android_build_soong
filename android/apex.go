@@ -111,6 +111,19 @@ func (i ApexInfo) InApex(apex string) bool {
 	return false
 }
 
+// InApexByBaseName tells whether this apex variant of the module is part of the given APEX or not,
+// where the APEX is specified by its canonical base name, i.e. typically beginning with
+// "com.android.". In particular this function doesn't differentiate between source and prebuilt
+// APEXes, where the latter may have "prebuilt_" prefixes.
+func (i ApexInfo) InApexByBaseName(apex string) bool {
+	for _, a := range i.InApexes {
+		if RemoveOptionalPrebuiltPrefix(a) == apex {
+			return true
+		}
+	}
+	return false
+}
+
 // ApexTestForInfo stores the contents of APEXes for which this module is a test - although this
 // module is not part of the APEX - and thus has access to APEX internals.
 type ApexTestForInfo struct {
@@ -736,74 +749,69 @@ var minSdkVersionAllowlist = func(apiMap map[string]int) map[string]ApiLevel {
 	}
 	return list
 }(map[string]int{
-	"adbd":                  30,
-	"android.net.ipsec.ike": 30,
-	"androidx-constraintlayout_constraintlayout-solver": 30,
-	"androidx.annotation_annotation":                    28,
-	"androidx.arch.core_core-common":                    28,
-	"androidx.collection_collection":                    28,
-	"androidx.lifecycle_lifecycle-common":               28,
-	"apache-commons-compress":                           29,
-	"bouncycastle_ike_digests":                          30,
-	"brotli-java":                                       29,
-	"captiveportal-lib":                                 28,
-	"flatbuffer_headers":                                30,
-	"framework-permission":                              30,
-	"framework-statsd":                                  30,
-	"gemmlowp_headers":                                  30,
-	"ike-internals":                                     30,
-	"kotlinx-coroutines-android":                        28,
-	"kotlinx-coroutines-core":                           28,
-	"libadb_crypto":                                     30,
-	"libadb_pairing_auth":                               30,
-	"libadb_pairing_connection":                         30,
-	"libadb_pairing_server":                             30,
-	"libadb_protos":                                     30,
-	"libadb_tls_connection":                             30,
-	"libadbconnection_client":                           30,
-	"libadbconnection_server":                           30,
-	"libadbd_core":                                      30,
-	"libadbd_services":                                  30,
-	"libadbd":                                           30,
-	"libapp_processes_protos_lite":                      30,
-	"libasyncio":                                        30,
-	"libbrotli":                                         30,
-	"libbuildversion":                                   30,
-	"libcrypto_static":                                  30,
-	"libcrypto_utils":                                   30,
-	"libdiagnose_usb":                                   30,
-	"libeigen":                                          30,
-	"liblz4":                                            30,
-	"libmdnssd":                                         30,
-	"libneuralnetworks_common":                          30,
-	"libneuralnetworks_headers":                         30,
-	"libneuralnetworks":                                 30,
-	"libprocpartition":                                  30,
-	"libprotobuf-java-lite":                             30,
-	"libprotoutil":                                      30,
-	"libqemu_pipe":                                      30,
-	"libstats_jni":                                      30,
-	"libstatslog_statsd":                                30,
-	"libstatsmetadata":                                  30,
-	"libstatspull":                                      30,
-	"libstatssocket":                                    30,
-	"libsync":                                           30,
-	"libtextclassifier_hash_headers":                    30,
-	"libtextclassifier_hash_static":                     30,
-	"libtflite_kernel_utils":                            30,
-	"libwatchdog":                                       29,
-	"libzstd":                                           30,
-	"metrics-constants-protos":                          28,
-	"net-utils-framework-common":                        29,
-	"permissioncontroller-statsd":                       28,
-	"philox_random_headers":                             30,
-	"philox_random":                                     30,
-	"service-permission":                                30,
-	"service-statsd":                                    30,
-	"statsd-aidl-ndk_platform":                          30,
-	"statsd":                                            30,
-	"tensorflow_headers":                                30,
-	"xz-java":                                           29,
+	"adbd":                           30,
+	"android.net.ipsec.ike":          30,
+	"apache-commons-compress":        29,
+	"bouncycastle_ike_digests":       30,
+	"brotli-java":                    29,
+	"captiveportal-lib":              28,
+	"flatbuffer_headers":             30,
+	"framework-permission":           30,
+	"framework-statsd":               30,
+	"gemmlowp_headers":               30,
+	"ike-internals":                  30,
+	"kotlinx-coroutines-android":     28,
+	"kotlinx-coroutines-core":        28,
+	"libadb_crypto":                  30,
+	"libadb_pairing_auth":            30,
+	"libadb_pairing_connection":      30,
+	"libadb_pairing_server":          30,
+	"libadb_protos":                  30,
+	"libadb_tls_connection":          30,
+	"libadbconnection_client":        30,
+	"libadbconnection_server":        30,
+	"libadbd_core":                   30,
+	"libadbd_services":               30,
+	"libadbd":                        30,
+	"libapp_processes_protos_lite":   30,
+	"libasyncio":                     30,
+	"libbrotli":                      30,
+	"libbuildversion":                30,
+	"libcrypto_static":               30,
+	"libcrypto_utils":                30,
+	"libdiagnose_usb":                30,
+	"libeigen":                       30,
+	"liblz4":                         30,
+	"libmdnssd":                      30,
+	"libneuralnetworks_common":       30,
+	"libneuralnetworks_headers":      30,
+	"libneuralnetworks":              30,
+	"libprocpartition":               30,
+	"libprotobuf-java-lite":          30,
+	"libprotoutil":                   30,
+	"libqemu_pipe":                   30,
+	"libstats_jni":                   30,
+	"libstatslog_statsd":             30,
+	"libstatsmetadata":               30,
+	"libstatspull":                   30,
+	"libstatssocket":                 30,
+	"libsync":                        30,
+	"libtextclassifier_hash_headers": 30,
+	"libtextclassifier_hash_static":  30,
+	"libtflite_kernel_utils":         30,
+	"libwatchdog":                    29,
+	"libzstd":                        30,
+	"metrics-constants-protos":       28,
+	"net-utils-framework-common":     29,
+	"permissioncontroller-statsd":    28,
+	"philox_random_headers":          30,
+	"philox_random":                  30,
+	"service-permission":             30,
+	"service-statsd":                 30,
+	"statsd-aidl-ndk_platform":       30,
+	"statsd":                         30,
+	"tensorflow_headers":             30,
+	"xz-java":                        29,
 })
 
 // Function called while walking an APEX's payload dependencies.
@@ -830,9 +838,8 @@ func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion ApiL
 		return
 	}
 
-	// do not enforce deps.min_sdk_version if APEX/APK doesn't set min_sdk_version or
-	// min_sdk_version is not finalized (e.g. current or codenames)
-	if minSdkVersion.IsCurrent() {
+	// do not enforce deps.min_sdk_version if APEX/APK doesn't set min_sdk_version
+	if minSdkVersion.IsNone() {
 		return
 	}
 
