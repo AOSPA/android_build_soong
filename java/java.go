@@ -1041,7 +1041,15 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 					// Normally the package rule runs aapt, which includes the resource,
 					// but we're not running that in our package rule so just copy in the
 					// resource files here.
-					deps.staticResourceJars = append(deps.staticResourceJars, dep.(*AndroidApp).exportPackage)
+					var exportPackage android.Path
+					if androidAppImport, ok := dep.(*AndroidAppImport); ok {
+						exportPackage = androidAppImport.ExportPackage()
+					} else {
+						exportPackage = dep.(*AndroidApp).exportPackage
+					}
+					if exportPackage != nil {
+						deps.staticResourceJars = append(deps.staticResourceJars, exportPackage)
+					}
 				}
 			case kotlinStdlibTag:
 				deps.kotlinStdlib = append(deps.kotlinStdlib, dep.HeaderJars()...)
