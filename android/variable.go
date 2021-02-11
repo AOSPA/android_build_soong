@@ -191,6 +191,8 @@ type productVariables struct {
 	DeviceVndkVersion       *string  `json:",omitempty"`
 	DeviceSystemSdkVersions []string `json:",omitempty"`
 
+	RecoverySnapshotVersion *string `json:",omitempty"`
+
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
 	DeviceSecondaryCpuVariant  *string  `json:",omitempty"`

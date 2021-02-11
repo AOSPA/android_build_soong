@@ -1565,9 +1565,8 @@ func createVersionVariations(mctx android.BottomUpMutatorContext, versions []str
 func VersionVariantAvailable(module interface {
 	Host() bool
 	InRamdisk() bool
-	InRecovery() bool
 }) bool {
-	return !module.Host() && !module.InRamdisk() && !module.InRecovery()
+	return !module.Host() && !module.InRamdisk()
 }
 
 // VersionMutator splits a module into the mandatory non-stubs variant
