@@ -141,7 +141,7 @@ type AndroidMkEntries struct {
 }
 
 type AndroidMkExtraEntriesFunc func(entries *AndroidMkEntries)
-type AndroidMkExtraFootersFunc func(w io.Writer, name, prefix, moduleDir string, entries *AndroidMkEntries)
+type AndroidMkExtraFootersFunc func(w io.Writer, name, prefix, moduleDir string)
 
 // Utility funcs to manipulate Android.mk variable entries.
 
@@ -554,7 +554,7 @@ func (a *AndroidMkEntries) fillInEntries(config Config, bpPath string, mod bluep
 	fmt.Fprintln(&a.footer, "include "+a.Include)
 	blueprintDir := filepath.Dir(bpPath)
 	for _, footerFunc := range a.ExtraFooters {
-		footerFunc(&a.footer, name, prefix, blueprintDir, a)
+		footerFunc(&a.footer, name, prefix, blueprintDir)
 	}
 }
 
@@ -627,7 +627,7 @@ func translateAndroidMk(ctx SingletonContext, mkFile string, mods []blueprint.Mo
 
 	fmt.Fprintln(buf, "LOCAL_MODULE_MAKEFILE := $(lastword $(MAKEFILE_LIST))")
 
-	type_stats := make(map[string]int)
+	typeStats := make(map[string]int)
 	for _, mod := range mods {
 		err := translateAndroidMkModule(ctx, buf, mod)
 		if err != nil {
@@ -636,19 +636,19 @@ func translateAndroidMk(ctx SingletonContext, mkFile string, mods []blueprint.Mo
 		}
 
 		if amod, ok := mod.(Module); ok && ctx.PrimaryModule(amod) == amod {
-			type_stats[ctx.ModuleType(amod)] += 1
+			typeStats[ctx.ModuleType(amod)] += 1
 		}
 	}
 
 	keys := []string{}
 	fmt.Fprintln(buf, "\nSTATS.SOONG_MODULE_TYPE :=")
-	for k := range type_stats {
+	for k := range typeStats {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, mod_type := range keys {
 		fmt.Fprintln(buf, "STATS.SOONG_MODULE_TYPE +=", mod_type)
-		fmt.Fprintf(buf, "STATS.SOONG_MODULE_TYPE.%s := %d\n", mod_type, type_stats[mod_type])
+		fmt.Fprintf(buf, "STATS.SOONG_MODULE_TYPE.%s := %d\n", mod_type, typeStats[mod_type])
 	}
 
 	// Don't write to the file if it hasn't changed
@@ -820,7 +820,7 @@ func shouldSkipAndroidMkProcessing(module *ModuleBase) bool {
 	}
 
 	return !module.Enabled() ||
-		module.commonProperties.SkipInstall ||
+		module.commonProperties.HideFromMake ||
 		// Make does not understand LinuxBionic
 		module.Os() == LinuxBionic
 }

@@ -29,6 +29,7 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 
 	ctx.RegisterModuleType("toolchain_library", ToolchainLibraryFactory)
 	ctx.RegisterModuleType("llndk_library", LlndkLibraryFactory)
+	ctx.RegisterModuleType("cc_benchmark", BenchmarkFactory)
 	ctx.RegisterModuleType("cc_object", ObjectFactory)
 	ctx.RegisterModuleType("cc_genrule", genRuleFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_shared_stl", NdkPrebuiltSharedStlFactory)
@@ -334,7 +335,7 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			},
 			apex_available: [
 				"//apex_available:platform",
-				"myapex"
+				"//apex_available:anyapex",
 			],
 		}
 		cc_library {
@@ -436,6 +437,13 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 
 		ndk_prebuilt_shared_stl {
 			name: "ndk_libc++_shared",
+		}
+
+		cc_library_static {
+			name: "libgoogle-benchmark",
+			sdk_version: "current",
+			stl: "none",
+			system_shared_libs: [],
 		}
 	`
 

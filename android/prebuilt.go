@@ -17,6 +17,7 @@ package android
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -72,6 +73,12 @@ type Prebuilt struct {
 
 	srcsSupplier     PrebuiltSrcsSupplier
 	srcsPropertyName string
+}
+
+// RemoveOptionalPrebuiltPrefix returns the result of removing the "prebuilt_" prefix from the
+// supplied name if it has one, or returns the name unmodified if it does not.
+func RemoveOptionalPrebuiltPrefix(name string) string {
+	return strings.TrimPrefix(name, "prebuilt_")
 }
 
 func (p *Prebuilt) Name(name string) string {
@@ -178,6 +185,9 @@ func InitSingleSourcePrebuiltModule(module PrebuiltInterface, srcProps interface
 	srcPropertyName := proptools.PropertyNameForField(srcField)
 
 	srcsSupplier := func(ctx BaseModuleContext) []string {
+		if !module.Enabled() {
+			return nil
+		}
 		value := srcPropsValue.FieldByIndex(srcFieldIndex)
 		if value.Kind() == reflect.Ptr {
 			value = value.Elem()
@@ -279,7 +289,7 @@ func PrebuiltPostDepsMutator(ctx BottomUpMutatorContext) {
 				})
 			}
 		} else {
-			m.SkipInstall()
+			m.HideFromMake()
 		}
 	}
 }

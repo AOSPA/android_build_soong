@@ -331,6 +331,8 @@ type BaseContext interface {
 type ModuleContext interface {
 	BaseModuleContext
 
+	blueprintModuleContext() blueprint.ModuleContext
+
 	// Deprecated: use ModuleContext.Build instead.
 	ModuleBuild(pctx PackageContext, params ModuleBuildParams)
 
@@ -338,10 +340,51 @@ type ModuleContext interface {
 	ExpandSource(srcFile, prop string) Path
 	ExpandOptionalSource(srcFile *string, prop string) OptionalPath
 
+	// InstallExecutable creates a rule to copy srcPath to name in the installPath directory,
+	// with the given additional dependencies.  The file is marked executable after copying.
+	//
+	// The installed file will be returned by FilesToInstall(), and the PackagingSpec for the
+	// installed file will be returned by PackagingSpecs() on this module or by
+	// TransitivePackagingSpecs() on modules that depend on this module through dependency tags
+	// for which IsInstallDepNeeded returns true.
 	InstallExecutable(installPath InstallPath, name string, srcPath Path, deps ...Path) InstallPath
+
+	// InstallFile creates a rule to copy srcPath to name in the installPath directory,
+	// with the given additional dependencies.
+	//
+	// The installed file will be returned by FilesToInstall(), and the PackagingSpec for the
+	// installed file will be returned by PackagingSpecs() on this module or by
+	// TransitivePackagingSpecs() on modules that depend on this module through dependency tags
+	// for which IsInstallDepNeeded returns true.
 	InstallFile(installPath InstallPath, name string, srcPath Path, deps ...Path) InstallPath
+
+	// InstallSymlink creates a rule to create a symlink from src srcPath to name in the installPath
+	// directory.
+	//
+	// The installed symlink will be returned by FilesToInstall(), and the PackagingSpec for the
+	// installed file will be returned by PackagingSpecs() on this module or by
+	// TransitivePackagingSpecs() on modules that depend on this module through dependency tags
+	// for which IsInstallDepNeeded returns true.
 	InstallSymlink(installPath InstallPath, name string, srcPath InstallPath) InstallPath
+
+	// InstallAbsoluteSymlink creates a rule to create an absolute symlink from src srcPath to name
+	// in the installPath directory.
+	//
+	// The installed symlink will be returned by FilesToInstall(), and the PackagingSpec for the
+	// installed file will be returned by PackagingSpecs() on this module or by
+	// TransitivePackagingSpecs() on modules that depend on this module through dependency tags
+	// for which IsInstallDepNeeded returns true.
 	InstallAbsoluteSymlink(installPath InstallPath, name string, absPath string) InstallPath
+
+	// PackageFile creates a PackagingSpec as if InstallFile was called, but without creating
+	// the rule to copy the file.  This is useful to define how a module would be packaged
+	// without installing it into the global installation directories.
+	//
+	// The created PackagingSpec for the will be returned by PackagingSpecs() on this module or by
+	// TransitivePackagingSpecs() on modules that depend on this module through dependency tags
+	// for which IsInstallDepNeeded returns true.
+	PackageFile(installPath InstallPath, name string, srcPath Path) PackagingSpec
+
 	CheckbuildFile(srcPath Path)
 
 	InstallInData() bool
@@ -409,8 +452,8 @@ type Module interface {
 	InstallInRoot() bool
 	InstallBypassMake() bool
 	InstallForceOS() (*OsType, *ArchType)
-	SkipInstall()
-	IsSkipInstall() bool
+	HideFromMake()
+	IsHideFromMake() bool
 	MakeUninstallable()
 	ReplacedByPrebuilt()
 	IsReplacedByPrebuilt() bool
@@ -441,6 +484,10 @@ type Module interface {
 
 	FilesToInstall() InstallPaths
 	PackagingSpecs() []PackagingSpec
+
+	// TransitivePackagingSpecs returns the PackagingSpecs for this module and any transitive
+	// dependencies with dependency tags for which IsInstallDepNeeded() returns true.
+	TransitivePackagingSpecs() []PackagingSpec
 }
 
 // Qualified id for a module
@@ -704,6 +751,13 @@ type commonProperties struct {
 	// Set by osMutator.
 	CommonOSVariant bool `blueprint:"mutated"`
 
+	// When HideFromMake is set to true, no entry for this variant will be emitted in the
+	// generated Android.mk file.
+	HideFromMake bool `blueprint:"mutated"`
+
+	// When SkipInstall is set to true, calls to ctx.InstallFile, ctx.InstallExecutable,
+	// ctx.InstallSymlink and ctx.InstallAbsoluteSymlink act like calls to ctx.PackageFile
+	// and don't create a rule to install the file.
 	SkipInstall bool `blueprint:"mutated"`
 
 	// Whether the module has been replaced by a prebuilt
@@ -1003,12 +1057,14 @@ type ModuleBase struct {
 	// The primary visibility property, may be nil, that controls access to the module.
 	primaryVisibilityProperty visibilityProperty
 
-	noAddressSanitizer bool
-	installFiles       InstallPaths
-	checkbuildFiles    Paths
-	packagingSpecs     []PackagingSpec
-	noticeFiles        Paths
-	phonies            map[string]Paths
+	noAddressSanitizer   bool
+	installFiles         InstallPaths
+	installFilesDepSet   *installPathsDepSet
+	checkbuildFiles      Paths
+	packagingSpecs       []PackagingSpec
+	packagingSpecsDepSet *packagingSpecsDepSet
+	noticeFiles          Paths
+	phonies              map[string]Paths
 
 	// The files to copy to the dist as explicitly specified in the .bp file.
 	distFiles TaggedDistFiles
@@ -1306,26 +1362,33 @@ func (m *ModuleBase) Disable() {
 	m.commonProperties.ForcedDisabled = true
 }
 
+// HideFromMake marks this variant so that it is not emitted in the generated Android.mk file.
+func (m *ModuleBase) HideFromMake() {
+	m.commonProperties.HideFromMake = true
+}
+
+// IsHideFromMake returns true if HideFromMake was previously called.
+func (m *ModuleBase) IsHideFromMake() bool {
+	return m.commonProperties.HideFromMake == true
+}
+
+// SkipInstall marks this variant to not create install rules when ctx.Install* are called.
 func (m *ModuleBase) SkipInstall() {
 	m.commonProperties.SkipInstall = true
 }
 
-func (m *ModuleBase) IsSkipInstall() bool {
-	return m.commonProperties.SkipInstall == true
-}
-
-// Similar to SkipInstall, but if the AndroidMk entry would set
+// Similar to HideFromMake, but if the AndroidMk entry would set
 // LOCAL_UNINSTALLABLE_MODULE then this variant may still output that entry
 // rather than leaving it out altogether. That happens in cases where it would
 // have other side effects, in particular when it adds a NOTICE file target,
 // which other install targets might depend on.
 func (m *ModuleBase) MakeUninstallable() {
-	m.SkipInstall()
+	m.HideFromMake()
 }
 
 func (m *ModuleBase) ReplacedByPrebuilt() {
 	m.commonProperties.ReplacedByPrebuilt = true
-	m.SkipInstall()
+	m.HideFromMake()
 }
 
 func (m *ModuleBase) IsReplacedByPrebuilt() bool {
@@ -1338,19 +1401,17 @@ func (m *ModuleBase) ExportedToMake() bool {
 
 // computeInstallDeps finds the installed paths of all dependencies that have a dependency
 // tag that is annotated as needing installation via the IsInstallDepNeeded method.
-func (m *ModuleBase) computeInstallDeps(ctx blueprint.ModuleContext) InstallPaths {
-	var result InstallPaths
-	ctx.WalkDeps(func(child, parent blueprint.Module) bool {
-		if a, ok := child.(Module); ok {
-			if IsInstallDepNeeded(ctx.OtherModuleDependencyTag(child)) {
-				result = append(result, a.FilesToInstall()...)
-				return true
-			}
+func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*installPathsDepSet, []*packagingSpecsDepSet) {
+	var installDeps []*installPathsDepSet
+	var packagingSpecs []*packagingSpecsDepSet
+	ctx.VisitDirectDeps(func(dep Module) {
+		if IsInstallDepNeeded(ctx.OtherModuleDependencyTag(dep)) {
+			installDeps = append(installDeps, dep.base().installFilesDepSet)
+			packagingSpecs = append(packagingSpecs, dep.base().packagingSpecsDepSet)
 		}
-		return false
 	})
 
-	return result
+	return installDeps, packagingSpecs
 }
 
 func (m *ModuleBase) FilesToInstall() InstallPaths {
@@ -1359,6 +1420,10 @@ func (m *ModuleBase) FilesToInstall() InstallPaths {
 
 func (m *ModuleBase) PackagingSpecs() []PackagingSpec {
 	return m.packagingSpecs
+}
+
+func (m *ModuleBase) TransitivePackagingSpecs() []PackagingSpec {
+	return m.packagingSpecsDepSet.ToList()
 }
 
 func (m *ModuleBase) NoAddressSanitizer() bool {
@@ -1587,10 +1652,14 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		module:            m.module,
 		bp:                blueprintCtx,
 		baseModuleContext: m.baseModuleContextFactory(blueprintCtx),
-		installDeps:       m.computeInstallDeps(blueprintCtx),
-		installFiles:      m.installFiles,
 		variables:         make(map[string]string),
 	}
+
+	dependencyInstallFiles, dependencyPackagingSpecs := m.computeInstallDeps(ctx)
+	// set m.installFilesDepSet to only the transitive dependencies to be used as the dependencies
+	// of installed files of this module.  It will be replaced by a depset including the installed
+	// files of this module at the end for use by modules that depend on this one.
+	m.installFilesDepSet = newInstallPathsDepSet(nil, dependencyInstallFiles)
 
 	// Temporarily continue to call blueprintCtx.GetMissingDependencies() to maintain the previous behavior of never
 	// reporting missing dependency errors in Blueprint when AllowMissingDependencies == true.
@@ -1699,6 +1768,9 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 	}
+
+	m.installFilesDepSet = newInstallPathsDepSet(m.installFiles, dependencyInstallFiles)
+	m.packagingSpecsDepSet = newPackagingSpecsDepSet(m.packagingSpecs, dependencyPackagingSpecs)
 
 	m.buildParams = ctx.buildParams
 	m.ruleParams = ctx.ruleParams
@@ -1874,7 +1946,6 @@ type moduleContext struct {
 	bp blueprint.ModuleContext
 	baseModuleContext
 	packagingSpecs  []PackagingSpec
-	installDeps     InstallPaths
 	installFiles    InstallPaths
 	checkbuildFiles Paths
 	module          Module
@@ -2383,8 +2454,12 @@ func (m *moduleContext) InstallForceOS() (*OsType, *ArchType) {
 	return m.module.InstallForceOS()
 }
 
-func (m *moduleContext) skipInstall(fullInstallPath InstallPath) bool {
+func (m *moduleContext) skipInstall() bool {
 	if m.module.base().commonProperties.SkipInstall {
+		return true
+	}
+
+	if m.module.base().commonProperties.HideFromMake {
 		return true
 	}
 
@@ -2414,14 +2489,29 @@ func (m *moduleContext) InstallExecutable(installPath InstallPath, name string, 
 	return m.installFile(installPath, name, srcPath, deps, true)
 }
 
+func (m *moduleContext) PackageFile(installPath InstallPath, name string, srcPath Path) PackagingSpec {
+	fullInstallPath := installPath.Join(m, name)
+	return m.packageFile(fullInstallPath, srcPath, false)
+}
+
+func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, executable bool) PackagingSpec {
+	spec := PackagingSpec{
+		relPathInPackage: Rel(m, fullInstallPath.PartitionDir(), fullInstallPath.String()),
+		srcPath:          srcPath,
+		symlinkTarget:    "",
+		executable:       executable,
+	}
+	m.packagingSpecs = append(m.packagingSpecs, spec)
+	return spec
+}
+
 func (m *moduleContext) installFile(installPath InstallPath, name string, srcPath Path, deps []Path, executable bool) InstallPath {
 
 	fullInstallPath := installPath.Join(m, name)
 	m.module.base().hooks.runInstallHooks(m, srcPath, fullInstallPath, false)
 
-	if !m.skipInstall(fullInstallPath) {
-
-		deps = append(deps, m.installDeps.Paths()...)
+	if !m.skipInstall() {
+		deps = append(deps, m.module.base().installFilesDepSet.ToList().Paths()...)
 
 		var implicitDeps, orderOnlyDeps Paths
 
@@ -2451,14 +2541,10 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 		m.installFiles = append(m.installFiles, fullInstallPath)
 	}
 
-	m.packagingSpecs = append(m.packagingSpecs, PackagingSpec{
-		relPathInPackage: Rel(m, fullInstallPath.PartitionDir(), fullInstallPath.String()),
-		srcPath:          srcPath,
-		symlinkTarget:    "",
-		executable:       executable,
-	})
+	m.packageFile(fullInstallPath, srcPath, executable)
 
 	m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
+
 	return fullInstallPath
 }
 
@@ -2470,7 +2556,7 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 	if err != nil {
 		panic(fmt.Sprintf("Unable to generate symlink between %q and %q: %s", fullInstallPath.Base(), srcPath.Base(), err))
 	}
-	if !m.skipInstall(fullInstallPath) {
+	if !m.skipInstall() {
 
 		m.Build(pctx, BuildParams{
 			Rule:        Symlink,
@@ -2503,7 +2589,7 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 	fullInstallPath := installPath.Join(m, name)
 	m.module.base().hooks.runInstallHooks(m, nil, fullInstallPath, true)
 
-	if !m.skipInstall(fullInstallPath) {
+	if !m.skipInstall() {
 		m.Build(pctx, BuildParams{
 			Rule:        Symlink,
 			Description: "install symlink " + fullInstallPath.Base() + " -> " + absPath,
@@ -2529,6 +2615,10 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 
 func (m *moduleContext) CheckbuildFile(srcPath Path) {
 	m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
+}
+
+func (m *moduleContext) blueprintModuleContext() blueprint.ModuleContext {
+	return m.bp
 }
 
 // SrcIsModule decodes module references in the format ":name" into the module name, or empty string if the input
@@ -2664,7 +2754,12 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 	}
 }
 
+// Modules can implement HostToolProvider and return a valid OptionalPath from HostToolPath() to
+// specify that they can be used as a tool by a genrule module.
 type HostToolProvider interface {
+	Module
+	// HostToolPath returns the path to the host tool for the module if it is one, or an invalid
+	// OptionalPath.
 	HostToolPath() OptionalPath
 }
 
@@ -2857,4 +2952,24 @@ type IdeInfo struct {
 func CheckBlueprintSyntax(ctx BaseModuleContext, filename string, contents string) []error {
 	bpctx := ctx.blueprintBaseModuleContext()
 	return blueprint.CheckBlueprintSyntax(bpctx.ModuleFactories(), filename, contents)
+}
+
+// installPathsDepSet is a thin type-safe wrapper around the generic depSet.  It always uses
+// topological order.
+type installPathsDepSet struct {
+	depSet
+}
+
+// newInstallPathsDepSet returns an immutable packagingSpecsDepSet with the given direct and
+// transitive contents.
+func newInstallPathsDepSet(direct InstallPaths, transitive []*installPathsDepSet) *installPathsDepSet {
+	return &installPathsDepSet{*newDepSet(TOPOLOGICAL, direct, transitive)}
+}
+
+// ToList returns the installPathsDepSet flattened to a list in topological order.
+func (d *installPathsDepSet) ToList() InstallPaths {
+	if d == nil {
+		return nil
+	}
+	return d.depSet.ToList().(InstallPaths)
 }

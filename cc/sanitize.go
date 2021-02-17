@@ -204,6 +204,13 @@ type sanitize struct {
 	Properties SanitizeProperties
 }
 
+// Mark this tag with a check to see if apex dependency check should be skipped
+func (t libraryDependencyTag) SkipApexAllowedDependenciesCheck() bool {
+	return t.skipApexAllowedDependenciesCheck
+}
+
+var _ android.SkipApexAllowedDependenciesCheck = (*libraryDependencyTag)(nil)
+
 func init() {
 	android.RegisterMakeVarsProvider(pctx, cfiMakeVarsProvider)
 	android.RegisterMakeVarsProvider(pctx, hwasanMakeVarsProvider)
@@ -1038,9 +1045,6 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 
 		if runtimeLibrary != "" && (toolchain.Bionic() || c.sanitize.Properties.UbsanRuntimeDep) {
 			// UBSan is supported on non-bionic linux host builds as well
-			if isLlndkLibrary(runtimeLibrary, mctx.Config()) && !c.static() && c.UseVndk() {
-				runtimeLibrary = runtimeLibrary + llndkLibrarySuffix
-			}
 
 			// Adding dependency to the runtime library. We are using *FarVariation*
 			// because the runtime libraries themselves are not mutated by sanitizer
@@ -1077,9 +1081,18 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 						runtimeLibrary = lib
 					}
 				}
-
+				// Skip apex dependency check for sharedLibraryDependency
+				// when sanitizer diags are enabled. Skipping the check will allow
+				// building with diag libraries without having to list the
+				// dependency in Apex's allowed_deps file.
+				diagEnabled := len(diagSanitizers) > 0
 				// dynamic executable and shared libs get shared runtime libs
-				depTag := libraryDependencyTag{Kind: sharedLibraryDependency, Order: earlyLibraryDependency}
+				depTag := libraryDependencyTag{
+					Kind:  sharedLibraryDependency,
+					Order: earlyLibraryDependency,
+
+					skipApexAllowedDependenciesCheck: diagEnabled,
+				}
 				variations := append(mctx.Target().Variations(),
 					blueprint.Variation{Mutator: "link", Variation: "shared"})
 				if c.Device() {

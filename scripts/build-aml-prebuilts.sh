@@ -54,6 +54,11 @@ PLATFORM_VERSION_ALL_CODENAMES="$(my_get_build_var PLATFORM_VERSION_ALL_CODENAME
 PLATFORM_VERSION_ALL_CODENAMES="${PLATFORM_VERSION_ALL_CODENAMES/,/'","'}"
 PLATFORM_VERSION_ALL_CODENAMES="[\"${PLATFORM_VERSION_ALL_CODENAMES}\"]"
 
+# Get the list of missing <uses-library> modules and convert it to a JSON array
+# (quote module names, add comma separator and wrap in brackets).
+MISSING_USES_LIBRARIES="$(my_get_build_var INTERNAL_PLATFORM_MISSING_USES_LIBRARIES)"
+MISSING_USES_LIBRARIES="[$(echo $MISSING_USES_LIBRARIES | sed -e 's/\([^ ]\+\)/\"\1\"/g' -e 's/[ ]\+/, /g')]"
+
 # Logic from build/make/core/goma.mk
 if [ "${USE_GOMA}" = true ]; then
   if [ -n "${GOMA_DIR}" ]; then
@@ -77,10 +82,14 @@ readonly SOONG_VARS=${SOONG_OUT}/soong.variables
 # CrossHost: linux_bionic
 # CrossHostArch: x86_64
 #   -  Enable Bionic on host as ART needs prebuilts for it.
+# VendorVars.art_mdoule.source_build
+#   -  TODO(b/172480615): Change default to false when platform uses ART Module
+#      prebuilts by default.
 cat > ${SOONG_VARS}.new << EOF
 {
     "BuildNumberFile": "build_number.txt",
 
+    "Platform_version_name": "${PLATFORM_VERSION}",
     "Platform_sdk_version": ${PLATFORM_SDK_VERSION},
     "Platform_sdk_codename": "${PLATFORM_VERSION}",
     "Platform_version_active_codenames": ${PLATFORM_VERSION_ALL_CODENAMES},
@@ -94,7 +103,15 @@ cat > ${SOONG_VARS}.new << EOF
 
     "Allow_missing_dependencies": ${SOONG_ALLOW_MISSING_DEPENDENCIES:-false},
     "Unbundled_build": ${TARGET_BUILD_UNBUNDLED:-false},
-    "UseGoma": ${USE_GOMA}
+    "UseGoma": ${USE_GOMA},
+
+    "VendorVars": {
+        "art_module": {
+            "source_build": "${ENABLE_ART_SOURCE_BUILD:-true}"
+        }
+    },
+
+    "MissingUsesLibraries": ${MISSING_USES_LIBRARIES}
 }
 EOF
 
