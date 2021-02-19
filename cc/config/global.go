@@ -77,6 +77,7 @@ var (
 		"-Werror=date-time",
 		"-Werror=pragma-pack",
 		"-Werror=pragma-pack-suspicious-include",
+		"-Werror=string-plus-int",
 		"-Werror=unreachable-code-loop-increment",
 	}
 
@@ -140,8 +141,13 @@ var (
 	}
 
 	noOverrideGlobalCflags = []string{
+		"-Werror=bool-operation",
+		"-Werror=implicit-int-float-conversion",
+		"-Werror=int-in-bool-context",
 		"-Werror=int-to-pointer-cast",
 		"-Werror=pointer-to-int-cast",
+		"-Werror=string-compare",
+		"-Werror=xor-used-as-pow",
 		// http://b/161386391 for -Wno-void-pointer-to-enum-cast
 		"-Wno-void-pointer-to-enum-cast",
 		// http://b/161386391 for -Wno-void-pointer-to-int-cast
@@ -169,8 +175,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r407598"
-	ClangDefaultShortVersion = "12.0.1"
+	ClangDefaultVersion      = "clang-r407598b"
+	ClangDefaultShortVersion = "12.0.2"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{

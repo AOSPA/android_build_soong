@@ -171,7 +171,7 @@ func androidMkWriteExtraTestConfigs(extraTestConfigs android.Paths, entries *and
 	}
 }
 
-func androidMkWriteTestData(data []android.DataPath, ctx AndroidMkContext, entries *android.AndroidMkEntries) {
+func AndroidMkWriteTestData(data []android.DataPath, entries *android.AndroidMkEntries) {
 	testFiles := android.AndroidMkDataPaths(data)
 	if len(testFiles) > 0 {
 		entries.ExtraEntries = append(entries.ExtraEntries, func(entries *android.AndroidMkEntries) {
@@ -370,7 +370,7 @@ func (benchmark *benchmarkDecorator) AndroidMkEntries(ctx AndroidMkContext, entr
 	for _, srcPath := range benchmark.data {
 		dataPaths = append(dataPaths, android.DataPath{SrcPath: srcPath})
 	}
-	androidMkWriteTestData(dataPaths, ctx, entries)
+	AndroidMkWriteTestData(dataPaths, entries)
 }
 
 func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
@@ -395,7 +395,7 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 		}
 	})
 
-	androidMkWriteTestData(test.data, ctx, entries)
+	AndroidMkWriteTestData(test.data, entries)
 	androidMkWriteExtraTestConfigs(test.extraTestConfigs, entries)
 }
 
@@ -536,7 +536,7 @@ func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entrie
 		entries.SubName += ".cfi"
 	}
 
-	entries.SubName += c.androidMkSuffix
+	entries.SubName += c.baseProperties.Androidmk_suffix
 
 	entries.ExtraEntries = append(entries.ExtraEntries, func(entries *android.AndroidMkEntries) {
 		c.libraryDecorator.androidMkWriteExportedFlags(entries)
@@ -563,7 +563,7 @@ func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entrie
 
 func (c *snapshotBinaryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.Class = "EXECUTABLES"
-	entries.SubName = c.androidMkSuffix
+	entries.SubName = c.baseProperties.Androidmk_suffix
 
 	entries.ExtraEntries = append(entries.ExtraEntries, func(entries *android.AndroidMkEntries) {
 		entries.AddStrings("LOCAL_MODULE_SYMLINKS", c.Properties.Symlinks...)
@@ -572,7 +572,7 @@ func (c *snapshotBinaryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries
 
 func (c *snapshotObjectLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.Class = "STATIC_LIBRARIES"
-	entries.SubName = c.androidMkSuffix
+	entries.SubName = c.baseProperties.Androidmk_suffix
 
 	entries.ExtraFooters = append(entries.ExtraFooters,
 		func(w io.Writer, name, prefix, moduleDir string) {

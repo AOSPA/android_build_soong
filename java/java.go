@@ -40,18 +40,21 @@ func init() {
 	// Register sdk member types.
 	android.RegisterSdkMemberType(javaHeaderLibsSdkMemberType)
 
+	// Export implementation classes jar as part of the sdk.
+	exportImplementationClassesJar := func(_ android.SdkMemberContext, j *Library) android.Path {
+		implementationJars := j.ImplementationAndResourcesJars()
+		if len(implementationJars) != 1 {
+			panic(fmt.Errorf("there must be only one implementation jar from %q", j.Name()))
+		}
+		return implementationJars[0]
+	}
+
 	// Register java implementation libraries for use only in module_exports (not sdk).
 	android.RegisterSdkMemberType(&librarySdkMemberType{
 		android.SdkMemberTypeBase{
 			PropertyName: "java_libs",
 		},
-		func(_ android.SdkMemberContext, j *Library) android.Path {
-			implementationJars := j.ImplementationAndResourcesJars()
-			if len(implementationJars) != 1 {
-				panic(fmt.Errorf("there must be only one implementation jar from %q", j.Name()))
-			}
-			return implementationJars[0]
-		},
+		exportImplementationClassesJar,
 		sdkSnapshotFilePathForJar,
 		copyEverythingToSnapshot,
 	})
@@ -72,19 +75,11 @@ func init() {
 			PropertyName: "java_boot_libs",
 			SupportsSdk:  true,
 		},
-		func(ctx android.SdkMemberContext, j *Library) android.Path {
-			// Java boot libs are only provided in the SDK to provide access to their dex implementation
-			// jar for use by dexpreopting and boot jars package check. They do not need to provide an
-			// actual implementation jar but the java_import will need a file that exists so just copy an
-			// empty file. Any attempt to use that file as a jar will cause a build error.
-			return ctx.SnapshotBuilder().EmptyFile()
-		},
-		func(osPrefix, name string) string {
-			// Create a special name for the implementation jar to try and provide some useful information
-			// to a developer that attempts to compile against this.
-			// TODO(b/175714559): Provide a proper error message in Soong not ninja.
-			return filepath.Join(osPrefix, "java_boot_libs", "snapshot", "jars", "are", "invalid", name+jarFileSuffix)
-		},
+		// Temporarily export implementation classes jar for java_boot_libs as it is required for the
+		// hiddenapi processing.
+		// TODO(b/179354495): Revert once hiddenapi processing has been modularized.
+		exportImplementationClassesJar,
+		sdkSnapshotFilePathForJar,
 		onlyCopyJarToSnapshot,
 	})
 
@@ -1689,35 +1684,44 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	// Combine the classes built from sources, any manifests, and any static libraries into
 	// classes.jar. If there is only one input jar this step will be skipped.
-	var outputFile android.ModuleOutPath
+	var outputFile android.OutputPath
 
 	if len(jars) == 1 && !manifest.Valid() {
+		// Optimization: skip the combine step as there is nothing to do
+		// TODO(ccross): this leaves any module-info.class files, but those should only come from
+		// prebuilt dependencies until we support modules in the platform build, so there shouldn't be
+		// any if len(jars) == 1.
+
+		// Transform the single path to the jar into an OutputPath as that is required by the following
+		// code.
 		if moduleOutPath, ok := jars[0].(android.ModuleOutPath); ok {
-			// Optimization: skip the combine step if there is nothing to do
-			// TODO(ccross): this leaves any module-info.class files, but those should only come from
-			// prebuilt dependencies until we support modules in the platform build, so there shouldn't be
-			// any if len(jars) == 1.
-			outputFile = moduleOutPath
+			// The path contains an embedded OutputPath so reuse that.
+			outputFile = moduleOutPath.OutputPath
+		} else if outputPath, ok := jars[0].(android.OutputPath); ok {
+			// The path is an OutputPath so reuse it directly.
+			outputFile = outputPath
 		} else {
+			// The file is not in the out directory so create an OutputPath into which it can be copied
+			// and which the following code can use to refer to it.
 			combinedJar := android.PathForModuleOut(ctx, "combined", jarName)
 			ctx.Build(pctx, android.BuildParams{
 				Rule:   android.Cp,
 				Input:  jars[0],
 				Output: combinedJar,
 			})
-			outputFile = combinedJar
+			outputFile = combinedJar.OutputPath
 		}
 	} else {
 		combinedJar := android.PathForModuleOut(ctx, "combined", jarName)
 		TransformJarsToJar(ctx, combinedJar, "for javac", jars, manifest,
 			false, nil, nil)
-		outputFile = combinedJar
+		outputFile = combinedJar.OutputPath
 	}
 
 	// jarjar implementation jar if necessary
 	if j.expandJarjarRules != nil {
 		// Transform classes.jar into classes-jarjar.jar
-		jarjarFile := android.PathForModuleOut(ctx, "jarjar", jarName)
+		jarjarFile := android.PathForModuleOut(ctx, "jarjar", jarName).OutputPath
 		TransformJarJar(ctx, jarjarFile, outputFile, j.expandJarjarRules)
 		outputFile = jarjarFile
 
@@ -1762,7 +1766,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	implementationAndResourcesJar := outputFile
 	if j.resourceJar != nil {
 		jars := android.Paths{j.resourceJar, implementationAndResourcesJar}
-		combinedJar := android.PathForModuleOut(ctx, "withres", jarName)
+		combinedJar := android.PathForModuleOut(ctx, "withres", jarName).OutputPath
 		TransformJarsToJar(ctx, combinedJar, "for resources", jars, manifest,
 			false, nil, nil)
 		implementationAndResourcesJar = combinedJar
@@ -1788,7 +1792,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 				android.PathForSource(ctx, "build/make/core/proguard.jacoco.flags"))
 		}
 		// Dex compilation
-		var dexOutputFile android.ModuleOutPath
+		var dexOutputFile android.OutputPath
 		dexOutputFile = j.dexer.compileDex(ctx, flags, j.minSdkVersion(), outputFile, jarName)
 		if ctx.Failed() {
 			return
@@ -1807,11 +1811,11 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		// merge dex jar with resources if necessary
 		if j.resourceJar != nil {
 			jars := android.Paths{dexOutputFile, j.resourceJar}
-			combinedJar := android.PathForModuleOut(ctx, "dex-withres", jarName)
+			combinedJar := android.PathForModuleOut(ctx, "dex-withres", jarName).OutputPath
 			TransformJarsToJar(ctx, combinedJar, "for dex resources", jars, android.OptionalPath{},
 				false, nil, nil)
 			if *j.dexProperties.Uncompress_dex {
-				combinedAlignedJar := android.PathForModuleOut(ctx, "dex-withres-aligned", jarName)
+				combinedAlignedJar := android.PathForModuleOut(ctx, "dex-withres-aligned", jarName).OutputPath
 				TransformZipAlign(ctx, combinedAlignedJar, combinedJar)
 				dexOutputFile = combinedAlignedJar
 			} else {
@@ -1875,7 +1879,7 @@ func (j *Module) compileJavaClasses(ctx android.ModuleContext, jarName string, i
 		jarName += strconv.Itoa(idx)
 	}
 
-	classes := android.PathForModuleOut(ctx, "javac", jarName)
+	classes := android.PathForModuleOut(ctx, "javac", jarName).OutputPath
 	TransformJavaToClasses(ctx, classes, idx, srcFiles, srcJars, flags, extraJarDeps)
 
 	if ctx.Config().EmitXrefRules() {
@@ -1955,12 +1959,12 @@ func (j *Module) compileJavaHeader(ctx android.ModuleContext, srcFiles, srcJars 
 }
 
 func (j *Module) instrument(ctx android.ModuleContext, flags javaBuilderFlags,
-	classesJar android.Path, jarName string) android.ModuleOutPath {
+	classesJar android.Path, jarName string) android.OutputPath {
 
 	specs := j.jacocoModuleToZipCommand(ctx)
 
 	jacocoReportClassesFile := android.PathForModuleOut(ctx, "jacoco-report-classes", jarName)
-	instrumentedJar := android.PathForModuleOut(ctx, "jacoco", jarName)
+	instrumentedJar := android.PathForModuleOut(ctx, "jacoco", jarName).OutputPath
 
 	jacocoInstrumentJar(ctx, instrumentedJar, jacocoReportClassesFile, classesJar, specs)
 
@@ -2374,7 +2378,7 @@ type testProperties struct {
 
 	// list of files or filegroup modules that provide data that should be installed alongside
 	// the test
-	Data []string `android:"path"`
+	Data []string `android:"path,arch_variant"`
 
 	// Flag to indicate whether or not to create test config automatically. If AndroidTest.xml
 	// doesn't exist next to the Android.bp, this attribute doesn't need to be set to true
@@ -2678,9 +2682,10 @@ func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 
 func (j *Binary) DepsMutator(ctx android.BottomUpMutatorContext) {
-	if ctx.Arch().ArchType == android.Common {
+	if ctx.Arch().ArchType == android.Common || ctx.BazelConversionMode() {
 		j.deps(ctx)
-	} else {
+	}
+	if ctx.Arch().ArchType != android.Common || ctx.BazelConversionMode() {
 		// These dependencies ensure the host installation rules will install the jar file and
 		// the jni libraries when the wrapper is installed.
 		ctx.AddVariationDependencies(nil, jniInstallTag, j.binaryProperties.Jni_libs...)
@@ -2937,7 +2942,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			}
 			j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
 
-			var dexOutputFile android.ModuleOutPath
+			var dexOutputFile android.OutputPath
 			dexOutputFile = j.dexer.compileDex(ctx, flags, j.minSdkVersion(), outputFile, jarName)
 			if ctx.Failed() {
 				return

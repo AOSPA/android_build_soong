@@ -24,6 +24,8 @@ func init() {
 	RegisterSingletonType("api_levels", ApiLevelsSingleton)
 }
 
+const previewAPILevelBase = 9000
+
 // An API level, which may be a finalized (numbered) API, a preview (codenamed)
 // API, or the future API level (10000). Can be parsed from a string with
 // ApiLevelFromUser or ApiLevelOrPanic.
@@ -57,6 +59,21 @@ func (this ApiLevel) FinalOrFutureInt() int {
 	}
 }
 
+// FinalOrPreviewInt distinguishes preview versions from "current" (future).
+// This is for "native" stubs and should be in sync with ndkstubgen/getApiLevelsMap().
+// - "current" -> future (10000)
+// - preview codenames -> preview base (9000) + index
+// - otherwise -> cast to int
+func (this ApiLevel) FinalOrPreviewInt() int {
+	if this.IsCurrent() {
+		return this.number
+	}
+	if this.IsPreview() {
+		return previewAPILevelBase + this.number
+	}
+	return this.number
+}
+
 // Returns the canonical name for this API level. For a finalized API level
 // this will be the API number as a string. For a preview API level this
 // will be the codename, or "current".
@@ -79,6 +96,10 @@ func (this ApiLevel) IsPreview() bool {
 // preview API level but will instead be canonicalized to the final API level.
 func (this ApiLevel) IsCurrent() bool {
 	return this.value == "current"
+}
+
+func (this ApiLevel) IsNone() bool {
+	return this.number == -1
 }
 
 // Returns -1 if the current API level is less than the argument, 0 if they
@@ -278,7 +299,6 @@ var apiLevelsMapKey = NewOnceKey("ApiLevelsMap")
 
 func getApiLevelsMap(config Config) map[string]int {
 	return config.Once(apiLevelsMapKey, func() interface{} {
-		baseApiLevel := 9000
 		apiLevelsMap := map[string]int{
 			"G":     9,
 			"I":     14,
@@ -298,7 +318,7 @@ func getApiLevelsMap(config Config) map[string]int {
 			"R":     30,
 		}
 		for i, codename := range config.PlatformVersionActiveCodenames() {
-			apiLevelsMap[codename] = baseApiLevel + i
+			apiLevelsMap[codename] = previewAPILevelBase + i
 		}
 
 		return apiLevelsMap

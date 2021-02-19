@@ -47,9 +47,13 @@ var (
 		"-C debuginfo=2",
 		"-C opt-level=3",
 		"-C relocation-model=pic",
+		// Use v0 mangling to distinguish from C++ symbols
+		"-Z symbol-mangling-version=v0",
 	}
 
-	deviceGlobalRustFlags = []string{}
+	deviceGlobalRustFlags = []string{
+		"-C panic=abort",
+	}
 
 	deviceGlobalLinkFlags = []string{
 		// Prepend the lld flags from cc_config so we stay in sync with cc
