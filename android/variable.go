@@ -330,6 +330,9 @@ type productVariables struct {
 	VndkUseCoreVariant         *bool `json:",omitempty"`
 	VndkSnapshotBuildArtifacts *bool `json:",omitempty"`
 
+	DirectedVendorSnapshot bool            `json:",omitempty"`
+	VendorSnapshotModules  map[string]bool `json:",omitempty"`
+
 	BoardVendorSepolicyDirs      []string `json:",omitempty"`
 	BoardOdmSepolicyDirs         []string `json:",omitempty"`
 	BoardPlatPublicSepolicyDirs  []string `json:",omitempty"`
@@ -374,6 +377,8 @@ type productVariables struct {
 	InstallExtraFlattenedApexes *bool `json:",omitempty"`
 
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
+
+	PrebuiltHiddenApiDir *string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
