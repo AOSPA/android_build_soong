@@ -436,7 +436,7 @@ func osMutator(bpctx blueprint.BottomUpMutatorContext) {
 	// blueprint.BottomUpMutatorContext because android.BottomUpMutatorContext
 	// filters out non-Soong modules.  Now that we've handled them, create a
 	// normal android.BottomUpMutatorContext.
-	mctx := bottomUpMutatorContextFactory(bpctx, module, false)
+	mctx := bottomUpMutatorContextFactory(bpctx, module, false, false)
 
 	base := module.base()
 
@@ -576,7 +576,7 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	// blueprint.BottomUpMutatorContext because android.BottomUpMutatorContext
 	// filters out non-Soong modules.  Now that we've handled them, create a
 	// normal android.BottomUpMutatorContext.
-	mctx := bottomUpMutatorContextFactory(bpctx, module, false)
+	mctx := bottomUpMutatorContextFactory(bpctx, module, false, false)
 
 	base := module.base()
 
@@ -617,10 +617,14 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	}
 
 	// Some modules want compile_multilib: "first" to mean 32-bit, not 64-bit.
-	// This is used for Windows support and for HOST_PREFER_32_BIT=true support for Art modules.
+	// This is used for HOST_PREFER_32_BIT=true support for Art modules.
 	prefer32 := false
 	if base.prefer32 != nil {
 		prefer32 = base.prefer32(mctx, base, os)
+	}
+	if os == Windows {
+		// Windows builds always prefer 32-bit
+		prefer32 = true
 	}
 
 	// Determine the multilib selection for this module.
@@ -643,10 +647,11 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	}
 
 	// Recovery is always the primary architecture, filter out any other architectures.
+	// Common arch is also allowed
 	if image == RecoveryVariation {
 		primaryArch := mctx.Config().DevicePrimaryArchType()
-		targets = filterToArch(targets, primaryArch)
-		multiTargets = filterToArch(multiTargets, primaryArch)
+		targets = filterToArch(targets, primaryArch, Common)
+		multiTargets = filterToArch(multiTargets, primaryArch, Common)
 	}
 
 	// If there are no supported targets disable the module.
@@ -715,10 +720,17 @@ func decodeMultilib(base *ModuleBase, class OsClass) (multilib, extraMultilib st
 }
 
 // filterToArch takes a list of Targets and an ArchType, and returns a modified list that contains
-// only Targets that have the specified ArchType.
-func filterToArch(targets []Target, arch ArchType) []Target {
+// only Targets that have the specified ArchTypes.
+func filterToArch(targets []Target, archs ...ArchType) []Target {
 	for i := 0; i < len(targets); i++ {
-		if targets[i].Arch.ArchType != arch {
+		found := false
+		for _, arch := range archs {
+			if targets[i].Arch.ArchType == arch {
+				found = true
+				break
+			}
+		}
+		if !found {
 			targets = append(targets[:i], targets[i+1:]...)
 			i--
 		}

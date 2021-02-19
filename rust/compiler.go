@@ -96,7 +96,11 @@ type BaseCompilerProperties struct {
 	// list of C shared library dependencies
 	Shared_libs []string `android:"arch_variant"`
 
-	// list of C static library dependencies
+	// list of C static library dependencies. Note, static libraries prefixed by "lib" will be passed to rustc
+	// along with "-lstatic=<name>". This will bundle the static library into rlib/static libraries so dependents do
+	// not need to also declare the static library as a dependency. Static libraries which are not prefixed by "lib"
+	// cannot be passed to rustc with this flag and will not be bundled into rlib/static libraries, and thus must
+	// be redeclared in dependents.
 	Static_libs []string `android:"arch_variant"`
 
 	// crate name, required for modules which produce Rust libraries: rust_library, rust_ffi and SourceProvider
@@ -136,8 +140,7 @@ type BaseCompilerProperties struct {
 }
 
 type baseCompiler struct {
-	Properties   BaseCompilerProperties
-	coverageFile android.Path //rustc generates a single gcno file
+	Properties BaseCompilerProperties
 
 	// Install related
 	dir      string
@@ -146,9 +149,9 @@ type baseCompiler struct {
 	relative string
 	path     android.InstallPath
 	location installLocation
+	sanitize *sanitize
 
-	coverageOutputZipFile android.OptionalPath
-	distFile              android.OptionalPath
+	distFile android.OptionalPath
 	// Stripped output file. If Valid(), this file will be installed instead of outputFile.
 	strippedOutputFile android.OptionalPath
 }

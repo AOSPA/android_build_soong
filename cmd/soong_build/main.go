@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/blueprint/bootstrap"
 
@@ -99,7 +100,7 @@ func main() {
 	if bazelConversionRequested(configuration) {
 		// Run the alternate pipeline of bp2build mutators and singleton to convert Blueprint to BUILD files
 		// before everything else.
-		runBp2Build(configuration, extraNinjaDeps)
+		runBp2Build(srcDir, configuration)
 		// Short-circuit and return.
 		return
 	}
@@ -161,17 +162,60 @@ func main() {
 // Run Soong in the bp2build mode. This creates a standalone context that registers
 // an alternate pipeline of mutators and singletons specifically for generating
 // Bazel BUILD files instead of Ninja files.
-func runBp2Build(configuration android.Config, extraNinjaDeps []string) {
+func runBp2Build(srcDir string, configuration android.Config) {
 	// Register an alternate set of singletons and mutators for bazel
 	// conversion for Bazel conversion.
 	bp2buildCtx := android.NewContext(configuration)
 	bp2buildCtx.RegisterForBazelConversion()
+
+	// No need to generate Ninja build rules/statements from Modules and Singletons.
 	configuration.SetStopBefore(bootstrap.StopBeforePrepareBuildActions)
 	bp2buildCtx.SetNameInterface(newNameResolver(configuration))
+
+	// The bp2build process is a purely functional process that only depends on
+	// Android.bp files. It must not depend on the values of per-build product
+	// configurations or variables, since those will generate different BUILD
+	// files based on how the user has configured their tree.
+	bp2buildCtx.SetModuleListFile(bootstrap.ModuleListFile)
+	extraNinjaDeps, err := bp2buildCtx.ListModulePaths(srcDir)
+	if err != nil {
+		panic(err)
+	}
+	extraNinjaDepsString := strings.Join(extraNinjaDeps, " \\\n ")
+
+	// Run the loading and analysis pipeline to prepare the graph of regular
+	// Modules parsed from Android.bp files, and the BazelTargetModules mapped
+	// from the regular Modules.
 	bootstrap.Main(bp2buildCtx.Context, configuration, extraNinjaDeps...)
 
-	codegenContext := bp2build.NewCodegenContext(configuration, *bp2buildCtx)
+	// Run the code-generation phase to convert BazelTargetModules to BUILD files.
+	codegenContext := bp2build.NewCodegenContext(configuration, *bp2buildCtx, bp2build.Bp2Build)
 	bp2build.Codegen(codegenContext)
+
+	// Workarounds to support running bp2build in a clean AOSP checkout with no
+	// prior builds, and exiting early as soon as the BUILD files get generated,
+	// therefore not creating build.ninja files that soong_ui and callers of
+	// soong_build expects.
+	//
+	// These files are: build.ninja and build.ninja.d. Since Kati hasn't been
+	// ran as well, and `nothing` is defined in a .mk file, there isn't a ninja
+	// target called `nothing`, so we manually create it here.
+	//
+	// Even though outFile (build.ninja) and depFile (build.ninja.d) are values
+	// passed into bootstrap.Main, they are package-private fields in bootstrap.
+	// Short of modifying Blueprint to add an exported getter, inlining them
+	// here is the next-best practical option.
+	ninjaFileName := "build.ninja"
+	ninjaFile := android.PathForOutput(codegenContext, ninjaFileName)
+	ninjaFileD := android.PathForOutput(codegenContext, ninjaFileName+".d")
+	// A workaround to create the 'nothing' ninja target so `m nothing` works,
+	// since bp2build runs without Kati, and the 'nothing' target is declared in
+	// a Makefile.
+	android.WriteFileToOutputDir(ninjaFile, []byte("build nothing: phony\n  phony_output = true\n"), 0666)
+	android.WriteFileToOutputDir(
+		ninjaFileD,
+		[]byte(fmt.Sprintf("%s: \\\n %s\n", ninjaFileName, extraNinjaDepsString)),
+		0666)
 }
 
 // shouldPrepareBuildActions reads configuration and flags if build actions

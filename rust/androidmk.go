@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	"android/soong/android"
+	"android/soong/cc"
 )
 
 type AndroidMkContext interface {
@@ -82,13 +83,11 @@ func (binary *binaryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.Andr
 	}
 
 	ret.Class = "EXECUTABLES"
-	ret.ExtraEntries = append(ret.ExtraEntries, func(entries *android.AndroidMkEntries) {
-		entries.SetOptionalPath("LOCAL_PREBUILT_COVERAGE_ARCHIVE", binary.coverageOutputZipFile)
-	})
 }
 
 func (test *testDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkEntries) {
-	test.binaryDecorator.AndroidMk(ctx, ret)
+	ctx.SubAndroidMk(ret, test.binaryDecorator)
+
 	ret.Class = "NATIVE_TESTS"
 	ret.ExtraEntries = append(ret.ExtraEntries, func(entries *android.AndroidMkEntries) {
 		entries.AddCompatibilityTestSuites(test.Properties.Test_suites...)
@@ -98,7 +97,8 @@ func (test *testDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidM
 		entries.SetBoolIfTrue("LOCAL_DISABLE_AUTO_GENERATE_TEST_CONFIG", !BoolDefault(test.Properties.Auto_gen_config, true))
 		entries.SetBoolIfTrue("LOCAL_IS_UNIT_TEST", Bool(test.Properties.Test_options.Unit_test))
 	})
-	// TODO(chh): add test data with androidMkWriteTestData(test.data, ctx, ret)
+
+	cc.AndroidMkWriteTestData(test.data, ret)
 }
 
 func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkEntries) {
@@ -117,10 +117,6 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 	if library.distFile.Valid() {
 		ret.DistFiles = android.MakeDefaultDistFiles(library.distFile.Path())
 	}
-
-	ret.ExtraEntries = append(ret.ExtraEntries, func(entries *android.AndroidMkEntries) {
-		entries.SetOptionalPath("LOCAL_PREBUILT_COVERAGE_ARCHIVE", library.coverageOutputZipFile)
-	})
 }
 
 func (procMacro *procMacroDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkEntries) {
