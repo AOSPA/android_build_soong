@@ -280,7 +280,8 @@ func (paths Paths) containsPath(path Path) bool {
 	return false
 }
 
-// PathsForSource returns Paths rooted from SrcDir
+// PathsForSource returns Paths rooted from SrcDir, *not* rooted from the module's local source
+// directory
 func PathsForSource(ctx PathContext, paths []string) Paths {
 	ret := make(Paths, len(paths))
 	for i, path := range paths {
@@ -289,9 +290,9 @@ func PathsForSource(ctx PathContext, paths []string) Paths {
 	return ret
 }
 
-// ExistentPathsForSources returns a list of Paths rooted from SrcDir that are
-// found in the tree. If any are not found, they are omitted from the list,
-// and dependencies are added so that we're re-run when they are added.
+// ExistentPathsForSources returns a list of Paths rooted from SrcDir, *not* rooted from the
+// module's local source directory, that are found in the tree. If any are not found, they are
+// omitted from the list, and dependencies are added so that we're re-run when they are added.
 func ExistentPathsForSources(ctx PathContext, paths []string) Paths {
 	ret := make(Paths, 0, len(paths))
 	for _, path := range paths {
@@ -395,6 +396,9 @@ func BazelLabelForModuleSrcExcludes(ctx BazelConversionPathContext, paths, exclu
 // `android:"path"` so that dependencies on other modules will have already been handled by the
 // path_properties mutator.
 func expandSrcsForBazel(ctx BazelConversionPathContext, paths, expandedExcludes []string) bazel.LabelList {
+	if paths == nil {
+		return bazel.LabelList{}
+	}
 	labels := bazel.LabelList{
 		Includes: []bazel.Label{},
 	}
@@ -582,7 +586,7 @@ func expandOneSrcPath(ctx ModuleWithDepsPathContext, sPath string, expandedExclu
 		p := pathForModuleSrc(ctx, sPath)
 		if exists, _, err := ctx.Config().fs.Exists(p.String()); err != nil {
 			ReportPathErrorf(ctx, "%s: %s", p, err.Error())
-		} else if !exists && !ctx.Config().testAllowNonExistentPaths {
+		} else if !exists && !ctx.Config().TestAllowNonExistentPaths {
 			ReportPathErrorf(ctx, "module source path %q does not exist", p)
 		}
 
@@ -1018,15 +1022,16 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 		}
 	} else if exists, _, err := ctx.Config().fs.Exists(path.String()); err != nil {
 		ReportPathErrorf(ctx, "%s: %s", path, err.Error())
-	} else if !exists && !ctx.Config().testAllowNonExistentPaths {
+	} else if !exists && !ctx.Config().TestAllowNonExistentPaths {
 		ReportPathErrorf(ctx, "source path %q does not exist", path)
 	}
 	return path
 }
 
-// ExistentPathForSource returns an OptionalPath with the SourcePath if the
-// path exists, or an empty OptionalPath if it doesn't exist. Dependencies are added
-// so that the ninja file will be regenerated if the state of the path changes.
+// ExistentPathForSource returns an OptionalPath with the SourcePath, rooted from SrcDir, *not*
+// rooted from the module's local source directory, if the path exists, or an empty OptionalPath if
+// it doesn't exist. Dependencies are added so that the ninja file will be regenerated if the state
+// of the path changes.
 func ExistentPathForSource(ctx PathContext, pathComponents ...string) OptionalPath {
 	path, err := pathForSource(ctx, pathComponents...)
 	if err != nil {
@@ -1948,4 +1953,29 @@ type DataPath struct {
 	SrcPath Path
 	// The install path of the data file, relative to the install root.
 	RelativeInstallPath string
+}
+
+// PathsIfNonNil returns a Paths containing only the non-nil input arguments.
+func PathsIfNonNil(paths ...Path) Paths {
+	if len(paths) == 0 {
+		// Fast path for empty argument list
+		return nil
+	} else if len(paths) == 1 {
+		// Fast path for a single argument
+		if paths[0] != nil {
+			return paths
+		} else {
+			return nil
+		}
+	}
+	ret := make(Paths, 0, len(paths))
+	for _, path := range paths {
+		if path != nil {
+			ret = append(ret, path)
+		}
+	}
+	if len(ret) == 0 {
+		return nil
+	}
+	return ret
 }

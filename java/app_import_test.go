@@ -182,31 +182,31 @@ func TestAndroidAppImport_DpiVariants(t *testing.T) {
 			name:                "no preferred",
 			aaptPreferredConfig: nil,
 			aaptPrebuiltDPI:     []string{},
-			expected:            "prebuilts/apk/app.apk",
+			expected:            "verify_uses_libraries/apk/app.apk",
 		},
 		{
 			name:                "AAPTPreferredConfig matches",
 			aaptPreferredConfig: proptools.StringPtr("xhdpi"),
 			aaptPrebuiltDPI:     []string{"xxhdpi", "ldpi"},
-			expected:            "prebuilts/apk/app_xhdpi.apk",
+			expected:            "verify_uses_libraries/apk/app_xhdpi.apk",
 		},
 		{
 			name:                "AAPTPrebuiltDPI matches",
 			aaptPreferredConfig: proptools.StringPtr("mdpi"),
 			aaptPrebuiltDPI:     []string{"xxhdpi", "xhdpi"},
-			expected:            "prebuilts/apk/app_xxhdpi.apk",
+			expected:            "verify_uses_libraries/apk/app_xxhdpi.apk",
 		},
 		{
 			name:                "non-first AAPTPrebuiltDPI matches",
 			aaptPreferredConfig: proptools.StringPtr("mdpi"),
 			aaptPrebuiltDPI:     []string{"ldpi", "xhdpi"},
-			expected:            "prebuilts/apk/app_xhdpi.apk",
+			expected:            "verify_uses_libraries/apk/app_xhdpi.apk",
 		},
 		{
 			name:                "no matches",
 			aaptPreferredConfig: proptools.StringPtr("mdpi"),
 			aaptPrebuiltDPI:     []string{"ldpi", "xxxhdpi"},
-			expected:            "prebuilts/apk/app.apk",
+			expected:            "verify_uses_libraries/apk/app.apk",
 		},
 	}
 
@@ -225,14 +225,14 @@ func TestAndroidAppImport_DpiVariants(t *testing.T) {
 		if len(matches) != 2 {
 			t.Errorf("failed to extract the src apk path from %q", jniRuleCommand)
 		}
-		if test.expected != matches[1] {
+		if strings.HasSuffix(matches[1], test.expected) {
 			t.Errorf("wrong src apk, expected: %q got: %q", test.expected, matches[1])
 		}
 	}
 }
 
 func TestAndroidAppImport_Filename(t *testing.T) {
-	ctx, config := testJava(t, `
+	ctx, _ := testJava(t, `
 		android_app_import {
 			name: "foo",
 			apk: "prebuilts/apk/app.apk",
@@ -269,8 +269,7 @@ func TestAndroidAppImport_Filename(t *testing.T) {
 
 		a := variant.Module().(*AndroidAppImport)
 		expectedValues := []string{test.expected}
-		actualValues := android.AndroidMkEntriesForTest(
-			t, config, "", a)[0].EntryMap["LOCAL_INSTALLED_MODULE_STEM"]
+		actualValues := android.AndroidMkEntriesForTest(t, ctx, a)[0].EntryMap["LOCAL_INSTALLED_MODULE_STEM"]
 		if !reflect.DeepEqual(actualValues, expectedValues) {
 			t.Errorf("Incorrect LOCAL_INSTALLED_MODULE_STEM value '%s', expected '%s'",
 				actualValues, expectedValues)
@@ -302,7 +301,7 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 					},
 				}
 			`,
-			expected: "prebuilts/apk/app_arm64.apk",
+			expected: "verify_uses_libraries/apk/app_arm64.apk",
 		},
 		{
 			name: "no matching arch",
@@ -321,7 +320,7 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 					},
 				}
 			`,
-			expected: "prebuilts/apk/app.apk",
+			expected: "verify_uses_libraries/apk/app.apk",
 		},
 		{
 			name: "no matching arch without default",
@@ -359,7 +358,7 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 		if len(matches) != 2 {
 			t.Errorf("failed to extract the src apk path from %q", jniRuleCommand)
 		}
-		if test.expected != matches[1] {
+		if strings.HasSuffix(matches[1], test.expected) {
 			t.Errorf("wrong src apk, expected: %q got: %q", test.expected, matches[1])
 		}
 	}
@@ -393,8 +392,71 @@ func TestAndroidAppImport_overridesDisabledAndroidApp(t *testing.T) {
 	}
 }
 
+func TestAndroidAppImport_frameworkRes(t *testing.T) {
+	ctx, _ := testJava(t, `
+		android_app_import {
+			name: "framework-res",
+			certificate: "platform",
+			apk: "package-res.apk",
+			prefer: true,
+			export_package_resources: true,
+			// Disable dexpreopt and verify_uses_libraries check as the app
+			// contains no Java code to be dexpreopted.
+			enforce_uses_libs: false,
+			dex_preopt: {
+				enabled: false,
+			},
+		}
+		`)
+
+	mod := ctx.ModuleForTests("prebuilt_framework-res", "android_common").Module()
+	a := mod.(*AndroidAppImport)
+
+	if !a.preprocessed {
+		t.Errorf("prebuilt framework-res is not preprocessed")
+	}
+
+	expectedInstallPath := buildDir + "/target/product/test_device/system/framework/framework-res.apk"
+
+	if a.dexpreopter.installPath.String() != expectedInstallPath {
+		t.Errorf("prebuilt framework-res installed to incorrect location, actual: %s, expected: %s", a.dexpreopter.installPath, expectedInstallPath)
+
+	}
+
+	entries := android.AndroidMkEntriesForTest(t, ctx, mod)[0]
+
+	expectedPath := "."
+	// From apk property above, in the root of the source tree.
+	expectedPrebuiltModuleFile := "package-res.apk"
+	// Verify that the apk is preprocessed: The export package is the same
+	// as the prebuilt.
+	expectedSoongResourceExportPackage := expectedPrebuiltModuleFile
+
+	actualPath := entries.EntryMap["LOCAL_PATH"]
+	actualPrebuiltModuleFile := entries.EntryMap["LOCAL_PREBUILT_MODULE_FILE"]
+	actualSoongResourceExportPackage := entries.EntryMap["LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE"]
+
+	if len(actualPath) != 1 {
+		t.Errorf("LOCAL_PATH incorrect len %d", len(actualPath))
+	} else if actualPath[0] != expectedPath {
+		t.Errorf("LOCAL_PATH mismatch, actual: %s, expected: %s", actualPath[0], expectedPath)
+	}
+
+	if len(actualPrebuiltModuleFile) != 1 {
+		t.Errorf("LOCAL_PREBUILT_MODULE_FILE incorrect len %d", len(actualPrebuiltModuleFile))
+	} else if actualPrebuiltModuleFile[0] != expectedPrebuiltModuleFile {
+		t.Errorf("LOCAL_PREBUILT_MODULE_FILE mismatch, actual: %s, expected: %s", actualPrebuiltModuleFile[0], expectedPrebuiltModuleFile)
+	}
+
+	if len(actualSoongResourceExportPackage) != 1 {
+		t.Errorf("LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE incorrect len %d", len(actualSoongResourceExportPackage))
+	} else if actualSoongResourceExportPackage[0] != expectedSoongResourceExportPackage {
+		t.Errorf("LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE mismatch, actual: %s, expected: %s", actualSoongResourceExportPackage[0], expectedSoongResourceExportPackage)
+	}
+}
+
 func TestAndroidTestImport(t *testing.T) {
-	ctx, config := testJava(t, `
+	ctx, _ := testJava(t, `
 		android_test_import {
 			name: "foo",
 			apk: "prebuilts/apk/app.apk",
@@ -408,7 +470,7 @@ func TestAndroidTestImport(t *testing.T) {
 	test := ctx.ModuleForTests("foo", "android_common").Module().(*AndroidTestImport)
 
 	// Check android mks.
-	entries := android.AndroidMkEntriesForTest(t, config, "", test)[0]
+	entries := android.AndroidMkEntriesForTest(t, ctx, test)[0]
 	expected := []string{"tests"}
 	actual := entries.EntryMap["LOCAL_MODULE_TAGS"]
 	if !reflect.DeepEqual(expected, actual) {

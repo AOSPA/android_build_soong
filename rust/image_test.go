@@ -15,15 +15,16 @@
 package rust
 
 import (
+	"strings"
 	"testing"
 
 	"android/soong/android"
 	"android/soong/cc"
 )
 
-// Test that cc_binaries can link against rust_ffi_static libraries.
+// Test that cc modules can link against vendor_available rust_ffi_static libraries.
 func TestVendorLinkage(t *testing.T) {
-	ctx := testRust(t, `
+	ctx := testRustVndk(t, `
 			cc_binary {
 				name: "fizz_vendor",
 				static_libs: ["libfoo_vendor"],
@@ -37,21 +38,71 @@ func TestVendorLinkage(t *testing.T) {
 			}
 		`)
 
-	vendorBinary := ctx.ModuleForTests("fizz_vendor", "android_arm64_armv8-a").Module().(*cc.Module)
+	vendorBinary := ctx.ModuleForTests("fizz_vendor", "android_vendor.VER_arm64_armv8-a").Module().(*cc.Module)
 
 	if !android.InList("libfoo_vendor", vendorBinary.Properties.AndroidMkStaticLibs) {
 		t.Errorf("vendorBinary should have a dependency on libfoo_vendor")
 	}
 }
 
+// Test that variants which use the vndk emit the appropriate cfg flag.
+func TestImageVndkCfgFlag(t *testing.T) {
+	ctx := testRustVndk(t, `
+			rust_ffi_static {
+				name: "libfoo",
+				crate_name: "foo",
+				srcs: ["foo.rs"],
+				vendor_available: true,
+			}
+		`)
+
+	vendor := ctx.ModuleForTests("libfoo", "android_vendor.VER_arm64_armv8-a_static").Rule("rustc")
+
+	if !strings.Contains(vendor.Args["rustcFlags"], "--cfg 'android_vndk'") {
+		t.Errorf("missing \"--cfg 'android_vndk'\" for libfoo vendor variant, rustcFlags: %#v", vendor.Args["rustcFlags"])
+	}
+}
+
+// Test that cc modules can link against vendor_ramdisk_available rust_ffi_static libraries.
+func TestVendorRamdiskLinkage(t *testing.T) {
+	ctx := testRustVndk(t, `
+			cc_library_static {
+				name: "libcc_vendor_ramdisk",
+				static_libs: ["libfoo_vendor_ramdisk"],
+				system_shared_libs: [],
+				vendor_ramdisk_available: true,
+			}
+			rust_ffi_static {
+				name: "libfoo_vendor_ramdisk",
+				crate_name: "foo",
+				srcs: ["foo.rs"],
+				vendor_ramdisk_available: true,
+			}
+		`)
+
+	vendorRamdiskLibrary := ctx.ModuleForTests("libcc_vendor_ramdisk", "android_vendor_ramdisk_arm64_armv8-a_static").Module().(*cc.Module)
+
+	if !android.InList("libfoo_vendor_ramdisk.vendor_ramdisk", vendorRamdiskLibrary.Properties.AndroidMkStaticLibs) {
+		t.Errorf("libcc_vendor_ramdisk should have a dependency on libfoo_vendor_ramdisk")
+	}
+}
+
 // Test that shared libraries cannot be made vendor available until proper support is added.
 func TestForbiddenVendorLinkage(t *testing.T) {
-	testRustError(t, "can only be set for rust_ffi_static modules", `
+	testRustError(t, "cannot be set for rust_ffi or rust_ffi_shared modules.", `
 		rust_ffi_shared {
 			name: "libfoo_vendor",
 			crate_name: "foo",
 			srcs: ["foo.rs"],
 			vendor_available: true,
+		}
+	`)
+	testRustError(t, "cannot be set for rust_ffi or rust_ffi_shared modules.", `
+		rust_ffi_shared {
+			name: "libfoo_vendor",
+			crate_name: "foo",
+			srcs: ["foo.rs"],
+			vendor_ramdisk_available: true,
 		}
 	`)
 	testRustError(t, "Rust vendor specific modules are currently only supported for rust_ffi_static modules.", `
@@ -70,4 +121,13 @@ func TestForbiddenVendorLinkage(t *testing.T) {
 			vendor: true,
 		}
 	`)
+	testRustError(t, "Rust vendor specific modules are currently only supported for rust_ffi_static modules.", `
+		rust_binary {
+			name: "foo_vendor",
+			crate_name: "foo",
+			srcs: ["foo.rs"],
+			vendor: true,
+		}
+	`)
+
 }

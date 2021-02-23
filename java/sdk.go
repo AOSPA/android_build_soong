@@ -566,10 +566,11 @@ func createFrameworkAidl(stubsModules []string, path android.OutputPath, ctx and
 
 	ctx.VisitAllModules(func(module android.Module) {
 		// Collect dex jar paths for the modules listed above.
-		if j, ok := module.(Dependency); ok {
+		if ctx.ModuleHasProvider(module, JavaInfoProvider) {
+			j := ctx.ModuleProvider(module, JavaInfoProvider).(JavaInfo)
 			name := ctx.ModuleName(module)
 			if i := android.IndexList(name, stubsModules); i != -1 {
-				stubsJars[i] = j.HeaderJars()
+				stubsJars[i] = j.HeaderJars
 			}
 		}
 	})
@@ -640,14 +641,26 @@ func createAPIFingerprint(ctx android.SingletonContext) {
 
 	if ctx.Config().PlatformSdkCodename() == "REL" {
 		cmd.Text("echo REL >").Output(out)
-	} else if !ctx.Config().AlwaysUsePrebuiltSdks() {
-		in, err := ctx.GlobWithDeps("frameworks/base/api/*current.txt", nil)
-		if err != nil {
-			ctx.Errorf("error globbing API files: %s", err)
+	} else if ctx.Config().FrameworksBaseDirExists(ctx) && !ctx.Config().AlwaysUsePrebuiltSdks() {
+		cmd.Text("cat")
+		apiTxtFileModules := []string{
+			"frameworks-base-api-current.txt",
+			"frameworks-base-api-system-current.txt",
+			"frameworks-base-api-module-lib-current.txt",
 		}
-
-		cmd.Text("cat").
-			Inputs(android.PathsForSource(ctx, in)).
+		count := 0
+		ctx.VisitAllModules(func(module android.Module) {
+			name := ctx.ModuleName(module)
+			if android.InList(name, apiTxtFileModules) {
+				cmd.Inputs(android.OutputFilesForModule(ctx, module, ""))
+				count++
+			}
+		})
+		if count != len(apiTxtFileModules) {
+			ctx.Errorf("Could not find all the expected API modules %v, found %d\n", apiTxtFileModules, count)
+			return
+		}
+		cmd.Input(android.PathForSource(ctx, "frameworks/base/services/api/current.txt")).
 			Text("| md5sum | cut -d' ' -f1 >").
 			Output(out)
 	} else {
