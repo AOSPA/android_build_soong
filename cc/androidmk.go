@@ -95,9 +95,9 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				if len(c.Properties.AndroidMkHeaderLibs) > 0 {
 					entries.AddStrings("LOCAL_HEADER_LIBRARIES", c.Properties.AndroidMkHeaderLibs...)
 				}
-                                if lib, ok := c.compiler.(*libraryDecorator); ok {
-                                       entries.AddStrings("LOCAL_SRC_FILES", lib.baseCompiler.srcsBeforeGen.Strings()...)
-                                }
+				if lib, ok := c.compiler.(*libraryDecorator); ok {
+					entries.AddStrings("LOCAL_SRC_FILES", lib.baseCompiler.srcsBeforeGen.Strings()...)
+				}
 				entries.SetString("LOCAL_SOONG_LINK_TYPE", c.makeLinkType)
 				if c.UseVndk() {
 					entries.SetBool("LOCAL_USE_VNDK", true)
@@ -520,7 +520,10 @@ func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entrie
 			entries.SetString("LOCAL_BUILT_MODULE_STEM", "$(LOCAL_MODULE)"+ext)
 			entries.SetString("LOCAL_MODULE_SUFFIX", suffix)
 			entries.SetString("LOCAL_MODULE_STEM", stem)
-			if c.shared() {
+			// TODO(b/181815415) remove isLlndk() when possible
+			if c.isLlndk() {
+				entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
+			} else if c.shared() {
 				entries.SetString("LOCAL_MODULE_PATH", path)
 			}
 			if c.tocFile.Valid() {

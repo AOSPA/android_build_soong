@@ -1737,17 +1737,18 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		ramdiskSnapshotSharedLibs := ramdiskSnapshotSharedLibs(actx.Config())
 
 		rewriteVendorLibs := func(lib string) string {
+			// Only a module with BOARD_VNDK_VERSION uses snapshot.
+			// We check this before checking if the library is an
+			// llndk so that the snapshot can contain llndk
+			// libraries.
+			if c.VndkVersion() == actx.DeviceConfig().VndkVersion() {
+				if snapshot, ok := vendorSnapshotSharedLibs.get(lib, actx.Arch().ArchType); ok {
+					return snapshot
+				}
+			}
+
 			if isLlndkLibrary(lib, ctx.Config()) {
 				return lib + llndkLibrarySuffix
-			}
-
-			// only modules with BOARD_VNDK_VERSION uses snapshot.
-			if c.VndkVersion() != actx.DeviceConfig().VndkVersion() {
-				return lib
-			}
-
-			if snapshot, ok := vendorSnapshotSharedLibs.get(lib, actx.Arch().ArchType); ok {
-				return snapshot
 			}
 
 			return lib

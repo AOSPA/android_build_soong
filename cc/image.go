@@ -185,6 +185,7 @@ func (m *Module) ImageMutatorBegin(mctx android.BaseModuleContext) {
 	if productVndkVersion == "current" {
 		productVndkVersion = platformVndkVersion
 	}
+	usingVendorSnapshot := boardVndkVersion != platformVndkVersion
 
 	if boardVndkVersion == "" {
 		// If the device isn't compiling against the VNDK, we always
@@ -193,20 +194,44 @@ func (m *Module) ImageMutatorBegin(mctx android.BaseModuleContext) {
 	} else if _, ok := m.linker.(*llndkStubDecorator); ok {
 		// LL-NDK stubs only exist in the vendor and product variants,
 		// since the real libraries will be used in the core variant.
-		vendorVariants = append(vendorVariants,
-			platformVndkVersion,
-			boardVndkVersion,
-		)
+
+		if usingVendorSnapshot {
+			// If we're using the vendor snapshot, avoid providing
+			// the boardVndkVersion. This requires that the vendor
+			// snapshot provide the library instead, which happens
+			// below as a snapshot prebuilt.
+			vendorVariants = append(vendorVariants,
+				platformVndkVersion,
+			)
+		} else {
+			vendorVariants = append(vendorVariants,
+				platformVndkVersion,
+				boardVndkVersion,
+			)
+		}
+
 		productVariants = append(productVariants,
 			platformVndkVersion,
 			productVndkVersion,
 		)
 	} else if _, ok := m.linker.(*llndkHeadersDecorator); ok {
 		// ... and LL-NDK headers as well
-		vendorVariants = append(vendorVariants,
-			platformVndkVersion,
-			boardVndkVersion,
-		)
+
+		if usingVendorSnapshot {
+			// If we're using the vendor snapshot, avoid providing
+			// the boardVndkVersion. This requires that the vendor
+			// snapshot provide the headers instead, which happens
+			// below as a snapshot prebuilt.
+			vendorVariants = append(vendorVariants,
+				platformVndkVersion,
+			)
+		} else {
+			vendorVariants = append(vendorVariants,
+				platformVndkVersion,
+				boardVndkVersion,
+			)
+		}
+
 		productVariants = append(productVariants,
 			platformVndkVersion,
 			productVndkVersion,
