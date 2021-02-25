@@ -67,9 +67,12 @@ func shouldCollectHeadersForSnapshot(ctx android.ModuleContext, m *Module) bool 
 	}
 	if _, _, ok := isVndkSnapshotLibrary(ctx.DeviceConfig(), m); ok {
 		return ctx.Config().VndkSnapshotBuildArtifacts()
-	} else if isVendorSnapshotModule(m, isVendorProprietaryPath(ctx.ModuleDir())) ||
-		isRecoverySnapshotModule(m, isVendorProprietaryPath(ctx.ModuleDir())) {
-		return true
+	}
+
+	for _, image := range []snapshotImage{vendorSnapshotImageSingleton, recoverySnapshotImageSingleton} {
+		if isSnapshotAware(ctx.DeviceConfig(), m, image.isProprietaryPath(ctx.ModuleDir()), image) {
+			return true
+		}
 	}
 	return false
 }

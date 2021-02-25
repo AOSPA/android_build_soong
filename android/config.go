@@ -964,6 +964,10 @@ func (c *config) HasMultilibConflict(arch ArchType) bool {
 	return c.multilibConflicts[arch]
 }
 
+func (c *config) PrebuiltHiddenApiDir(ctx PathContext) string {
+	return String(c.productVariables.PrebuiltHiddenApiDir)
+}
+
 func (c *deviceConfig) Arches() []Arch {
 	var arches []Arch
 	for _, target := range c.config.Targets[Android] {
@@ -1308,4 +1312,12 @@ func (c *deviceConfig) DeviceSecondaryArchVariant() string {
 
 func (c *deviceConfig) BoardUsesRecoveryAsBoot() bool {
 	return Bool(c.config.productVariables.BoardUsesRecoveryAsBoot)
+}
+
+func (c *deviceConfig) DirectedVendorSnapshot() bool {
+	return c.config.productVariables.DirectedVendorSnapshot
+}
+
+func (c *deviceConfig) VendorSnapshotModules() map[string]bool {
+	return c.config.productVariables.VendorSnapshotModules
 }
