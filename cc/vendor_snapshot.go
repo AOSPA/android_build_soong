@@ -51,6 +51,15 @@ var recoverySnapshotSingleton = snapshotSingleton{
 	false, /* fake */
 }
 
+var ramdiskSnapshotSingleton = snapshotSingleton{
+	"ramdisk",
+	"SOONG_RAMDISK_SNAPSHOT_ZIP",
+	android.OptionalPath{},
+	false,
+	ramdiskSnapshotImageSingleton,
+	false, /* fake */
+}
+
 func VendorSnapshotSingleton() android.Singleton {
 	return &vendorSnapshotSingleton
 }
@@ -61,6 +70,10 @@ func VendorFakeSnapshotSingleton() android.Singleton {
 
 func RecoverySnapshotSingleton() android.Singleton {
 	return &recoverySnapshotSingleton
+}
+
+func RamdiskSnapshotSingleton() android.Singleton {
+	return &ramdiskSnapshotSingleton
 }
 
 type snapshotSingleton struct {
@@ -109,7 +122,15 @@ var (
 		"kernel",
 		"vendor",
 	}
-
+	// Modules under following directories are ignored. They are OEM's and vendor's
+	// proprietary modules(device/, kernel/, vendor/, and hardware/).
+	// TODO(b/65377115): Clean up these with more maintainable way
+	ramdiskProprietaryDirs = []string{
+		"device",
+		"hardware",
+		"kernel",
+		"vendor",
+	}
 	// Modules under following directories are included as they are in AOSP,
 	// although hardware/ and kernel/ are normally for vendor's own.
 	// TODO(b/65377115): Clean up these with more maintainable way
@@ -132,6 +153,10 @@ func isVendorProprietaryPath(dir string) bool {
 
 func isRecoveryProprietaryPath(dir string) bool {
 	return isProprietaryPath(dir, recoveryProprietaryDirs)
+}
+
+func isRamdiskProprietaryPath(dir string) bool {
+	return isProprietaryPath(dir, ramdiskProprietaryDirs)
 }
 
 // Determine if a dir under source tree is an SoC-owned proprietary directory, such as
@@ -190,6 +215,27 @@ func isRecoveryProprietaryModule(ctx android.BaseModuleContext) bool {
 
 	if c, ok := ctx.Module().(*Module); ok {
 		if c.ExcludeFromRecoverySnapshot() {
+			return true
+		}
+	}
+
+	return false
+}
+func isRamdiskProprietaryModule(ctx android.BaseModuleContext) bool {
+
+	// Any module in a vendor proprietary path is a vendor proprietary
+	// module.
+	if isRamdiskProprietaryPath(ctx.ModuleDir()) {
+		return true
+	}
+
+	// However if the module is not in a vendor proprietary path, it may
+	// still be a vendor proprietary module. This happens for cc modules
+	// that are excluded from the vendor snapshot, and it means that the
+	// vendor has assumed control of the framework-provided module.
+
+	if c, ok := ctx.Module().(*Module); ok {
+		if c.ExcludeFromRamdiskSnapshot() {
 			return true
 		}
 	}

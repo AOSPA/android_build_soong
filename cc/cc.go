@@ -54,6 +54,8 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 		ctx.BottomUp("vendor_snapshot_source", VendorSnapshotSourceMutator).Parallel()
 		ctx.BottomUp("recovery_snapshot", RecoverySnapshotMutator).Parallel()
 		ctx.BottomUp("recovery_snapshot_source", RecoverySnapshotSourceMutator).Parallel()
+		ctx.BottomUp("ramdisk_snapshot", RamdiskSnapshotMutator).Parallel()
+		ctx.BottomUp("ramdisk_snapshot_source", RamdiskSnapshotSourceMutator).Parallel()
 	})
 
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
@@ -291,6 +293,13 @@ type BaseProperties struct {
 	// allows a partner to exclude a module normally thought of as a
 	// framework module from the recovery snapshot.
 	Exclude_from_recovery_snapshot *bool
+
+    // Normally Soong uses the directory structure to decide which modules
+	// should be included (framework) or excluded (non-framework) from the
+	// different snapshots (vendor, recovery, etc.), but this property
+	// allows a partner to exclude a module normally thought of as a
+	// framework module from the ramdisk snapshot.
+	Exclude_from_ramdisk_snapshot *bool
 }
 
 type VendorProperties struct {
@@ -1032,6 +1041,11 @@ func (c *Module) ExcludeFromRecoverySnapshot() bool {
 	return Bool(c.Properties.Exclude_from_recovery_snapshot)
 }
 
+func (c *Module) ExcludeFromRamdiskSnapshot() bool {
+	return Bool(c.Properties.Exclude_from_ramdisk_snapshot)
+}
+
+
 func isBionic(name string) bool {
 	switch name {
 	case "libc", "libm", "libdl", "libdl_android", "linker":
@@ -1518,7 +1532,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		// glob exported headers for snapshot, if BOARD_VNDK_VERSION is current or
-		// RECOVERY_SNAPSHOT_VERSION is current.
+		// RECOVERY_SNAPSHOT_VERSION is current or RAMDISK_SNAPSHOT_VERSION is current.
 		if i, ok := c.linker.(snapshotLibraryInterface); ok {
 			if shouldCollectHeadersForSnapshot(ctx, c) {
 				i.collectHeadersForSnapshot(ctx)
@@ -1720,6 +1734,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		vendorPublicLibraries := vendorPublicLibraries(actx.Config())
 		vendorSnapshotSharedLibs := vendorSnapshotSharedLibs(actx.Config())
 		recoverySnapshotSharedLibs := recoverySnapshotSharedLibs(actx.Config())
+		ramdiskSnapshotSharedLibs := ramdiskSnapshotSharedLibs(actx.Config())
 
 		rewriteVendorLibs := func(lib string) string {
 			if isLlndkLibrary(lib, ctx.Config()) {
@@ -1751,6 +1766,18 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 						recoverySnapshotVersion == "" {
 						nonvariantLibs = append(nonvariantLibs, name)
 					} else if snapshot, ok := recoverySnapshotSharedLibs.get(
+						name, actx.Arch().ArchType); ok {
+						nonvariantLibs = append(nonvariantLibs, snapshot)
+					} else {
+						nonvariantLibs = append(nonvariantLibs, name)
+					}
+				} else if c.InRamdisk() {
+					ramdiskSnapshotVersion :=
+						actx.DeviceConfig().RamdiskSnapshotVersion()
+					if ramdiskSnapshotVersion == "current" ||
+						ramdiskSnapshotVersion == "" {
+						nonvariantLibs = append(nonvariantLibs, name)
+					} else if snapshot, ok := ramdiskSnapshotSharedLibs.get(
 						name, actx.Arch().ArchType); ok {
 						nonvariantLibs = append(nonvariantLibs, snapshot)
 					} else {
@@ -1835,6 +1862,25 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		snapshotHeaderLibs = recoverySnapshotHeaderLibs(actx.Config())
 		snapshotStaticLibs = recoverySnapshotStaticLibs(actx.Config())
 		snapshotObjects = recoverySnapshotObjects(actx.Config())
+	}
+
+	if c.InRamdisk() {
+		rewriteSnapshotLibs = func(lib string, snapshotMap *snapshotMap) string {
+			ramdiskSnapshotVersion :=
+				actx.DeviceConfig().RamdiskSnapshotVersion()
+			if ramdiskSnapshotVersion == "current" ||
+				ramdiskSnapshotVersion == "" {
+				return lib
+			} else if snapshot, ok := snapshotMap.get(lib, actx.Arch().ArchType); ok {
+				return snapshot
+			}
+
+			return lib
+		}
+
+		snapshotHeaderLibs = ramdiskSnapshotHeaderLibs(actx.Config())
+		snapshotStaticLibs = ramdiskSnapshotStaticLibs(actx.Config())
+		snapshotObjects = ramdiskSnapshotObjects(actx.Config())
 	}
 
 	for _, lib := range deps.HeaderLibs {
@@ -2606,6 +2652,7 @@ func baseLibName(depName string) string {
 func (c *Module) makeLibName(ctx android.ModuleContext, ccDep LinkableInterface, depName string) string {
 	vendorSuffixModules := vendorSuffixModules(ctx.Config())
 	recoverySuffixModules := recoverySuffixModules(ctx.Config())
+	ramdiskSuffixModules := ramdiskSuffixModules(ctx.Config())
 	vendorPublicLibraries := vendorPublicLibraries(ctx.Config())
 
 	libName := baseLibName(depName)
@@ -2626,6 +2673,8 @@ func (c *Module) makeLibName(ctx android.ModuleContext, ccDep LinkableInterface,
 				return baseName + ".vendor"
 			} else if c.InRecovery() && recoverySuffixModules[baseName] {
 				return baseName + ".recovery"
+			} else if c.InRamdisk() && ramdiskSuffixModules[baseName] {
+				return baseName + ".ramdisk"
 			} else {
 				return baseName
 			}
