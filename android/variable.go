@@ -192,6 +192,7 @@ type productVariables struct {
 	DeviceSystemSdkVersions []string `json:",omitempty"`
 
 	RecoverySnapshotVersion *string `json:",omitempty"`
+	RamdiskSnapshotVersion *string `json:",omitempty"`
 
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
@@ -335,6 +336,9 @@ type productVariables struct {
 
 	DirectedRecoverySnapshot bool            `json:",omitempty"`
 	RecoverySnapshotModules  map[string]bool `json:",omitempty"`
+
+	DirectedRamdiskSnapshot bool            `json:",omitempty"`
+	RamdiskSnapshotModules  map[string]bool `json:",omitempty"`
 
 	BoardVendorSepolicyDirs      []string `json:",omitempty"`
 	BoardOdmSepolicyDirs         []string `json:",omitempty"`
