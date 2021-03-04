@@ -1610,9 +1610,22 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 		configurationName := j.ConfigurationName()
 		primary := configurationName == ctx.ModuleName()
-		// If the prebuilt is being used rather than the from source, skip this
-		// module to prevent duplicated classes
-		primary = primary && !j.IsReplacedByPrebuilt()
+
+		// A source module that has been replaced by a prebuilt can never be the primary module
+		// as long as the prebuilt actually provides a build dex jar. If it doesn't then use
+		// the source module for now.
+		if j.IsReplacedByPrebuilt() {
+			ctx.VisitDirectDepsWithTag(android.PrebuiltDepTag, func(prebuilt android.Module) {
+				if h, ok := prebuilt.(hiddenAPIIntf); ok && h.bootDexJar() != nil {
+					// It is safe to ignore the source module as the prebuilt module provides an
+					// appropriate boot dex jar.
+					primary = false
+				} else {
+					// The prebuilt doesn't provide a suitable boot dex jar so keep using the
+					// source module instead.
+				}
+			})
+		}
 
 		// Hidden API CSV generation and dex encoding
 		dexOutputFile = j.hiddenAPI.hiddenAPI(ctx, configurationName, primary, dexOutputFile, j.implementationJarFile,
