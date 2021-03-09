@@ -191,10 +191,6 @@ func (vendorSnapshotImage) skipSourceMutator(ctx android.BottomUpMutatorContext)
 	if module.VndkVersion() != vndkVersion {
 		return true
 	}
-	// .. and also filter out llndk library
-	if module.isLlndk(ctx.Config()) {
-		return true
-	}
 	return false
 }
 
@@ -675,6 +671,10 @@ type snapshotLibraryProperties struct {
 
 	// Whether this prebuilt needs to depend on sanitize minimal runtime or not.
 	Sanitize_minimal_dep *bool `android:"arch_variant"`
+
+	// TODO(b/181815415) remove Is_llndk when possible
+	// Whether this prebuilt is a snapshot of an llndk library.
+	Is_llndk *bool
 }
 
 type snapshotSanitizer interface {
@@ -786,6 +786,11 @@ func (p *snapshotLibraryDecorator) setSanitizerVariation(t sanitizerType, enable
 	default:
 		return
 	}
+}
+
+// TODO(b/181815415) remove isLlndk() when possible
+func (p *snapshotLibraryDecorator) isLlndk() bool {
+	return Bool(p.properties.Is_llndk)
 }
 
 func snapshotLibraryFactory(suffix string) (*Module, *snapshotLibraryDecorator) {
