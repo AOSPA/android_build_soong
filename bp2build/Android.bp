@@ -1,3 +1,7 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 bootstrap_go_package {
     name: "soong-bp2build",
     pkgPath: "android/soong/bp2build",
@@ -11,12 +15,17 @@ bootstrap_go_package {
     deps: [
         "soong-android",
         "soong-bazel",
+        "soong-cc",
         "soong-genrule",
+        "soong-sh",
     ],
     testSrcs: [
         "build_conversion_test.go",
         "bzl_conversion_test.go",
+        "cc_library_headers_conversion_test.go",
+        "cc_object_conversion_test.go",
         "conversion_test.go",
+        "sh_conversion_test.go",
         "testing.go",
     ],
     pluginFor: [

@@ -232,6 +232,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 		flags.LinkFlags = append(flags.LinkFlags, "-Wl,-rpath,"+rpathPrefix+"../"+rpath)
 	}
 
+	if ctx.RustModule().UseVndk() {
+		flags.RustFlags = append(flags.RustFlags, "--cfg 'android_vndk'")
+	}
+
 	return flags
 }
 
@@ -254,7 +258,7 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	if !Bool(compiler.Properties.No_stdlibs) {
 		for _, stdlib := range config.Stdlibs {
 			// If we're building for the primary arch of the build host, use the compiler's stdlibs
-			if ctx.Target().Os == android.BuildOs && ctx.TargetPrimary() {
+			if ctx.Target().Os == android.BuildOs {
 				stdlib = stdlib + "_" + ctx.toolchain().RustTriple()
 			}
 

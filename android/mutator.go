@@ -15,7 +15,10 @@
 package android
 
 import (
+	"android/soong/bazel"
+	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -275,6 +278,12 @@ type TopDownMutatorContext interface {
 	// CreateModule creates a new module by calling the factory method for the specified moduleType, and applies
 	// the specified property structs to it as if the properties were set in a blueprint file.
 	CreateModule(ModuleFactory, ...interface{}) Module
+
+	// CreateBazelTargetModule creates a BazelTargetModule by calling the
+	// factory method, just like in CreateModule, but also requires
+	// BazelTargetModuleProperties containing additional metadata for the
+	// bp2build codegenerator.
+	CreateBazelTargetModule(ModuleFactory, bazel.BazelTargetModuleProperties, interface{}) BazelTargetModule
 }
 
 type topDownMutatorContext struct {
@@ -500,6 +509,21 @@ func registerDepsMutatorBp2Build(ctx RegisterMutatorsContext) {
 	// TODO(b/179313531): Consider a separate mutator that only runs depsMutator for modules that are
 	// being converted to build targets.
 	ctx.BottomUp("deps", depsMutator).Parallel()
+}
+
+func (t *topDownMutatorContext) CreateBazelTargetModule(
+	factory ModuleFactory,
+	bazelProps bazel.BazelTargetModuleProperties,
+	attrs interface{}) BazelTargetModule {
+	if !strings.HasPrefix(*bazelProps.Name, bazel.BazelTargetModuleNamePrefix) {
+		panic(fmt.Errorf(
+			"bp2build error: the bazel target module name must start with '%s': %s",
+			bazel.BazelTargetModuleNamePrefix,
+			*bazelProps.Name,
+		))
+	}
+
+	return t.CreateModule(factory, &bazelProps, attrs).(BazelTargetModule)
 }
 
 func (t *topDownMutatorContext) AppendProperties(props ...interface{}) {

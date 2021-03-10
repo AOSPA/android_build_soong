@@ -22,9 +22,13 @@ import (
 )
 
 func init() {
-	android.RegisterSingletonType("hiddenapi", hiddenAPISingletonFactory)
-	android.RegisterSingletonType("hiddenapi_index", hiddenAPIIndexSingletonFactory)
-	android.RegisterModuleType("hiddenapi_flags", hiddenAPIFlagsFactory)
+	RegisterHiddenApiSingletonComponents(android.InitRegistrationContext)
+}
+
+func RegisterHiddenApiSingletonComponents(ctx android.RegistrationContext) {
+	ctx.RegisterSingletonType("hiddenapi", hiddenAPISingletonFactory)
+	ctx.RegisterSingletonType("hiddenapi_index", hiddenAPIIndexSingletonFactory)
+	ctx.RegisterModuleType("hiddenapi_flags", hiddenAPIFlagsFactory)
 }
 
 type hiddenAPISingletonPathsStruct struct {
@@ -219,7 +223,7 @@ func stubFlagsRule(ctx android.SingletonContext) {
 
 	ctx.VisitAllModules(func(module android.Module) {
 		// Collect dex jar paths for the modules listed above.
-		if j, ok := module.(Dependency); ok {
+		if j, ok := module.(UsesLibraryDependency); ok {
 			name := ctx.ModuleName(module)
 			for moduleList, pathList := range moduleListToPathList {
 				if i := android.IndexList(name, *moduleList); i != -1 {
@@ -368,7 +372,7 @@ func flagsRule(ctx android.SingletonContext) android.Path {
 	stubFlags := hiddenAPISingletonPaths(ctx).stubFlags
 
 	rule.Command().
-		Tool(android.PathForSource(ctx, "frameworks/base/tools/hiddenapi/generate_hiddenapi_lists.py")).
+		BuiltTool("generate_hiddenapi_lists").
 		FlagWithInput("--csv ", stubFlags).
 		Inputs(flagsCSV).
 		FlagWithInput("--unsupported ",
