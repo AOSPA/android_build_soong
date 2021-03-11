@@ -150,7 +150,7 @@ func init() {
 		"-Wunguarded-availability",
 		// This macro allows the bionic versioning.h to indirectly determine whether the
 		// option -Wunguarded-availability is on or not.
-		"-D__ANDROID_UNGUARDED_AVAILABILITY__",
+		"-D__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__",
 	}, " "))
 
 	pctx.StaticVariable("ClangExtraCppflags", strings.Join([]string{

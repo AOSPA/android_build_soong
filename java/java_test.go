@@ -127,7 +127,6 @@ func testJavaErrorWithConfig(t *testing.T, pattern string, config android.Config
 	}
 
 	t.Fatalf("missing expected error %q (0 errors are returned)", pattern)
-
 	return ctx, config
 }
 
@@ -1176,6 +1175,110 @@ func TestIncludeSrcs(t *testing.T) {
 
 	if g, w := barRes.Args["jarArgs"], "-C java-res -f java-res/a/a -f java-res/b/b"; g != w {
 		t.Errorf("bar resource jar args %q is not %q", w, g)
+	}
+}
+
+func TestJavaLint(t *testing.T) {
+	ctx, _ := testJavaWithFS(t, `
+		java_library {
+			name: "foo",
+			srcs: [
+				"a.java",
+				"b.java",
+				"c.java",
+			],
+			min_sdk_version: "29",
+			sdk_version: "system_current",
+		}
+       `, map[string][]byte{
+		"lint-baseline.xml": nil,
+	})
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+	rule := foo.Rule("lint")
+
+	if !strings.Contains(rule.RuleParams.Command, "--baseline lint-baseline.xml") {
+		t.Error("did not pass --baseline flag")
+	}
+}
+
+func TestJavaLintWithoutBaseline(t *testing.T) {
+	ctx, _ := testJavaWithFS(t, `
+		java_library {
+			name: "foo",
+			srcs: [
+				"a.java",
+				"b.java",
+				"c.java",
+			],
+			min_sdk_version: "29",
+			sdk_version: "system_current",
+		}
+       `, map[string][]byte{})
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+	rule := foo.Rule("lint")
+
+	if strings.Contains(rule.RuleParams.Command, "--baseline") {
+		t.Error("passed --baseline flag for non existent file")
+	}
+}
+
+func TestJavaLintRequiresCustomLintFileToExist(t *testing.T) {
+	config := testConfig(
+		nil,
+		`
+		java_library {
+			name: "foo",
+			srcs: [
+			],
+			min_sdk_version: "29",
+			sdk_version: "system_current",
+			lint: {
+				baseline_filename: "mybaseline.xml",
+			},
+		}
+     `, map[string][]byte{
+			"build/soong/java/lint_defaults.txt":                   nil,
+			"prebuilts/cmdline-tools/tools/bin/lint":               nil,
+			"prebuilts/cmdline-tools/tools/lib/lint-classpath.jar": nil,
+			"framework/aidl":                     nil,
+			"a.java":                             nil,
+			"AndroidManifest.xml":                nil,
+			"build/make/target/product/security": nil,
+		})
+	config.TestAllowNonExistentPaths = false
+	testJavaErrorWithConfig(t,
+		"source path \"mybaseline.xml\" does not exist",
+		config,
+	)
+}
+
+func TestJavaLintUsesCorrectBpConfig(t *testing.T) {
+	ctx, _ := testJavaWithFS(t, `
+		java_library {
+			name: "foo",
+			srcs: [
+				"a.java",
+				"b.java",
+				"c.java",
+			],
+			min_sdk_version: "29",
+			sdk_version: "system_current",
+			lint: {
+				error_checks: ["SomeCheck"],
+				baseline_filename: "mybaseline.xml",
+			},
+		}
+       `, map[string][]byte{
+		"mybaseline.xml": nil,
+	})
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+	rule := foo.Rule("lint")
+
+	if !strings.Contains(rule.RuleParams.Command, "--baseline mybaseline.xml") {
+		t.Error("did not use the correct file for baseline")
 	}
 }
 
@@ -2406,7 +2509,7 @@ func TestAidlFlagsArePassedToTheAidlCompiler(t *testing.T) {
 }
 
 func TestDataNativeBinaries(t *testing.T) {
-	ctx, config := testJava(t, `
+	ctx, _ := testJava(t, `
 		java_test_host {
 			name: "foo",
 			srcs: ["a.java"],
@@ -2422,7 +2525,7 @@ func TestDataNativeBinaries(t *testing.T) {
 	buildOS := android.BuildOs.String()
 
 	test := ctx.ModuleForTests("foo", buildOS+"_common").Module().(*TestHost)
-	entries := android.AndroidMkEntriesForTest(t, config, "", test)[0]
+	entries := android.AndroidMkEntriesForTest(t, ctx, test)[0]
 	expected := []string{buildDir + "/.intermediates/bin/" + buildOS + "_x86_64_PY3/bin:bin"}
 	actual := entries.EntryMap["LOCAL_COMPATIBILITY_SUPPORT_FILES"]
 	if !reflect.DeepEqual(expected, actual) {

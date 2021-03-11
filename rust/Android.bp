@@ -1,9 +1,14 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 bootstrap_go_package {
     name: "soong-rust",
     pkgPath: "android/soong/rust",
     deps: [
         "soong",
         "soong-android",
+        "soong-bloaty",
         "soong-cc",
         "soong-rust-config",
     ],
