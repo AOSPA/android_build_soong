@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"android/soong/genrule"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -74,10 +75,12 @@ func testContext(config android.Config) *android.TestContext {
 
 	ctx.PreDepsMutators(python.RegisterPythonPreDepsMutators)
 	ctx.PostDepsMutators(android.RegisterOverridePostDepsMutators)
-	ctx.RegisterPreSingletonType("overlay", android.SingletonFactoryAdaptor(ctx.Context, OverlaySingletonFactory))
-	ctx.RegisterPreSingletonType("sdk_versions", android.SingletonFactoryAdaptor(ctx.Context, sdkPreSingletonFactory))
+	ctx.RegisterPreSingletonType("overlay", OverlaySingletonFactory)
+	ctx.RegisterPreSingletonType("sdk_versions", sdkPreSingletonFactory)
 
 	android.RegisterPrebuiltMutators(ctx)
+
+	genrule.RegisterGenruleBuildComponents(ctx)
 
 	// Register module types and mutators from cc needed for JNI testing
 	cc.RegisterRequiredBuildComponentsForTest(ctx)
@@ -114,20 +117,26 @@ func testJavaErrorWithConfig(t *testing.T, pattern string, config android.Config
 	pathCtx := android.PathContextForTesting(config)
 	dexpreopt.SetTestGlobalConfig(config, dexpreopt.GlobalConfigForTests(pathCtx))
 
+	runWithErrors(t, ctx, config, pattern)
+
+	return ctx, config
+}
+
+func runWithErrors(t *testing.T, ctx *android.TestContext, config android.Config, pattern string) {
 	ctx.Register()
 	_, errs := ctx.ParseBlueprintsFiles("Android.bp")
 	if len(errs) > 0 {
 		android.FailIfNoMatchingErrors(t, pattern, errs)
-		return ctx, config
+		return
 	}
 	_, errs = ctx.PrepareBuildActions(config)
 	if len(errs) > 0 {
 		android.FailIfNoMatchingErrors(t, pattern, errs)
-		return ctx, config
+		return
 	}
 
 	t.Fatalf("missing expected error %q (0 errors are returned)", pattern)
-	return ctx, config
+	return
 }
 
 func testJavaWithFS(t *testing.T, bp string, fs map[string][]byte) (*android.TestContext, android.Config) {

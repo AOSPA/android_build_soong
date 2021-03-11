@@ -26,7 +26,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -61,16 +60,10 @@ func testContext(config android.Config) *android.TestContext {
 	java.RegisterRequiredBuildComponentsForTest(ctx)
 
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
-	ctx.PreArchMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("sysprop_deps", syspropDepsMutator).Parallel()
-	})
 
 	android.RegisterPrebuiltMutators(ctx)
 
 	cc.RegisterRequiredBuildComponentsForTest(ctx)
-	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("sysprop_java", java.SyspropMutator).Parallel()
-	})
 
 	ctx.RegisterModuleType("sysprop_library", syspropLibraryFactory)
 
@@ -88,6 +81,51 @@ func run(t *testing.T, ctx *android.TestContext, config android.Config) {
 }
 
 func testConfig(env map[string]string, bp string, fs map[string][]byte) android.Config {
+	bp += `
+		cc_library {
+			name: "libbase",
+			host_supported: true,
+		}
+
+		cc_library_headers {
+			name: "libbase_headers",
+			vendor_available: true,
+			recovery_available: true,
+		}
+
+		cc_library {
+			name: "liblog",
+			no_libcrt: true,
+			nocrt: true,
+			system_shared_libs: [],
+			recovery_available: true,
+			host_supported: true,
+			llndk_stubs: "liblog.llndk",
+		}
+
+		llndk_library {
+			name: "liblog.llndk",
+			symbol_file: "",
+		}
+
+		java_library {
+			name: "sysprop-library-stub-platform",
+			sdk_version: "core_current",
+		}
+
+		java_library {
+			name: "sysprop-library-stub-vendor",
+			soc_specific: true,
+			sdk_version: "core_current",
+		}
+
+		java_library {
+			name: "sysprop-library-stub-product",
+			product_specific: true,
+			sdk_version: "core_current",
+		}
+	`
+
 	bp += cc.GatherRequiredDepsForTest(android.Android)
 
 	mockFS := map[string][]byte{
@@ -257,54 +295,11 @@ func TestSyspropLibrary(t *testing.T) {
 			static_libs: ["sysprop-platform", "sysprop-vendor"],
 		}
 
-		cc_library {
-			name: "libbase",
-			host_supported: true,
-		}
-
-		cc_library_headers {
-			name: "libbase_headers",
-			vendor_available: true,
-			recovery_available: true,
-		}
-
-		cc_library {
-			name: "liblog",
-			no_libcrt: true,
-			nocrt: true,
-			system_shared_libs: [],
-			recovery_available: true,
-			host_supported: true,
-			llndk_stubs: "liblog.llndk",
-		}
-
 		cc_binary_host {
 			name: "hostbin",
 			static_libs: ["sysprop-platform"],
 		}
-
-		llndk_library {
-			name: "liblog.llndk",
-			symbol_file: "",
-		}
-
-		java_library {
-			name: "sysprop-library-stub-platform",
-			sdk_version: "core_current",
-		}
-
-		java_library {
-			name: "sysprop-library-stub-vendor",
-			soc_specific: true,
-			sdk_version: "core_current",
-		}
-
-		java_library {
-			name: "sysprop-library-stub-product",
-			product_specific: true,
-			sdk_version: "core_current",
-		}
-		`)
+	`)
 
 	// Check for generated cc_library
 	for _, variant := range []string{
@@ -392,15 +387,68 @@ func TestSyspropLibrary(t *testing.T) {
 	}
 
 	// Java modules linking against system API should use public stub
-	javaSystemApiClient := ctx.ModuleForTests("java-platform", "android_common")
-	publicStubFound := false
-	ctx.VisitDirectDeps(javaSystemApiClient.Module(), func(dep blueprint.Module) {
-		if dep.Name() == "sysprop-platform_public" {
-			publicStubFound = true
+	javaSystemApiClient := ctx.ModuleForTests("java-platform", "android_common").Rule("javac")
+	syspropPlatformPublic := ctx.ModuleForTests("sysprop-platform_public", "android_common").Description("for turbine")
+	if g, w := javaSystemApiClient.Implicits.Strings(), syspropPlatformPublic.Output.String(); !android.InList(w, g) {
+		t.Errorf("system api client should use public stub %q, got %q", w, g)
+	}
+}
+
+func TestApexAvailabilityIsForwarded(t *testing.T) {
+	ctx := test(t, `
+		sysprop_library {
+			name: "sysprop-platform",
+			apex_available: ["//apex_available:platform"],
+			srcs: ["android/sysprop/PlatformProperties.sysprop"],
+			api_packages: ["android.sysprop"],
+			property_owner: "Platform",
 		}
-	})
-	if !publicStubFound {
-		t.Errorf("system api client should use public stub")
+	`)
+
+	expected := []string{"//apex_available:platform"}
+
+	ccModule := ctx.ModuleForTests("libsysprop-platform", "android_arm64_armv8-a_shared").Module().(*cc.Module)
+	propFromCc := ccModule.ApexProperties.Apex_available
+	if !reflect.DeepEqual(propFromCc, expected) {
+		t.Errorf("apex_available not forwarded to cc module. expected %#v, got %#v",
+			expected, propFromCc)
 	}
 
+	javaModule := ctx.ModuleForTests("sysprop-platform", "android_common").Module().(*java.Library)
+	propFromJava := javaModule.ApexProperties.Apex_available
+	if !reflect.DeepEqual(propFromJava, expected) {
+		t.Errorf("apex_available not forwarded to java module. expected %#v, got %#v",
+			expected, propFromJava)
+	}
+}
+
+func TestMinSdkVersionIsForwarded(t *testing.T) {
+	ctx := test(t, `
+		sysprop_library {
+			name: "sysprop-platform",
+			srcs: ["android/sysprop/PlatformProperties.sysprop"],
+			api_packages: ["android.sysprop"],
+			property_owner: "Platform",
+			cpp: {
+				min_sdk_version: "29",
+			},
+			java: {
+				min_sdk_version: "30",
+			},
+		}
+	`)
+
+	ccModule := ctx.ModuleForTests("libsysprop-platform", "android_arm64_armv8-a_shared").Module().(*cc.Module)
+	propFromCc := proptools.String(ccModule.Properties.Min_sdk_version)
+	if propFromCc != "29" {
+		t.Errorf("min_sdk_version not forwarded to cc module. expected %#v, got %#v",
+			"29", propFromCc)
+	}
+
+	javaModule := ctx.ModuleForTests("sysprop-platform", "android_common").Module().(*java.Library)
+	propFromJava := javaModule.MinSdkVersion()
+	if propFromJava != "30" {
+		t.Errorf("min_sdk_version not forwarded to java module. expected %#v, got %#v",
+			"30", propFromJava)
+	}
 }

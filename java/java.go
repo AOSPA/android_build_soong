@@ -370,6 +370,10 @@ type CompilerDeviceProperties struct {
 	// If true, generate the signature file of APK Signing Scheme V4, along side the signed APK file.
 	// Defaults to false.
 	V4_signature *bool
+
+	// Only for libraries created by a sysprop_library module, SyspropPublicStub is the name of the
+	// public stubs library.
+	SyspropPublicStub string `blueprint:"mutated"`
 }
 
 // Functionality common to Module and Import
@@ -433,9 +437,6 @@ type Module struct {
 
 	// output file containing classes.dex and resources
 	dexJarFile android.Path
-
-	// output file that contains classes.dex if it should be in the output file
-	maybeStrippedDexJarFile android.Path
 
 	// output file containing uninstrumented classes that will be instrumented by jacoco
 	jacocoReportClassesFile android.Path
@@ -583,6 +584,16 @@ type JavaInfo struct {
 
 var JavaInfoProvider = blueprint.NewProvider(JavaInfo{})
 
+// SyspropPublicStubInfo contains info about the sysprop public stub library that corresponds to
+// the sysprop implementation library.
+type SyspropPublicStubInfo struct {
+	// JavaInfo is the JavaInfoProvider of the sysprop public stub library that corresponds to
+	// the sysprop implementation library.
+	JavaInfo JavaInfo
+}
+
+var SyspropPublicStubInfoProvider = blueprint.NewProvider(SyspropPublicStubInfo{})
+
 // Methods that need to be implemented for a module that is added to apex java_libs property.
 type ApexDependency interface {
 	HeaderJars() android.Paths
@@ -652,29 +663,30 @@ func IsJniDepTag(depTag blueprint.DependencyTag) bool {
 }
 
 var (
-	dataNativeBinsTag     = dependencyTag{name: "dataNativeBins"}
-	staticLibTag          = dependencyTag{name: "staticlib"}
-	libTag                = dependencyTag{name: "javalib"}
-	java9LibTag           = dependencyTag{name: "java9lib"}
-	pluginTag             = dependencyTag{name: "plugin"}
-	errorpronePluginTag   = dependencyTag{name: "errorprone-plugin"}
-	exportedPluginTag     = dependencyTag{name: "exported-plugin"}
-	bootClasspathTag      = dependencyTag{name: "bootclasspath"}
-	systemModulesTag      = dependencyTag{name: "system modules"}
-	frameworkResTag       = dependencyTag{name: "framework-res"}
-	kotlinStdlibTag       = dependencyTag{name: "kotlin-stdlib"}
-	kotlinAnnotationsTag  = dependencyTag{name: "kotlin-annotations"}
-	proguardRaiseTag      = dependencyTag{name: "proguard-raise"}
-	certificateTag        = dependencyTag{name: "certificate"}
-	instrumentationForTag = dependencyTag{name: "instrumentation_for"}
-	extraLintCheckTag     = dependencyTag{name: "extra-lint-check"}
-	jniLibTag             = dependencyTag{name: "jnilib"}
-	jniInstallTag         = installDependencyTag{name: "jni install"}
-	binaryInstallTag      = installDependencyTag{name: "binary install"}
-	usesLibTag            = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion)
-	usesLibCompat28Tag    = makeUsesLibraryDependencyTag(28)
-	usesLibCompat29Tag    = makeUsesLibraryDependencyTag(29)
-	usesLibCompat30Tag    = makeUsesLibraryDependencyTag(30)
+	dataNativeBinsTag       = dependencyTag{name: "dataNativeBins"}
+	staticLibTag            = dependencyTag{name: "staticlib"}
+	libTag                  = dependencyTag{name: "javalib"}
+	java9LibTag             = dependencyTag{name: "java9lib"}
+	pluginTag               = dependencyTag{name: "plugin"}
+	errorpronePluginTag     = dependencyTag{name: "errorprone-plugin"}
+	exportedPluginTag       = dependencyTag{name: "exported-plugin"}
+	bootClasspathTag        = dependencyTag{name: "bootclasspath"}
+	systemModulesTag        = dependencyTag{name: "system modules"}
+	frameworkResTag         = dependencyTag{name: "framework-res"}
+	kotlinStdlibTag         = dependencyTag{name: "kotlin-stdlib"}
+	kotlinAnnotationsTag    = dependencyTag{name: "kotlin-annotations"}
+	proguardRaiseTag        = dependencyTag{name: "proguard-raise"}
+	certificateTag          = dependencyTag{name: "certificate"}
+	instrumentationForTag   = dependencyTag{name: "instrumentation_for"}
+	extraLintCheckTag       = dependencyTag{name: "extra-lint-check"}
+	jniLibTag               = dependencyTag{name: "jnilib"}
+	syspropPublicStubDepTag = dependencyTag{name: "sysprop public stub"}
+	jniInstallTag           = installDependencyTag{name: "jni install"}
+	binaryInstallTag        = installDependencyTag{name: "binary install"}
+	usesLibTag              = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion)
+	usesLibCompat28Tag      = makeUsesLibraryDependencyTag(28)
+	usesLibCompat29Tag      = makeUsesLibraryDependencyTag(29)
+	usesLibCompat30Tag      = makeUsesLibraryDependencyTag(30)
 )
 
 func IsLibDepTag(depTag blueprint.DependencyTag) bool {
@@ -813,35 +825,17 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 		j.linter.deps(ctx)
 
 		sdkDeps(ctx, sdkContext(j), j.dexer)
-	}
 
-	syspropPublicStubs := syspropPublicStubs(ctx.Config())
-
-	// rewriteSyspropLibs validates if a java module can link against platform's sysprop_library,
-	// and redirects dependency to public stub depending on the link type.
-	rewriteSyspropLibs := func(libs []string, prop string) []string {
-		// make a copy
-		ret := android.CopyOf(libs)
-
-		for idx, lib := range libs {
-			stub, ok := syspropPublicStubs[lib]
-
-			if !ok {
-				continue
-			}
-
-			linkType, _ := j.getLinkType(ctx.ModuleName())
-			// only platform modules can use internal props
-			if linkType != javaPlatform {
-				ret[idx] = stub
-			}
+		if j.deviceProperties.SyspropPublicStub != "" {
+			// This is a sysprop implementation library that has a corresponding sysprop public
+			// stubs library, and a dependency on it so that dependencies on the implementation can
+			// be forwarded to the public stubs library when necessary.
+			ctx.AddVariationDependencies(nil, syspropPublicStubDepTag, j.deviceProperties.SyspropPublicStub)
 		}
-
-		return ret
 	}
 
-	libDeps := ctx.AddVariationDependencies(nil, libTag, rewriteSyspropLibs(j.properties.Libs, "libs")...)
-	ctx.AddVariationDependencies(nil, staticLibTag, rewriteSyspropLibs(j.properties.Static_libs, "static_libs")...)
+	libDeps := ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
+	ctx.AddVariationDependencies(nil, staticLibTag, j.properties.Static_libs...)
 
 	// Add dependency on libraries that provide additional hidden api annotations.
 	ctx.AddVariationDependencies(nil, hiddenApiAnnotationsTag, j.properties.Hiddenapi_additional_annotations...)
@@ -856,12 +850,8 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 		//      if true, enable enforcement
 		//    PRODUCT_INTER_PARTITION_JAVA_LIBRARY_ALLOWLIST
 		//      exception list of java_library names to allow inter-partition dependency
-		for idx, lib := range j.properties.Libs {
+		for idx := range j.properties.Libs {
 			if libDeps[idx] == nil {
-				continue
-			}
-
-			if _, ok := syspropPublicStubs[lib]; ok {
 				continue
 			}
 
@@ -1038,7 +1028,7 @@ func (lt linkType) String() string {
 	case javaPlatform:
 		return "private API"
 	default:
-		panic(fmt.Errorf("unrecognized linktype: %v", lt))
+		panic(fmt.Errorf("unrecognized linktype: %d", lt))
 	}
 }
 
@@ -1134,6 +1124,8 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 		}
 	}
 
+	linkType, _ := j.getLinkType(ctx.ModuleName())
+
 	ctx.VisitDirectDeps(func(module android.Module) {
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
@@ -1156,6 +1148,14 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			}
 		} else if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
 			dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			if linkType != javaPlatform &&
+				ctx.OtherModuleHasProvider(module, SyspropPublicStubInfoProvider) {
+				// dep is a sysprop implementation library, but this module is not linking against
+				// the platform, so it gets the sysprop public stubs library instead.  Replace
+				// dep with the JavaInfo from the SyspropPublicStubInfoProvider.
+				syspropDep := ctx.OtherModuleProvider(module, SyspropPublicStubInfoProvider).(SyspropPublicStubInfo)
+				dep = syspropDep.JavaInfo
+			}
 			switch tag {
 			case bootClasspathTag:
 				deps.bootClasspath = append(deps.bootClasspath, dep.HeaderJars...)
@@ -1214,6 +1214,12 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 				deps.kotlinStdlib = append(deps.kotlinStdlib, dep.HeaderJars...)
 			case kotlinAnnotationsTag:
 				deps.kotlinAnnotations = dep.HeaderJars
+			case syspropPublicStubDepTag:
+				// This is a sysprop implementation library, forward the JavaInfoProvider from
+				// the corresponding sysprop public stub library as SyspropPublicStubInfoProvider.
+				ctx.SetProvider(SyspropPublicStubInfoProvider, SyspropPublicStubInfo{
+					JavaInfo: dep,
+				})
 			}
 		} else if dep, ok := module.(android.SourceFileProducer); ok {
 			switch tag {
@@ -1818,46 +1824,50 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		}
 	}
 
-	if ctx.Device() && j.hasCode(ctx) &&
-		(Bool(j.properties.Installable) || Bool(j.dexProperties.Compile_dex)) {
-		if j.shouldInstrumentStatic(ctx) {
-			j.dexer.extraProguardFlagFiles = append(j.dexer.extraProguardFlagFiles,
-				android.PathForSource(ctx, "build/make/core/proguard.jacoco.flags"))
-		}
-		// Dex compilation
-		var dexOutputFile android.OutputPath
-		dexOutputFile = j.dexer.compileDex(ctx, flags, j.minSdkVersion(), outputFile, jarName)
-		if ctx.Failed() {
-			return
-		}
-
-		// Hidden API CSV generation and dex encoding
-		dexOutputFile = j.hiddenAPIExtractAndEncode(ctx, dexOutputFile, j.implementationJarFile,
-			proptools.Bool(j.dexProperties.Uncompress_dex))
-
-		// merge dex jar with resources if necessary
-		if j.resourceJar != nil {
-			jars := android.Paths{dexOutputFile, j.resourceJar}
-			combinedJar := android.PathForModuleOut(ctx, "dex-withres", jarName).OutputPath
-			TransformJarsToJar(ctx, combinedJar, "for dex resources", jars, android.OptionalPath{},
-				false, nil, nil)
-			if *j.dexProperties.Uncompress_dex {
-				combinedAlignedJar := android.PathForModuleOut(ctx, "dex-withres-aligned", jarName).OutputPath
-				TransformZipAlign(ctx, combinedAlignedJar, combinedJar)
-				dexOutputFile = combinedAlignedJar
-			} else {
-				dexOutputFile = combinedJar
+	if ctx.Device() && (Bool(j.properties.Installable) || Bool(j.dexProperties.Compile_dex)) {
+		if j.hasCode(ctx) {
+			if j.shouldInstrumentStatic(ctx) {
+				j.dexer.extraProguardFlagFiles = append(j.dexer.extraProguardFlagFiles,
+					android.PathForSource(ctx, "build/make/core/proguard.jacoco.flags"))
 			}
+			// Dex compilation
+			var dexOutputFile android.OutputPath
+			dexOutputFile = j.dexer.compileDex(ctx, flags, j.minSdkVersion(), outputFile, jarName)
+			if ctx.Failed() {
+				return
+			}
+
+			// Hidden API CSV generation and dex encoding
+			dexOutputFile = j.hiddenAPIExtractAndEncode(ctx, dexOutputFile, j.implementationJarFile,
+				proptools.Bool(j.dexProperties.Uncompress_dex))
+
+			// merge dex jar with resources if necessary
+			if j.resourceJar != nil {
+				jars := android.Paths{dexOutputFile, j.resourceJar}
+				combinedJar := android.PathForModuleOut(ctx, "dex-withres", jarName).OutputPath
+				TransformJarsToJar(ctx, combinedJar, "for dex resources", jars, android.OptionalPath{},
+					false, nil, nil)
+				if *j.dexProperties.Uncompress_dex {
+					combinedAlignedJar := android.PathForModuleOut(ctx, "dex-withres-aligned", jarName).OutputPath
+					TransformZipAlign(ctx, combinedAlignedJar, combinedJar)
+					dexOutputFile = combinedAlignedJar
+				} else {
+					dexOutputFile = combinedJar
+				}
+			}
+
+			j.dexJarFile = dexOutputFile
+
+			// Dexpreopting
+			j.dexpreopt(ctx, dexOutputFile)
+
+			outputFile = dexOutputFile
+		} else {
+			// There is no code to compile into a dex jar, make sure the resources are propagated
+			// to the APK if this is an app.
+			outputFile = implementationAndResourcesJar
+			j.dexJarFile = j.resourceJar
 		}
-
-		j.dexJarFile = dexOutputFile
-
-		// Dexpreopting
-		j.dexpreopt(ctx, dexOutputFile)
-
-		j.maybeStrippedDexJarFile = dexOutputFile
-
-		outputFile = dexOutputFile
 
 		if ctx.Failed() {
 			return
@@ -2036,13 +2046,6 @@ func (j *Module) DexJarInstallPath() android.Path {
 	return j.installFile
 }
 
-func (j *Module) ResourceJars() android.Paths {
-	if j.resourceJar == nil {
-		return nil
-	}
-	return android.Paths{j.resourceJar}
-}
-
 func (j *Module) ImplementationAndResourcesJars() android.Paths {
 	if j.implementationAndResourcesJar == nil {
 		return nil
@@ -2057,17 +2060,6 @@ func (j *Module) AidlIncludeDirs() android.Paths {
 
 func (j *Module) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 	return j.classLoaderContexts
-}
-
-// ExportedPlugins returns the list of jars needed to run the exported plugins, the list of
-// classes for the plugins, and a boolean for whether turbine needs to be disabled due to plugins
-// that generate APIs.
-func (j *Module) ExportedPlugins() (android.Paths, []string, bool) {
-	return j.exportedPluginJars, j.exportedPluginClasses, j.exportedDisableTurbine
-}
-
-func (j *Module) SrcJarArgs() ([]string, android.Paths) {
-	return j.srcJarArgs, j.srcJarDeps
 }
 
 var _ logtagsProducer = (*Module)(nil)
@@ -2505,6 +2497,11 @@ func (j *TestHost) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if j.testProperties.Test_options.Unit_test == nil && ctx.Host() {
+		// TODO(b/): Clean temporary heuristic to avoid unexpected onboarding.
+		defaultUnitTest := !inList("tradefed", j.properties.Static_libs) && !inList("tradefed", j.properties.Libs) && !inList("cts", j.testProperties.Test_suites) && !inList("robolectric-host-android_all", j.properties.Static_libs) && !inList("robolectric-host-android_all", j.properties.Libs)
+		j.testProperties.Test_options.Unit_test = proptools.BoolPtr(defaultUnitTest)
+	}
 	j.testConfig = tradefed.AutoGenJavaTestConfig(ctx, j.testProperties.Test_config, j.testProperties.Test_config_template,
 		j.testProperties.Test_suites, j.testProperties.Auto_gen_config, j.testProperties.Test_options.Unit_test)
 
@@ -2665,6 +2662,7 @@ func TestHostFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
 	InitJavaModuleMultiTargets(module, android.HostSupported)
+
 	return module
 }
 
@@ -3036,17 +3034,6 @@ func (j *Import) HeaderJars() android.Paths {
 	return android.Paths{j.combinedClasspathFile}
 }
 
-func (j *Import) ImplementationJars() android.Paths {
-	if j.combinedClasspathFile == nil {
-		return nil
-	}
-	return android.Paths{j.combinedClasspathFile}
-}
-
-func (j *Import) ResourceJars() android.Paths {
-	return nil
-}
-
 func (j *Import) ImplementationAndResourcesJars() android.Paths {
 	if j.combinedClasspathFile == nil {
 		return nil
@@ -3062,20 +3049,8 @@ func (j *Import) DexJarInstallPath() android.Path {
 	return nil
 }
 
-func (j *Import) AidlIncludeDirs() android.Paths {
-	return j.exportAidlIncludeDirs
-}
-
 func (j *Import) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 	return j.classLoaderContexts
-}
-
-func (j *Import) ExportedPlugins() (android.Paths, []string, bool) {
-	return nil, nil, false
-}
-
-func (j *Import) SrcJarArgs() ([]string, android.Paths) {
-	return nil, nil
 }
 
 var _ android.ApexModule = (*Import)(nil)
@@ -3183,8 +3158,7 @@ type DexImport struct {
 
 	properties DexImportProperties
 
-	dexJarFile              android.Path
-	maybeStrippedDexJarFile android.Path
+	dexJarFile android.Path
 
 	dexpreopter
 
@@ -3270,8 +3244,6 @@ func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.dexJarFile = dexOutputFile
 
 	j.dexpreopt(ctx, dexOutputFile)
-
-	j.maybeStrippedDexJarFile = dexOutputFile
 
 	if apexInfo.IsForPlatform() {
 		ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),

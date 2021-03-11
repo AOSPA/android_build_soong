@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"android/soong/shared"
 	"github.com/google/blueprint/bootstrap"
 
 	"android/soong/android"
@@ -28,13 +29,21 @@ import (
 )
 
 var (
+	topDir            string
+	outDir            string
 	docFile           string
 	bazelQueryViewDir string
+	delveListen       string
+	delvePath         string
 )
 
 func init() {
+	flag.StringVar(&topDir, "top", "", "Top directory of the Android source tree")
+	flag.StringVar(&outDir, "out", "", "Soong output directory (usually $TOP/out/soong)")
+	flag.StringVar(&delveListen, "delve_listen", "", "Delve port to listen on for debugging")
+	flag.StringVar(&delvePath, "delve_path", "", "Path to Delve. Only used if --delve_listen is set")
 	flag.StringVar(&docFile, "soong_docs", "", "build documentation file to output")
-	flag.StringVar(&bazelQueryViewDir, "bazel_queryview_dir", "", "path to the bazel queryview directory")
+	flag.StringVar(&bazelQueryViewDir, "bazel_queryview_dir", "", "path to the bazel queryview directory relative to --top")
 }
 
 func newNameResolver(config android.Config) *android.NameResolver {
@@ -80,8 +89,11 @@ func newConfig(srcDir string) android.Config {
 }
 
 func main() {
-	android.ReexecWithDelveMaybe()
 	flag.Parse()
+
+	shared.ReexecWithDelveMaybe(delveListen, delvePath)
+	android.InitSandbox(topDir)
+	android.InitEnvironment(shared.JoinPath(topDir, outDir, "soong.environment.available"))
 
 	// The top-level Blueprints file is passed as the first argument.
 	srcDir := filepath.Dir(flag.Arg(0))
@@ -89,9 +101,11 @@ func main() {
 	configuration := newConfig(srcDir)
 	extraNinjaDeps := []string{configuration.ProductVariablesFileName}
 
-	// Read the SOONG_DELVE again through configuration so that there is a dependency on the environment variable
-	// and soong_build will rerun when it is set for the first time.
-	if listen := configuration.Getenv("SOONG_DELVE"); listen != "" {
+	// These two are here so that we restart a non-debugged soong_build when the
+	// user sets SOONG_DELVE the first time.
+	configuration.Getenv("SOONG_DELVE")
+	configuration.Getenv("SOONG_DELVE_PATH")
+	if shared.IsDebugging() {
 		// Add a non-existent file to the dependencies so that soong_build will rerun when the debugger is
 		// enabled even if it completed successfully.
 		extraNinjaDeps = append(extraNinjaDeps, filepath.Join(configuration.BuildDir(), "always_rerun_for_delve"))
@@ -134,7 +148,10 @@ func main() {
 
 	// Convert the Soong module graph into Bazel BUILD files.
 	if bazelQueryViewDir != "" {
-		if err := createBazelQueryView(ctx, bazelQueryViewDir); err != nil {
+		// Run the code-generation phase to convert BazelTargetModules to BUILD files.
+		codegenContext := bp2build.NewCodegenContext(configuration, *ctx, bp2build.QueryView)
+		absoluteQueryViewDir := shared.JoinPath(topDir, bazelQueryViewDir)
+		if err := createBazelQueryView(codegenContext, absoluteQueryViewDir); err != nil {
 			fmt.Fprintf(os.Stderr, "%s", err)
 			os.Exit(1)
 		}
@@ -188,9 +205,15 @@ func runBp2Build(srcDir string, configuration android.Config) {
 	// from the regular Modules.
 	bootstrap.Main(bp2buildCtx.Context, configuration, extraNinjaDeps...)
 
-	// Run the code-generation phase to convert BazelTargetModules to BUILD files.
+	// Run the code-generation phase to convert BazelTargetModules to BUILD files
+	// and print conversion metrics to the user.
 	codegenContext := bp2build.NewCodegenContext(configuration, *bp2buildCtx, bp2build.Bp2Build)
-	bp2build.Codegen(codegenContext)
+	metrics := bp2build.Codegen(codegenContext)
+
+	// Only report metrics when in bp2build mode. The metrics aren't relevant
+	// for queryview, since that's a total repo-wide conversion and there's a
+	// 1:1 mapping for each module.
+	metrics.Print()
 
 	// Workarounds to support running bp2build in a clean AOSP checkout with no
 	// prior builds, and exiting early as soon as the BUILD files get generated,

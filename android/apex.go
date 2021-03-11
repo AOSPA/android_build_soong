@@ -739,6 +739,8 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 
 	d.flatListPath = PathForModuleOut(ctx, "depsinfo", "flatlist.txt").OutputPath
 	WriteFileRule(ctx, d.flatListPath, flatContent.String())
+
+	ctx.Phony(fmt.Sprintf("%s-depsinfo", ctx.ModuleName()), d.fullListPath, d.flatListPath)
 }
 
 // TODO(b/158059172): remove minSdkVersion allowlist
@@ -847,8 +849,12 @@ func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion ApiL
 		if err := to.ShouldSupportSdkVersion(ctx, minSdkVersion); err != nil {
 			toName := ctx.OtherModuleName(to)
 			if ver, ok := minSdkVersionAllowlist[toName]; !ok || ver.GreaterThan(minSdkVersion) {
-				ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v. Dependency path: %s",
-					minSdkVersion, ctx.ModuleName(), err.Error(), ctx.GetPathString(false))
+				ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v."+
+					"\n\nDependency path: %s\n\n"+
+					"Consider adding 'min_sdk_version: %q' to %q",
+					minSdkVersion, ctx.ModuleName(), err.Error(),
+					ctx.GetPathString(false),
+					minSdkVersion, ctx.ModuleName())
 				return false
 			}
 		}
