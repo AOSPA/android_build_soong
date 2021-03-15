@@ -116,6 +116,7 @@ func (tctx *testRustCtx) useMockedFs() {
 		"foo.proto":       nil,
 		"liby.so":         nil,
 		"libz.so":         nil,
+		"data.txt":        nil,
 	}
 }
 
@@ -134,7 +135,7 @@ func (tctx *testRustCtx) enableCoverage(t *testing.T) {
 	if tctx.config == nil {
 		t.Fatalf("tctx.config not been generated yet. Please call generateConfig first.")
 	}
-	tctx.config.TestProductVariables.GcovCoverage = proptools.BoolPtr(true)
+	tctx.config.TestProductVariables.ClangCoverage = proptools.BoolPtr(true)
 	tctx.config.TestProductVariables.Native_coverage = proptools.BoolPtr(true)
 	tctx.config.TestProductVariables.NativeCoveragePaths = []string{"*"}
 }
@@ -212,6 +213,7 @@ func TestDepsTracking(t *testing.T) {
 			name: "librlib",
 			srcs: ["foo.rs"],
 			crate_name: "rlib",
+			static_libs: ["libstatic"],
 		}
 		rust_proc_macro {
 			name: "libpm",
@@ -229,6 +231,7 @@ func TestDepsTracking(t *testing.T) {
 		}
 	`)
 	module := ctx.ModuleForTests("fizz-buzz", "linux_glibc_x86_64").Module().(*Module)
+	rustc := ctx.ModuleForTests("librlib", "linux_glibc_x86_64_rlib_rlib-std").Rule("rustc")
 
 	// Since dependencies are added to AndroidMk* properties, we can check these to see if they've been picked up.
 	if !android.InList("libdylib", module.Properties.AndroidMkDylibs) {
@@ -250,6 +253,11 @@ func TestDepsTracking(t *testing.T) {
 	if !android.InList("libstatic", module.Properties.AndroidMkStaticLibs) {
 		t.Errorf("Static library dependency not detected (dependency missing from AndroidMkStaticLibs)")
 	}
+
+	if !strings.Contains(rustc.Args["rustcFlags"], "-lstatic=static") {
+		t.Errorf("-lstatic flag not being passed to rustc for static library")
+	}
+
 }
 
 func TestSourceProviderDeps(t *testing.T) {

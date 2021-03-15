@@ -119,9 +119,10 @@ func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps Path
 	outputFile := android.PathForModuleOut(ctx, fileName)
 
 	flags.RustFlags = append(flags.RustFlags, deps.depFlags...)
+	flags.LinkFlags = append(flags.LinkFlags, deps.depLinkFlags...)
 	flags.LinkFlags = append(flags.LinkFlags, deps.linkObjects...)
 
-	outputs := TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
+	TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 
 	if binary.stripper.NeedsStrip(ctx) {
 		strippedOutputFile := android.PathForModuleOut(ctx, "stripped", fileName)
@@ -129,25 +130,10 @@ func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps Path
 		binary.strippedOutputFile = android.OptionalPathForPath(strippedOutputFile)
 	}
 
-	binary.coverageFile = outputs.coverageFile
-
-	var coverageFiles android.Paths
-	if outputs.coverageFile != nil {
-		coverageFiles = append(coverageFiles, binary.coverageFile)
-	}
-	if len(deps.coverageFiles) > 0 {
-		coverageFiles = append(coverageFiles, deps.coverageFiles...)
-	}
-	binary.coverageOutputZipFile = TransformCoverageFilesToZip(ctx, coverageFiles, binary.getStem(ctx))
-
 	return outputFile
 }
 
-func (binary *binaryDecorator) coverageOutputZipPath() android.OptionalPath {
-	return binary.coverageOutputZipFile
-}
-
-func (binary *binaryDecorator) autoDep(ctx BaseModuleContext) autoDep {
+func (binary *binaryDecorator) autoDep(ctx android.BottomUpMutatorContext) autoDep {
 	// Binaries default to dylib dependencies for device, rlib for host.
 	if binary.preferRlib() {
 		return rlibAutoDep

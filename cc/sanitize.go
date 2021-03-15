@@ -267,6 +267,12 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		return
 	}
 
+	// cc_test targets default to SYNC MemTag unless explicitly set to ASYNC (via diag: {memtag_heap}).
+	if ctx.testBinary() && s.Memtag_heap == nil {
+		s.Memtag_heap = boolPtr(true)
+		s.Diag.Memtag_heap = boolPtr(true)
+	}
+
 	var globalSanitizers []string
 	var globalSanitizersDiag []string
 
@@ -358,27 +364,29 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 			s.Diag.Cfi = boolPtr(true)
 		}
 
+		if found, globalSanitizersDiag = removeFromList("memtag_heap", globalSanitizersDiag); found &&
+			s.Diag.Memtag_heap == nil && Bool(s.Memtag_heap) {
+			s.Diag.Memtag_heap = boolPtr(true)
+		}
+
 		if len(globalSanitizersDiag) > 0 {
 			ctx.ModuleErrorf("unknown global sanitizer diagnostics option %s", globalSanitizersDiag[0])
 		}
 	}
 
-	// cc_test targets default to SYNC MemTag.
-	if ctx.testBinary() && s.Memtag_heap == nil {
-		if !ctx.Config().MemtagHeapDisabledForPath(ctx.ModuleDir()) {
-			s.Memtag_heap = boolPtr(true)
-			s.Diag.Memtag_heap = boolPtr(true)
-		}
-	}
-
 	// Enable Memtag for all components in the include paths (for Aarch64 only)
-	if s.Memtag_heap == nil && ctx.Arch().ArchType == android.Arm64 {
+	if ctx.Arch().ArchType == android.Arm64 {
 		if ctx.Config().MemtagHeapSyncEnabledForPath(ctx.ModuleDir()) {
-			s.Memtag_heap = boolPtr(true)
-			s.Diag.Memtag_heap = boolPtr(true)
+			if s.Memtag_heap == nil {
+				s.Memtag_heap = boolPtr(true)
+			}
+			if s.Diag.Memtag_heap == nil {
+				s.Diag.Memtag_heap = boolPtr(true)
+			}
 		} else if ctx.Config().MemtagHeapAsyncEnabledForPath(ctx.ModuleDir()) {
-			s.Memtag_heap = boolPtr(true)
-			s.Diag.Memtag_heap = boolPtr(false)
+			if s.Memtag_heap == nil {
+				s.Memtag_heap = boolPtr(true)
+			}
 		}
 	}
 
@@ -1178,13 +1186,11 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 			// added to libFlags and LOCAL_SHARED_LIBRARIES by cc.Module
 			if c.staticBinary() {
 				deps := append(extraStaticDeps, runtimeLibrary)
-				// If we're using snapshots and in vendor, redirect to snapshot whenever possible
-				if c.VndkVersion() == mctx.DeviceConfig().VndkVersion() {
-					snapshots := vendorSnapshotStaticLibs(mctx.Config())
-					for idx, dep := range deps {
-						if lib, ok := snapshots.get(dep, mctx.Arch().ArchType); ok {
-							deps[idx] = lib
-						}
+				// If we're using snapshots, redirect to snapshot whenever possible
+				snapshot := mctx.Provider(SnapshotInfoProvider).(SnapshotInfo)
+				for idx, dep := range deps {
+					if lib, ok := snapshot.StaticLibs[dep]; ok {
+						deps[idx] = lib
 					}
 				}
 
@@ -1197,13 +1203,12 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 				}
 				mctx.AddFarVariationDependencies(variations, depTag, deps...)
 			} else if !c.static() && !c.Header() {
-				// If we're using snapshots and in vendor, redirect to snapshot whenever possible
-				if c.VndkVersion() == mctx.DeviceConfig().VndkVersion() {
-					snapshots := vendorSnapshotSharedLibs(mctx.Config())
-					if lib, ok := snapshots.get(runtimeLibrary, mctx.Arch().ArchType); ok {
-						runtimeLibrary = lib
-					}
+				// If we're using snapshots, redirect to snapshot whenever possible
+				snapshot := mctx.Provider(SnapshotInfoProvider).(SnapshotInfo)
+				if lib, ok := snapshot.SharedLibs[runtimeLibrary]; ok {
+					runtimeLibrary = lib
 				}
+
 				// Skip apex dependency check for sharedLibraryDependency
 				// when sanitizer diags are enabled. Skipping the check will allow
 				// building with diag libraries without having to list the

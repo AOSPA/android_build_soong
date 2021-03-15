@@ -219,13 +219,17 @@ func (library *libraryDecorator) setSource() {
 	library.MutatedProperties.VariantIsSource = true
 }
 
-func (library *libraryDecorator) autoDep(ctx BaseModuleContext) autoDep {
+func (library *libraryDecorator) autoDep(ctx android.BottomUpMutatorContext) autoDep {
 	if library.preferRlib() {
 		return rlibAutoDep
 	} else if library.rlib() || library.static() {
 		return rlibAutoDep
 	} else if library.dylib() || library.shared() {
 		return dylibAutoDep
+	} else if ctx.BazelConversionMode() {
+		// In Bazel conversion mode, we are currently ignoring the deptag, so we just need to supply a
+		// compatible tag in order to add the dependency.
+		return rlibAutoDep
 	} else {
 		panic(fmt.Errorf("autoDep called on library %q that has no enabled variants.", ctx.ModuleName()))
 	}
@@ -439,6 +443,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	}
 
 	flags.RustFlags = append(flags.RustFlags, deps.depFlags...)
+	flags.LinkFlags = append(flags.LinkFlags, deps.depLinkFlags...)
 	flags.LinkFlags = append(flags.LinkFlags, deps.linkObjects...)
 
 	if library.dylib() {
@@ -452,26 +457,22 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		fileName = library.getStem(ctx) + ctx.toolchain().RlibSuffix()
 		outputFile = android.PathForModuleOut(ctx, fileName)
 
-		outputs := TransformSrctoRlib(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-		library.coverageFile = outputs.coverageFile
+		TransformSrctoRlib(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	} else if library.dylib() {
 		fileName = library.getStem(ctx) + ctx.toolchain().DylibSuffix()
 		outputFile = android.PathForModuleOut(ctx, fileName)
 
-		outputs := TransformSrctoDylib(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-		library.coverageFile = outputs.coverageFile
+		TransformSrctoDylib(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	} else if library.static() {
 		fileName = library.getStem(ctx) + ctx.toolchain().StaticLibSuffix()
 		outputFile = android.PathForModuleOut(ctx, fileName)
 
-		outputs := TransformSrctoStatic(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-		library.coverageFile = outputs.coverageFile
+		TransformSrctoStatic(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	} else if library.shared() {
 		fileName = library.sharedLibFilename(ctx)
 		outputFile = android.PathForModuleOut(ctx, fileName)
 
-		outputs := TransformSrctoShared(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-		library.coverageFile = outputs.coverageFile
+		TransformSrctoShared(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	}
 
 	if !library.rlib() && library.stripper.NeedsStrip(ctx) {
@@ -480,18 +481,8 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		library.strippedOutputFile = android.OptionalPathForPath(strippedOutputFile)
 	}
 
-	var coverageFiles android.Paths
-	if library.coverageFile != nil {
-		coverageFiles = append(coverageFiles, library.coverageFile)
-	}
-	if len(deps.coverageFiles) > 0 {
-		coverageFiles = append(coverageFiles, deps.coverageFiles...)
-	}
-	library.coverageOutputZipFile = TransformCoverageFilesToZip(ctx, coverageFiles, library.getStem(ctx))
-
 	if library.rlib() || library.dylib() {
 		library.flagExporter.exportLinkDirs(deps.linkDirs...)
-		library.flagExporter.exportDepFlags(deps.depFlags...)
 		library.flagExporter.exportLinkObjects(deps.linkObjects...)
 	}
 

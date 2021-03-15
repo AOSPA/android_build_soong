@@ -49,6 +49,11 @@ func (p *PackagingSpec) FileName() string {
 	return ""
 }
 
+// Path relative to the root of the package
+func (p *PackagingSpec) RelPathInPackage() string {
+	return p.relPathInPackage
+}
+
 type PackageModule interface {
 	Module
 	packagingBase() *PackagingBase
@@ -61,7 +66,7 @@ type PackageModule interface {
 	// returns zip entries in it. This is expected to be called in GenerateAndroidBuildActions,
 	// followed by a build rule that unzips it and creates the final output (img, zip, tar.gz,
 	// etc.) from the extracted files
-	CopyDepsToZip(ctx ModuleContext, zipOut OutputPath) []string
+	CopyDepsToZip(ctx ModuleContext, zipOut WritablePath) []string
 }
 
 // PackagingBase provides basic functionality for packaging dependencies. A module is expected to
@@ -87,9 +92,17 @@ type packagingMultilibProperties struct {
 	Lib64  depsProperty `android:"arch_variant"`
 }
 
+type packagingArchProperties struct {
+	Arm64  depsProperty
+	Arm    depsProperty
+	X86_64 depsProperty
+	X86    depsProperty
+}
+
 type PackagingProperties struct {
 	Deps     []string                    `android:"arch_variant"`
 	Multilib packagingMultilibProperties `android:"arch_variant"`
+	Arch     packagingArchProperties
 }
 
 func InitPackageModule(p PackageModule) {
@@ -116,6 +129,7 @@ func (p *PackagingBase) getDepsForArch(ctx BaseModuleContext, arch ArchType) []s
 	} else if arch == Common {
 		ret = append(ret, p.properties.Multilib.Common.Deps...)
 	}
+
 	for i, t := range ctx.MultiTargets() {
 		if t.Arch.ArchType == arch {
 			ret = append(ret, p.properties.Deps...)
@@ -124,6 +138,20 @@ func (p *PackagingBase) getDepsForArch(ctx BaseModuleContext, arch ArchType) []s
 			}
 		}
 	}
+
+	if ctx.Arch().ArchType == Common {
+		switch arch {
+		case Arm64:
+			ret = append(ret, p.properties.Arch.Arm64.Deps...)
+		case Arm:
+			ret = append(ret, p.properties.Arch.Arm.Deps...)
+		case X86_64:
+			ret = append(ret, p.properties.Arch.X86_64.Deps...)
+		case X86:
+			ret = append(ret, p.properties.Arch.X86.Deps...)
+		}
+	}
+
 	return FirstUniqueStrings(ret)
 }
 
@@ -152,7 +180,7 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 }
 
 // See PackageModule.CopyDepsToZip
-func (p *PackagingBase) CopyDepsToZip(ctx ModuleContext, zipOut OutputPath) (entries []string) {
+func (p *PackagingBase) CopyDepsToZip(ctx ModuleContext, zipOut WritablePath) (entries []string) {
 	m := make(map[string]PackagingSpec)
 	ctx.WalkDeps(func(child Module, parent Module) bool {
 		if !IsInstallDepNeeded(ctx.OtherModuleDependencyTag(child)) {
@@ -168,7 +196,7 @@ func (p *PackagingBase) CopyDepsToZip(ctx ModuleContext, zipOut OutputPath) (ent
 
 	builder := NewRuleBuilder(pctx, ctx)
 
-	dir := PathForModuleOut(ctx, ".zip").OutputPath
+	dir := PathForModuleOut(ctx, ".zip")
 	builder.Command().Text("rm").Flag("-rf").Text(dir.String())
 	builder.Command().Text("mkdir").Flag("-p").Text(dir.String())
 

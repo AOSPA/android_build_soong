@@ -56,8 +56,9 @@ func NewTestArchContext(config Config) *TestContext {
 
 type TestContext struct {
 	*Context
-	preArch, preDeps, postDeps, finalDeps []RegisterMutatorFunc
-	NameResolver                          *NameResolver
+	preArch, preDeps, postDeps, finalDeps           []RegisterMutatorFunc
+	bp2buildPreArch, bp2buildDeps, bp2buildMutators []RegisterMutatorFunc
+	NameResolver                                    *NameResolver
 }
 
 func (ctx *TestContext) PreArchMutators(f RegisterMutatorFunc) {
@@ -81,10 +82,36 @@ func (ctx *TestContext) FinalDepsMutators(f RegisterMutatorFunc) {
 	ctx.finalDeps = append(ctx.finalDeps, f)
 }
 
+// RegisterBp2BuildMutator registers a BazelTargetModule mutator for converting a module
+// type to the equivalent Bazel target.
+func (ctx *TestContext) RegisterBp2BuildMutator(moduleType string, m func(TopDownMutatorContext)) {
+	f := func(ctx RegisterMutatorsContext) {
+		ctx.TopDown(moduleType, m)
+	}
+	ctx.bp2buildMutators = append(ctx.bp2buildMutators, f)
+}
+
+// PreArchBp2BuildMutators adds mutators to be register for converting Android Blueprint modules
+// into Bazel BUILD targets that should run prior to deps and conversion.
+func (ctx *TestContext) PreArchBp2BuildMutators(f RegisterMutatorFunc) {
+	ctx.bp2buildPreArch = append(ctx.bp2buildPreArch, f)
+}
+
+// DepsBp2BuildMutators adds mutators to be register for converting Android Blueprint modules into
+// Bazel BUILD targets that should run prior to conversion to resolve dependencies.
+func (ctx *TestContext) DepsBp2BuildMutators(f RegisterMutatorFunc) {
+	ctx.bp2buildDeps = append(ctx.bp2buildDeps, f)
+}
+
 func (ctx *TestContext) Register() {
 	registerMutators(ctx.Context.Context, ctx.preArch, ctx.preDeps, ctx.postDeps, ctx.finalDeps)
 
 	ctx.RegisterSingletonType("env", EnvSingleton)
+}
+
+// RegisterForBazelConversion prepares a test context for bp2build conversion.
+func (ctx *TestContext) RegisterForBazelConversion() {
+	RegisterMutatorsForBazelConversion(ctx.Context.Context, ctx.bp2buildPreArch, ctx.bp2buildDeps, ctx.bp2buildMutators)
 }
 
 func (ctx *TestContext) ParseFileList(rootDir string, filePaths []string) (deps []string, errs []error) {
