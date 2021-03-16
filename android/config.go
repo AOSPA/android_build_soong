@@ -1354,7 +1354,7 @@ func (c *deviceConfig) createDirsMapOnce(onceKey OnceKey, previous map[string]bo
 	dirMap := c.Once(onceKey, func() interface{} {
 		ret, err := createDirsMap(previous, dirs)
 		if err != nil {
-			panic(fmt.Errorf("%s: %w", onceKey.key, err))
+			panic(fmt.Errorf("%s: %w", *onceKey.key.(*string), err))
 		}
 		return ret
 	})
