@@ -71,7 +71,7 @@ func shouldCollectHeadersForSnapshot(ctx android.ModuleContext, m *Module) bool 
 	}
 	for _, image := range []snapshotImage{vendorSnapshotImageSingleton, recoverySnapshotImageSingleton,
                                               ramdiskSnapshotImageSingleton } {
-		if isSnapshotAware(ctx.DeviceConfig(), m, image.isProprietaryPath(ctx.ModuleDir()), image) {
+		if isSnapshotAware(ctx.DeviceConfig(), m, image.isProprietaryPath(ctx.ModuleDir(), ctx.DeviceConfig()), image) {
 			return true
 		}
 	}

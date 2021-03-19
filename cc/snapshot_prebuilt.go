@@ -18,6 +18,7 @@ package cc
 // snapshot mutators and snapshot information maps which are also defined in this file.
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -49,9 +50,9 @@ type snapshotImage interface {
 	// directory, such as device/, vendor/, etc.
 	//
 	// For a given snapshot (e.g., vendor, recovery, etc.) if
-	// isProprietaryPath(dir) returns true, then the module in dir will be
-	// built from sources.
-	isProprietaryPath(dir string) bool
+	// isProprietaryPath(dir, deviceConfig) returns true, then the module in dir
+	// will be built from sources.
+	isProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool
 
 	// Whether to include VNDK in the snapshot for this image.
 	includeVndk() bool
@@ -93,6 +94,33 @@ type vendorSnapshotImage struct{}
 type recoverySnapshotImage struct{}
 type ramdiskSnapshotImage struct{}
 
+type directoryMap map[string]bool
+
+var (
+	// Modules under following directories are ignored. They are OEM's and vendor's
+	// proprietary modules(device/, kernel/, vendor/, and hardware/).
+	defaultDirectoryExcludedMap = directoryMap{
+		"device":   true,
+		"hardware": true,
+		"kernel":   true,
+		"vendor":   true,
+		// QC specific directories to be ignored
+		"disregard": true,
+	}
+
+	// Modules under following directories are included as they are in AOSP,
+	// although hardware/ and kernel/ are normally for vendor's own.
+	defaultDirectoryIncludedMap = directoryMap{
+		"kernel/configs":              true,
+		"kernel/prebuilts":            true,
+		"kernel/tests":                true,
+		"hardware/interfaces":         true,
+		"hardware/libhardware":        true,
+		"hardware/libhardware_legacy": true,
+		"hardware/ril":                true,
+	}
+)
+
 func (vendorSnapshotImage) init() {
 	android.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
 	android.RegisterModuleType("vendor_snapshot_shared", VendorSnapshotSharedFactory)
@@ -117,8 +145,25 @@ func (vendorSnapshotImage) available(m *Module) *bool {
 	return m.VendorProperties.Vendor_available
 }
 
-func (vendorSnapshotImage) isProprietaryPath(dir string) bool {
-	return isVendorProprietaryPath(dir)
+func isDirectoryExcluded(dir string, excludedMap directoryMap, includedMap directoryMap) bool {
+	if dir == "." || dir == "/" {
+		return false
+	}
+	if includedMap[dir] {
+		return false
+	} else if excludedMap[dir] {
+		return true
+	} else if defaultDirectoryIncludedMap[dir] {
+		return false
+	} else if defaultDirectoryExcludedMap[dir] {
+		return true
+	} else {
+		return isDirectoryExcluded(filepath.Dir(dir), excludedMap, includedMap)
+	}
+}
+
+func (vendorSnapshotImage) isProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool {
+	return isDirectoryExcluded(dir, deviceConfig.VendorSnapshotDirsExcludedMap(), deviceConfig.VendorSnapshotDirsIncludedMap())
 }
 
 // vendor snapshot includes static/header libraries with vndk: {enabled: true}.
@@ -227,8 +272,8 @@ func (recoverySnapshotImage) available(m *Module) *bool {
 	return m.Properties.Recovery_available
 }
 
-func (recoverySnapshotImage) isProprietaryPath(dir string) bool {
-	return isRecoveryProprietaryPath(dir)
+func (recoverySnapshotImage) isProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool {
+	return isDirectoryExcluded(dir, deviceConfig.RecoverySnapshotDirsExcludedMap(), deviceConfig.RecoverySnapshotDirsIncludedMap())
 }
 
 // recovery snapshot does NOT treat vndk specially.
@@ -318,8 +363,8 @@ func (ramdiskSnapshotImage) available(m *Module) *bool {
 	return m.Properties.Ramdisk_available
 }
 
-func (ramdiskSnapshotImage) isProprietaryPath(dir string) bool {
-	return isRamdiskProprietaryPath(dir)
+func (ramdiskSnapshotImage) isProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool {
+	return isDirectoryExcluded(dir, nil, nil)
 }
 
 // ramdisk snapshot does NOT treat vndk specially.
@@ -531,7 +576,6 @@ func recoverySnapshotObjects(config android.Config) *snapshotMap {
 	}).(*snapshotMap)
 }
 
-
 func ramdiskSuffixModules(config android.Config) map[string]bool {
 	return config.Once(ramdiskSuffixModulesKey, func() interface{} {
 		return make(map[string]bool)
@@ -723,7 +767,7 @@ func (p *snapshotLibraryDecorator) link(ctx ModuleContext, flags Flags, deps Pat
 		p.androidMkSuffix = recoverySuffix
 	} else if m.InRamdisk() && ramdiskSuffixModules(ctx.Config())[m.BaseModuleName()] {
 		p.androidMkSuffix = ramdiskSuffix
-        }
+	}
 	if p.header() {
 		return p.libraryDecorator.link(ctx, flags, deps, objs)
 	}
@@ -1070,7 +1114,7 @@ func (p *snapshotObjectLinker) link(ctx ModuleContext, flags Flags, deps PathDep
 		p.androidMkSuffix = vendorSuffix
 	} else if m.InRecovery() && recoverySuffixModules(ctx.Config())[m.BaseModuleName()] {
 		p.androidMkSuffix = recoverySuffix
-	}else if m.InRamdisk() && ramdiskSuffixModules(ctx.Config())[m.BaseModuleName()] {
+	} else if m.InRamdisk() && ramdiskSuffixModules(ctx.Config())[m.BaseModuleName()] {
 		p.androidMkSuffix = ramdiskSuffix
 	}
 
@@ -1116,6 +1160,7 @@ func RecoverySnapshotObjectFactory() android.Module {
 	module.AddProperties(&prebuilt.properties)
 	return module.Init()
 }
+
 // ramdisk_snapshot_object is a special prebuilt compiled object file which is auto-generated by
 // development/vendor_snapshot/update.py. As a part of ramdisk snapshot, ramdisk_snapshot_object
 // overrides the recovery variant of the cc object with the same name, if BOARD_VNDK_VERSION is set.
@@ -1133,6 +1178,7 @@ func RamdiskSnapshotObjectFactory() android.Module {
 	module.AddProperties(&prebuilt.properties)
 	return module.Init()
 }
+
 type snapshotInterface interface {
 	matchesWithDevice(config android.DeviceConfig) bool
 }
