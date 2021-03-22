@@ -185,12 +185,22 @@ func runSoong(ctx Context, config Config) {
 		configPath, _ := config.Environment().Get("PATH")
 		ninjaEnv.Set("PATH", configPath)
 
+		qcEnvVars := []string{
+			"TARGET_PRODUCT",
+			"SDCLANG_AE_CONFIG",
+			"SDCLANG_CONFIG",
+			"SDCLANG_SA_ENABLED",
+			"QIIFA_BUILD_CONFIG",
+		}
+		for _, qcVar := range qcEnvVars {
+			ninjaEnv.Set(qcVar, os.Getenv(qcVar))
+		}
+
 		// For debugging
 		if os.Getenv("SOONG_DELVE") != "" {
 			// SOONG_DELVE is already in cmd.Environment
 			ninjaEnv.Set("SOONG_DELVE_PATH", shared.ResolveDelveBinary())
 		}
-
 		cmd.Environment = &ninjaEnv
 		cmd.Sandbox = soongSandbox
 		cmd.RunAndStreamOrFatal()

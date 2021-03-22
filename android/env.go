@@ -15,9 +15,6 @@
 package android
 
 import (
-	"os"
-	"strings"
-
 	"android/soong/shared"
 )
 
@@ -29,9 +26,6 @@ import (
 // a manifest regeneration.
 
 var originalEnv map[string]string
-var SdclangEnv map[string]string
-var QiifaBuildConfig string
-
 
 func InitEnvironment(envFile string) {
 	var err error
@@ -39,15 +33,6 @@ func InitEnvironment(envFile string) {
 	if err != nil {
 		panic(err)
 	}
-	// TODO(b/182662723) move functionality as necessary
-	SdclangEnv = make(map[string]string)
-	for _, env := range os.Environ() {
-		idx := strings.IndexRune(env, '=')
-		if idx != -1 {
-			SdclangEnv[env[:idx]] = env[idx+1:]
-		}
-	}
-        QiifaBuildConfig = originalEnv["QIIFA_BUILD_CONFIG"]
 }
 
 func EnvSingleton() Singleton {
