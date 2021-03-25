@@ -1331,9 +1331,8 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 			dir := android.PathForModuleGen(ctx, "aidl")
 			library.reexportDirs(dir)
 
-			// TODO: restrict to aidl deps
-			library.reexportDeps(library.baseCompiler.pathDeps...)
-			library.addExportedGeneratedHeaders(library.baseCompiler.pathDeps...)
+			library.reexportDeps(library.baseCompiler.aidlOrderOnlyDeps...)
+			library.addExportedGeneratedHeaders(library.baseCompiler.aidlHeaders...)
 		}
 	}
 
@@ -1347,9 +1346,8 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 			includes = append(includes, flags.proto.Dir)
 			library.reexportDirs(includes...)
 
-			// TODO: restrict to proto deps
-			library.reexportDeps(library.baseCompiler.pathDeps...)
-			library.addExportedGeneratedHeaders(library.baseCompiler.pathDeps...)
+			library.reexportDeps(library.baseCompiler.protoOrderOnlyDeps...)
+			library.addExportedGeneratedHeaders(library.baseCompiler.protoHeaders...)
 		}
 	}
 
@@ -1368,10 +1366,16 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 			}
 		}
 
+		// Make sure to only export headers which are within the include directory.
+		_, headers := android.FilterPathListPredicate(library.baseCompiler.syspropHeaders, func(path android.Path) bool {
+			_, isRel := android.MaybeRel(ctx, dir.String(), path.String())
+			return isRel
+		})
+
 		// Add sysprop-related directories to the exported directories of this library.
 		library.reexportDirs(dir)
-		library.reexportDeps(library.baseCompiler.pathDeps...)
-		library.addExportedGeneratedHeaders(library.baseCompiler.pathDeps...)
+		library.reexportDeps(library.baseCompiler.syspropOrderOnlyDeps...)
+		library.addExportedGeneratedHeaders(headers...)
 	}
 
 	// Add stub-related flags if this library is a stub library.

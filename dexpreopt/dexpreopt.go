@@ -288,12 +288,9 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 
 	} else {
 		// Other libraries or APKs for which the exact <uses-library> list is unknown.
-		// Pass special class loader context to skip the classpath and collision check.
-		// This will get removed once LOCAL_USES_LIBRARIES is enforced.
-		// Right now LOCAL_USES_LIBRARIES is opt in, for the case where it's not specified we still default
-		// to the &.
+		// We assume the class loader context is empty.
 		rule.Command().
-			Text(`class_loader_context_arg=--class-loader-context=\&`).
+			Text(`class_loader_context_arg=--class-loader-context=PCL[]`).
 			Text(`stored_class_loader_context_arg=""`)
 	}
 
@@ -369,11 +366,11 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 		}
 		if module.EnforceUsesLibraries {
 			// If the verify_uses_libraries check failed (in this case status file contains a
-			// non-empty error message), then use "extract" compiler filter to avoid compiling any
+			// non-empty error message), then use "verify" compiler filter to avoid compiling any
 			// code (it would be rejected on device because of a class loader context mismatch).
 			cmd.Text("--compiler-filter=$(if test -s ").
 				Input(module.EnforceUsesLibrariesStatusFile).
-				Text(" ; then echo extract ; else echo " + compilerFilter + " ; fi)")
+				Text(" ; then echo verify ; else echo " + compilerFilter + " ; fi)")
 		} else {
 			cmd.FlagWithArg("--compiler-filter=", compilerFilter)
 		}

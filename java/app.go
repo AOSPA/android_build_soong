@@ -469,7 +469,7 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) android.Path {
 		a.Module.compile(ctx, a.aaptSrcJar)
 	}
 
-	return a.maybeStrippedDexJarFile
+	return a.dexJarFile
 }
 
 func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, ctx android.ModuleContext) android.WritablePath {
@@ -1217,6 +1217,15 @@ func (u *usesLibrary) presentOptionalUsesLibs(ctx android.BaseModuleContext) []s
 	return optionalUsesLibs
 }
 
+// Helper function to replace string in a list.
+func replaceInList(list []string, oldstr, newstr string) {
+	for i, str := range list {
+		if str == oldstr {
+			list[i] = newstr
+		}
+	}
+}
+
 // Returns a map of module names of shared library dependencies to the paths
 // to their dex jars on host and on device.
 func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext) dexpreopt.ClassLoaderContextMap {
@@ -1227,7 +1236,16 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 			if tag, ok := ctx.OtherModuleDependencyTag(m).(usesLibraryDependencyTag); ok {
 				dep := ctx.OtherModuleName(m)
 				if lib, ok := m.(UsesLibraryDependency); ok {
-					clcMap.AddContext(ctx, tag.sdkVersion, dep,
+					libName := dep
+					if ulib, ok := m.(ProvidesUsesLib); ok && ulib.ProvidesUsesLib() != nil {
+						libName = *ulib.ProvidesUsesLib()
+						// Replace module name with library name in `uses_libs`/`optional_uses_libs`
+						// in order to pass verify_uses_libraries check (which compares these
+						// properties against library names written in the manifest).
+						replaceInList(u.usesLibraryProperties.Uses_libs, dep, libName)
+						replaceInList(u.usesLibraryProperties.Optional_uses_libs, dep, libName)
+					}
+					clcMap.AddContext(ctx, tag.sdkVersion, libName,
 						lib.DexJarBuildPath(), lib.DexJarInstallPath(), lib.ClassLoaderContexts())
 				} else if ctx.Config().AllowMissingDependencies() {
 					ctx.AddMissingDependencies([]string{dep})
@@ -1262,6 +1280,14 @@ func (u *usesLibrary) verifyUsesLibrariesManifest(ctx android.ModuleContext, man
 	outputFile := android.PathForModuleOut(ctx, "manifest_check", "AndroidManifest.xml")
 	statusFile := dexpreopt.UsesLibrariesStatusFile(ctx)
 
+	// Disable verify_uses_libraries check if dexpreopt is globally disabled. Without dexpreopt the
+	// check is not necessary, and although it is good to have, it is difficult to maintain on
+	// non-linux build platforms where dexpreopt is generally disabled (the check may fail due to
+	// various unrelated reasons, such as a failure to get manifest from an APK).
+	if dexpreopt.GetGlobalConfig(ctx).DisablePreopt {
+		return manifest
+	}
+
 	rule := android.NewRuleBuilder(pctx, ctx)
 	cmd := rule.Command().BuiltTool("manifest_check").
 		Flag("--enforce-uses-libraries").
@@ -1291,6 +1317,14 @@ func (u *usesLibrary) verifyUsesLibrariesManifest(ctx android.ModuleContext, man
 func (u *usesLibrary) verifyUsesLibrariesAPK(ctx android.ModuleContext, apk android.Path) android.Path {
 	outputFile := android.PathForModuleOut(ctx, "verify_uses_libraries", apk.Base())
 	statusFile := dexpreopt.UsesLibrariesStatusFile(ctx)
+
+	// Disable verify_uses_libraries check if dexpreopt is globally disabled. Without dexpreopt the
+	// check is not necessary, and although it is good to have, it is difficult to maintain on
+	// non-linux build platforms where dexpreopt is generally disabled (the check may fail due to
+	// various unrelated reasons, such as a failure to get manifest from an APK).
+	if dexpreopt.GetGlobalConfig(ctx).DisablePreopt {
+		return apk
+	}
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 	aapt := ctx.Config().HostToolPath(ctx, "aapt")

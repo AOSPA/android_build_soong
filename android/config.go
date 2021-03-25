@@ -232,7 +232,7 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 
 	// Copy the real PATH value to the test environment, it's needed by
 	// NonHermeticHostSystemTool() used in x86_darwin_host.go
-	envCopy["PATH"] = originalEnv["PATH"]
+	envCopy["PATH"] = os.Getenv("PATH")
 
 	config := &config{
 		productVariables: productVariables{
@@ -305,10 +305,7 @@ func TestArchConfigFuchsia(buildDir string, env map[string]string, bp string, fs
 	return testConfig
 }
 
-// TestArchConfig returns a Config object suitable for using for tests that
-// need to run the arch mutator.
-func TestArchConfig(buildDir string, env map[string]string, bp string, fs map[string][]byte) Config {
-	testConfig := TestConfig(buildDir, env, bp, fs)
+func modifyTestConfigToSupportArchMutator(testConfig Config) {
 	config := testConfig.config
 
 	config.Targets = map[OsType][]Target{
@@ -334,7 +331,13 @@ func TestArchConfig(buildDir string, env map[string]string, bp string, fs map[st
 	config.TestProductVariables.DeviceArchVariant = proptools.StringPtr("armv8-a")
 	config.TestProductVariables.DeviceSecondaryArch = proptools.StringPtr("arm")
 	config.TestProductVariables.DeviceSecondaryArchVariant = proptools.StringPtr("armv7-a-neon")
+}
 
+// TestArchConfig returns a Config object suitable for using for tests that
+// need to run the arch mutator.
+func TestArchConfig(buildDir string, env map[string]string, bp string, fs map[string][]byte) Config {
+	testConfig := TestConfig(buildDir, env, bp, fs)
+	modifyTestConfigToSupportArchMutator(testConfig)
 	return testConfig
 }
 
@@ -911,6 +914,25 @@ func (c *config) XrefCuEncoding() string {
 		return enc
 	}
 	return "json"
+}
+
+// XrefCuJavaSourceMax returns the maximum number of the Java source files
+// in a single compilation unit
+const xrefJavaSourceFileMaxDefault = "1000"
+
+func (c Config) XrefCuJavaSourceMax() string {
+	v := c.Getenv("KYTHE_JAVA_SOURCE_BATCH_SIZE")
+	if v == "" {
+		return xrefJavaSourceFileMaxDefault
+	}
+	if _, err := strconv.ParseUint(v, 0, 0); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"bad KYTHE_JAVA_SOURCE_BATCH_SIZE value: %s, will use %s",
+			err, xrefJavaSourceFileMaxDefault)
+		return xrefJavaSourceFileMaxDefault
+	}
+	return v
+
 }
 
 func (c *config) EmitXrefRules() bool {

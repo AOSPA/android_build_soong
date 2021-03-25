@@ -19,7 +19,6 @@ import (
 	"android/soong/bazel"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -105,6 +104,10 @@ type CodegenContext struct {
 	mode    CodegenMode
 }
 
+func (c *CodegenContext) Mode() CodegenMode {
+	return c.mode
+}
+
 // CodegenMode is an enum to differentiate code-generation modes.
 type CodegenMode int
 
@@ -160,64 +163,57 @@ func propsToAttributes(props map[string]string) string {
 	return attributes
 }
 
-func GenerateBazelTargets(ctx bpToBuildContext, codegenMode CodegenMode) map[string]BazelTargets {
+func GenerateBazelTargets(ctx CodegenContext) (map[string]BazelTargets, CodegenMetrics) {
 	buildFileToTargets := make(map[string]BazelTargets)
-	ctx.VisitAllModules(func(m blueprint.Module) {
-		dir := ctx.ModuleDir(m)
+
+	// Simple metrics tracking for bp2build
+	totalModuleCount := 0
+	ruleClassCount := make(map[string]int)
+
+	bpCtx := ctx.Context()
+	bpCtx.VisitAllModules(func(m blueprint.Module) {
+		dir := bpCtx.ModuleDir(m)
 		var t BazelTarget
 
-		switch codegenMode {
+		switch ctx.Mode() {
 		case Bp2Build:
-			if _, ok := m.(android.BazelTargetModule); !ok {
+			if b, ok := m.(android.BazelTargetModule); !ok {
+				// Only include regular Soong modules (non-BazelTargetModules) into the total count.
+				totalModuleCount += 1
 				return
+			} else {
+				t = generateBazelTarget(bpCtx, m, b)
+				ruleClassCount[t.ruleClass] += 1
 			}
-			t = generateBazelTarget(ctx, m)
 		case QueryView:
 			// Blocklist certain module types from being generated.
-			if canonicalizeModuleType(ctx.ModuleType(m)) == "package" {
+			if canonicalizeModuleType(bpCtx.ModuleType(m)) == "package" {
 				// package module name contain slashes, and thus cannot
 				// be mapped cleanly to a bazel label.
 				return
 			}
-			t = generateSoongModuleTarget(ctx, m)
+			t = generateSoongModuleTarget(bpCtx, m)
 		default:
-			panic(fmt.Errorf("Unknown code-generation mode: %s", codegenMode))
+			panic(fmt.Errorf("Unknown code-generation mode: %s", ctx.Mode()))
 		}
 
 		buildFileToTargets[dir] = append(buildFileToTargets[dir], t)
 	})
-	return buildFileToTargets
+
+	metrics := CodegenMetrics{
+		TotalModuleCount: totalModuleCount,
+		RuleClassCount:   ruleClassCount,
+	}
+
+	return buildFileToTargets, metrics
 }
 
-// Helper method to trim quotes around strings.
-func trimQuotes(s string) string {
-	if s == "" {
-		// strconv.Unquote would error out on empty strings, but this method
-		// allows them, so return the empty string directly.
-		return ""
-	}
-	ret, err := strconv.Unquote(s)
-	if err != nil {
-		// Panic the error immediately.
-		panic(fmt.Errorf("Trying to unquote '%s', but got error: %s", s, err))
-	}
-	return ret
-}
+func generateBazelTarget(ctx bpToBuildContext, m blueprint.Module, b android.BazelTargetModule) BazelTarget {
+	ruleClass := b.RuleClass()
+	bzlLoadLocation := b.BzlLoadLocation()
 
-func generateBazelTarget(ctx bpToBuildContext, m blueprint.Module) BazelTarget {
 	// extract the bazel attributes from the module.
 	props := getBuildProperties(ctx, m)
-
-	// extract the rule class name from the attributes. Since the string value
-	// will be string-quoted, remove the quotes here.
-	ruleClass := trimQuotes(props.Attrs["rule_class"])
-	// Delete it from being generated in the BUILD file.
-	delete(props.Attrs, "rule_class")
-
-	// extract the bzl_load_location, and also remove the quotes around it here.
-	bzlLoadLocation := trimQuotes(props.Attrs["bzl_load_location"])
-	// Delete it from being generated in the BUILD file.
-	delete(props.Attrs, "bzl_load_location")
 
 	delete(props.Attrs, "bp2build_available")
 
@@ -358,11 +354,42 @@ func prettyPrint(propertyValue reflect.Value, indent int) (string, error) {
 		ret += makeIndent(indent)
 		ret += "]"
 	case reflect.Struct:
+		// Special cases where the bp2build sends additional information to the codegenerator
+		// by wrapping the attributes in a custom struct type.
 		if labels, ok := propertyValue.Interface().(bazel.LabelList); ok {
 			// TODO(b/165114590): convert glob syntax
 			return prettyPrint(reflect.ValueOf(labels.Includes), indent)
 		} else if label, ok := propertyValue.Interface().(bazel.Label); ok {
 			return fmt.Sprintf("%q", label.Label), nil
+		} else if stringList, ok := propertyValue.Interface().(bazel.StringListAttribute); ok {
+			// A Bazel string_list attribute that may contain a select statement.
+			ret, err := prettyPrint(reflect.ValueOf(stringList.Value), indent)
+			if err != nil {
+				return ret, err
+			}
+
+			if !stringList.HasArchSpecificValues() {
+				// Select statement not needed.
+				return ret, nil
+			}
+
+			ret += " + " + "select({\n"
+			for _, arch := range android.ArchTypeList() {
+				value := stringList.GetValueForArch(arch.Name)
+				if len(value) > 0 {
+					ret += makeIndent(indent + 1)
+					list, _ := prettyPrint(reflect.ValueOf(value), indent+1)
+					ret += fmt.Sprintf("\"%s\": %s,\n", platformArchMap[arch], list)
+				}
+			}
+
+			ret += makeIndent(indent + 1)
+			list, _ := prettyPrint(reflect.ValueOf(stringList.GetValueForArch("default")), indent+1)
+			ret += fmt.Sprintf("\"%s\": %s,\n", "//conditions:default", list)
+
+			ret += makeIndent(indent)
+			ret += "})"
+			return ret, err
 		}
 
 		ret = "{\n"

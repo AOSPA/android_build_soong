@@ -28,7 +28,7 @@ import (
 // modules from the ART apex.
 
 func TestBootImages(t *testing.T) {
-	ctx, _ := testApex(t, `
+	ctx := testApex(t, `
 		java_sdk_library {
 			name: "foo",
 			srcs: ["b.java"],
@@ -48,6 +48,7 @@ func TestBootImages(t *testing.T) {
 				"baz",
 				"quuz",
 			],
+			updatable: false,
 		}
 
 		apex_key {
@@ -180,13 +181,14 @@ func withFrameworkBootImageJars(bootJars ...string) func(fs map[string][]byte, c
 }
 
 func TestBootImageInApex(t *testing.T) {
-	ctx, _ := testApex(t, `
+	ctx := testApex(t, `
 		apex {
 			name: "myapex",
 			key: "myapex.key",
 			boot_images: [
 				"mybootimage",
 			],
+			updatable: false,
 		}
 
 		apex_key {

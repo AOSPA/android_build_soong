@@ -230,6 +230,8 @@ type baseCompiler struct {
 	// other modules and filegroups. May include source files that have not yet been translated to
 	// C/C++ (.aidl, .proto, etc.)
 	srcsBeforeGen android.Paths
+
+	generatedSourceInfo
 }
 
 var _ compiler = (*baseCompiler)(nil)
@@ -440,7 +442,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		fmt.Sprintf("${config.%sClangGlobalCflags}", hod))
 
 	if isThirdParty(modulePath) {
-		flags.Global.CommonFlags = append([]string{"${config.ClangExternalCflags}"}, flags.Global.CommonFlags...)
+		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "${config.ClangExternalCflags}")
 	}
 
 	if tc.Bionic() {
@@ -634,10 +636,11 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 
 	srcs := append(android.Paths(nil), compiler.srcsBeforeGen...)
 
-	srcs, genDeps := genSources(ctx, srcs, buildFlags)
+	srcs, genDeps, info := genSources(ctx, srcs, buildFlags)
 	pathDeps = append(pathDeps, genDeps...)
 
 	compiler.pathDeps = pathDeps
+	compiler.generatedSourceInfo = info
 	compiler.cFlagsDeps = flags.CFlagsDeps
 
 	// Save src, buildFlags and context
