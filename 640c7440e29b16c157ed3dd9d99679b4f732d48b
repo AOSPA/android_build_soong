@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5e269b9d_c08bec61",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000450
+      },
+      "writtenOn": "2021-03-25T01:24:12Z",
+      "side": 1,
+      "message": "https://github.com/LineageOS/android_build_soong/commit/9b58749f30d397ad05ff2d35e4d081016a2ebbee",
+      "revId": "640c7440e29b16c157ed3dd9d99679b4f732d48b",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
