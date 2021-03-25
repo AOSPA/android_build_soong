@@ -202,6 +202,15 @@ type ExcludeFromVisibilityEnforcementTag interface {
 	ExcludeFromVisibilityEnforcement()
 }
 
+// The visibility mutators.
+var PrepareForTestWithVisibility = FixtureRegisterWithContext(registerVisibilityMutators)
+
+func registerVisibilityMutators(ctx RegistrationContext) {
+	ctx.PreArchMutators(RegisterVisibilityRuleChecker)
+	ctx.PreArchMutators(RegisterVisibilityRuleGatherer)
+	ctx.PostDepsMutators(RegisterVisibilityRuleEnforcer)
+}
+
 // The rule checker needs to be registered before defaults expansion to correctly check that
 // //visibility:xxx isn't combined with other packages in the same list in any one module.
 func RegisterVisibilityRuleChecker(ctx RegisterMutatorsContext) {

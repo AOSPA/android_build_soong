@@ -89,12 +89,6 @@ func TestHiddenAPIIndexSingleton(t *testing.T) {
 		}
 
 		java_library {
-			name: "foo-hiddenapi",
-			srcs: ["a.java"],
-			compile_dex: true,
-		}
-
-		java_library {
 			name: "foo-hiddenapi-annotations",
 			srcs: ["a.java"],
 			compile_dex: true,
@@ -118,7 +112,6 @@ func TestHiddenAPIIndexSingleton(t *testing.T) {
 	indexRule := hiddenAPIIndex.Rule("singleton-merged-hiddenapi-index")
 	CheckHiddenAPIRuleInputs(t, `
 .intermediates/bar/android_common/hiddenapi/index.csv
-.intermediates/foo-hiddenapi/android_common/hiddenapi/index.csv
 .intermediates/foo/android_common/hiddenapi/index.csv
 `,
 		indexRule)
@@ -131,6 +124,29 @@ func TestHiddenAPIIndexSingleton(t *testing.T) {
 .intermediates/foo-hiddenapi-annotations/android_common/javac/foo-hiddenapi-annotations.jar
 .intermediates/foo/android_common/javac/foo.jar
 `, indexParams)
+}
+
+func TestHiddenAPISingletonWithSourceAndPrebuiltPreferredButNoDex(t *testing.T) {
+	config := testConfigWithBootJars(`
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			compile_dex: true,
+		}
+
+		java_import {
+			name: "foo",
+			jars: ["a.jar"],
+			prefer: true,
+		}
+	`, []string{"platform:foo"}, nil)
+
+	ctx := testContextWithHiddenAPI(config)
+
+	runWithErrors(t, ctx, config,
+		"hiddenapi has determined that the source module \"foo\" should be ignored as it has been"+
+			" replaced by the prebuilt module \"prebuilt_foo\" but unfortunately it does not provide a"+
+			" suitable boot dex jar")
 }
 
 func TestHiddenAPISingletonWithPrebuilt(t *testing.T) {
