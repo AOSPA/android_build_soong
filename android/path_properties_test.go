@@ -15,7 +15,6 @@
 package android
 
 import (
-	"reflect"
 	"testing"
 )
 
@@ -26,6 +25,9 @@ type pathDepsMutatorTestModule struct {
 		Bar []string `android:"path,arch_variant"`
 		Baz *string  `android:"path"`
 		Qux string
+		V   *struct {
+			W string `android:"path"`
+		}
 	}
 
 	// A second property struct with a duplicate property name
@@ -94,8 +96,11 @@ func TestPathDepsMutator(t *testing.T) {
 						],
 					},
 				],
+				v: {
+					w: ":w",
+				},
 			}`,
-			deps: []string{"a", "b", "c", "x", "y", "z"},
+			deps: []string{"a", "b", "c", "w", "x", "y", "z"},
 		},
 		{
 			name: "arch variant",
@@ -136,6 +141,10 @@ func TestPathDepsMutator(t *testing.T) {
 				}
 
 				filegroup {
+					name: "w",
+				}
+
+				filegroup {
 					name: "x",
 				}
 
@@ -148,23 +157,18 @@ func TestPathDepsMutator(t *testing.T) {
 				}
 			`
 
-			config := TestArchConfig(buildDir, nil, bp, nil)
-			ctx := NewTestArchContext(config)
+			result := GroupFixturePreparers(
+				PrepareForTestWithArchMutator,
+				PrepareForTestWithFilegroup,
+				FixtureRegisterWithContext(func(ctx RegistrationContext) {
+					ctx.RegisterModuleType("test", pathDepsMutatorTestModuleFactory)
+				}),
+				FixtureWithRootAndroidBp(bp),
+			).RunTest(t)
 
-			ctx.RegisterModuleType("test", pathDepsMutatorTestModuleFactory)
-			ctx.RegisterModuleType("filegroup", FileGroupFactory)
+			m := result.Module("foo", "android_arm64_armv8-a").(*pathDepsMutatorTestModule)
 
-			ctx.Register()
-			_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-			FailIfErrored(t, errs)
-			_, errs = ctx.PrepareBuildActions(config)
-			FailIfErrored(t, errs)
-
-			m := ctx.ModuleForTests("foo", "android_arm64_armv8-a").Module().(*pathDepsMutatorTestModule)
-
-			if g, w := m.sourceDeps, test.deps; !reflect.DeepEqual(g, w) {
-				t.Errorf("want deps %q, got %q", w, g)
-			}
+			AssertDeepEquals(t, "deps", test.deps, m.sourceDeps)
 		})
 	}
 }

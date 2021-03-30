@@ -17,6 +17,7 @@ package filesystem
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -61,6 +62,10 @@ type bootimgProperties struct {
 
 	// Optional kernel commandline
 	Cmdline *string
+
+	// File that contains bootconfig parameters. This can be set only when `vendor_boot` is true
+	// and `header_version` is greater than or equal to 4.
+	Bootconfig *string `android:"arch_variant,path"`
 
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
@@ -153,7 +158,7 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 		if vendor {
 			flag = "--vendor_cmdline "
 		}
-		cmd.FlagWithArg(flag, "\""+proptools.ShellEscape(cmdline)+"\"")
+		cmd.FlagWithArg(flag, proptools.ShellEscapeIncludingSpaces(cmdline))
 	}
 
 	headerVersion := proptools.String(b.properties.Header_version)
@@ -189,6 +194,19 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 		return output
 	}
 
+	bootconfig := proptools.String(b.properties.Bootconfig)
+	if bootconfig != "" {
+		if !vendor {
+			ctx.PropertyErrorf("bootconfig", "requires vendor_boot: true")
+			return output
+		}
+		if verNum < 4 {
+			ctx.PropertyErrorf("bootconfig", "requires header_version: 4 or later")
+			return output
+		}
+		cmd.FlagWithInput("--vendor_bootconfig ", android.PathForModuleSrc(ctx, bootconfig))
+	}
+
 	flag := "--output "
 	if vendor {
 		flag = "--vendor_boot "
@@ -200,20 +218,44 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 }
 
 func (b *bootimg) signImage(ctx android.ModuleContext, unsignedImage android.OutputPath) android.OutputPath {
-	output := android.PathForModuleOut(ctx, b.installFileName()).OutputPath
-	key := android.PathForModuleSrc(ctx, proptools.String(b.properties.Avb_private_key))
+	propFile, toolDeps := b.buildPropFile(ctx)
 
+	output := android.PathForModuleOut(ctx, b.installFileName()).OutputPath
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().Text("cp").Input(unsignedImage).Output(output)
-	builder.Command().
-		BuiltTool("avbtool").
-		Flag("add_hash_footer").
-		FlagWithArg("--partition_name ", b.partitionName()).
-		FlagWithInput("--key ", key).
-		FlagWithOutput("--image ", output)
+	builder.Command().BuiltTool("verity_utils").
+		Input(propFile).
+		Implicits(toolDeps).
+		Output(output)
 
 	builder.Build("sign_bootimg", fmt.Sprintf("Signing %s", b.BaseModuleName()))
 	return output
+}
+
+func (b *bootimg) buildPropFile(ctx android.ModuleContext) (propFile android.OutputPath, toolDeps android.Paths) {
+	var sb strings.Builder
+	var deps android.Paths
+	addStr := func(name string, value string) {
+		fmt.Fprintf(&sb, "%s=%s\n", name, value)
+	}
+	addPath := func(name string, path android.Path) {
+		addStr(name, path.String())
+		deps = append(deps, path)
+	}
+
+	addStr("avb_hash_enable", "true")
+	addPath("avb_avbtool", ctx.Config().HostToolPath(ctx, "avbtool"))
+	algorithm := proptools.StringDefault(b.properties.Avb_algorithm, "SHA256_RSA4096")
+	addStr("avb_algorithm", algorithm)
+	key := android.PathForModuleSrc(ctx, proptools.String(b.properties.Avb_private_key))
+	addPath("avb_key_path", key)
+	addStr("avb_add_hash_footer_args", "") // TODO(jiyong): add --rollback_index
+	partitionName := proptools.StringDefault(b.properties.Partition_name, b.Name())
+	addStr("partition_name", partitionName)
+
+	propFile = android.PathForModuleOut(ctx, "prop").OutputPath
+	android.WriteFileRule(ctx, propFile, sb.String())
+	return propFile, deps
 }
 
 var _ android.AndroidMkEntriesProvider = (*bootimg)(nil)
@@ -236,4 +278,21 @@ var _ Filesystem = (*bootimg)(nil)
 
 func (b *bootimg) OutputPath() android.Path {
 	return b.output
+}
+
+func (b *bootimg) SignedOutputPath() android.Path {
+	if proptools.Bool(b.properties.Use_avb) {
+		return b.OutputPath()
+	}
+	return nil
+}
+
+var _ android.OutputFileProducer = (*bootimg)(nil)
+
+// Implements android.OutputFileProducer
+func (b *bootimg) OutputFiles(tag string) (android.Paths, error) {
+	if tag == "" {
+		return []android.Path{b.output}, nil
+	}
+	return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 }

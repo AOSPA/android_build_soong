@@ -15,94 +15,29 @@
 package etc
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"android/soong/android"
 )
 
-var buildDir string
-
-func setUp() {
-	var err error
-	buildDir, err = ioutil.TempDir("", "soong_etc_test")
-	if err != nil {
-		panic(err)
-	}
-}
-
-func tearDown() {
-	os.RemoveAll(buildDir)
-}
-
 func TestMain(m *testing.M) {
-	run := func() int {
-		setUp()
-		defer tearDown()
-
-		return m.Run()
-	}
-
-	os.Exit(run())
+	os.Exit(m.Run())
 }
 
-func testPrebuiltEtcContext(t *testing.T, bp string) (*android.TestContext, android.Config) {
-	fs := map[string][]byte{
+var prepareForPrebuiltEtcTest = android.GroupFixturePreparers(
+	android.PrepareForTestWithArchMutator,
+	PrepareForTestWithPrebuiltEtc,
+	android.FixtureMergeMockFs(android.MockFS{
 		"foo.conf": nil,
 		"bar.conf": nil,
 		"baz.conf": nil,
-	}
+	}),
+)
 
-	config := android.TestArchConfig(buildDir, nil, bp, fs)
-
-	ctx := android.NewTestArchContext(config)
-	ctx.RegisterModuleType("prebuilt_etc", PrebuiltEtcFactory)
-	ctx.RegisterModuleType("prebuilt_etc_host", PrebuiltEtcHostFactory)
-	ctx.RegisterModuleType("prebuilt_usr_share", PrebuiltUserShareFactory)
-	ctx.RegisterModuleType("prebuilt_usr_share_host", PrebuiltUserShareHostFactory)
-	ctx.RegisterModuleType("prebuilt_font", PrebuiltFontFactory)
-	ctx.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
-	ctx.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
-	ctx.Register()
-
-	return ctx, config
-}
-
-func testPrebuiltEtc(t *testing.T, bp string) (*android.TestContext, android.Config) {
-	t.Helper()
-
-	ctx, config := testPrebuiltEtcContext(t, bp)
-	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-	android.FailIfErrored(t, errs)
-	_, errs = ctx.PrepareBuildActions(config)
-	android.FailIfErrored(t, errs)
-
-	return ctx, config
-}
-
-func testPrebuiltEtcError(t *testing.T, pattern, bp string) {
-	t.Helper()
-
-	ctx, config := testPrebuiltEtcContext(t, bp)
-	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-	if len(errs) > 0 {
-		android.FailIfNoMatchingErrors(t, pattern, errs)
-		return
-	}
-
-	_, errs = ctx.PrepareBuildActions(config)
-	if len(errs) > 0 {
-		android.FailIfNoMatchingErrors(t, pattern, errs)
-		return
-	}
-
-	t.Fatalf("missing expected error %q (0 errors are returned)", pattern)
-}
 func TestPrebuiltEtcVariants(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_etc {
 			name: "foo.conf",
 			src: "foo.conf",
@@ -119,24 +54,24 @@ func TestPrebuiltEtcVariants(t *testing.T) {
 		}
 	`)
 
-	foo_variants := ctx.ModuleVariantsForTests("foo.conf")
+	foo_variants := result.ModuleVariantsForTests("foo.conf")
 	if len(foo_variants) != 1 {
 		t.Errorf("expected 1, got %#v", foo_variants)
 	}
 
-	bar_variants := ctx.ModuleVariantsForTests("bar.conf")
+	bar_variants := result.ModuleVariantsForTests("bar.conf")
 	if len(bar_variants) != 2 {
 		t.Errorf("expected 2, got %#v", bar_variants)
 	}
 
-	baz_variants := ctx.ModuleVariantsForTests("baz.conf")
+	baz_variants := result.ModuleVariantsForTests("baz.conf")
 	if len(baz_variants) != 1 {
 		t.Errorf("expected 1, got %#v", bar_variants)
 	}
 }
 
 func TestPrebuiltEtcOutputPath(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_etc {
 			name: "foo.conf",
 			src: "foo.conf",
@@ -144,14 +79,12 @@ func TestPrebuiltEtcOutputPath(t *testing.T) {
 		}
 	`)
 
-	p := ctx.ModuleForTests("foo.conf", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-	if p.outputFilePath.Base() != "foo.installed.conf" {
-		t.Errorf("expected foo.installed.conf, got %q", p.outputFilePath.Base())
-	}
+	p := result.Module("foo.conf", "android_arm64_armv8-a").(*PrebuiltEtc)
+	android.AssertStringEquals(t, "output file path", "foo.installed.conf", p.outputFilePath.Base())
 }
 
 func TestPrebuiltEtcGlob(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_etc {
 			name: "my_foo",
 			src: "foo.*",
@@ -163,19 +96,15 @@ func TestPrebuiltEtcGlob(t *testing.T) {
 		}
 	`)
 
-	p := ctx.ModuleForTests("my_foo", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-	if p.outputFilePath.Base() != "my_foo" {
-		t.Errorf("expected my_foo, got %q", p.outputFilePath.Base())
-	}
+	p := result.Module("my_foo", "android_arm64_armv8-a").(*PrebuiltEtc)
+	android.AssertStringEquals(t, "my_foo output file path", "my_foo", p.outputFilePath.Base())
 
-	p = ctx.ModuleForTests("my_bar", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-	if p.outputFilePath.Base() != "bar.conf" {
-		t.Errorf("expected bar.conf, got %q", p.outputFilePath.Base())
-	}
+	p = result.Module("my_bar", "android_arm64_armv8-a").(*PrebuiltEtc)
+	android.AssertStringEquals(t, "my_bar output file path", "bar.conf", p.outputFilePath.Base())
 }
 
 func TestPrebuiltEtcAndroidMk(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_etc {
 			name: "foo",
 			src: "foo.conf",
@@ -197,13 +126,11 @@ func TestPrebuiltEtcAndroidMk(t *testing.T) {
 		"LOCAL_TARGET_REQUIRED_MODULES": {"targetModA"},
 	}
 
-	mod := ctx.ModuleForTests("foo", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-	entries := android.AndroidMkEntriesForTest(t, ctx, mod)[0]
+	mod := result.Module("foo", "android_arm64_armv8-a").(*PrebuiltEtc)
+	entries := android.AndroidMkEntriesForTest(t, result.TestContext, mod)[0]
 	for k, expectedValue := range expected {
 		if value, ok := entries.EntryMap[k]; ok {
-			if !reflect.DeepEqual(value, expectedValue) {
-				t.Errorf("Incorrect %s '%s', expected '%s'", k, value, expectedValue)
-			}
+			android.AssertDeepEquals(t, k, expectedValue, value)
 		} else {
 			t.Errorf("No %s defined, saw %q", k, entries.EntryMap)
 		}
@@ -211,7 +138,7 @@ func TestPrebuiltEtcAndroidMk(t *testing.T) {
 }
 
 func TestPrebuiltEtcRelativeInstallPathInstallDirPath(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_etc {
 			name: "foo.conf",
 			src: "foo.conf",
@@ -219,26 +146,26 @@ func TestPrebuiltEtcRelativeInstallPathInstallDirPath(t *testing.T) {
 		}
 	`)
 
-	p := ctx.ModuleForTests("foo.conf", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-	expected := buildDir + "/target/product/test_device/system/etc/bar"
-	if p.installDirPath.String() != expected {
-		t.Errorf("expected %q, got %q", expected, p.installDirPath.String())
-	}
+	p := result.Module("foo.conf", "android_arm64_armv8-a").(*PrebuiltEtc)
+	expected := "out/soong/target/product/test_device/system/etc/bar"
+	android.AssertPathRelativeToTopEquals(t, "install dir", expected, p.installDirPath)
 }
 
 func TestPrebuiltEtcCannotSetRelativeInstallPathAndSubDir(t *testing.T) {
-	testPrebuiltEtcError(t, "relative_install_path is set. Cannot set sub_dir", `
-		prebuilt_etc {
-			name: "foo.conf",
-			src: "foo.conf",
-			sub_dir: "bar",
-			relative_install_path: "bar",
-		}
-	`)
+	prepareForPrebuiltEtcTest.
+		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern("relative_install_path is set. Cannot set sub_dir")).
+		RunTestWithBp(t, `
+			prebuilt_etc {
+				name: "foo.conf",
+				src: "foo.conf",
+				sub_dir: "bar",
+				relative_install_path: "bar",
+			}
+		`)
 }
 
 func TestPrebuiltEtcHost(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_etc_host {
 			name: "foo.conf",
 			src: "foo.conf",
@@ -246,14 +173,14 @@ func TestPrebuiltEtcHost(t *testing.T) {
 	`)
 
 	buildOS := android.BuildOs.String()
-	p := ctx.ModuleForTests("foo.conf", buildOS+"_common").Module().(*PrebuiltEtc)
+	p := result.Module("foo.conf", buildOS+"_common").(*PrebuiltEtc)
 	if !p.Host() {
 		t.Errorf("host bit is not set for a prebuilt_etc_host module.")
 	}
 }
 
 func TestPrebuiltUserShareInstallDirPath(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_usr_share {
 			name: "foo.conf",
 			src: "foo.conf",
@@ -261,15 +188,13 @@ func TestPrebuiltUserShareInstallDirPath(t *testing.T) {
 		}
 	`)
 
-	p := ctx.ModuleForTests("foo.conf", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-	expected := buildDir + "/target/product/test_device/system/usr/share/bar"
-	if p.installDirPath.String() != expected {
-		t.Errorf("expected %q, got %q", expected, p.installDirPath.String())
-	}
+	p := result.Module("foo.conf", "android_arm64_armv8-a").(*PrebuiltEtc)
+	expected := "out/soong/target/product/test_device/system/usr/share/bar"
+	android.AssertPathRelativeToTopEquals(t, "install dir", expected, p.installDirPath)
 }
 
 func TestPrebuiltUserShareHostInstallDirPath(t *testing.T) {
-	ctx, config := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_usr_share_host {
 			name: "foo.conf",
 			src: "foo.conf",
@@ -278,30 +203,26 @@ func TestPrebuiltUserShareHostInstallDirPath(t *testing.T) {
 	`)
 
 	buildOS := android.BuildOs.String()
-	p := ctx.ModuleForTests("foo.conf", buildOS+"_common").Module().(*PrebuiltEtc)
-	expected := filepath.Join(buildDir, "host", config.PrebuiltOS(), "usr", "share", "bar")
-	if p.installDirPath.String() != expected {
-		t.Errorf("expected %q, got %q", expected, p.installDirPath.String())
-	}
+	p := result.Module("foo.conf", buildOS+"_common").(*PrebuiltEtc)
+	expected := filepath.Join("out/soong/host", result.Config.PrebuiltOS(), "usr", "share", "bar")
+	android.AssertPathRelativeToTopEquals(t, "install dir", expected, p.installDirPath)
 }
 
 func TestPrebuiltFontInstallDirPath(t *testing.T) {
-	ctx, _ := testPrebuiltEtc(t, `
+	result := prepareForPrebuiltEtcTest.RunTestWithBp(t, `
 		prebuilt_font {
 			name: "foo.conf",
 			src: "foo.conf",
 		}
 	`)
 
-	p := ctx.ModuleForTests("foo.conf", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-	expected := buildDir + "/target/product/test_device/system/fonts"
-	if p.installDirPath.String() != expected {
-		t.Errorf("expected %q, got %q", expected, p.installDirPath.String())
-	}
+	p := result.Module("foo.conf", "android_arm64_armv8-a").(*PrebuiltEtc)
+	expected := "out/soong/target/product/test_device/system/fonts"
+	android.AssertPathRelativeToTopEquals(t, "install dir", expected, p.installDirPath)
 }
 
 func TestPrebuiltFirmwareDirPath(t *testing.T) {
-	targetPath := buildDir + "/target/product/test_device"
+	targetPath := "out/soong/target/product/test_device"
 	tests := []struct {
 		description  string
 		config       string
@@ -327,17 +248,15 @@ func TestPrebuiltFirmwareDirPath(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
-			ctx, _ := testPrebuiltEtc(t, tt.config)
-			p := ctx.ModuleForTests("foo.conf", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-			if p.installDirPath.String() != tt.expectedPath {
-				t.Errorf("expected %q, got %q", tt.expectedPath, p.installDirPath)
-			}
+			result := prepareForPrebuiltEtcTest.RunTestWithBp(t, tt.config)
+			p := result.Module("foo.conf", "android_arm64_armv8-a").(*PrebuiltEtc)
+			android.AssertPathRelativeToTopEquals(t, "install dir", tt.expectedPath, p.installDirPath)
 		})
 	}
 }
 
 func TestPrebuiltDSPDirPath(t *testing.T) {
-	targetPath := filepath.Join(buildDir, "/target/product/test_device")
+	targetPath := "out/soong/target/product/test_device"
 	tests := []struct {
 		description  string
 		config       string
@@ -363,11 +282,9 @@ func TestPrebuiltDSPDirPath(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
-			ctx, _ := testPrebuiltEtc(t, tt.config)
-			p := ctx.ModuleForTests("foo.conf", "android_arm64_armv8-a").Module().(*PrebuiltEtc)
-			if p.installDirPath.String() != tt.expectedPath {
-				t.Errorf("expected %q, got %q", tt.expectedPath, p.installDirPath)
-			}
+			result := prepareForPrebuiltEtcTest.RunTestWithBp(t, tt.config)
+			p := result.Module("foo.conf", "android_arm64_armv8-a").(*PrebuiltEtc)
+			android.AssertPathRelativeToTopEquals(t, "install dir", tt.expectedPath, p.installDirPath)
 		})
 	}
 }

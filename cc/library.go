@@ -27,6 +27,7 @@ import (
 	"github.com/google/blueprint/pathtools"
 
 	"android/soong/android"
+	"android/soong/bazel"
 	"android/soong/cc/config"
 )
 
@@ -200,6 +201,8 @@ type FlagExporterProperties struct {
 
 func init() {
 	RegisterLibraryBuildComponents(android.InitRegistrationContext)
+
+	android.RegisterBp2BuildMutator("cc_library_static", CcLibraryStaticBp2Build)
 }
 
 func RegisterLibraryBuildComponents(ctx android.RegistrationContext) {
@@ -230,6 +233,7 @@ func LibraryStaticFactory() android.Module {
 	module, library := NewLibrary(android.HostAndDeviceSupported)
 	library.BuildOnlyStatic()
 	module.sdkMemberTypes = []android.SdkMemberType{staticLibrarySdkMemberType}
+	module.bazelHandler = &staticLibraryBazelHandler{module: module}
 	return module.Init()
 }
 
@@ -406,6 +410,50 @@ type libraryDecorator struct {
 	collectedSnapshotHeaders android.Paths
         isTechPackageLibrary      bool
         generateTechPackageLsdump bool
+}
+
+type staticLibraryBazelHandler struct {
+	bazelHandler
+
+	module *Module
+}
+
+func (handler *staticLibraryBazelHandler) generateBazelBuildActions(ctx android.ModuleContext, label string) bool {
+	bazelCtx := ctx.Config().BazelContext
+	outputPaths, objPaths, ok := bazelCtx.GetOutputFilesAndCcObjectFiles(label, ctx.Arch().ArchType)
+	if !ok {
+		return ok
+	}
+	if len(outputPaths) != 1 {
+		// TODO(cparsons): This is actually expected behavior for static libraries with no srcs.
+		// We should support this.
+		ctx.ModuleErrorf("expected exactly one output file for '%s', but got %s", label, objPaths)
+		return false
+	}
+	outputFilePath := android.PathForBazelOut(ctx, outputPaths[0])
+	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
+
+	objFiles := make(android.Paths, len(objPaths))
+	for i, objPath := range objPaths {
+		objFiles[i] = android.PathForBazelOut(ctx, objPath)
+	}
+	objects := Objects{
+		objFiles: objFiles,
+	}
+
+	ctx.SetProvider(StaticLibraryInfoProvider, StaticLibraryInfo{
+		StaticLibrary: outputFilePath,
+		ReuseObjects:  objects,
+		Objects:       objects,
+
+		// TODO(cparsons): Include transitive static libraries in this provider to support
+		// static libraries with deps.
+		TransitiveStaticLibrariesForOrdering: android.NewDepSetBuilder(android.TOPOLOGICAL).
+			Direct(outputFilePath).
+			Build(),
+	})
+	handler.module.outputFile = android.OptionalPathForPath(android.PathForBazelOut(ctx, objPaths[0]))
+	return ok
 }
 
 // collectHeadersForSnapshot collects all exported headers from library.
@@ -1887,6 +1935,7 @@ func createPerApiVersionVariations(mctx android.BottomUpMutatorContext, minSdkVe
 
 	for i, module := range modules {
 		module.(*Module).Properties.Sdk_version = StringPtr(versionStrs[i])
+		module.(*Module).Properties.Min_sdk_version = StringPtr(versionStrs[i])
 	}
 }
 
@@ -1997,3 +2046,137 @@ func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.Modu
 
 	return outputFile
 }
+
+func Bp2BuildParseHeaderLibs(ctx android.TopDownMutatorContext, module *Module) bazel.LabelList {
+	var headerLibs []string
+	for _, linkerProps := range module.linker.linkerProps() {
+		if baseLinkerProps, ok := linkerProps.(*BaseLinkerProperties); ok {
+			headerLibs = baseLinkerProps.Header_libs
+			// FIXME: re-export include dirs from baseLinkerProps.Export_header_lib_headers?
+			break
+		}
+	}
+
+	headerLibsLabels := android.BazelLabelForModuleDeps(ctx, headerLibs)
+	return headerLibsLabels
+}
+
+func Bp2BuildParseExportedIncludes(ctx android.TopDownMutatorContext, module *Module) (bazel.LabelList, bazel.LabelList) {
+	libraryDecorator := module.linker.(*libraryDecorator)
+
+	includeDirs := libraryDecorator.flagExporter.Properties.Export_system_include_dirs
+	includeDirs = append(includeDirs, libraryDecorator.flagExporter.Properties.Export_include_dirs...)
+
+	includeDirsLabels := android.BazelLabelForModuleSrc(ctx, includeDirs)
+
+	var includeDirGlobs []string
+	for _, includeDir := range includeDirs {
+		includeDirGlobs = append(includeDirGlobs, includeDir+"/**/*.h")
+		includeDirGlobs = append(includeDirGlobs, includeDir+"/**/*.inc")
+		includeDirGlobs = append(includeDirGlobs, includeDir+"/**/*.hpp")
+	}
+
+	headersLabels := android.BazelLabelForModuleSrc(ctx, includeDirGlobs)
+
+	return includeDirsLabels, headersLabels
+}
+
+type bazelCcLibraryStaticAttributes struct {
+	Copts      []string
+	Srcs       bazel.LabelList
+	Deps       bazel.LabelList
+	Linkstatic bool
+	Includes   bazel.LabelList
+	Hdrs       bazel.LabelList
+}
+
+type bazelCcLibraryStatic struct {
+	android.BazelTargetModuleBase
+	bazelCcLibraryStaticAttributes
+}
+
+func BazelCcLibraryStaticFactory() android.Module {
+	module := &bazelCcLibraryStatic{}
+	module.AddProperties(&module.bazelCcLibraryStaticAttributes)
+	android.InitBazelTargetModule(module)
+	return module
+}
+
+func CcLibraryStaticBp2Build(ctx android.TopDownMutatorContext) {
+	module, ok := ctx.Module().(*Module)
+	if !ok {
+		// Not a cc module
+		return
+	}
+	if !module.ConvertWithBp2build(ctx) {
+		return
+	}
+	if ctx.ModuleType() != "cc_library_static" {
+		return
+	}
+
+	var copts []string
+	var srcs []string
+	var includeDirs []string
+	var localIncludeDirs []string
+	for _, props := range module.compiler.compilerProps() {
+		if baseCompilerProps, ok := props.(*BaseCompilerProperties); ok {
+			copts = baseCompilerProps.Cflags
+			srcs = baseCompilerProps.Srcs
+			includeDirs = baseCompilerProps.Include_dirs
+			localIncludeDirs = baseCompilerProps.Local_include_dirs
+			break
+		}
+	}
+	srcsLabels := android.BazelLabelForModuleSrc(ctx, srcs)
+
+	var staticLibs []string
+	var wholeStaticLibs []string
+	for _, props := range module.linker.linkerProps() {
+		if baseLinkerProperties, ok := props.(*BaseLinkerProperties); ok {
+			staticLibs = baseLinkerProperties.Static_libs
+			wholeStaticLibs = baseLinkerProperties.Whole_static_libs
+			break
+		}
+	}
+
+	// FIXME: Treat Static_libs and Whole_static_libs differently?
+	allDeps := staticLibs
+	allDeps = append(allDeps, wholeStaticLibs...)
+
+	depsLabels := android.BazelLabelForModuleDeps(ctx, allDeps)
+
+	// FIXME: Unify absolute vs relative paths
+	// FIXME: Use -I copts instead of setting includes= ?
+	allIncludes := includeDirs
+	allIncludes = append(allIncludes, localIncludeDirs...)
+	includesLabels := android.BazelLabelForModuleSrc(ctx, allIncludes)
+
+	exportedIncludesLabels, exportedIncludesHeadersLabels := Bp2BuildParseExportedIncludes(ctx, module)
+	includesLabels.Append(exportedIncludesLabels)
+
+	headerLibsLabels := Bp2BuildParseHeaderLibs(ctx, module)
+	depsLabels.Append(headerLibsLabels)
+
+	attrs := &bazelCcLibraryStaticAttributes{
+		Copts:      copts,
+		Srcs:       bazel.UniqueBazelLabelList(srcsLabels),
+		Deps:       bazel.UniqueBazelLabelList(depsLabels),
+		Linkstatic: true,
+		Includes:   bazel.UniqueBazelLabelList(includesLabels),
+		Hdrs:       bazel.UniqueBazelLabelList(exportedIncludesHeadersLabels),
+	}
+
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "cc_library_static",
+		Bzl_load_location: "//build/bazel/rules:cc_library_static.bzl",
+	}
+
+	ctx.CreateBazelTargetModule(BazelCcLibraryStaticFactory, module.Name(), props, attrs)
+}
+
+func (m *bazelCcLibraryStatic) Name() string {
+	return m.BaseModuleName()
+}
+
+func (m *bazelCcLibraryStatic) GenerateAndroidBuildActions(ctx android.ModuleContext) {}

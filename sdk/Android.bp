@@ -20,8 +20,10 @@ bootstrap_go_package {
         "update.go",
     ],
     testSrcs: [
+        "boot_image_sdk_test.go",
         "bp_test.go",
         "cc_sdk_test.go",
+        "compat_config_sdk_test.go",
         "exports_test.go",
         "java_sdk_test.go",
         "sdk_test.go",

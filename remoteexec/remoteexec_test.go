@@ -17,8 +17,6 @@ package remoteexec
 import (
 	"fmt"
 	"testing"
-
-	"android/soong/android"
 )
 
 func TestTemplate(t *testing.T) {
@@ -38,7 +36,7 @@ func TestTemplate(t *testing.T) {
 					PoolKey:           "default",
 				},
 			},
-			want: fmt.Sprintf("${remoteexec.Wrapper} --labels=compiler=clang,lang=cpp,type=compile --platform=\"Pool=default,container-image=%s\" --exec_strategy=local --inputs=$in --output_files=$out -- ", DefaultImage),
+			want: fmt.Sprintf("${android.RBEWrapper} --labels=compiler=clang,lang=cpp,type=compile --platform=\"Pool=default,container-image=%s\" --exec_strategy=local --inputs=$in --output_files=$out -- ", DefaultImage),
 		},
 		{
 			name: "all params",
@@ -47,14 +45,14 @@ func TestTemplate(t *testing.T) {
 				Inputs:          []string{"$in"},
 				OutputFiles:     []string{"$out"},
 				ExecStrategy:    "remote",
-				RSPFile:         "$out.rsp",
+				RSPFiles:        []string{"$out.rsp", "out2.rsp"},
 				ToolchainInputs: []string{"clang++"},
 				Platform: map[string]string{
 					ContainerImageKey: DefaultImage,
 					PoolKey:           "default",
 				},
 			},
-			want: fmt.Sprintf("${remoteexec.Wrapper} --labels=compiler=clang,lang=cpp,type=compile --platform=\"Pool=default,container-image=%s\" --exec_strategy=remote --inputs=$in --input_list_paths=$out.rsp --output_files=$out --toolchain_inputs=clang++ -- ", DefaultImage),
+			want: fmt.Sprintf("${android.RBEWrapper} --labels=compiler=clang,lang=cpp,type=compile --platform=\"Pool=default,container-image=%s\" --exec_strategy=remote --inputs=$in --input_list_paths=$out.rsp,out2.rsp --output_files=$out --toolchain_inputs=clang++ -- ", DefaultImage),
 		},
 	}
 	for _, test := range tests {
@@ -77,7 +75,7 @@ func TestNoVarTemplate(t *testing.T) {
 		},
 	}
 	want := fmt.Sprintf("prebuilts/remoteexecution-client/live/rewrapper --labels=compiler=clang,lang=cpp,type=compile --platform=\"Pool=default,container-image=%s\" --exec_strategy=local --inputs=$in --output_files=$out -- ", DefaultImage)
-	if got := params.NoVarTemplate(android.NullConfig("")); got != want {
+	if got := params.NoVarTemplate(DefaultWrapperPath); got != want {
 		t.Errorf("NoVarTemplate() returned\n%s\nwant\n%s", got, want)
 	}
 }
@@ -92,7 +90,7 @@ func TestTemplateDeterminism(t *testing.T) {
 			PoolKey:           "default",
 		},
 	}
-	want := fmt.Sprintf("${remoteexec.Wrapper} --labels=compiler=clang,lang=cpp,type=compile --platform=\"Pool=default,container-image=%s\" --exec_strategy=local --inputs=$in --output_files=$out -- ", DefaultImage)
+	want := fmt.Sprintf("${android.RBEWrapper} --labels=compiler=clang,lang=cpp,type=compile --platform=\"Pool=default,container-image=%s\" --exec_strategy=local --inputs=$in --output_files=$out -- ", DefaultImage)
 	for i := 0; i < 1000; i++ {
 		if got := r.Template(); got != want {
 			t.Fatalf("Template() returned\n%s\nwant\n%s", got, want)

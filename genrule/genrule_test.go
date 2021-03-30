@@ -15,10 +15,8 @@
 package genrule
 
 import (
-	"io/ioutil"
 	"os"
-	"reflect"
-	"strings"
+	"regexp"
 	"testing"
 
 	"android/soong/android"
@@ -26,47 +24,34 @@ import (
 	"github.com/google/blueprint/proptools"
 )
 
-var buildDir string
-
-func setUp() {
-	var err error
-	buildDir, err = ioutil.TempDir("", "genrule_test")
-	if err != nil {
-		panic(err)
-	}
-}
-
-func tearDown() {
-	os.RemoveAll(buildDir)
-}
-
 func TestMain(m *testing.M) {
-	run := func() int {
-		setUp()
-		defer tearDown()
-
-		return m.Run()
-	}
-
-	os.Exit(run())
+	os.Exit(m.Run())
 }
 
-func testContext(config android.Config) *android.TestContext {
+var prepareForGenRuleTest = android.GroupFixturePreparers(
+	android.PrepareForTestWithArchMutator,
+	android.PrepareForTestWithDefaults,
 
-	ctx := android.NewTestArchContext(config)
-	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
-	ctx.RegisterModuleType("tool", toolFactory)
+	android.PrepareForTestWithFilegroup,
+	PrepareForTestWithGenRuleBuildComponents,
+	android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("tool", toolFactory)
+		ctx.RegisterModuleType("output", outputProducerFactory)
+	}),
+	android.FixtureMergeMockFs(android.MockFS{
+		"tool":       nil,
+		"tool_file1": nil,
+		"tool_file2": nil,
+		"in1":        nil,
+		"in2":        nil,
+		"in1.txt":    nil,
+		"in2.txt":    nil,
+		"in3.txt":    nil,
+	}),
+)
 
-	RegisterGenruleBuildComponents(ctx)
-
-	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
-	ctx.Register()
-
-	return ctx
-}
-
-func testConfig(bp string, fs map[string][]byte) android.Config {
-	bp += `
+func testGenruleBp() string {
+	return `
 		tool {
 			name: "tool",
 		}
@@ -105,23 +90,6 @@ func testConfig(bp string, fs map[string][]byte) android.Config {
 			name: "empty",
 		}
 	`
-
-	mockFS := map[string][]byte{
-		"tool":       nil,
-		"tool_file1": nil,
-		"tool_file2": nil,
-		"in1":        nil,
-		"in2":        nil,
-		"in1.txt":    nil,
-		"in2.txt":    nil,
-		"in3.txt":    nil,
-	}
-
-	for k, v := range fs {
-		mockFS[k] = v
-	}
-
-	return android.TestArchConfig(buildDir, nil, bp, mockFS)
 }
 
 func TestGenruleCmd(t *testing.T) {
@@ -330,6 +298,14 @@ func TestGenruleCmd(t *testing.T) {
 			`,
 			expect: "echo foo > __SBOX_SANDBOX_DIR__/out/foo && cp __SBOX_SANDBOX_DIR__/out/foo __SBOX_SANDBOX_DIR__/out/out",
 		},
+		{
+			name: "$",
+			prop: `
+				out: ["out"],
+				cmd: "echo $$ > $(out)",
+			`,
+			expect: "echo $ > __SBOX_SANDBOX_DIR__/out/out",
+		},
 
 		{
 			name: "error empty location",
@@ -466,38 +442,29 @@ func TestGenruleCmd(t *testing.T) {
 			bp += test.prop
 			bp += "}\n"
 
-			config := testConfig(bp, nil)
-			config.TestProductVariables.Allow_missing_dependencies = proptools.BoolPtr(test.allowMissingDependencies)
-
-			ctx := testContext(config)
-			ctx.SetAllowMissingDependencies(test.allowMissingDependencies)
-
-			_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-			if errs == nil {
-				_, errs = ctx.PrepareBuildActions(config)
+			var expectedErrors []string
+			if test.err != "" {
+				expectedErrors = append(expectedErrors, regexp.QuoteMeta(test.err))
 			}
-			if errs == nil && test.err != "" {
-				t.Fatalf("want error %q, got no error", test.err)
-			} else if errs != nil && test.err == "" {
-				android.FailIfErrored(t, errs)
-			} else if test.err != "" {
-				if len(errs) != 1 {
-					t.Errorf("want 1 error, got %d errors:", len(errs))
-					for _, err := range errs {
-						t.Errorf("   %s", err.Error())
-					}
-					t.FailNow()
-				}
-				if !strings.Contains(errs[0].Error(), test.err) {
-					t.Fatalf("want %q, got %q", test.err, errs[0].Error())
-				}
+
+			result := android.GroupFixturePreparers(
+				prepareForGenRuleTest,
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					variables.Allow_missing_dependencies = proptools.BoolPtr(test.allowMissingDependencies)
+				}),
+				android.FixtureModifyContext(func(ctx *android.TestContext) {
+					ctx.SetAllowMissingDependencies(test.allowMissingDependencies)
+				}),
+			).
+				ExtendWithErrorHandler(android.FixtureExpectsAllErrorsToMatchAPattern(expectedErrors)).
+				RunTestWithBp(t, testGenruleBp()+bp)
+
+			if expectedErrors != nil {
 				return
 			}
 
-			gen := ctx.ModuleForTests("gen", "").Module().(*Module)
-			if g, w := gen.rawCommands[0], test.expect; w != g {
-				t.Errorf("want %q, got %q", w, g)
-			}
+			gen := result.Module("gen", "").(*Module)
+			android.AssertStringEquals(t, "raw commands", test.expect, gen.rawCommands[0])
 		})
 	}
 }
@@ -557,25 +524,15 @@ func TestGenruleHashInputs(t *testing.T) {
 		},
 	}
 
-	config := testConfig(bp, nil)
-	ctx := testContext(config)
-	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-	if errs == nil {
-		_, errs = ctx.PrepareBuildActions(config)
-	}
-	if errs != nil {
-		t.Fatal(errs)
-	}
+	result := prepareForGenRuleTest.RunTestWithBp(t, testGenruleBp()+bp)
 
 	for _, test := range testcases {
 		t.Run(test.name, func(t *testing.T) {
-			gen := ctx.ModuleForTests(test.name, "")
+			gen := result.ModuleForTests(test.name, "")
 			manifest := android.RuleBuilderSboxProtoForTests(t, gen.Output("genrule.sbox.textproto"))
 			hash := manifest.Commands[0].GetInputHash()
 
-			if g, w := hash, test.expectedHash; g != w {
-				t.Errorf("Expected has %q, got %q", w, g)
-			}
+			android.AssertStringEquals(t, "hash", test.expectedHash, hash)
 		})
 	}
 }
@@ -602,8 +559,14 @@ func TestGenSrcs(t *testing.T) {
 			cmds: []string{
 				"bash -c '__SBOX_SANDBOX_DIR__/tools/out/bin/tool in1.txt > __SBOX_SANDBOX_DIR__/out/in1.h' && bash -c '__SBOX_SANDBOX_DIR__/tools/out/bin/tool in2.txt > __SBOX_SANDBOX_DIR__/out/in2.h'",
 			},
-			deps:  []string{buildDir + "/.intermediates/gen/gen/gensrcs/in1.h", buildDir + "/.intermediates/gen/gen/gensrcs/in2.h"},
-			files: []string{buildDir + "/.intermediates/gen/gen/gensrcs/in1.h", buildDir + "/.intermediates/gen/gen/gensrcs/in2.h"},
+			deps: []string{
+				"out/soong/.intermediates/gen/gen/gensrcs/in1.h",
+				"out/soong/.intermediates/gen/gen/gensrcs/in2.h",
+			},
+			files: []string{
+				"out/soong/.intermediates/gen/gen/gensrcs/in1.h",
+				"out/soong/.intermediates/gen/gen/gensrcs/in2.h",
+			},
 		},
 		{
 			name: "shards",
@@ -617,8 +580,16 @@ func TestGenSrcs(t *testing.T) {
 				"bash -c '__SBOX_SANDBOX_DIR__/tools/out/bin/tool in1.txt > __SBOX_SANDBOX_DIR__/out/in1.h' && bash -c '__SBOX_SANDBOX_DIR__/tools/out/bin/tool in2.txt > __SBOX_SANDBOX_DIR__/out/in2.h'",
 				"bash -c '__SBOX_SANDBOX_DIR__/tools/out/bin/tool in3.txt > __SBOX_SANDBOX_DIR__/out/in3.h'",
 			},
-			deps:  []string{buildDir + "/.intermediates/gen/gen/gensrcs/in1.h", buildDir + "/.intermediates/gen/gen/gensrcs/in2.h", buildDir + "/.intermediates/gen/gen/gensrcs/in3.h"},
-			files: []string{buildDir + "/.intermediates/gen/gen/gensrcs/in1.h", buildDir + "/.intermediates/gen/gen/gensrcs/in2.h", buildDir + "/.intermediates/gen/gen/gensrcs/in3.h"},
+			deps: []string{
+				"out/soong/.intermediates/gen/gen/gensrcs/in1.h",
+				"out/soong/.intermediates/gen/gen/gensrcs/in2.h",
+				"out/soong/.intermediates/gen/gen/gensrcs/in3.h",
+			},
+			files: []string{
+				"out/soong/.intermediates/gen/gen/gensrcs/in1.h",
+				"out/soong/.intermediates/gen/gen/gensrcs/in2.h",
+				"out/soong/.intermediates/gen/gen/gensrcs/in3.h",
+			},
 		},
 	}
 
@@ -630,46 +601,27 @@ func TestGenSrcs(t *testing.T) {
 			bp += test.prop
 			bp += "}\n"
 
-			config := testConfig(bp, nil)
-			ctx := testContext(config)
-
-			_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-			if errs == nil {
-				_, errs = ctx.PrepareBuildActions(config)
+			var expectedErrors []string
+			if test.err != "" {
+				expectedErrors = append(expectedErrors, regexp.QuoteMeta(test.err))
 			}
-			if errs == nil && test.err != "" {
-				t.Fatalf("want error %q, got no error", test.err)
-			} else if errs != nil && test.err == "" {
-				android.FailIfErrored(t, errs)
-			} else if test.err != "" {
-				if len(errs) != 1 {
-					t.Errorf("want 1 error, got %d errors:", len(errs))
-					for _, err := range errs {
-						t.Errorf("   %s", err.Error())
-					}
-					t.FailNow()
-				}
-				if !strings.Contains(errs[0].Error(), test.err) {
-					t.Fatalf("want %q, got %q", test.err, errs[0].Error())
-				}
+
+			result := prepareForGenRuleTest.
+				ExtendWithErrorHandler(android.FixtureExpectsAllErrorsToMatchAPattern(expectedErrors)).
+				RunTestWithBp(t, testGenruleBp()+bp)
+
+			if expectedErrors != nil {
 				return
 			}
 
-			gen := ctx.ModuleForTests("gen", "").Module().(*Module)
-			if g, w := gen.rawCommands, test.cmds; !reflect.DeepEqual(w, g) {
-				t.Errorf("want %q, got %q", w, g)
-			}
+			gen := result.Module("gen", "").(*Module)
+			android.AssertDeepEquals(t, "cmd", test.cmds, gen.rawCommands)
 
-			if g, w := gen.outputDeps.Strings(), test.deps; !reflect.DeepEqual(w, g) {
-				t.Errorf("want deps %q, got %q", w, g)
-			}
+			android.AssertPathsRelativeToTopEquals(t, "deps", test.deps, gen.outputDeps)
 
-			if g, w := gen.outputFiles.Strings(), test.files; !reflect.DeepEqual(w, g) {
-				t.Errorf("want files %q, got %q", w, g)
-			}
+			android.AssertPathsRelativeToTopEquals(t, "files", test.files, gen.outputFiles)
 		})
 	}
-
 }
 
 func TestGenruleDefaults(t *testing.T) {
@@ -690,25 +642,44 @@ func TestGenruleDefaults(t *testing.T) {
 					defaults: ["gen_defaults1", "gen_defaults2"],
 				}
 			`
-	config := testConfig(bp, nil)
-	ctx := testContext(config)
-	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-	if errs == nil {
-		_, errs = ctx.PrepareBuildActions(config)
-	}
-	if errs != nil {
-		t.Fatal(errs)
-	}
-	gen := ctx.ModuleForTests("gen", "").Module().(*Module)
+
+	result := prepareForGenRuleTest.RunTestWithBp(t, testGenruleBp()+bp)
+
+	gen := result.Module("gen", "").(*Module)
 
 	expectedCmd := "cp in1 __SBOX_SANDBOX_DIR__/out/out"
-	if gen.rawCommands[0] != expectedCmd {
-		t.Errorf("Expected cmd: %q, actual: %q", expectedCmd, gen.rawCommands[0])
-	}
+	android.AssertStringEquals(t, "cmd", expectedCmd, gen.rawCommands[0])
 
 	expectedSrcs := []string{"in1"}
-	if !reflect.DeepEqual(expectedSrcs, gen.properties.Srcs) {
-		t.Errorf("Expected srcs: %q, actual: %q", expectedSrcs, gen.properties.Srcs)
+	android.AssertDeepEquals(t, "srcs", expectedSrcs, gen.properties.Srcs)
+}
+
+func TestGenruleAllowMissingDependencies(t *testing.T) {
+	bp := `
+		output {
+			name: "disabled",
+			enabled: false,
+		}
+
+		genrule {
+			name: "gen",
+			srcs: [
+				":disabled",
+			],
+			out: ["out"],
+			cmd: "cat $(in) > $(out)",
+		}
+       `
+	result := prepareForGenRuleTest.Extend(
+		android.FixtureModifyConfigAndContext(
+			func(config android.Config, ctx *android.TestContext) {
+				config.TestProductVariables.Allow_missing_dependencies = proptools.BoolPtr(true)
+				ctx.SetAllowMissingDependencies(true)
+			})).RunTestWithBp(t, bp)
+
+	gen := result.ModuleForTests("gen", "").Output("out")
+	if gen.Rule != android.ErrorRule {
+		t.Errorf("Expected missing dependency error rule for gen, got %q", gen.Rule.String())
 	}
 }
 
@@ -721,29 +692,19 @@ func TestGenruleWithBazel(t *testing.T) {
 		}
 	`
 
-	config := testConfig(bp, nil)
-	config.BazelContext = android.MockBazelContext{
-		AllFiles: map[string][]string{
-			"//foo/bar:bar": []string{"bazelone.txt", "bazeltwo.txt"}}}
+	result := android.GroupFixturePreparers(
+		prepareForGenRuleTest, android.FixtureModifyConfig(func(config android.Config) {
+			config.BazelContext = android.MockBazelContext{
+				AllFiles: map[string][]string{
+					"//foo/bar:bar": []string{"bazelone.txt", "bazeltwo.txt"}}}
+		})).RunTestWithBp(t, testGenruleBp()+bp)
 
-	ctx := testContext(config)
-	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-	if errs == nil {
-		_, errs = ctx.PrepareBuildActions(config)
-	}
-	if errs != nil {
-		t.Fatal(errs)
-	}
-	gen := ctx.ModuleForTests("foo", "").Module().(*Module)
+	gen := result.Module("foo", "").(*Module)
 
 	expectedOutputFiles := []string{"outputbase/execroot/__main__/bazelone.txt",
 		"outputbase/execroot/__main__/bazeltwo.txt"}
-	if !reflect.DeepEqual(gen.outputFiles.Strings(), expectedOutputFiles) {
-		t.Errorf("Expected output files: %q, actual: %q", expectedOutputFiles, gen.outputFiles)
-	}
-	if !reflect.DeepEqual(gen.outputDeps.Strings(), expectedOutputFiles) {
-		t.Errorf("Expected output deps: %q, actual: %q", expectedOutputFiles, gen.outputDeps)
-	}
+	android.AssertDeepEquals(t, "output files", expectedOutputFiles, gen.outputFiles.Strings())
+	android.AssertDeepEquals(t, "output deps", expectedOutputFiles, gen.outputDeps.Strings())
 }
 
 type testTool struct {
@@ -766,3 +727,24 @@ func (t *testTool) HostToolPath() android.OptionalPath {
 }
 
 var _ android.HostToolProvider = (*testTool)(nil)
+
+type testOutputProducer struct {
+	android.ModuleBase
+	outputFile android.Path
+}
+
+func outputProducerFactory() android.Module {
+	module := &testOutputProducer{}
+	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibFirst)
+	return module
+}
+
+func (t *testOutputProducer) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	t.outputFile = ctx.InstallFile(android.PathForModuleInstall(ctx, "bin"), ctx.ModuleName(), android.PathForOutput(ctx, ctx.ModuleName()))
+}
+
+func (t *testOutputProducer) OutputFiles(tag string) (android.Paths, error) {
+	return android.Paths{t.outputFile}, nil
+}
+
+var _ android.OutputFileProducer = (*testOutputProducer)(nil)

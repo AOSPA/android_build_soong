@@ -14,22 +14,10 @@
 
 package bazel
 
-import "fmt"
-
-type bazelModuleProperties struct {
-	// The label of the Bazel target replacing this Soong module.
-	Label string
-
-	// If true, bp2build will generate the converted Bazel target for this module.
-	Bp2build_available bool
-}
-
-// Properties contains common module properties for Bazel migration purposes.
-type Properties struct {
-	// In USE_BAZEL_ANALYSIS=1 mode, this represents the Bazel target replacing
-	// this Soong module.
-	Bazel_module bazelModuleProperties
-}
+import (
+	"fmt"
+	"sort"
+)
 
 // BazelTargetModuleProperties contain properties and metadata used for
 // Blueprint to BUILD file conversion.
@@ -64,6 +52,28 @@ func (ll *LabelList) Append(other LabelList) {
 	if len(ll.Excludes) > 0 || len(other.Excludes) > 0 {
 		ll.Excludes = append(other.Excludes, other.Excludes...)
 	}
+}
+
+func UniqueBazelLabels(originalLabels []Label) []Label {
+	uniqueLabelsSet := make(map[Label]bool)
+	for _, l := range originalLabels {
+		uniqueLabelsSet[l] = true
+	}
+	var uniqueLabels []Label
+	for l, _ := range uniqueLabelsSet {
+		uniqueLabels = append(uniqueLabels, l)
+	}
+	sort.SliceStable(uniqueLabels, func(i, j int) bool {
+		return uniqueLabels[i].Label < uniqueLabels[j].Label
+	})
+	return uniqueLabels
+}
+
+func UniqueBazelLabelList(originalLabelList LabelList) LabelList {
+	var uniqueLabelList LabelList
+	uniqueLabelList.Includes = UniqueBazelLabels(originalLabelList.Includes)
+	uniqueLabelList.Excludes = UniqueBazelLabels(originalLabelList.Excludes)
+	return uniqueLabelList
 }
 
 // StringListAttribute corresponds to the string_list Bazel attribute type with
