@@ -19,6 +19,7 @@ package android
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -34,6 +35,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android/soongconfig"
+	"android/soong/remoteexec"
 )
 
 // Bool re-exports proptools.Bool for the android package.
@@ -66,6 +68,18 @@ type Config struct {
 // BuildDir returns the build output directory for the configuration.
 func (c Config) BuildDir() string {
 	return c.buildDir
+}
+
+func (c Config) NinjaBuildDir() string {
+	return c.buildDir
+}
+
+func (c Config) DebugCompilation() bool {
+	return false // Never compile Go code in the main build for debugging
+}
+
+func (c Config) SrcDir() string {
+	return c.srcDir
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -125,6 +139,9 @@ type config struct {
 
 	fs         pathtools.FileSystem
 	mockBpList string
+
+	bp2buildPackageConfig    Bp2BuildConfig
+	bp2buildModuleTypeConfig map[string]bool
 
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
 	// in tests when a path doesn't exist.
@@ -267,43 +284,25 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 
 	config.mockFileSystem(bp, fs)
 
+	config.bp2buildModuleTypeConfig = map[string]bool{}
+
 	return Config{config}
 }
 
-// TestArchConfigNativeBridge returns a Config object suitable for using
-// for tests that need to run the arch mutator for native bridge supported
-// archs.
-func TestArchConfigNativeBridge(buildDir string, env map[string]string, bp string, fs map[string][]byte) Config {
-	testConfig := TestArchConfig(buildDir, env, bp, fs)
-	config := testConfig.config
-
-	config.Targets[Android] = []Target{
-		{Android, Arch{ArchType: X86_64, ArchVariant: "silvermont", Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled, "", "", false},
-		{Android, Arch{ArchType: X86, ArchVariant: "silvermont", Abi: []string{"armeabi-v7a"}}, NativeBridgeDisabled, "", "", false},
-		{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Abi: []string{"arm64-v8a"}}, NativeBridgeEnabled, "x86_64", "arm64", false},
-		{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Abi: []string{"armeabi-v7a"}}, NativeBridgeEnabled, "x86", "arm", false},
-	}
-
-	return testConfig
-}
-
-// TestArchConfigFuchsia returns a Config object suitable for using for
-// tests that need to run the arch mutator for the Fuchsia arch.
-func TestArchConfigFuchsia(buildDir string, env map[string]string, bp string, fs map[string][]byte) Config {
-	testConfig := TestConfig(buildDir, env, bp, fs)
-	config := testConfig.config
-
-	config.Targets = map[OsType][]Target{
-		Fuchsia: []Target{
+func fuchsiaTargets() map[OsType][]Target {
+	return map[OsType][]Target{
+		Fuchsia: {
 			{Fuchsia, Arch{ArchType: Arm64, ArchVariant: "", Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled, "", "", false},
 		},
-		BuildOs: []Target{
+		BuildOs: {
 			{BuildOs, Arch{ArchType: X86_64}, NativeBridgeDisabled, "", "", false},
 		},
 	}
-
-	return testConfig
 }
+
+var PrepareForTestSetDeviceToFuchsia = FixtureModifyConfig(func(config Config) {
+	config.Targets = fuchsiaTargets()
+})
 
 func modifyTestConfigToSupportArchMutator(testConfig Config) {
 	config := testConfig.config
@@ -458,6 +457,8 @@ func NewConfig(srcDir, buildDir string, moduleListFile string) (Config, error) {
 			Bool(config.productVariables.ClangCoverage))
 
 	config.BazelContext, err = NewBazelContext(config)
+	config.bp2buildPackageConfig = bp2buildDefaultConfig
+	config.bp2buildModuleTypeConfig = make(map[string]bool)
 
 	return Config{config}, err
 }
@@ -501,6 +502,10 @@ func (c *config) SetStopBefore(stopBefore bootstrap.StopBefore) {
 	c.stopBefore = stopBefore
 }
 
+func (c *config) SetAllowMissingDependencies() {
+	c.productVariables.Allow_missing_dependencies = proptools.BoolPtr(true)
+}
+
 var _ bootstrap.ConfigStopBefore = (*config)(nil)
 
 // BlueprintToolLocation returns the directory containing build system tools
@@ -525,26 +530,6 @@ func (c *config) HostJNIToolPath(ctx PathContext, path string) Path {
 
 func (c *config) HostJavaToolPath(ctx PathContext, path string) Path {
 	return PathForOutput(ctx, "host", c.PrebuiltOS(), "framework", path)
-}
-
-// NonHermeticHostSystemTool looks for non-hermetic tools from the system we're
-// running on. These tools are not checked-in to AOSP, and therefore could lead
-// to reproducibility problems. Should not be used for other than finding the
-// XCode SDK (xcrun, sw_vers), etc. See ui/build/paths/config.go for the
-// allowlist of host system tools.
-func (c *config) NonHermeticHostSystemTool(name string) string {
-	for _, dir := range filepath.SplitList(c.Getenv("PATH")) {
-		path := filepath.Join(dir, name)
-		if s, err := os.Stat(path); err != nil {
-			continue
-		} else if m := s.Mode(); !s.IsDir() && m&0111 != 0 {
-			return path
-		}
-	}
-	panic(fmt.Errorf(
-		"Unable to use '%s' as a host system tool for build system "+
-			"hermeticity reasons. See build/soong/ui/build/paths/config.go "+
-			"for the full list of allowed host tools on your system.", name))
 }
 
 // PrebuiltOS returns the name of the host OS used in prebuilts directories.
@@ -1027,8 +1012,12 @@ func (c *config) DexpreoptGlobalConfig(ctx PathContext) ([]byte, error) {
 	return ioutil.ReadFile(absolutePath(path.String()))
 }
 
+func (c *deviceConfig) WithDexpreopt() bool {
+	return c.config.productVariables.WithDexpreopt
+}
+
 func (c *config) FrameworksBaseDirExists(ctx PathContext) bool {
-	return ExistentPathForSource(ctx, "frameworks", "base").Valid()
+	return ExistentPathForSource(ctx, "frameworks", "base", "Android.bp").Valid()
 }
 
 func (c *config) VndkSnapshotBuildArtifacts() bool {
@@ -1432,7 +1421,10 @@ func (c *deviceConfig) PlatformSepolicyVersion() string {
 }
 
 func (c *deviceConfig) BoardSepolicyVers() string {
-	return String(c.config.productVariables.BoardSepolicyVers)
+	if ver := String(c.config.productVariables.BoardSepolicyVers); ver != "" {
+		return ver
+	}
+	return c.PlatformSepolicyVersion()
 }
 
 func (c *deviceConfig) BoardReqdMaskPolicy() []string {
@@ -1455,6 +1447,62 @@ func (c *deviceConfig) RecoverySnapshotModules() map[string]bool {
 	return c.config.productVariables.RecoverySnapshotModules
 }
 
+func createDirsMap(previous map[string]bool, dirs []string) (map[string]bool, error) {
+	var ret = make(map[string]bool)
+	for _, dir := range dirs {
+		clean := filepath.Clean(dir)
+		if previous[clean] || ret[clean] {
+			return nil, fmt.Errorf("Duplicate entry %s", dir)
+		}
+		ret[clean] = true
+	}
+	return ret, nil
+}
+
+func (c *deviceConfig) createDirsMapOnce(onceKey OnceKey, previous map[string]bool, dirs []string) map[string]bool {
+	dirMap := c.Once(onceKey, func() interface{} {
+		ret, err := createDirsMap(previous, dirs)
+		if err != nil {
+			panic(fmt.Errorf("%s: %w", onceKey.key, err))
+		}
+		return ret
+	})
+	if dirMap == nil {
+		return nil
+	}
+	return dirMap.(map[string]bool)
+}
+
+var vendorSnapshotDirsExcludedKey = NewOnceKey("VendorSnapshotDirsExcludedMap")
+
+func (c *deviceConfig) VendorSnapshotDirsExcludedMap() map[string]bool {
+	return c.createDirsMapOnce(vendorSnapshotDirsExcludedKey, nil,
+		c.config.productVariables.VendorSnapshotDirsExcluded)
+}
+
+var vendorSnapshotDirsIncludedKey = NewOnceKey("VendorSnapshotDirsIncludedMap")
+
+func (c *deviceConfig) VendorSnapshotDirsIncludedMap() map[string]bool {
+	excludedMap := c.VendorSnapshotDirsExcludedMap()
+	return c.createDirsMapOnce(vendorSnapshotDirsIncludedKey, excludedMap,
+		c.config.productVariables.VendorSnapshotDirsIncluded)
+}
+
+var recoverySnapshotDirsExcludedKey = NewOnceKey("RecoverySnapshotDirsExcludedMap")
+
+func (c *deviceConfig) RecoverySnapshotDirsExcludedMap() map[string]bool {
+	return c.createDirsMapOnce(recoverySnapshotDirsExcludedKey, nil,
+		c.config.productVariables.RecoverySnapshotDirsExcluded)
+}
+
+var recoverySnapshotDirsIncludedKey = NewOnceKey("RecoverySnapshotDirsIncludedMap")
+
+func (c *deviceConfig) RecoverySnapshotDirsIncludedMap() map[string]bool {
+	excludedMap := c.RecoverySnapshotDirsExcludedMap()
+	return c.createDirsMapOnce(recoverySnapshotDirsIncludedKey, excludedMap,
+		c.config.productVariables.RecoverySnapshotDirsIncluded)
+}
+
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
 	if c.config.productVariables.ShippingApiLevel == nil {
 		return NoneApiLevel
@@ -1463,8 +1511,28 @@ func (c *deviceConfig) ShippingApiLevel() ApiLevel {
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
+func (c *deviceConfig) BuildBrokenEnforceSyspropOwner() bool {
+	return c.config.productVariables.BuildBrokenEnforceSyspropOwner
+}
+
+func (c *deviceConfig) BuildBrokenTrebleSyspropNeverallow() bool {
+	return c.config.productVariables.BuildBrokenTrebleSyspropNeverallow
+}
+
 func (c *deviceConfig) BuildBrokenVendorPropertyNamespace() bool {
 	return c.config.productVariables.BuildBrokenVendorPropertyNamespace
+}
+
+func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
+	return c.config.productVariables.RequiresInsecureExecmemForSwiftshader
+}
+
+func (c *config) SelinuxIgnoreNeverallows() bool {
+	return c.productVariables.SelinuxIgnoreNeverallows
+}
+
+func (c *deviceConfig) SepolicySplit() bool {
+	return c.config.productVariables.SepolicySplit
 }
 
 // The ConfiguredJarList struct provides methods for handling a list of (apex, jar) pairs.
@@ -1611,6 +1679,20 @@ func (l *ConfiguredJarList) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (l *ConfiguredJarList) MarshalJSON() ([]byte, error) {
+	if len(l.apexes) != len(l.jars) {
+		return nil, errors.New(fmt.Sprintf("Inconsistent ConfiguredJarList: apexes: %q, jars: %q", l.apexes, l.jars))
+	}
+
+	list := make([]string, 0, len(l.apexes))
+
+	for i := 0; i < len(l.apexes); i++ {
+		list = append(list, l.apexes[i]+":"+l.jars[i])
+	}
+
+	return json.Marshal(list)
+}
+
 // ModuleStem hardcodes the stem of framework-minus-apex to return "framework".
 //
 // TODO(b/139391334): hard coded until we find a good way to query the stem of a
@@ -1727,4 +1809,8 @@ func (c *config) NonUpdatableBootJars() ConfiguredJarList {
 
 func (c *config) UpdatableBootJars() ConfiguredJarList {
 	return c.productVariables.UpdatableBootJars
+}
+
+func (c *config) RBEWrapper() string {
+	return c.GetenvWithDefault("RBE_WRAPPER", remoteexec.DefaultWrapperPath)
 }

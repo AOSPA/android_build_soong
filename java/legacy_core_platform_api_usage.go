@@ -96,6 +96,7 @@ var legacyCorePlatformApiModules = []string{
 	"FrameworksNetTests",
 	"FrameworksServicesRoboTests",
 	"FrameworksServicesTests",
+	"FrameworksMockingServicesTests",
 	"FrameworksUtilTests",
 	"GtsIncrementalInstallTestCases",
 	"GtsIncrementalInstallTriggerApp",
@@ -229,7 +230,11 @@ func init() {
 }
 
 func useLegacyCorePlatformApi(ctx android.EarlyModuleContext) bool {
-	_, found := legacyCorePlatformApiLookup[ctx.ModuleName()]
+	return useLegacyCorePlatformApiByName(ctx.ModuleName())
+}
+
+func useLegacyCorePlatformApiByName(name string) bool {
+	_, found := legacyCorePlatformApiLookup[name]
 	return found
 }
 

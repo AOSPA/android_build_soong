@@ -48,6 +48,7 @@ type configImpl struct {
 	dist           bool
 	skipConfig     bool
 	skipKati       bool
+	skipNinja      bool
 	skipSoongTests bool
 
 	// From the product config
@@ -56,7 +57,6 @@ type configImpl struct {
 	katiSuffix      string
 	targetDevice    string
 	targetDeviceDir string
-	fullBuild       bool
 
 	// Autodetected
 	totalRAM uint64
@@ -553,6 +553,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 		if arg == "--make-mode" {
 		} else if arg == "showcommands" {
 			c.verbose = true
+		} else if arg == "--skip-ninja" {
+			c.skipNinja = true
 		} else if arg == "--skip-make" {
 			c.skipConfig = true
 			c.skipKati = true
@@ -773,6 +775,10 @@ func (c *configImpl) SkipKati() bool {
 	return c.skipKati
 }
 
+func (c *configImpl) SkipNinja() bool {
+	return c.skipNinja
+}
+
 func (c *configImpl) SkipConfig() bool {
 	return c.skipConfig
 }
@@ -790,14 +796,6 @@ func (c *configImpl) TargetDevice() string {
 
 func (c *configImpl) SetTargetDevice(device string) {
 	c.targetDevice = device
-}
-
-func (c *configImpl) FullBuild() bool {
-	return c.fullBuild
-}
-
-func (c *configImpl) SetFullBuild(fullBuild bool) {
-	c.fullBuild = fullBuild
 }
 
 func (c *configImpl) TargetBuildVariant() string {

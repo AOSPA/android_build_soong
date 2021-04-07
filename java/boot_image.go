@@ -20,15 +20,24 @@ import (
 
 	"android/soong/android"
 	"android/soong/dexpreopt"
+
 	"github.com/google/blueprint"
 )
 
 func init() {
 	RegisterBootImageBuildComponents(android.InitRegistrationContext)
+
+	android.RegisterSdkMemberType(&bootImageMemberType{
+		SdkMemberTypeBase: android.SdkMemberTypeBase{
+			PropertyName: "boot_images",
+			SupportsSdk:  true,
+		},
+	})
 }
 
 func RegisterBootImageBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("boot_image", bootImageFactory)
+	ctx.RegisterModuleType("prebuilt_boot_image", prebuiltBootImageFactory)
 }
 
 type bootImageProperties struct {
@@ -41,15 +50,16 @@ type bootImageProperties struct {
 type BootImageModule struct {
 	android.ModuleBase
 	android.ApexModuleBase
-
+	android.SdkBase
 	properties bootImageProperties
 }
 
 func bootImageFactory() android.Module {
 	m := &BootImageModule{}
 	m.AddProperties(&m.properties)
-	android.InitAndroidArchModule(m, android.HostAndDeviceSupported, android.MultilibCommon)
 	android.InitApexModule(m)
+	android.InitSdkAwareModule(m)
+	android.InitAndroidArchModule(m, android.HostAndDeviceSupported, android.MultilibCommon)
 	return m
 }
 
@@ -86,10 +96,6 @@ func (i BootImageInfo) AndroidBootImageFilesByArchType() map[android.ArchType]an
 
 func (b *BootImageModule) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
 	tag := ctx.OtherModuleDependencyTag(dep)
-	if tag == dexpreopt.Dex2oatDepTag {
-		// The dex2oat tool is only needed for building and is not required in the apex.
-		return false
-	}
 	if android.IsMetaDependencyTag(tag) {
 		// Cross-cutting metadata dependencies are metadata.
 		return false
@@ -137,4 +143,75 @@ func (b *BootImageModule) GenerateAndroidBuildActions(ctx android.ModuleContext)
 
 	// Make it available for other modules.
 	ctx.SetProvider(BootImageInfoProvider, info)
+}
+
+type bootImageMemberType struct {
+	android.SdkMemberTypeBase
+}
+
+func (b *bootImageMemberType) AddDependencies(mctx android.BottomUpMutatorContext, dependencyTag blueprint.DependencyTag, names []string) {
+	mctx.AddVariationDependencies(nil, dependencyTag, names...)
+}
+
+func (b *bootImageMemberType) IsInstance(module android.Module) bool {
+	_, ok := module.(*BootImageModule)
+	return ok
+}
+
+func (b *bootImageMemberType) AddPrebuiltModule(ctx android.SdkMemberContext, member android.SdkMember) android.BpModule {
+	return ctx.SnapshotBuilder().AddPrebuiltModule(member, "prebuilt_boot_image")
+}
+
+func (b *bootImageMemberType) CreateVariantPropertiesStruct() android.SdkMemberProperties {
+	return &bootImageSdkMemberProperties{}
+}
+
+type bootImageSdkMemberProperties struct {
+	android.SdkMemberPropertiesBase
+
+	Image_name string
+}
+
+func (b *bootImageSdkMemberProperties) PopulateFromVariant(ctx android.SdkMemberContext, variant android.Module) {
+	module := variant.(*BootImageModule)
+
+	b.Image_name = module.properties.Image_name
+}
+
+func (b *bootImageSdkMemberProperties) AddToPropertySet(ctx android.SdkMemberContext, propertySet android.BpPropertySet) {
+	if b.Image_name != "" {
+		propertySet.AddProperty("image_name", b.Image_name)
+	}
+}
+
+var _ android.SdkMemberType = (*bootImageMemberType)(nil)
+
+// A prebuilt version of the boot image module.
+//
+// At the moment this is basically just a boot image module that can be used as a prebuilt.
+// Eventually as more functionality is migrated into the boot image module from the singleton then
+// this will diverge.
+type prebuiltBootImageModule struct {
+	BootImageModule
+	prebuilt android.Prebuilt
+}
+
+func (module *prebuiltBootImageModule) Prebuilt() *android.Prebuilt {
+	return &module.prebuilt
+}
+
+func (module *prebuiltBootImageModule) Name() string {
+	return module.prebuilt.Name(module.ModuleBase.Name())
+}
+
+func prebuiltBootImageFactory() android.Module {
+	m := &prebuiltBootImageModule{}
+	m.AddProperties(&m.properties)
+	// This doesn't actually have any prebuilt files of its own so pass a placeholder for the srcs
+	// array.
+	android.InitPrebuiltModule(m, &[]string{"placeholder"})
+	android.InitApexModule(m)
+	android.InitSdkAwareModule(m)
+	android.InitAndroidArchModule(m, android.HostAndDeviceSupported, android.MultilibCommon)
+	return m
 }

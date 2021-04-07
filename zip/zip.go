@@ -29,7 +29,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode"
+
+	"android/soong/response"
 
 	"github.com/google/blueprint/pathtools"
 
@@ -164,14 +165,12 @@ func (b *FileArgsBuilder) RspFile(name string) *FileArgsBuilder {
 	}
 	defer f.Close()
 
-	list, err := ioutil.ReadAll(f)
+	arg := b.state
+	arg.SourceFiles, err = response.ReadRspFile(f)
 	if err != nil {
 		b.err = err
 		return b
 	}
-
-	arg := b.state
-	arg.SourceFiles = ReadRespFile(list)
 	for i := range arg.SourceFiles {
 		arg.SourceFiles[i] = pathtools.MatchEscape(arg.SourceFiles[i])
 	}
@@ -251,49 +250,6 @@ type ZipArgs struct {
 
 	Stderr     io.Writer
 	Filesystem pathtools.FileSystem
-}
-
-const NOQUOTE = '\x00'
-
-func ReadRespFile(bytes []byte) []string {
-	var args []string
-	var arg []rune
-
-	isEscaping := false
-	quotingStart := NOQUOTE
-	for _, c := range string(bytes) {
-		switch {
-		case isEscaping:
-			if quotingStart == '"' {
-				if !(c == '"' || c == '\\') {
-					// '\"' or '\\' will be escaped under double quoting.
-					arg = append(arg, '\\')
-				}
-			}
-			arg = append(arg, c)
-			isEscaping = false
-		case c == '\\' && quotingStart != '\'':
-			isEscaping = true
-		case quotingStart == NOQUOTE && (c == '\'' || c == '"'):
-			quotingStart = c
-		case quotingStart != NOQUOTE && c == quotingStart:
-			quotingStart = NOQUOTE
-		case quotingStart == NOQUOTE && unicode.IsSpace(c):
-			// Current character is a space outside quotes
-			if len(arg) != 0 {
-				args = append(args, string(arg))
-			}
-			arg = arg[:0]
-		default:
-			arg = append(arg, c)
-		}
-	}
-
-	if len(arg) != 0 {
-		args = append(args, string(arg))
-	}
-
-	return args
 }
 
 func zipTo(args ZipArgs, w io.Writer) error {
@@ -406,6 +362,8 @@ func Zip(args ZipArgs) error {
 	buf := &bytes.Buffer{}
 	var out io.Writer = buf
 
+	var zipErr error
+
 	if !args.WriteIfChanged {
 		f, err := os.Create(args.OutputFilePath)
 		if err != nil {
@@ -414,7 +372,7 @@ func Zip(args ZipArgs) error {
 
 		defer f.Close()
 		defer func() {
-			if err != nil {
+			if zipErr != nil {
 				os.Remove(args.OutputFilePath)
 			}
 		}()
@@ -422,9 +380,9 @@ func Zip(args ZipArgs) error {
 		out = f
 	}
 
-	err := zipTo(args, out)
-	if err != nil {
-		return err
+	zipErr = zipTo(args, out)
+	if zipErr != nil {
+		return zipErr
 	}
 
 	if args.WriteIfChanged {

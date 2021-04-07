@@ -29,7 +29,6 @@ import (
 	"android/soong/android"
 	"android/soong/bpf"
 	"android/soong/cc"
-	"android/soong/dexpreopt"
 	prebuilt_etc "android/soong/etc"
 	"android/soong/filesystem"
 	"android/soong/java"
@@ -101,6 +100,9 @@ type apexBundleProperties struct {
 
 	// List of prebuilt files that are embedded inside this APEX bundle.
 	Prebuilts []string
+
+	// List of platform_compat_config files that are embedded inside this APEX bundle.
+	Compat_configs []string
 
 	// List of BPF programs inside this APEX bundle.
 	Bpfs []string
@@ -546,23 +548,35 @@ type dependencyTag struct {
 	// Determines if the dependent will be part of the APEX payload. Can be false for the
 	// dependencies to the signing key module, etc.
 	payload bool
+
+	// True if the dependent can only be a source module, false if a prebuilt module is a suitable
+	// replacement. This is needed because some prebuilt modules do not provide all the information
+	// needed by the apex.
+	sourceOnly bool
 }
 
+func (d dependencyTag) ReplaceSourceWithPrebuilt() bool {
+	return !d.sourceOnly
+}
+
+var _ android.ReplaceSourceWithPrebuilt = &dependencyTag{}
+
 var (
-	androidAppTag  = dependencyTag{name: "androidApp", payload: true}
-	bpfTag         = dependencyTag{name: "bpf", payload: true}
-	certificateTag = dependencyTag{name: "certificate"}
-	executableTag  = dependencyTag{name: "executable", payload: true}
-	fsTag          = dependencyTag{name: "filesystem", payload: true}
-	bootImageTag   = dependencyTag{name: "bootImage", payload: true}
-	javaLibTag     = dependencyTag{name: "javaLib", payload: true}
-	jniLibTag      = dependencyTag{name: "jniLib", payload: true}
-	keyTag         = dependencyTag{name: "key"}
-	prebuiltTag    = dependencyTag{name: "prebuilt", payload: true}
-	rroTag         = dependencyTag{name: "rro", payload: true}
-	sharedLibTag   = dependencyTag{name: "sharedLib", payload: true}
-	testForTag     = dependencyTag{name: "test for"}
-	testTag        = dependencyTag{name: "test", payload: true}
+	androidAppTag   = dependencyTag{name: "androidApp", payload: true}
+	bpfTag          = dependencyTag{name: "bpf", payload: true}
+	certificateTag  = dependencyTag{name: "certificate"}
+	executableTag   = dependencyTag{name: "executable", payload: true}
+	fsTag           = dependencyTag{name: "filesystem", payload: true}
+	bootImageTag    = dependencyTag{name: "bootImage", payload: true}
+	compatConfigTag = dependencyTag{name: "compatConfig", payload: true, sourceOnly: true}
+	javaLibTag      = dependencyTag{name: "javaLib", payload: true}
+	jniLibTag       = dependencyTag{name: "jniLib", payload: true}
+	keyTag          = dependencyTag{name: "key"}
+	prebuiltTag     = dependencyTag{name: "prebuilt", payload: true}
+	rroTag          = dependencyTag{name: "rro", payload: true}
+	sharedLibTag    = dependencyTag{name: "sharedLib", payload: true}
+	testForTag      = dependencyTag{name: "test for"}
+	testTag         = dependencyTag{name: "test", payload: true}
 )
 
 // TODO(jiyong): shorten this function signature
@@ -737,6 +751,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, bpfTag, a.properties.Bpfs...)
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
+	ctx.AddFarVariationDependencies(commonVariation, compatConfigTag, a.properties.Compat_configs...)
 
 	if a.artApex {
 		// With EMMA_INSTRUMENT_FRAMEWORK=true the ART boot image includes jacoco library.
@@ -830,7 +845,15 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		if !ok || !am.CanHaveApexVariants() {
 			return false
 		}
-		if !parent.(android.DepIsInSameApex).DepIsInSameApex(mctx, child) {
+		depTag := mctx.OtherModuleDependencyTag(child)
+
+		// Check to see if the tag always requires that the child module has an apex variant for every
+		// apex variant of the parent module. If it does not then it is still possible for something
+		// else, e.g. the DepIsInSameApex(...) method to decide that a variant is required.
+		if required, ok := depTag.(android.AlwaysRequireApexVariantTag); ok && required.AlwaysRequireApexVariant() {
+			return true
+		}
+		if !android.IsDepInSameApex(mctx, parent, child) {
 			return false
 		}
 		if excludeVndkLibs {
@@ -974,7 +997,7 @@ func markPlatformAvailability(mctx android.BottomUpMutatorContext) {
 	// If any of the dep is not available to platform, this module is also considered as being
 	// not available to platform even if it has "//apex_available:platform"
 	mctx.VisitDirectDeps(func(child android.Module) {
-		if !am.DepIsInSameApex(mctx, child) {
+		if !android.IsDepInSameApex(mctx, am, child) {
 			// if the dependency crosses apex boundary, don't consider it
 			return
 		}
@@ -1174,11 +1197,13 @@ func useVendorAllowList(config android.Config) []string {
 	}).([]string)
 }
 
-// setUseVendorAllowListForTest overrides useVendorAllowList and must be called before the first
-// call to useVendorAllowList()
-func setUseVendorAllowListForTest(config android.Config, allowList []string) {
-	config.Once(useVendorAllowListKey, func() interface{} {
-		return allowList
+// setUseVendorAllowListForTest returns a FixturePreparer that overrides useVendorAllowList and
+// must be called before the first call to useVendorAllowList()
+func setUseVendorAllowListForTest(allowList []string) android.FixturePreparer {
+	return android.FixtureModifyConfig(func(config android.Config) {
+		config.Once(useVendorAllowListKey, func() interface{} {
+			return allowList
+		})
 	})
 }
 
@@ -1547,9 +1572,6 @@ func (a *apexBundle) WalkPayloadDeps(ctx android.ModuleContext, do android.Paylo
 		if dt, ok := depTag.(dependencyTag); ok && !dt.payload {
 			return false
 		}
-		if depTag == dexpreopt.Dex2oatDepTag {
-			return false
-		}
 
 		ai := ctx.OtherModuleProvider(child, android.ApexInfoProvider).(android.ApexInfo)
 		externalDep := !android.InList(ctx.ModuleName(), ai.InApexes)
@@ -1731,10 +1753,14 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			case prebuiltTag:
 				if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
 					filesInfo = append(filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, depName))
-				} else if prebuilt, ok := child.(java.PlatformCompatConfigIntf); ok {
-					filesInfo = append(filesInfo, apexFileForCompatConfig(ctx, prebuilt, depName))
 				} else {
-					ctx.PropertyErrorf("prebuilts", "%q is not a prebuilt_etc and not a platform_compat_config module", depName)
+					ctx.PropertyErrorf("prebuilts", "%q is not a prebuilt_etc module", depName)
+				}
+			case compatConfigTag:
+				if compatConfig, ok := child.(java.PlatformCompatConfigIntf); ok {
+					filesInfo = append(filesInfo, apexFileForCompatConfig(ctx, compatConfig, depName))
+				} else {
+					ctx.PropertyErrorf("compat_configs", "%q is not a platform_compat_config module", depName)
 				}
 			case testTag:
 				if ccTest, ok := child.(*cc.Module); ok {
@@ -1833,7 +1859,10 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						// like to record requiredNativeLibs even when
 						// DepIsInSameAPex is false. We also shouldn't do
 						// this for host.
-						if !am.DepIsInSameApex(ctx, am) {
+						//
+						// TODO(jiyong): explain why the same module is passed in twice.
+						// Switching the first am to parent breaks lots of tests.
+						if !android.IsDepInSameApex(ctx, am, am) {
 							return false
 						}
 
@@ -2156,6 +2185,8 @@ func (a *apexBundle) checkStaticLinkingToStubLibraries(ctx android.ModuleContext
 
 			// If `to` is not actually in the same APEX as `from` then it does not need
 			// apex_available and neither do any of its dependencies.
+			//
+			// It is ok to call DepIsInSameApex() directly from within WalkPayloadDeps().
 			if am, ok := from.(android.DepIsInSameApex); ok && !am.DepIsInSameApex(ctx, to) {
 				// As soon as the dependency graph crosses the APEX boundary, don't go further.
 				return false
@@ -2239,6 +2270,8 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 
 		// If `to` is not actually in the same APEX as `from` then it does not need
 		// apex_available and neither do any of its dependencies.
+		//
+		// It is ok to call DepIsInSameApex() directly from within WalkPayloadDeps().
 		if am, ok := from.(android.DepIsInSameApex); ok && !am.DepIsInSameApex(ctx, to) {
 			// As soon as the dependency graph crosses the APEX boundary, don't go
 			// further.
