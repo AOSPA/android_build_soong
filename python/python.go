@@ -29,7 +29,11 @@ import (
 )
 
 func init() {
-	android.PreDepsMutators(RegisterPythonPreDepsMutators)
+	registerPythonMutators(android.InitRegistrationContext)
+}
+
+func registerPythonMutators(ctx android.RegistrationContext) {
+	ctx.PreDepsMutators(RegisterPythonPreDepsMutators)
 }
 
 // Exported to support other packages using Python modules in tests.
@@ -125,6 +129,7 @@ type pathMapping struct {
 type Module struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	android.BazelModuleBase
 
 	properties      BaseProperties
 	protoProperties android.ProtoProperties

@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 
+	"android/soong/bazel/cquery"
 	"github.com/google/blueprint/bootstrap"
 
 	"android/soong/bazel"
@@ -37,12 +38,13 @@ type CqueryRequestType int
 const (
 	getAllFiles CqueryRequestType = iota
 	getCcObjectFiles
+	getAllFilesAndCcObjectFiles
 )
 
 // Map key to describe bazel cquery requests.
 type cqueryKey struct {
 	label       string
-	requestType CqueryRequestType
+	requestType cquery.RequestType
 	archType    ArchType
 }
 
@@ -52,13 +54,16 @@ type BazelContext interface {
 	// has been queued to be run later.
 
 	// Returns result files built by building the given bazel target label.
-	GetAllFiles(label string, archType ArchType) ([]string, bool)
+	GetOutputFiles(label string, archType ArchType) ([]string, bool)
 
 	// Returns object files produced by compiling the given cc-related target.
 	// Retrieves these files from Bazel's CcInfo provider.
 	GetCcObjectFiles(label string, archType ArchType) ([]string, bool)
 
 	// TODO(cparsons): Other cquery-related methods should be added here.
+	// Returns the results of GetOutputFiles and GetCcObjectFiles in a single query (in that order).
+	GetOutputFilesAndCcObjectFiles(label string, archType ArchType) ([]string, []string, bool)
+
 	// ** End cquery methods
 
 	// Issues commands to Bazel to receive results for all cquery requests
@@ -106,7 +111,7 @@ type MockBazelContext struct {
 	AllFiles map[string][]string
 }
 
-func (m MockBazelContext) GetAllFiles(label string, archType ArchType) ([]string, bool) {
+func (m MockBazelContext) GetOutputFiles(label string, archType ArchType) ([]string, bool) {
 	result, ok := m.AllFiles[label]
 	return result, ok
 }
@@ -114,6 +119,11 @@ func (m MockBazelContext) GetAllFiles(label string, archType ArchType) ([]string
 func (m MockBazelContext) GetCcObjectFiles(label string, archType ArchType) ([]string, bool) {
 	result, ok := m.AllFiles[label]
 	return result, ok
+}
+
+func (m MockBazelContext) GetOutputFilesAndCcObjectFiles(label string, archType ArchType) ([]string, []string, bool) {
+	result, ok := m.AllFiles[label]
+	return result, result, ok
 }
 
 func (m MockBazelContext) InvokeBazel() error {
@@ -134,31 +144,50 @@ func (m MockBazelContext) BuildStatementsToRegister() []bazel.BuildStatement {
 
 var _ BazelContext = MockBazelContext{}
 
-func (bazelCtx *bazelContext) GetAllFiles(label string, archType ArchType) ([]string, bool) {
-	result, ok := bazelCtx.cquery(label, getAllFiles, archType)
+func (bazelCtx *bazelContext) GetOutputFiles(label string, archType ArchType) ([]string, bool) {
+	rawString, ok := bazelCtx.cquery(label, cquery.GetOutputFiles, archType)
+	var ret []string
 	if ok {
-		bazelOutput := strings.TrimSpace(result)
-		return strings.Split(bazelOutput, ", "), true
-	} else {
-		return nil, false
+		bazelOutput := strings.TrimSpace(rawString)
+		ret = cquery.GetOutputFiles.ParseResult(bazelOutput).([]string)
 	}
+	return ret, ok
 }
 
 func (bazelCtx *bazelContext) GetCcObjectFiles(label string, archType ArchType) ([]string, bool) {
-	result, ok := bazelCtx.cquery(label, getCcObjectFiles, archType)
+	rawString, ok := bazelCtx.cquery(label, cquery.GetCcObjectFiles, archType)
+	var returnResult []string
 	if ok {
-		bazelOutput := strings.TrimSpace(result)
-		return strings.Split(bazelOutput, ", "), true
-	} else {
-		return nil, false
+		bazelOutput := strings.TrimSpace(rawString)
+		returnResult = cquery.GetCcObjectFiles.ParseResult(bazelOutput).([]string)
 	}
+	return returnResult, ok
 }
 
-func (n noopBazelContext) GetAllFiles(label string, archType ArchType) ([]string, bool) {
+func (bazelCtx *bazelContext) GetOutputFilesAndCcObjectFiles(label string, archType ArchType) ([]string, []string, bool) {
+	var outputFiles []string
+	var ccObjects []string
+
+	result, ok := bazelCtx.cquery(label, cquery.GetOutputFilesAndCcObjectFiles, archType)
+	if ok {
+		bazelOutput := strings.TrimSpace(result)
+		returnResult := cquery.GetOutputFilesAndCcObjectFiles.ParseResult(bazelOutput).(cquery.GetOutputFilesAndCcObjectFiles_Result)
+		outputFiles = returnResult.OutputFiles
+		ccObjects = returnResult.CcObjectFiles
+	}
+
+	return outputFiles, ccObjects, ok
+}
+
+func (n noopBazelContext) GetOutputFiles(label string, archType ArchType) ([]string, bool) {
 	panic("unimplemented")
 }
 
 func (n noopBazelContext) GetCcObjectFiles(label string, archType ArchType) ([]string, bool) {
+	panic("unimplemented")
+}
+
+func (n noopBazelContext) GetOutputFilesAndCcObjectFiles(label string, archType ArchType) ([]string, []string, bool) {
 	panic("unimplemented")
 }
 
@@ -232,7 +261,7 @@ func (context *bazelContext) BazelEnabled() bool {
 // If the given request was already made (and the results are available), then
 // returns (result, true). If the request is queued but no results are available,
 // then returns ("", false).
-func (context *bazelContext) cquery(label string, requestType CqueryRequestType,
+func (context *bazelContext) cquery(label string, requestType cquery.RequestType,
 	archType ArchType) (string, bool) {
 	key := cqueryKey{label, requestType, archType}
 	if result, ok := context.results[key]; ok {
@@ -253,8 +282,12 @@ func pwdPrefix() string {
 	return ""
 }
 
+// Issues the given bazel command with given build label and additional flags.
+// Returns (stdout, stderr, error). The first and second return values are strings
+// containing the stdout and stderr of the run command, and an error is returned if
+// the invocation returned an error code.
 func (context *bazelContext) issueBazelCommand(runName bazel.RunName, command string, labels []string,
-	extraFlags ...string) (string, error) {
+	extraFlags ...string) (string, string, error) {
 
 	cmdFlags := []string{"--output_base=" + context.outputBase, command}
 	cmdFlags = append(cmdFlags, labels...)
@@ -281,9 +314,10 @@ func (context *bazelContext) issueBazelCommand(runName bazel.RunName, command st
 	bazelCmd.Stderr = stderr
 
 	if output, err := bazelCmd.Output(); err != nil {
-		return "", fmt.Errorf("bazel command failed. command: [%s], env: [%s], error [%s]", bazelCmd, bazelCmd.Env, stderr)
+		return "", string(stderr.Bytes()),
+			fmt.Errorf("bazel command failed. command: [%s], env: [%s], error [%s]", bazelCmd, bazelCmd.Env, stderr)
 	} else {
-		return string(output), nil
+		return string(output), string(stderr.Bytes()), nil
 	}
 }
 
@@ -452,26 +486,66 @@ phony_root(name = "phonyroot",
 		strings.Join(deps_arm, ",\n            ")))
 }
 
+func indent(original string) string {
+	result := ""
+	for _, line := range strings.Split(original, "\n") {
+		result += "  " + line + "\n"
+	}
+	return result
+}
+
+// Returns the file contents of the buildroot.cquery file that should be used for the cquery
+// expression in order to obtain information about buildroot and its dependencies.
+// The contents of this file depend on the bazelContext's requests; requests are enumerated
+// and grouped by their request type. The data retrieved for each label depends on its
+// request type.
 func (context *bazelContext) cqueryStarlarkFileContents() []byte {
+	requestTypeToCqueryIdEntries := map[cquery.RequestType][]string{}
+	for val, _ := range context.requests {
+		cqueryId := getCqueryId(val)
+		mapEntryString := fmt.Sprintf("%q : True", cqueryId)
+		requestTypeToCqueryIdEntries[val.requestType] =
+			append(requestTypeToCqueryIdEntries[val.requestType], mapEntryString)
+	}
+	labelRegistrationMapSection := ""
+	functionDefSection := ""
+	mainSwitchSection := ""
+
+	mapDeclarationFormatString := `
+%s = {
+  %s
+}
+`
+	functionDefFormatString := `
+def %s(target):
+%s
+`
+	mainSwitchSectionFormatString := `
+  if id_string in %s:
+    return id_string + ">>" + %s(target)
+`
+
+	for _, requestType := range cquery.RequestTypes {
+		labelMapName := requestType.Name() + "_Labels"
+		functionName := requestType.Name() + "_Fn"
+		labelRegistrationMapSection += fmt.Sprintf(mapDeclarationFormatString,
+			labelMapName,
+			strings.Join(requestTypeToCqueryIdEntries[requestType], ",\n  "))
+		functionDefSection += fmt.Sprintf(functionDefFormatString,
+			functionName,
+			indent(requestType.StarlarkFunctionBody()))
+		mainSwitchSection += fmt.Sprintf(mainSwitchSectionFormatString,
+			labelMapName, functionName)
+	}
+
 	formatString := `
 # This file is generated by soong_build. Do not edit.
-getAllFilesLabels = {
-  %s
-}
 
-getCcObjectFilesLabels = {
-  %s
-}
+# Label Map Section
+%s
 
-def get_cc_object_files(target):
-  result = []
-  linker_inputs = providers(target)["CcInfo"].linking_context.linker_inputs.to_list()
-
-  for linker_input in linker_inputs:
-    for library in linker_input.libraries:
-      for object in library.objects:
-        result += [object.path]
-  return result
+# Function Def Section
+%s
 
 def get_arch(target):
   buildoptions = build_options(target)
@@ -491,32 +565,16 @@ def get_arch(target):
 
 def format(target):
   id_string = str(target.label) + "|" + get_arch(target)
-  if id_string in getAllFilesLabels:
-    return id_string + ">>" + ', '.join([f.path for f in target.files.to_list()])
-  elif id_string in getCcObjectFilesLabels:
-    return id_string + ">>" + ', '.join(get_cc_object_files(target))
-  else:
-    # This target was not requested via cquery, and thus must be a dependency
-    # of a requested target.
-    return id_string + ">>NONE"
+
+  # Main switch section
+  %s
+  # This target was not requested via cquery, and thus must be a dependency
+  # of a requested target.
+  return id_string + ">>NONE"
 `
-	var getAllFilesDeps []string = nil
-	var getCcObjectFilesDeps []string = nil
 
-	for val, _ := range context.requests {
-		labelWithArch := getCqueryId(val)
-		mapEntryString := fmt.Sprintf("%q : True", labelWithArch)
-		switch val.requestType {
-		case getAllFiles:
-			getAllFilesDeps = append(getAllFilesDeps, mapEntryString)
-		case getCcObjectFiles:
-			getCcObjectFilesDeps = append(getCcObjectFilesDeps, mapEntryString)
-		}
-	}
-	getAllFilesDepsString := strings.Join(getAllFilesDeps, ",\n  ")
-	getCcObjectFilesDepsString := strings.Join(getCcObjectFilesDeps, ",\n  ")
-
-	return []byte(fmt.Sprintf(formatString, getAllFilesDepsString, getCcObjectFilesDepsString))
+	return []byte(fmt.Sprintf(formatString, labelRegistrationMapSection, functionDefSection,
+		mainSwitchSection))
 }
 
 // Returns a workspace-relative path containing build-related metadata required
@@ -531,6 +589,7 @@ func (context *bazelContext) InvokeBazel() error {
 	context.results = make(map[cqueryKey]string)
 
 	var cqueryOutput string
+	var cqueryErr string
 	var err error
 
 	intermediatesDirPath := absolutePath(context.intermediatesDir())
@@ -568,7 +627,7 @@ func (context *bazelContext) InvokeBazel() error {
 		return err
 	}
 	buildrootLabel := "//:buildroot"
-	cqueryOutput, err = context.issueBazelCommand(bazel.CqueryBuildRootRunName, "cquery",
+	cqueryOutput, cqueryErr, err = context.issueBazelCommand(bazel.CqueryBuildRootRunName, "cquery",
 		[]string{fmt.Sprintf("kind(rule, deps(%s))", buildrootLabel)},
 		"--output=starlark",
 		"--starlark:file="+cqueryFileRelpath)
@@ -595,7 +654,8 @@ func (context *bazelContext) InvokeBazel() error {
 		if cqueryResult, ok := cqueryResults[getCqueryId(val)]; ok {
 			context.results[val] = string(cqueryResult)
 		} else {
-			return fmt.Errorf("missing result for bazel target %s. query output: [%s]", getCqueryId(val), cqueryOutput)
+			return fmt.Errorf("missing result for bazel target %s. query output: [%s], cquery err: [%s]",
+				getCqueryId(val), cqueryOutput, cqueryErr)
 		}
 	}
 
@@ -603,7 +663,7 @@ func (context *bazelContext) InvokeBazel() error {
 	//
 	// TODO(cparsons): Use --target_pattern_file to avoid command line limits.
 	var aqueryOutput string
-	aqueryOutput, err = context.issueBazelCommand(bazel.AqueryBuildRootRunName, "aquery",
+	aqueryOutput, _, err = context.issueBazelCommand(bazel.AqueryBuildRootRunName, "aquery",
 		[]string{fmt.Sprintf("deps(%s)", buildrootLabel),
 			// Use jsonproto instead of proto; actual proto parsing would require a dependency on Bazel's
 			// proto sources, which would add a number of unnecessary dependencies.
@@ -621,7 +681,7 @@ func (context *bazelContext) InvokeBazel() error {
 	// Issue a build command of the phony root to generate symlink forests for dependencies of the
 	// Bazel build. This is necessary because aquery invocations do not generate this symlink forest,
 	// but some of symlinks may be required to resolve source dependencies of the build.
-	_, err = context.issueBazelCommand(bazel.BazelBuildPhonyRootRunName, "build",
+	_, _, err = context.issueBazelCommand(bazel.BazelBuildPhonyRootRunName, "build",
 		[]string{"//:phonyroot"})
 
 	if err != nil {
@@ -657,7 +717,7 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 
 	// Add ninja file dependencies for files which all bazel invocations require.
 	bazelBuildList := absolutePath(filepath.Join(
-		filepath.Dir(bootstrap.ModuleListFile), "bazel.list"))
+		filepath.Dir(bootstrap.CmdlineModuleListFile()), "bazel.list"))
 	ctx.AddNinjaFileDeps(bazelBuildList)
 
 	data, err := ioutil.ReadFile(bazelBuildList)

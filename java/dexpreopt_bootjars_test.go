@@ -16,7 +16,6 @@ package java
 
 import (
 	"path/filepath"
-	"reflect"
 	"sort"
 	"testing"
 
@@ -44,25 +43,22 @@ func testDexpreoptBoot(t *testing.T, ruleFile string, expectedInputs, expectedOu
 		}
 	`
 
-	config := testConfig(nil, bp, nil)
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+		dexpreopt.FixtureSetBootJars("platform:foo", "platform:bar", "platform:baz"),
+	).RunTestWithBp(t, bp)
 
-	pathCtx := android.PathContextForTesting(config)
-	dexpreoptConfig := dexpreopt.GlobalConfigForTests(pathCtx)
-	dexpreoptConfig.BootJars = android.CreateTestConfiguredJarList([]string{"platform:foo", "platform:bar", "platform:baz"})
-	dexpreopt.SetTestGlobalConfig(config, dexpreoptConfig)
-
-	ctx := testContext(config)
-	run(t, ctx, config)
-
-	dexpreoptBootJars := ctx.SingletonForTests("dex_bootjars")
+	dexpreoptBootJars := result.SingletonForTests("dex_bootjars")
 	rule := dexpreoptBootJars.Output(ruleFile)
 
 	for i := range expectedInputs {
-		expectedInputs[i] = filepath.Join(buildDir, "test_device", expectedInputs[i])
+		expectedInputs[i] = filepath.Join("out/soong/test_device", expectedInputs[i])
 	}
 
 	for i := range expectedOutputs {
-		expectedOutputs[i] = filepath.Join(buildDir, "test_device", expectedOutputs[i])
+		expectedOutputs[i] = filepath.Join("out/soong/test_device", expectedOutputs[i])
 	}
 
 	inputs := rule.Implicits.Strings()
@@ -73,13 +69,9 @@ func testDexpreoptBoot(t *testing.T, ruleFile string, expectedInputs, expectedOu
 	sort.Strings(outputs)
 	sort.Strings(expectedOutputs)
 
-	if !reflect.DeepEqual(inputs, expectedInputs) {
-		t.Errorf("want inputs %q\n got inputs %q", expectedInputs, inputs)
-	}
+	android.AssertStringPathsRelativeToTopEquals(t, "inputs", result.Config, expectedInputs, inputs)
 
-	if !reflect.DeepEqual(outputs, expectedOutputs) {
-		t.Errorf("want outputs %q\n got outputs %q", expectedOutputs, outputs)
-	}
+	android.AssertStringPathsRelativeToTopEquals(t, "outputs", result.Config, expectedOutputs, outputs)
 }
 
 func TestDexpreoptBootJars(t *testing.T) {
@@ -115,7 +107,7 @@ func TestDexpreoptBootJars(t *testing.T) {
 func TestDexpreoptBootZip(t *testing.T) {
 	ruleFile := "boot.zip"
 
-	ctx := android.PathContextForTesting(testConfig(nil, "", nil))
+	ctx := android.PathContextForTesting(android.TestArchConfig("", nil, "", nil))
 	expectedInputs := []string{}
 	for _, target := range ctx.Config().Targets[android.Android] {
 		for _, ext := range []string{".art", ".oat", ".vdex"} {

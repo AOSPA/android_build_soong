@@ -174,7 +174,13 @@ func (ctx *Context) RegisterForBazelConversion() {
 		t.register(ctx)
 	}
 
-	RegisterMutatorsForBazelConversion(ctx, bp2buildPreArchMutators, bp2buildDepsMutators, bp2buildMutators)
+	bp2buildMutatorList := []RegisterMutatorFunc{}
+	for t, f := range bp2buildMutators {
+		ctx.config.bp2buildModuleTypeConfig[t] = true
+		bp2buildMutatorList = append(bp2buildMutatorList, f)
+	}
+
+	RegisterMutatorsForBazelConversion(ctx, bp2buildPreArchMutators, bp2buildDepsMutators, bp2buildMutatorList)
 }
 
 // Register the pipeline of singletons, module types, and mutators for
@@ -206,7 +212,6 @@ func collateGloballyRegisteredSingletons() sortableComponents {
 
 		// Register env and ninjadeps last so that they can track all used environment variables and
 		// Ninja file dependencies stored in the config.
-		singleton{false, "env", EnvSingleton},
 		singleton{false, "ninjadeps", ninjaDepsSingletonFactory},
 	)
 
@@ -263,8 +268,9 @@ type RegistrationContext interface {
 //   ctx := android.NewTestContext(config)
 //   RegisterBuildComponents(ctx)
 var InitRegistrationContext RegistrationContext = &initRegistrationContext{
-	moduleTypes:    make(map[string]ModuleFactory),
-	singletonTypes: make(map[string]SingletonFactory),
+	moduleTypes:       make(map[string]ModuleFactory),
+	singletonTypes:    make(map[string]SingletonFactory),
+	preSingletonTypes: make(map[string]SingletonFactory),
 }
 
 // Make sure the TestContext implements RegistrationContext.
