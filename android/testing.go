@@ -539,8 +539,7 @@ type TestingBuildParams struct {
 // The parts of this structure which are changed are:
 // * BuildParams
 //   * Args
-//   * Path instances are intentionally not modified, use AssertPathRelativeToTopEquals or
-//     AssertPathsRelativeToTopEquals instead which do something similar.
+//   * All Path, Paths, WritablePath and WritablePaths fields.
 //
 // * RuleParams
 //   * Command
@@ -564,6 +563,20 @@ func (p TestingBuildParams) RelativeToTop() TestingBuildParams {
 	// Take a copy of the build params and replace any args that contains test specific temporary
 	// paths with paths relative to the top.
 	bparams := p.BuildParams
+	bparams.Depfile = normalizeWritablePathRelativeToTop(bparams.Depfile)
+	bparams.Output = normalizeWritablePathRelativeToTop(bparams.Output)
+	bparams.Outputs = bparams.Outputs.RelativeToTop()
+	bparams.SymlinkOutput = normalizeWritablePathRelativeToTop(bparams.SymlinkOutput)
+	bparams.SymlinkOutputs = bparams.SymlinkOutputs.RelativeToTop()
+	bparams.ImplicitOutput = normalizeWritablePathRelativeToTop(bparams.ImplicitOutput)
+	bparams.ImplicitOutputs = bparams.ImplicitOutputs.RelativeToTop()
+	bparams.Input = normalizePathRelativeToTop(bparams.Input)
+	bparams.Inputs = bparams.Inputs.RelativeToTop()
+	bparams.Implicit = normalizePathRelativeToTop(bparams.Implicit)
+	bparams.Implicits = bparams.Implicits.RelativeToTop()
+	bparams.OrderOnly = bparams.OrderOnly.RelativeToTop()
+	bparams.Validation = normalizePathRelativeToTop(bparams.Validation)
+	bparams.Validations = bparams.Validations.RelativeToTop()
 	bparams.Args = normalizeStringMapRelativeToTop(p.config, bparams.Args)
 
 	// Ditto for any fields in the RuleParams.
@@ -580,6 +593,20 @@ func (p TestingBuildParams) RelativeToTop() TestingBuildParams {
 		BuildParams: bparams,
 		RuleParams:  rparams,
 	}
+}
+
+func normalizeWritablePathRelativeToTop(path WritablePath) WritablePath {
+	if path == nil {
+		return nil
+	}
+	return path.RelativeToTop().(WritablePath)
+}
+
+func normalizePathRelativeToTop(path Path) Path {
+	if path == nil {
+		return nil
+	}
+	return path.RelativeToTop()
 }
 
 // baseTestingComponent provides functionality common to both TestingModule and TestingSingleton.
@@ -787,6 +814,22 @@ func (m TestingModule) Module() Module {
 // having any temporary build dir usages replaced with paths relative to a notional top.
 func (m TestingModule) VariablesForTestsRelativeToTop() map[string]string {
 	return normalizeStringMapRelativeToTop(m.config, m.module.VariablesForTests())
+}
+
+// OutputFiles calls OutputFileProducer.OutputFiles on the encapsulated module, exits the test
+// immediately if there is an error and otherwise returns the result of calling Paths.RelativeToTop
+// on the returned Paths.
+func (m TestingModule) OutputFiles(t *testing.T, tag string) Paths {
+	producer, ok := m.module.(OutputFileProducer)
+	if !ok {
+		t.Fatalf("%q must implement OutputFileProducer\n", m.module.Name())
+	}
+	paths, err := producer.OutputFiles(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return paths.RelativeToTop()
 }
 
 // TestingSingleton is wrapper around an android.Singleton that provides methods to find information about individual
@@ -1012,4 +1055,21 @@ func StringPathsRelativeToTop(soongOutDir string, paths []string) []string {
 		result = append(result, relative)
 	}
 	return result
+}
+
+// StringRelativeToTop will normalize a string containing paths, e.g. ninja command, by replacing
+// any references to the test specific temporary build directory that changes with each run to a
+// fixed path relative to a notional top directory.
+//
+// This is similar to StringPathRelativeToTop except that assumes the string is a single path
+// containing at most one instance of the temporary build directory at the start of the path while
+// this assumes that there can be any number at any position.
+func StringRelativeToTop(config Config, command string) string {
+	return normalizeStringRelativeToTop(config, command)
+}
+
+// StringsRelativeToTop will return a new slice such that each item in the new slice is the result
+// of calling StringRelativeToTop on the corresponding item in the input slice.
+func StringsRelativeToTop(config Config, command []string) []string {
+	return normalizeStringArrayRelativeToTop(config, command)
 }
