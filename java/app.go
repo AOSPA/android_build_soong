@@ -906,6 +906,8 @@ func AndroidAppFactory() android.Module {
 		&module.appProperties,
 		&module.overridableAppProperties)
 
+	module.usesLibrary.enforce = true
+
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	android.InitOverridableModule(module, &module.appProperties.Overrides)
@@ -1176,6 +1178,9 @@ type UsesLibraryProperties struct {
 // with knowledge of their shared libraries.
 type usesLibrary struct {
 	usesLibraryProperties UsesLibraryProperties
+
+	// Whether to enforce verify_uses_library check.
+	enforce bool
 }
 
 func (u *usesLibrary) addLib(lib string, optional bool) {
@@ -1242,7 +1247,7 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 func (u *usesLibrary) enforceUsesLibraries() bool {
 	defaultEnforceUsesLibs := len(u.usesLibraryProperties.Uses_libs) > 0 ||
 		len(u.usesLibraryProperties.Optional_uses_libs) > 0
-	return BoolDefault(u.usesLibraryProperties.Enforce_uses_libs, defaultEnforceUsesLibs)
+	return BoolDefault(u.usesLibraryProperties.Enforce_uses_libs, u.enforce || defaultEnforceUsesLibs)
 }
 
 // Freeze the value of `enforce_uses_libs` based on the current values of `uses_libs` and `optional_uses_libs`.
@@ -1255,12 +1260,18 @@ func (u *usesLibrary) freezeEnforceUsesLibraries() {
 // in the uses_libs and optional_uses_libs properties.  It returns the path to a copy of the manifest.
 func (u *usesLibrary) verifyUsesLibrariesManifest(ctx android.ModuleContext, manifest android.Path) android.Path {
 	outputFile := android.PathForModuleOut(ctx, "manifest_check", "AndroidManifest.xml")
+	statusFile := dexpreopt.UsesLibrariesStatusFile(ctx)
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 	cmd := rule.Command().BuiltTool("manifest_check").
 		Flag("--enforce-uses-libraries").
 		Input(manifest).
+		FlagWithOutput("--enforce-uses-libraries-status ", statusFile).
 		FlagWithOutput("-o ", outputFile)
+
+	if dexpreopt.GetGlobalConfig(ctx).RelaxUsesLibraryCheck {
+		cmd.Flag("--enforce-uses-libraries-relax")
+	}
 
 	for _, lib := range u.usesLibraryProperties.Uses_libs {
 		cmd.FlagWithArg("--uses-library ", lib)
@@ -1279,6 +1290,7 @@ func (u *usesLibrary) verifyUsesLibrariesManifest(ctx android.ModuleContext, man
 // in the uses_libs and optional_uses_libs properties.  It returns the path to a copy of the APK.
 func (u *usesLibrary) verifyUsesLibrariesAPK(ctx android.ModuleContext, apk android.Path) android.Path {
 	outputFile := android.PathForModuleOut(ctx, "verify_uses_libraries", apk.Base())
+	statusFile := dexpreopt.UsesLibrariesStatusFile(ctx)
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 	aapt := ctx.Config().HostToolPath(ctx, "aapt")
@@ -1286,7 +1298,8 @@ func (u *usesLibrary) verifyUsesLibrariesAPK(ctx android.ModuleContext, apk andr
 		Textf("aapt_binary=%s", aapt.String()).Implicit(aapt).
 		Textf(`uses_library_names="%s"`, strings.Join(u.usesLibraryProperties.Uses_libs, " ")).
 		Textf(`optional_uses_library_names="%s"`, strings.Join(u.usesLibraryProperties.Optional_uses_libs, " ")).
-		Tool(android.PathForSource(ctx, "build/make/core/verify_uses_libraries.sh")).Input(apk)
+		Textf(`relax_check="%t"`, dexpreopt.GetGlobalConfig(ctx).RelaxUsesLibraryCheck).
+		Tool(android.PathForSource(ctx, "build/make/core/verify_uses_libraries.sh")).Input(apk).Output(statusFile)
 	rule.Command().Text("cp -f").Input(apk).Output(outputFile)
 
 	rule.Build("verify_uses_libraries", "verify <uses-library>")

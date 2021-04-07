@@ -14,9 +14,17 @@
 
 package bazel
 
+import (
+	"fmt"
+	"strings"
+)
+
 type bazelModuleProperties struct {
 	// The label of the Bazel target replacing this Soong module.
 	Label string
+
+	// If true, bp2build will generate the converted Bazel target for this module.
+	Bp2build_available bool
 }
 
 // Properties contains common module properties for Bazel migration purposes.
@@ -29,11 +37,30 @@ type Properties struct {
 // BazelTargetModuleProperties contain properties and metadata used for
 // Blueprint to BUILD file conversion.
 type BazelTargetModuleProperties struct {
+	Name *string
+
 	// The Bazel rule class for this target.
 	Rule_class string
 
 	// The target label for the bzl file containing the definition of the rule class.
 	Bzl_load_location string
+}
+
+const BazelTargetModuleNamePrefix = "__bp2build__"
+
+func NewBazelTargetModuleProperties(name string, ruleClass string, bzlLoadLocation string) BazelTargetModuleProperties {
+	if strings.HasPrefix(name, BazelTargetModuleNamePrefix) {
+		panic(fmt.Errorf(
+			"The %s name prefix is added automatically, do not set it manually: %s",
+			BazelTargetModuleNamePrefix,
+			name))
+	}
+	name = BazelTargetModuleNamePrefix + name
+	return BazelTargetModuleProperties{
+		Name:              &name,
+		Rule_class:        ruleClass,
+		Bzl_load_location: bzlLoadLocation,
+	}
 }
 
 // Label is used to represent a Bazel compatible Label. Also stores the original bp text to support

@@ -28,7 +28,6 @@ import (
 )
 
 type AndroidLibraryDependency interface {
-	Dependency
 	ExportPackage() android.Path
 	ExportedProguardFlagFiles() android.Paths
 	ExportedRRODirs() []rroDir
@@ -161,8 +160,8 @@ func (a *aapt) SetRROEnforcedForDependent(enforce bool) {
 func (a *aapt) IsRROEnforced(ctx android.BaseModuleContext) bool {
 	// True if RRO is enforced for this module or...
 	return ctx.Config().EnforceRROForModule(ctx.ModuleName()) ||
-		// if RRO is enforced for any of its dependents, and this module is not exempted.
-		(a.aaptProperties.RROEnforcedForDependent && !ctx.Config().EnforceRROExemptedForModule(ctx.ModuleName()))
+		// if RRO is enforced for any of its dependents.
+		a.aaptProperties.RROEnforcedForDependent
 }
 
 func (a *aapt) aapt2Flags(ctx android.ModuleContext, sdkContext sdkContext,
@@ -444,16 +443,14 @@ func aaptLibs(ctx android.ModuleContext, sdkContext sdkContext, classLoaderConte
 					assets = append(assets, aarDep.ExportedAssets().Path())
 				}
 
-				if !ctx.Config().EnforceRROExemptedForModule(ctx.ModuleName()) {
-				outer:
-					for _, d := range aarDep.ExportedRRODirs() {
-						for _, e := range staticRRODirs {
-							if d.path == e.path {
-								continue outer
-							}
+			outer:
+				for _, d := range aarDep.ExportedRRODirs() {
+					for _, e := range staticRRODirs {
+						if d.path == e.path {
+							continue outer
 						}
-						staticRRODirs = append(staticRRODirs, d)
 					}
+					staticRRODirs = append(staticRRODirs, d)
 				}
 			}
 		}
@@ -796,9 +793,13 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	aapt2Link(ctx, a.exportPackage, srcJar, proguardOptionsFile, rTxt, a.extraAaptPackagesFile,
 		linkFlags, linkDeps, nil, overlayRes, transitiveAssets, nil)
-}
 
-var _ Dependency = (*AARImport)(nil)
+	ctx.SetProvider(JavaInfoProvider, JavaInfo{
+		HeaderJars:                     android.PathsIfNonNil(a.classpathFile),
+		ImplementationAndResourcesJars: android.PathsIfNonNil(a.classpathFile),
+		ImplementationJars:             android.PathsIfNonNil(a.classpathFile),
+	})
+}
 
 func (a *AARImport) HeaderJars() android.Paths {
 	return android.Paths{a.classpathFile}

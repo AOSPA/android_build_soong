@@ -15,10 +15,11 @@
 package java
 
 import (
-	"android/soong/android"
 	"fmt"
 	"strings"
 	"testing"
+
+	"android/soong/android"
 
 	"github.com/google/blueprint/proptools"
 )
@@ -32,7 +33,7 @@ func testConfigWithBootJars(bp string, bootJars []string, prebuiltHiddenApiDir *
 
 func testContextWithHiddenAPI(config android.Config) *android.TestContext {
 	ctx := testContext(config)
-	ctx.RegisterSingletonType("hiddenapi", hiddenAPISingletonFactory)
+	RegisterHiddenApiSingletonComponents(ctx)
 	return ctx
 }
 
@@ -64,7 +65,7 @@ func TestHiddenAPISingleton(t *testing.T) {
 			name: "foo",
 			srcs: ["a.java"],
 			compile_dex: true,
-	}
+		}
 	`, []string{"platform:foo"}, nil)
 
 	hiddenAPI := ctx.SingletonForTests("hiddenapi")
@@ -73,6 +74,63 @@ func TestHiddenAPISingleton(t *testing.T) {
 	if !strings.Contains(hiddenapiRule.RuleParams.Command, want) {
 		t.Errorf("Expected %s in hiddenapi command, but it was not present: %s", want, hiddenapiRule.RuleParams.Command)
 	}
+}
+
+func TestHiddenAPIIndexSingleton(t *testing.T) {
+	ctx, _ := testHiddenAPIBootJars(t, `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			compile_dex: true,
+
+			hiddenapi_additional_annotations: [
+				"foo-hiddenapi-annotations",
+			],
+		}
+
+		java_library {
+			name: "foo-hiddenapi",
+			srcs: ["a.java"],
+			compile_dex: true,
+		}
+
+		java_library {
+			name: "foo-hiddenapi-annotations",
+			srcs: ["a.java"],
+			compile_dex: true,
+		}
+
+		java_import {
+			name: "foo",
+			jars: ["a.jar"],
+			compile_dex: true,
+			prefer: false,
+		}
+
+		java_sdk_library {
+			name: "bar",
+			srcs: ["a.java"],
+			compile_dex: true,
+		}
+	`, []string{"platform:foo", "platform:bar"}, nil)
+
+	hiddenAPIIndex := ctx.SingletonForTests("hiddenapi_index")
+	indexRule := hiddenAPIIndex.Rule("singleton-merged-hiddenapi-index")
+	CheckHiddenAPIRuleInputs(t, `
+.intermediates/bar/android_common/hiddenapi/index.csv
+.intermediates/foo-hiddenapi/android_common/hiddenapi/index.csv
+.intermediates/foo/android_common/hiddenapi/index.csv
+`,
+		indexRule)
+
+	// Make sure that the foo-hiddenapi-annotations.jar is included in the inputs to the rules that
+	// creates the index.csv file.
+	foo := ctx.ModuleForTests("foo", "android_common")
+	indexParams := foo.Output("hiddenapi/index.csv")
+	CheckHiddenAPIRuleInputs(t, `
+.intermediates/foo-hiddenapi-annotations/android_common/javac/foo-hiddenapi-annotations.jar
+.intermediates/foo/android_common/javac/foo.jar
+`, indexParams)
 }
 
 func TestHiddenAPISingletonWithPrebuilt(t *testing.T) {
@@ -98,14 +156,14 @@ func TestHiddenAPISingletonWithPrebuiltUseSource(t *testing.T) {
 			name: "foo",
 			srcs: ["a.java"],
 			compile_dex: true,
-	}
+		}
 
 		java_import {
 			name: "foo",
 			jars: ["a.jar"],
 			compile_dex: true,
 			prefer: false,
-	}
+		}
 	`, []string{"platform:foo"}, nil)
 
 	hiddenAPI := ctx.SingletonForTests("hiddenapi")
@@ -127,14 +185,14 @@ func TestHiddenAPISingletonWithPrebuiltOverrideSource(t *testing.T) {
 			name: "foo",
 			srcs: ["a.java"],
 			compile_dex: true,
-	}
+		}
 
 		java_import {
 			name: "foo",
 			jars: ["a.jar"],
 			compile_dex: true,
 			prefer: true,
-	}
+		}
 	`, []string{"platform:foo"}, nil)
 
 	hiddenAPI := ctx.SingletonForTests("hiddenapi")
