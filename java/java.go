@@ -533,7 +533,6 @@ var (
 	bootClasspathTag      = dependencyTag{name: "bootclasspath"}
 	systemModulesTag      = dependencyTag{name: "system modules"}
 	frameworkResTag       = dependencyTag{name: "framework-res"}
-	frameworkApkTag       = dependencyTag{name: "framework-apk"}
 	kotlinStdlibTag       = dependencyTag{name: "kotlin-stdlib"}
 	kotlinAnnotationsTag  = dependencyTag{name: "kotlin-annotations"}
 	proguardRaiseTag      = dependencyTag{name: "proguard-raise"}
@@ -669,12 +668,6 @@ func sdkDeps(ctx android.BottomUpMutatorContext, sdkContext sdkContext, d dexer)
 	}
 	if sdkDep.systemModules != "" {
 		ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
-	}
-
-	if ctx.ModuleName() == "android_stubs_current" ||
-		ctx.ModuleName() == "android_system_stubs_current" ||
-		ctx.ModuleName() == "android_test_stubs_current" {
-		ctx.AddVariationDependencies(nil, frameworkApkTag, "framework-res")
 	}
 }
 
@@ -1030,26 +1023,6 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 					}
 				} else {
 					ctx.PropertyErrorf("exported_plugins", "%q is not a java_plugin module", otherName)
-				}
-			case frameworkApkTag:
-				if ctx.ModuleName() == "android_stubs_current" ||
-					ctx.ModuleName() == "android_system_stubs_current" ||
-					ctx.ModuleName() == "android_test_stubs_current" {
-					// framework stubs.jar need to depend on framework-res.apk, in order to pull the
-					// resource files out of there for aapt.
-					//
-					// Normally the package rule runs aapt, which includes the resource,
-					// but we're not running that in our package rule so just copy in the
-					// resource files here.
-					var exportPackage android.Path
-					if androidAppImport, ok := dep.(*AndroidAppImport); ok {
-						exportPackage = androidAppImport.ExportPackage()
-					} else {
-						exportPackage = dep.(*AndroidApp).exportPackage
-					}
-					if exportPackage != nil {
-						deps.staticResourceJars = append(deps.staticResourceJars, exportPackage)
-					}
 				}
 			case kotlinStdlibTag:
 				deps.kotlinStdlib = append(deps.kotlinStdlib, dep.HeaderJars()...)
@@ -1610,9 +1583,22 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 		configurationName := j.ConfigurationName()
 		primary := configurationName == ctx.ModuleName()
-		// If the prebuilt is being used rather than the from source, skip this
-		// module to prevent duplicated classes
-		primary = primary && !j.IsReplacedByPrebuilt()
+
+		// A source module that has been replaced by a prebuilt can never be the primary module
+		// as long as the prebuilt actually provides a build dex jar. If it doesn't then use
+		// the source module for now.
+		if j.IsReplacedByPrebuilt() {
+			ctx.VisitDirectDepsWithTag(android.PrebuiltDepTag, func(prebuilt android.Module) {
+				if h, ok := prebuilt.(hiddenAPIIntf); ok && h.bootDexJar() != nil {
+					// It is safe to ignore the source module as the prebuilt module provides an
+					// appropriate boot dex jar.
+					primary = false
+				} else {
+					// The prebuilt doesn't provide a suitable boot dex jar so keep using the
+					// source module instead.
+				}
+			})
+		}
 
 		// Hidden API CSV generation and dex encoding
 		dexOutputFile = j.hiddenAPI.hiddenAPI(ctx, configurationName, primary, dexOutputFile, j.implementationJarFile,

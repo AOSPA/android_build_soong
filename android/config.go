@@ -85,10 +85,11 @@ type config struct {
 	ConfigFileName           string
 	ProductVariablesFileName string
 
-	Targets             map[OsType][]Target
-	BuildOSTarget       Target // the Target for tools run on the build machine
-	BuildOSCommonTarget Target // the Target for common (java) tools run on the build machine
-	AndroidCommonTarget Target // the Target for common modules for the Android device
+	Targets                  map[OsType][]Target
+	BuildOSTarget            Target // the Target for tools run on the build machine
+	BuildOSCommonTarget      Target // the Target for common (java) tools run on the build machine
+	AndroidCommonTarget      Target // the Target for common modules for the Android device
+	AndroidFirstDeviceTarget Target // the first Target for modules for the Android device
 
 	// multilibConflicts for an ArchType is true if there is earlier configured device architecture with the same
 	// multilib value.
@@ -309,6 +310,7 @@ func TestArchConfig(buildDir string, env map[string]string, bp string, fs map[st
 	config.BuildOSTarget = config.Targets[BuildOs][0]
 	config.BuildOSCommonTarget = getCommonTargets(config.Targets[BuildOs])[0]
 	config.AndroidCommonTarget = getCommonTargets(config.Targets[Android])[0]
+	config.AndroidFirstDeviceTarget = firstTarget(config.Targets[Android], "lib64", "lib32")[0]
 	config.TestProductVariables.DeviceArch = proptools.StringPtr("arm64")
 	config.TestProductVariables.DeviceArchVariant = proptools.StringPtr("armv8-a")
 	config.TestProductVariables.DeviceSecondaryArch = proptools.StringPtr("arm")
@@ -403,6 +405,7 @@ func NewConfig(srcDir, buildDir string) (Config, error) {
 	config.BuildOSCommonTarget = getCommonTargets(config.Targets[BuildOs])[0]
 	if len(config.Targets[Android]) > 0 {
 		config.AndroidCommonTarget = getCommonTargets(config.Targets[Android])[0]
+		config.AndroidFirstDeviceTarget = firstTarget(config.Targets[Android], "lib64", "lib32")[0]
 	}
 
 	if err := config.fromEnv(); err != nil {
@@ -999,6 +1002,10 @@ func (c *deviceConfig) RecoverySnapshotVersion() string {
 	return String(c.config.productVariables.RecoverySnapshotVersion)
 }
 
+func (c *deviceConfig) RamdiskSnapshotVersion() string {
+	return String(c.config.productVariables.RamdiskSnapshotVersion)
+}
+
 func (c *deviceConfig) PlatformVndkVersion() string {
 	return String(c.config.productVariables.Platform_vndk_version)
 }
@@ -1321,4 +1328,68 @@ func (c *deviceConfig) DirectedRecoverySnapshot() bool {
 
 func (c *deviceConfig) RecoverySnapshotModules() map[string]bool {
 	return c.config.productVariables.RecoverySnapshotModules
+}
+
+func (c *deviceConfig) DirectedRamdiskSnapshot() bool {
+	return c.config.productVariables.DirectedRamdiskSnapshot
+}
+
+func (c *deviceConfig) RamdiskSnapshotModules() map[string]bool {
+	return c.config.productVariables.RamdiskSnapshotModules
+}
+
+func createDirsMap(previous map[string]bool, dirs []string) (map[string]bool, error) {
+	var ret = make(map[string]bool)
+	for _, dir := range dirs {
+		clean := filepath.Clean(dir)
+		if previous[clean] || ret[clean] {
+			return nil, fmt.Errorf("Duplicate entry %s", dir)
+		}
+		ret[clean] = true
+	}
+	return ret, nil
+}
+
+func (c *deviceConfig) createDirsMapOnce(onceKey OnceKey, previous map[string]bool, dirs []string) map[string]bool {
+	dirMap := c.Once(onceKey, func() interface{} {
+		ret, err := createDirsMap(previous, dirs)
+		if err != nil {
+			panic(fmt.Errorf("%s: %w", *onceKey.key.(*string), err))
+		}
+		return ret
+	})
+	if dirMap == nil {
+		return nil
+	}
+	return dirMap.(map[string]bool)
+}
+
+var vendorSnapshotDirsExcludedKey = NewOnceKey("VendorSnapshotDirsExcludedMap")
+
+func (c *deviceConfig) VendorSnapshotDirsExcludedMap() map[string]bool {
+	return c.createDirsMapOnce(vendorSnapshotDirsExcludedKey, nil,
+		c.config.productVariables.VendorSnapshotDirsExcluded)
+}
+
+var vendorSnapshotDirsIncludedKey = NewOnceKey("VendorSnapshotDirsIncludedMap")
+
+func (c *deviceConfig) VendorSnapshotDirsIncludedMap() map[string]bool {
+	excludedMap := c.VendorSnapshotDirsExcludedMap()
+	return c.createDirsMapOnce(vendorSnapshotDirsIncludedKey, excludedMap,
+		c.config.productVariables.VendorSnapshotDirsIncluded)
+}
+
+var recoverySnapshotDirsExcludedKey = NewOnceKey("RecoverySnapshotDirsExcludedMap")
+
+func (c *deviceConfig) RecoverySnapshotDirsExcludedMap() map[string]bool {
+	return c.createDirsMapOnce(recoverySnapshotDirsExcludedKey, nil,
+		c.config.productVariables.RecoverySnapshotDirsExcluded)
+}
+
+var recoverySnapshotDirsIncludedKey = NewOnceKey("RecoverySnapshotDirsIncludedMap")
+
+func (c *deviceConfig) RecoverySnapshotDirsIncludedMap() map[string]bool {
+	excludedMap := c.RecoverySnapshotDirsExcludedMap()
+	return c.createDirsMapOnce(recoverySnapshotDirsIncludedKey, excludedMap,
+		c.config.productVariables.RecoverySnapshotDirsIncluded)
 }

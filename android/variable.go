@@ -151,9 +151,9 @@ type variableProperties struct {
 		}
 
 		Device_support_hwfde struct {
-			Cflags []string
-			Header_libs  []string
-			Shared_libs  []string
+			Cflags      []string
+			Header_libs []string
+			Shared_libs []string
 		}
 
 		Device_support_hwfde_perf struct {
@@ -192,6 +192,7 @@ type productVariables struct {
 	DeviceSystemSdkVersions []string `json:",omitempty"`
 
 	RecoverySnapshotVersion *string `json:",omitempty"`
+	RamdiskSnapshotVersion  *string `json:",omitempty"`
 
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
@@ -233,10 +234,10 @@ type productVariables struct {
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 
-	Real_hal                   *bool `json:",omitempty"`
-	Qmaa_hal                   *bool `json:",omitempty"`
-	Device_support_hwfde       *bool `json:",omitempty"`
-	Device_support_hwfde_perf  *bool `json:",omitempty"`
+	Real_hal                         *bool `json:",omitempty"`
+	Qmaa_hal                         *bool `json:",omitempty"`
+	Device_support_hwfde             *bool `json:",omitempty"`
+	Device_support_hwfde_perf        *bool `json:",omitempty"`
 	Allow_missing_dependencies       *bool `json:",omitempty"`
 	Unbundled_build                  *bool `json:",omitempty"`
 	Unbundled_build_sdks_from_source *bool `json:",omitempty"`
@@ -335,6 +336,14 @@ type productVariables struct {
 
 	DirectedRecoverySnapshot bool            `json:",omitempty"`
 	RecoverySnapshotModules  map[string]bool `json:",omitempty"`
+
+	DirectedRamdiskSnapshot bool            `json:",omitempty"`
+	RamdiskSnapshotModules  map[string]bool `json:",omitempty"`
+
+	VendorSnapshotDirsIncluded   []string `json:",omitempty"`
+	VendorSnapshotDirsExcluded   []string `json:",omitempty"`
+	RecoverySnapshotDirsExcluded []string `json:",omitempty"`
+	RecoverySnapshotDirsIncluded []string `json:",omitempty"`
 
 	BoardVendorSepolicyDirs      []string `json:",omitempty"`
 	BoardOdmSepolicyDirs         []string `json:",omitempty"`
