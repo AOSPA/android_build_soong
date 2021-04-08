@@ -74,23 +74,6 @@ func testJavaError(t *testing.T, pattern string, bp string) (*android.TestContex
 	return result.TestContext, result.Config
 }
 
-// testJavaErrorWithConfig is a legacy way of running tests of java modules that expect errors.
-//
-// See testJava for an explanation as to how to stop using this deprecated method.
-//
-// deprecated
-func testJavaErrorWithConfig(t *testing.T, pattern string, config android.Config) (*android.TestContext, android.Config) {
-	t.Helper()
-	// This must be done on the supplied config and not as part of the fixture because any changes to
-	// the fixture's config will be ignored when RunTestWithConfig replaces it.
-	pathCtx := android.PathContextForTesting(config)
-	dexpreopt.SetTestGlobalConfig(config, dexpreopt.GlobalConfigForTests(pathCtx))
-	result := prepareForJavaTest.
-		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(pattern)).
-		RunTestWithConfig(t, config)
-	return result.TestContext, result.Config
-}
-
 // testJavaWithFS runs tests using the prepareForJavaTest
 //
 // See testJava for an explanation as to how to stop using this deprecated method.
@@ -250,7 +233,7 @@ func TestSimple(t *testing.T) {
 		}
 	`)
 
-	javac := ctx.ModuleForTests("foo", "android_common").Rule("javac").RelativeToTop()
+	javac := ctx.ModuleForTests("foo", "android_common").Rule("javac")
 	combineJar := ctx.ModuleForTests("foo", "android_common").Description("for javac")
 
 	if len(javac.Inputs) != 1 || javac.Inputs[0].String() != "a.java" {
@@ -845,7 +828,12 @@ func TestJavaSdkLibraryEnforce(t *testing.T) {
 			if expectedErrorPattern != "" {
 				errorHandler = android.FixtureExpectsAtLeastOneErrorMatchingPattern(expectedErrorPattern)
 			}
-			prepareForJavaTest.ExtendWithErrorHandler(errorHandler).RunTest(t, createPreparer(info))
+			android.GroupFixturePreparers(
+				prepareForJavaTest,
+				createPreparer(info),
+			).
+				ExtendWithErrorHandler(errorHandler).
+				RunTest(t)
 		})
 	}
 
@@ -976,7 +964,7 @@ func TestDefaults(t *testing.T) {
 		}
 		`)
 
-	javac := ctx.ModuleForTests("foo", "android_common").Rule("javac").RelativeToTop()
+	javac := ctx.ModuleForTests("foo", "android_common").Rule("javac")
 	combineJar := ctx.ModuleForTests("foo", "android_common").Description("for javac")
 
 	if len(javac.Inputs) != 1 || javac.Inputs[0].String() != "a.java" {
@@ -1336,11 +1324,11 @@ func TestTurbine(t *testing.T) {
 		}
 		`)
 
-	fooTurbine := result.ModuleForTests("foo", "android_common").Rule("turbine").RelativeToTop()
-	barTurbine := result.ModuleForTests("bar", "android_common").Rule("turbine").RelativeToTop()
-	barJavac := result.ModuleForTests("bar", "android_common").Rule("javac").RelativeToTop()
-	barTurbineCombined := result.ModuleForTests("bar", "android_common").Description("for turbine").RelativeToTop()
-	bazJavac := result.ModuleForTests("baz", "android_common").Rule("javac").RelativeToTop()
+	fooTurbine := result.ModuleForTests("foo", "android_common").Rule("turbine")
+	barTurbine := result.ModuleForTests("bar", "android_common").Rule("turbine")
+	barJavac := result.ModuleForTests("bar", "android_common").Rule("javac")
+	barTurbineCombined := result.ModuleForTests("bar", "android_common").Description("for turbine")
+	bazJavac := result.ModuleForTests("baz", "android_common").Rule("javac")
 
 	android.AssertPathsRelativeToTopEquals(t, "foo inputs", []string{"a.java"}, fooTurbine.Inputs)
 
@@ -1363,7 +1351,7 @@ func TestSharding(t *testing.T) {
 
 	barHeaderJar := filepath.Join("out", "soong", ".intermediates", "bar", "android_common", "turbine-combined", "bar.jar")
 	for i := 0; i < 3; i++ {
-		barJavac := ctx.ModuleForTests("bar", "android_common").Description("javac" + strconv.Itoa(i)).RelativeToTop()
+		barJavac := ctx.ModuleForTests("bar", "android_common").Description("javac" + strconv.Itoa(i))
 		if !strings.Contains(barJavac.Args["classpath"], barHeaderJar) {
 			t.Errorf("bar javac classpath %v does not contain %q", barJavac.Args["classpath"], barHeaderJar)
 		}
@@ -1670,7 +1658,7 @@ func TestJavaSdkLibrary_DoNotAccessImplWhenItIsNotBuilt(t *testing.T) {
 
 	// The bar library should depend on the stubs jar.
 	barLibrary := result.ModuleForTests("bar", "android_common").Rule("javac")
-	if expected, actual := `^-classpath .*:/[^:]*/turbine-combined/foo\.stubs\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+	if expected, actual := `^-classpath .*:out/soong/[^:]*/turbine-combined/foo\.stubs\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
 		t.Errorf("expected %q, found %#q", expected, actual)
 	}
 }
@@ -1973,7 +1961,7 @@ func TestJavaSdkLibrary_DefaultToStubs(t *testing.T) {
 		`)
 	// The baz library should depend on the system stubs jar.
 	bazLibrary := result.ModuleForTests("baz", "android_common").Rule("javac")
-	if expected, actual := `^-classpath .*:/[^:]*/turbine-combined/foo\.stubs.system\.jar$`, bazLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+	if expected, actual := `^-classpath .*:out/soong/[^:]*/turbine-combined/foo\.stubs.system\.jar$`, bazLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
 		t.Errorf("expected %q, found %#q", expected, actual)
 	}
 }

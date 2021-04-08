@@ -108,6 +108,11 @@ type Bp2BuildConfig map[string]BazelConversionConfigEntry
 type BazelConversionConfigEntry int
 
 const (
+	// A sentinel value to be used as a key in Bp2BuildConfig for modules with
+	// no package path. This is also the module dir for top level Android.bp
+	// modules.
+	BP2BUILD_TOPLEVEL = "."
+
 	// iota + 1 ensures that the int value is not 0 when used in the Bp2buildAllowlist map,
 	// which can also mean that the key doesn't exist in a lookup.
 
@@ -129,48 +134,57 @@ var (
 	}
 
 	// Per-module denylist to always opt modules out.
-	bp2buildModuleDoNotConvert = map[string]bool{
-		"libBionicBenchmarksUtils":      true,
-		"libbionic_spawn_benchmark":     true,
-		"libc_jemalloc_wrapper":         true,
-		"libc_bootstrap":                true,
-		"libc_init_static":              true,
-		"libc_init_dynamic":             true,
-		"libc_tzcode":                   true,
-		"libc_freebsd":                  true,
-		"libc_freebsd_large_stack":      true,
-		"libc_netbsd":                   true,
-		"libc_openbsd_ndk":              true,
-		"libc_openbsd_large_stack":      true,
-		"libc_openbsd":                  true,
-		"libc_gdtoa":                    true,
-		"libc_fortify":                  true,
-		"libc_bionic":                   true,
-		"libc_bionic_ndk":               true,
-		"libc_bionic_systrace":          true,
-		"libc_pthread":                  true,
-		"libc_syscalls":                 true,
-		"libc_aeabi":                    true,
-		"libc_ndk":                      true,
-		"libc_nopthread":                true,
-		"libc_common":                   true,
-		"libc_static_dispatch":          true,
-		"libc_dynamic_dispatch":         true,
-		"libc_common_static":            true,
-		"libc_common_shared":            true,
-		"libc_unwind_static":            true,
-		"libc_nomalloc":                 true,
-		"libasync_safe":                 true,
-		"libc_malloc_debug_backtrace":   true,
-		"libsystemproperties":           true,
-		"libdl_static":                  true,
-		"liblinker_main":                true,
-		"liblinker_malloc":              true,
-		"liblinker_debuggerd_stub":      true,
-		"libbionic_tests_headers_posix": true,
-		"libc_dns":                      true,
+	bp2buildModuleDoNotConvertList = []string{
+		"libBionicBenchmarksUtils",      // ruperts@, cc_library_static
+		"libbionic_spawn_benchmark",     // ruperts@, cc_library_static, depends on //system/libbase
+		"libc_jemalloc_wrapper",         // ruperts@, cc_library_static, depends on //external/jemalloc_new
+		"libc_bootstrap",                // ruperts@, cc_library_static
+		"libc_init_static",              // ruperts@, cc_library_static
+		"libc_init_dynamic",             // ruperts@, cc_library_static
+		"libc_tzcode",                   // ruperts@, cc_library_static
+		"libc_freebsd",                  // ruperts@, cc_library_static
+		"libc_freebsd_large_stack",      // ruperts@, cc_library_static
+		"libc_netbsd",                   // ruperts@, cc_library_static
+		"libc_openbsd_ndk",              // ruperts@, cc_library_static
+		"libc_openbsd_large_stack",      // ruperts@, cc_library_static
+		"libc_openbsd",                  // ruperts@, cc_library_static
+		"libc_gdtoa",                    // ruperts@, cc_library_static
+		"libc_fortify",                  // ruperts@, cc_library_static
+		"libc_bionic",                   // ruperts@, cc_library_static
+		"libc_bionic_ndk",               // ruperts@, cc_library_static, depends on //bionic/libc/system_properties
+		"libc_bionic_systrace",          // ruperts@, cc_library_static
+		"libc_pthread",                  // ruperts@, cc_library_static
+		"libc_syscalls",                 // ruperts@, cc_library_static
+		"libc_aeabi",                    // ruperts@, cc_library_static
+		"libc_ndk",                      // ruperts@, cc_library_static, depends on //bionic/libm:libm
+		"libc_nopthread",                // ruperts@, cc_library_static, depends on //external/arm-optimized-routines
+		"libc_common",                   // ruperts@, cc_library_static, depends on //bionic/libc:libc_nopthread
+		"libc_static_dispatch",          // ruperts@, cc_library_static
+		"libc_dynamic_dispatch",         // ruperts@, cc_library_static
+		"libc_common_static",            // ruperts@, cc_library_static, depends on //bionic/libc:libc_common
+		"libc_common_shared",            // ruperts@, cc_library_static, depends on //bionic/libc:libc_common
+		"libc_unwind_static",            // ruperts@, cc_library_static
+		"libc_nomalloc",                 // ruperts@, cc_library_static, depends on //bionic/libc:libc_common
+		"libasync_safe",                 // ruperts@, cc_library_static
+		"libc_malloc_debug_backtrace",   // ruperts@, cc_library_static, depends on //system/libbase
+		"libsystemproperties",           // ruperts@, cc_library_static, depends on //system/core/property_service/libpropertyinfoparser
+		"libdl_static",                  // ruperts@, cc_library_static
+		"liblinker_main",                // ruperts@, cc_library_static, depends on //system/libbase
+		"liblinker_malloc",              // ruperts@, cc_library_static, depends on //system/logging/liblog:liblog
+		"liblinker_debuggerd_stub",      // ruperts@, cc_library_static, depends on //system/libbase
+		"libbionic_tests_headers_posix", // ruperts@, cc_library_static
+		"libc_dns",                      // ruperts@, cc_library_static
 	}
+
+	// Used for quicker lookups
+	bp2buildModuleDoNotConvert = map[string]bool{}
 )
+
+func init() {
+	for _, moduleName := range bp2buildModuleDoNotConvertList {
+		bp2buildModuleDoNotConvert[moduleName] = true
+	}
+}
 
 // ConvertWithBp2build returns whether the given BazelModuleBase should be converted with bp2build.
 func (b *BazelModuleBase) ConvertWithBp2build(ctx BazelConversionPathContext) bool {
@@ -212,10 +226,15 @@ func (b *BazelModuleBase) ConvertWithBp2build(ctx BazelConversionPathContext) bo
 func bp2buildDefaultTrueRecursively(packagePath string, config Bp2BuildConfig) bool {
 	ret := false
 
+	// Return exact matches in the config.
+	if config[packagePath] == Bp2BuildDefaultTrueRecursively {
+		return true
+	}
 	if config[packagePath] == Bp2BuildDefaultFalse {
 		return false
 	}
 
+	// If not, check for the config recursively.
 	packagePrefix := ""
 	// e.g. for x/y/z, iterate over x, x/y, then x/y/z, taking the final value from the allowlist.
 	for _, part := range strings.Split(packagePath, "/") {

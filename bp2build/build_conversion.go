@@ -415,64 +415,10 @@ func prettyPrint(propertyValue reflect.Value, indent int) (string, error) {
 	case reflect.Struct:
 		// Special cases where the bp2build sends additional information to the codegenerator
 		// by wrapping the attributes in a custom struct type.
-		if labels, ok := propertyValue.Interface().(bazel.LabelListAttribute); ok {
-			// TODO(b/165114590): convert glob syntax
-			ret, err := prettyPrint(reflect.ValueOf(labels.Value.Includes), indent)
-			if err != nil {
-				return ret, err
-			}
-
-			if !labels.HasArchSpecificValues() {
-				// Select statement not needed.
-				return ret, nil
-			}
-
-			ret += " + " + "select({\n"
-			for _, arch := range android.ArchTypeList() {
-				value := labels.GetValueForArch(arch.Name)
-				if len(value.Includes) > 0 {
-					ret += makeIndent(indent + 1)
-					list, _ := prettyPrint(reflect.ValueOf(value.Includes), indent+1)
-					ret += fmt.Sprintf("\"%s\": %s,\n", platformArchMap[arch], list)
-				}
-			}
-
-			ret += makeIndent(indent + 1)
-			ret += fmt.Sprintf("\"%s\": [],\n", "//conditions:default")
-
-			ret += makeIndent(indent)
-			ret += "})"
-			return ret, err
+		if attr, ok := propertyValue.Interface().(bazel.Attribute); ok {
+			return prettyPrintAttribute(attr, indent)
 		} else if label, ok := propertyValue.Interface().(bazel.Label); ok {
 			return fmt.Sprintf("%q", label.Label), nil
-		} else if stringList, ok := propertyValue.Interface().(bazel.StringListAttribute); ok {
-			// A Bazel string_list attribute that may contain a select statement.
-			ret, err := prettyPrint(reflect.ValueOf(stringList.Value), indent)
-			if err != nil {
-				return ret, err
-			}
-
-			if !stringList.HasArchSpecificValues() {
-				// Select statement not needed.
-				return ret, nil
-			}
-
-			ret += " + " + "select({\n"
-			for _, arch := range android.ArchTypeList() {
-				value := stringList.GetValueForArch(arch.Name)
-				if len(value) > 0 {
-					ret += makeIndent(indent + 1)
-					list, _ := prettyPrint(reflect.ValueOf(value), indent+1)
-					ret += fmt.Sprintf("\"%s\": %s,\n", platformArchMap[arch], list)
-				}
-			}
-
-			ret += makeIndent(indent + 1)
-			ret += fmt.Sprintf("\"%s\": [],\n", "//conditions:default")
-
-			ret += makeIndent(indent)
-			ret += "})"
-			return ret, err
 		}
 
 		ret = "{\n"
@@ -568,6 +514,13 @@ func isZero(value reflect.Value) bool {
 
 func escapeString(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
+
+	// b/184026959: Reverse the application of some common control sequences.
+	// These must be generated literally in the BUILD file.
+	s = strings.ReplaceAll(s, "\t", "\\t")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+
 	return strings.ReplaceAll(s, "\"", "\\\"")
 }
 

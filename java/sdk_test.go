@@ -313,10 +313,10 @@ func TestClasspath(t *testing.T) {
 
 			checkClasspath := func(t *testing.T, result *android.TestResult, isJava8 bool) {
 				foo := result.ModuleForTests("foo", variant)
-				javac := foo.Rule("javac").RelativeToTop()
+				javac := foo.Rule("javac")
 				var deps []string
 
-				aidl := foo.MaybeRule("aidl").RelativeToTop()
+				aidl := foo.MaybeRule("aidl")
 				if aidl.Rule != nil {
 					deps = append(deps, android.PathRelativeToTop(aidl.Output))
 				}
@@ -376,7 +376,7 @@ func TestClasspath(t *testing.T) {
 				checkClasspath(t, result, true /* isJava8 */)
 
 				if testcase.host != android.Host {
-					aidl := result.ModuleForTests("foo", variant).Rule("aidl").RelativeToTop()
+					aidl := result.ModuleForTests("foo", variant).Rule("aidl")
 
 					android.AssertStringDoesContain(t, "aidl command", aidl.RuleParams.Command, testcase.aidl+" -I.")
 				}
@@ -389,7 +389,7 @@ func TestClasspath(t *testing.T) {
 				checkClasspath(t, result, false /* isJava8 */)
 
 				if testcase.host != android.Host {
-					aidl := result.ModuleForTests("foo", variant).Rule("aidl").RelativeToTop()
+					aidl := result.ModuleForTests("foo", variant).Rule("aidl")
 
 					android.AssertStringDoesContain(t, "aidl command", aidl.RuleParams.Command, testcase.aidl+" -I.")
 				}
@@ -402,14 +402,16 @@ func TestClasspath(t *testing.T) {
 
 			// Test again with PLATFORM_VERSION_CODENAME=REL, javac -source 8 -target 8
 			t.Run("REL + Java language level 8", func(t *testing.T) {
-				result := fixtureFactory.Extend(prepareWithPlatformVersionRel).RunTestWithBp(t, bpJava8)
+				result := android.GroupFixturePreparers(
+					fixtureFactory, prepareWithPlatformVersionRel).RunTestWithBp(t, bpJava8)
 
 				checkClasspath(t, result, true /* isJava8 */)
 			})
 
 			// Test again with PLATFORM_VERSION_CODENAME=REL, javac -source 9 -target 9
 			t.Run("REL + Java language level 9", func(t *testing.T) {
-				result := fixtureFactory.Extend(prepareWithPlatformVersionRel).RunTestWithBp(t, bp)
+				result := android.GroupFixturePreparers(
+					fixtureFactory, prepareWithPlatformVersionRel).RunTestWithBp(t, bp)
 
 				checkClasspath(t, result, false /* isJava8 */)
 			})

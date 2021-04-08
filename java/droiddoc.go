@@ -98,10 +98,6 @@ type JavadocProperties struct {
 
 	// names of the output files used in args that will be generated
 	Out []string
-
-	// If set, metalava is sandboxed to only read files explicitly specified on the command
-	// line. Defaults to false.
-	Sandbox *bool
 }
 
 type ApiToCheck struct {
@@ -226,10 +222,7 @@ type Javadoc struct {
 	srcJars     android.Paths
 	srcFiles    android.Paths
 	sourcepaths android.Paths
-	argFiles    android.Paths
 	implicits   android.Paths
-
-	args []string
 
 	docZip      android.WritablePath
 	stubsSrcJar android.WritablePath
@@ -268,25 +261,25 @@ func JavadocHostFactory() android.Module {
 
 var _ android.OutputFileProducer = (*Javadoc)(nil)
 
-func (j *Javadoc) sdkVersion() sdkSpec {
-	return sdkSpecFrom(String(j.properties.Sdk_version))
+func (j *Javadoc) SdkVersion() android.SdkSpec {
+	return android.SdkSpecFrom(String(j.properties.Sdk_version))
 }
 
-func (j *Javadoc) systemModules() string {
+func (j *Javadoc) SystemModules() string {
 	return proptools.String(j.properties.System_modules)
 }
 
-func (j *Javadoc) minSdkVersion() sdkSpec {
-	return j.sdkVersion()
+func (j *Javadoc) MinSdkVersion() android.SdkSpec {
+	return j.SdkVersion()
 }
 
-func (j *Javadoc) targetSdkVersion() sdkSpec {
-	return j.sdkVersion()
+func (j *Javadoc) TargetSdkVersion() android.SdkSpec {
+	return j.SdkVersion()
 }
 
 func (j *Javadoc) addDeps(ctx android.BottomUpMutatorContext) {
 	if ctx.Device() {
-		sdkDep := decodeSdkDep(ctx, sdkContext(j))
+		sdkDep := decodeSdkDep(ctx, android.SdkContext(j))
 		if sdkDep.useModule {
 			ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.bootclasspath...)
 			ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
@@ -364,7 +357,7 @@ func (j *Javadoc) genSources(ctx android.ModuleContext, srcFiles android.Paths,
 func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 	var deps deps
 
-	sdkDep := decodeSdkDep(ctx, sdkContext(j))
+	sdkDep := decodeSdkDep(ctx, android.SdkContext(j))
 	if sdkDep.invalidVersion {
 		ctx.AddMissingDependencies(sdkDep.bootclasspath)
 		ctx.AddMissingDependencies(sdkDep.java9Classpath)
@@ -393,7 +386,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 			}
 		case libTag:
 			if dep, ok := module.(SdkLibraryDependency); ok {
-				deps.classpath = append(deps.classpath, dep.SdkHeaderJars(ctx, j.sdkVersion())...)
+				deps.classpath = append(deps.classpath, dep.SdkHeaderJars(ctx, j.SdkVersion())...)
 			} else if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
 				dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
 				deps.classpath = append(deps.classpath, dep.HeaderJars...)
@@ -480,15 +473,20 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 		j.sourcepaths = android.PathsForModuleSrc(ctx, []string{"."})
 	}
 
-	j.argFiles = android.PathsForModuleSrc(ctx, j.properties.Arg_files)
+	return deps
+}
+
+func (j *Javadoc) expandArgs(ctx android.ModuleContext, cmd *android.RuleBuilderCommand) {
+	var argFiles android.Paths
 	argFilesMap := map[string]string{}
 	argFileLabels := []string{}
 
 	for _, label := range j.properties.Arg_files {
 		var paths = android.PathsForModuleSrc(ctx, []string{label})
 		if _, exists := argFilesMap[label]; !exists {
-			argFilesMap[label] = strings.Join(paths.Strings(), " ")
+			argFilesMap[label] = strings.Join(cmd.PathsForInputs(paths), " ")
 			argFileLabels = append(argFileLabels, label)
+			argFiles = append(argFiles, paths...)
 		} else {
 			ctx.ModuleErrorf("multiple arg_files for %q, %q and %q",
 				label, argFilesMap[label], paths)
@@ -508,7 +506,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 	}
 
 	for _, flag := range flags {
-		args, err := android.Expand(flag, func(name string) (string, error) {
+		expanded, err := android.Expand(flag, func(name string) (string, error) {
 			if strings.HasPrefix(name, "location ") {
 				label := strings.TrimSpace(strings.TrimPrefix(name, "location "))
 				if paths, ok := argFilesMap[label]; ok {
@@ -526,10 +524,10 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 		if err != nil {
 			ctx.PropertyErrorf(argsPropertyName, "%s", err.Error())
 		}
-		j.args = append(j.args, args)
+		cmd.Flag(expanded)
 	}
 
-	return deps
+	cmd.Implicits(argFiles)
 }
 
 func (j *Javadoc) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -553,7 +551,7 @@ func (j *Javadoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	srcJarList := zipSyncCmd(ctx, rule, srcJarDir, j.srcJars)
 
-	javaVersion := getJavaVersion(ctx, String(j.properties.Java_version), sdkContext(j))
+	javaVersion := getJavaVersion(ctx, String(j.properties.Java_version), android.SdkContext(j))
 
 	cmd := javadocSystemModulesCmd(ctx, rule, j.srcFiles, outDir, srcJarDir, srcJarList,
 		deps.systemModules, deps.classpath, j.sourcepaths)
@@ -562,6 +560,8 @@ func (j *Javadoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		Flag("-J-Xmx1024m").
 		Flag("-XDignore.symbol.file").
 		Flag("-Xdoclint:none")
+
+	j.expandArgs(ctx, cmd)
 
 	rule.Command().
 		BuiltTool("soong_zip").
@@ -821,7 +821,7 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			deps.bootClasspath, deps.classpath, d.Javadoc.sourcepaths)
 	}
 
-	cmd.Flag(strings.Join(d.Javadoc.args, " ")).Implicits(d.Javadoc.argFiles)
+	d.expandArgs(ctx, cmd)
 
 	if d.properties.Compat_config != nil {
 		compatConfig := android.PathForModuleSrc(ctx, String(d.properties.Compat_config))
