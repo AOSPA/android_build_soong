@@ -26,23 +26,32 @@ import (
 // Contains tests for boot_image logic from java/boot_image.go as the ART boot image requires
 // modules from the ART apex.
 
+var prepareForTestWithBootImage = android.GroupFixturePreparers(
+	java.PrepareForTestWithDexpreopt,
+	PrepareForTestWithApexBuildComponents,
+)
+
+// Some additional files needed for the art apex.
+var prepareForTestWithArtApex = android.FixtureMergeMockFs(android.MockFS{
+	"com.android.art.avbpubkey":                          nil,
+	"com.android.art.pem":                                nil,
+	"system/sepolicy/apex/com.android.art-file_contexts": nil,
+})
+
 func TestBootImages(t *testing.T) {
-	result := apexFixtureFactory.Extend(
+	result := android.GroupFixturePreparers(
+		prepareForTestWithBootImage,
 		// Configure some libraries in the art and framework boot images.
 		dexpreopt.FixtureSetArtBootJars("com.android.art:baz", "com.android.art:quuz"),
 		dexpreopt.FixtureSetBootJars("platform:foo", "platform:bar"),
-		filesForSdkLibrary.AddToFixture(),
-		// Some additional files needed for the art apex.
-		android.FixtureMergeMockFs(android.MockFS{
-			"com.android.art.avbpubkey":                          nil,
-			"com.android.art.pem":                                nil,
-			"system/sepolicy/apex/com.android.art-file_contexts": nil,
-		}),
+		prepareForTestWithArtApex,
+
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.FixtureWithLastReleaseApis("foo"),
 	).RunTestWithBp(t, `
 		java_sdk_library {
 			name: "foo",
 			srcs: ["b.java"],
-			unsafe_ignore_missing_latest_api: true,
 		}
 
 		java_library {
@@ -86,6 +95,9 @@ func TestBootImages(t *testing.T) {
 		boot_image {
 			name: "art-boot-image",
 			image_name: "art",
+			apex_available: [
+				"com.android.art",
+			],
 		}
 
 		boot_image {
@@ -151,10 +163,163 @@ func checkBootImage(t *testing.T, result *android.TestResult, moduleName string,
 	android.AssertTrimmedStringEquals(t, "invalid paths for "+moduleName, expectedBootImageFiles, strings.Join(allPaths, "\n"))
 }
 
-func TestBootImageInApex(t *testing.T) {
-	result := apexFixtureFactory.Extend(
-		// Configure some libraries in the framework boot image.
-		dexpreopt.FixtureSetBootJars("platform:foo", "platform:bar"),
+func TestBootImageInArtApex(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForTestWithBootImage,
+		prepareForTestWithArtApex,
+
+		// Configure some libraries in the art boot image.
+		dexpreopt.FixtureSetArtBootJars("com.android.art:foo", "com.android.art:bar"),
+	).RunTestWithBp(t, `
+		apex {
+			name: "com.android.art",
+			key: "com.android.art.key",
+			boot_images: [
+				"mybootimage",
+			],
+			// bar (like foo) should be transitively included in this apex because it is part of the
+			// mybootimage boot_image. However, it is kept here to ensure that the apex dedups the files
+			// correctly.
+			java_libs: [
+				"bar",
+			],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "com.android.art.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_library {
+			name: "foo",
+			srcs: ["b.java"],
+			installable: true,
+			apex_available: [
+				"com.android.art",
+			],
+		}
+
+		java_library {
+			name: "bar",
+			srcs: ["b.java"],
+			installable: true,
+			apex_available: [
+				"com.android.art",
+			],
+		}
+
+		boot_image {
+			name: "mybootimage",
+			image_name: "art",
+			apex_available: [
+				"com.android.art",
+			],
+		}
+
+		// Make sure that a preferred prebuilt doesn't affect the apex.
+		prebuilt_boot_image {
+			name: "mybootimage",
+			image_name: "art",
+			prefer: true,
+			apex_available: [
+				"com.android.art",
+			],
+		}
+	`)
+
+	ensureExactContents(t, result.TestContext, "com.android.art", "android_common_com.android.art_image", []string{
+		"javalib/arm/boot.art",
+		"javalib/arm/boot.oat",
+		"javalib/arm/boot.vdex",
+		"javalib/arm/boot-bar.art",
+		"javalib/arm/boot-bar.oat",
+		"javalib/arm/boot-bar.vdex",
+		"javalib/arm64/boot.art",
+		"javalib/arm64/boot.oat",
+		"javalib/arm64/boot.vdex",
+		"javalib/arm64/boot-bar.art",
+		"javalib/arm64/boot-bar.oat",
+		"javalib/arm64/boot-bar.vdex",
+		"javalib/bar.jar",
+		"javalib/foo.jar",
+	})
+
+	java.CheckModuleDependencies(t, result.TestContext, "com.android.art", "android_common_com.android.art_image", []string{
+		`bar`,
+		`com.android.art.key`,
+		`mybootimage`,
+	})
+}
+
+func TestBootImageInPrebuiltArtApex(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForTestWithBootImage,
+		prepareForTestWithArtApex,
+
+		android.FixtureMergeMockFs(android.MockFS{
+			"com.android.art-arm64.apex": nil,
+			"com.android.art-arm.apex":   nil,
+		}),
+
+		// Configure some libraries in the art boot image.
+		dexpreopt.FixtureSetArtBootJars("com.android.art:foo", "com.android.art:bar"),
+	).RunTestWithBp(t, `
+		prebuilt_apex {
+			name: "com.android.art",
+			arch: {
+				arm64: {
+					src: "com.android.art-arm64.apex",
+				},
+				arm: {
+					src: "com.android.art-arm.apex",
+				},
+			},
+			exported_java_libs: ["foo", "bar"],
+		}
+
+		java_import {
+			name: "foo",
+			jars: ["foo.jar"],
+			apex_available: [
+				"com.android.art",
+			],
+		}
+
+		java_import {
+			name: "bar",
+			jars: ["bar.jar"],
+			apex_available: [
+				"com.android.art",
+			],
+		}
+
+		prebuilt_boot_image {
+			name: "mybootimage",
+			image_name: "art",
+			apex_available: [
+				"com.android.art",
+			],
+		}
+	`)
+
+	java.CheckModuleDependencies(t, result.TestContext, "com.android.art", "android_common", []string{
+		`prebuilt_bar`,
+		`prebuilt_foo`,
+	})
+
+	java.CheckModuleDependencies(t, result.TestContext, "mybootimage", "android_common", []string{
+		`dex2oatd`,
+		`prebuilt_bar`,
+		`prebuilt_foo`,
+	})
+}
+
+func TestBootImageContentsNoName(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForTestWithBootImage,
+		prepareForTestWithMyapex,
 	).RunTestWithBp(t, `
 		apex {
 			name: "myapex",
@@ -175,17 +340,26 @@ func TestBootImageInApex(t *testing.T) {
 			name: "foo",
 			srcs: ["b.java"],
 			installable: true,
+			apex_available: [
+				"myapex",
+			],
 		}
 
 		java_library {
 			name: "bar",
 			srcs: ["b.java"],
 			installable: true,
+			apex_available: [
+				"myapex",
+			],
 		}
 
 		boot_image {
 			name: "mybootimage",
-			image_name: "boot",
+			contents: [
+				"foo",
+				"bar",
+			],
 			apex_available: [
 				"myapex",
 			],
@@ -193,18 +367,15 @@ func TestBootImageInApex(t *testing.T) {
 	`)
 
 	ensureExactContents(t, result.TestContext, "myapex", "android_common_myapex_image", []string{
-		"javalib/arm/boot-bar.art",
-		"javalib/arm/boot-bar.oat",
-		"javalib/arm/boot-bar.vdex",
-		"javalib/arm/boot-foo.art",
-		"javalib/arm/boot-foo.oat",
-		"javalib/arm/boot-foo.vdex",
-		"javalib/arm64/boot-bar.art",
-		"javalib/arm64/boot-bar.oat",
-		"javalib/arm64/boot-bar.vdex",
-		"javalib/arm64/boot-foo.art",
-		"javalib/arm64/boot-foo.oat",
-		"javalib/arm64/boot-foo.vdex",
+		// This does not include art, oat or vdex files as they are only included for the art boot
+		// image.
+		"javalib/bar.jar",
+		"javalib/foo.jar",
+	})
+
+	java.CheckModuleDependencies(t, result.TestContext, "myapex", "android_common_myapex_image", []string{
+		`myapex.key`,
+		`mybootimage`,
 	})
 }
 
