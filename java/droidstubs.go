@@ -284,7 +284,7 @@ func (d *Droidstubs) annotationsFlags(ctx android.ModuleContext, cmd *android.Ru
 		cmd.Flag("--include-annotations")
 
 		validatingNullability :=
-			android.InList("--validate-nullability-from-merged-stubs", d.Javadoc.args) ||
+			strings.Contains(String(d.Javadoc.properties.Args), "--validate-nullability-from-merged-stubs") ||
 				String(d.properties.Validate_nullability_from_list) != ""
 
 		migratingNullability := String(d.properties.Previous_api) != ""
@@ -360,7 +360,16 @@ func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *a
 	ctx.VisitDirectDepsWithTag(metalavaAPILevelsAnnotationsDirTag, func(m android.Module) {
 		if t, ok := m.(*ExportedDroiddocDir); ok {
 			for _, dep := range t.deps {
-				if strings.HasSuffix(dep.String(), filename) {
+				if dep.Base() == filename {
+					cmd.Implicit(dep)
+				}
+				if filename != "android.jar" && dep.Base() == "android.jar" {
+					// Metalava implicitly searches these patterns:
+					//  prebuilts/tools/common/api-versions/android-%/android.jar
+					//  prebuilts/sdk/%/public/android.jar
+					// Add android.jar files from the api_levels_annotations_dirs directories to try
+					// to satisfy these patterns.  If Metalava can't find a match for an API level
+					// between 1 and 28 in at least one pattern it will fail.
 					cmd.Implicit(dep)
 				}
 			}
@@ -374,7 +383,7 @@ func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *a
 
 func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersion javaVersion, srcs android.Paths,
 	srcJarList android.Path, bootclasspath, classpath classpath, sourcepaths android.Paths,
-	implicitsRsp, homeDir android.WritablePath, sandbox bool) *android.RuleBuilderCommand {
+	homeDir android.WritablePath) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -383,39 +392,16 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 
 	if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_METALAVA") {
 		rule.Remoteable(android.RemoteRuleSupports{RBE: true})
-		if sandbox {
-			execStrategy := ctx.Config().GetenvWithDefault("RBE_METALAVA_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
-			labels := map[string]string{"type": "tool", "name": "metalava"}
-			// TODO: metalava pool rejects these jobs
-			pool := ctx.Config().GetenvWithDefault("RBE_METALAVA_POOL", "java16")
-			rule.Rewrapper(&remoteexec.REParams{
-				Labels:          labels,
-				ExecStrategy:    execStrategy,
-				ToolchainInputs: []string{config.JavaCmd(ctx).String()},
-				Platform:        map[string]string{remoteexec.PoolKey: pool},
-			})
-		} else {
-			execStrategy := remoteexec.LocalExecStrategy
-			labels := map[string]string{"type": "compile", "lang": "java", "compiler": "metalava", "shallow": "true"}
-			pool := ctx.Config().GetenvWithDefault("RBE_METALAVA_POOL", "metalava")
-
-			inputs := []string{
-				ctx.Config().HostJavaToolPath(ctx, "metalava").String(),
-				homeDir.String(),
-			}
-			if v := ctx.Config().Getenv("RBE_METALAVA_INPUTS"); v != "" {
-				inputs = append(inputs, strings.Split(v, ",")...)
-			}
-			cmd.Text((&remoteexec.REParams{
-				Labels:               labels,
-				ExecStrategy:         execStrategy,
-				Inputs:               inputs,
-				RSPFiles:             []string{implicitsRsp.String()},
-				ToolchainInputs:      []string{config.JavaCmd(ctx).String()},
-				Platform:             map[string]string{remoteexec.PoolKey: pool},
-				EnvironmentVariables: []string{"ANDROID_PREFS_ROOT"},
-			}).NoVarTemplate(ctx.Config().RBEWrapper()))
-		}
+		execStrategy := ctx.Config().GetenvWithDefault("RBE_METALAVA_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
+		labels := map[string]string{"type": "tool", "name": "metalava"}
+		// TODO: metalava pool rejects these jobs
+		pool := ctx.Config().GetenvWithDefault("RBE_METALAVA_POOL", "java16")
+		rule.Rewrapper(&remoteexec.REParams{
+			Labels:          labels,
+			ExecStrategy:    execStrategy,
+			ToolchainInputs: []string{config.JavaCmd(ctx).String()},
+			Platform:        map[string]string{remoteexec.PoolKey: pool},
+		})
 	}
 
 	cmd.BuiltTool("metalava").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "metalava.jar")).
@@ -425,18 +411,6 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 		FlagWithArg("-source ", javaVersion.String()).
 		FlagWithRspFileInputList("@", android.PathForModuleOut(ctx, "metalava.rsp"), srcs).
 		FlagWithInput("@", srcJarList)
-
-	if !sandbox {
-		if javaHome := ctx.Config().Getenv("ANDROID_JAVA_HOME"); javaHome != "" {
-			cmd.Implicit(android.PathForSource(ctx, javaHome))
-		}
-
-		cmd.FlagWithOutput("--strict-input-files:warn ", android.PathForModuleOut(ctx, ctx.ModuleName()+"-"+"violations.txt"))
-
-		if implicitsRsp != nil {
-			cmd.FlagWithArg("--strict-input-files-exempt ", "@"+implicitsRsp.String())
-		}
-	}
 
 	if len(bootclasspath) > 0 {
 		cmd.FlagWithInputList("-bootclasspath ", bootclasspath.Paths(), ":")
@@ -465,7 +439,7 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	deps := d.Javadoc.collectDeps(ctx)
 
-	javaVersion := getJavaVersion(ctx, String(d.Javadoc.properties.Java_version), sdkContext(d))
+	javaVersion := getJavaVersion(ctx, String(d.Javadoc.properties.Java_version), android.SdkContext(d))
 
 	// Create rule for metalava
 
@@ -473,12 +447,9 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 
-	sandbox := proptools.Bool(d.Javadoc.properties.Sandbox)
-	if sandbox {
-		rule.Sbox(android.PathForModuleOut(ctx, "metalava"),
-			android.PathForModuleOut(ctx, "metalava.sbox.textproto")).
-			SandboxInputs()
-	}
+	rule.Sbox(android.PathForModuleOut(ctx, "metalava"),
+		android.PathForModuleOut(ctx, "metalava.sbox.textproto")).
+		SandboxInputs()
 
 	if BoolDefault(d.properties.High_mem, false) {
 		// This metalava run uses lots of memory, restrict the number of metalava jobs that can run in parallel.
@@ -496,11 +467,9 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	srcJarList := zipSyncCmd(ctx, rule, srcJarDir, d.Javadoc.srcJars)
 
-	implicitsRsp := android.PathForModuleOut(ctx, ctx.ModuleName()+"-"+"implicits.rsp")
 	homeDir := android.PathForModuleOut(ctx, "metalava", "home")
 	cmd := metalavaCmd(ctx, rule, javaVersion, d.Javadoc.srcFiles, srcJarList,
-		deps.bootClasspath, deps.classpath, d.Javadoc.sourcepaths, implicitsRsp, homeDir,
-		sandbox)
+		deps.bootClasspath, deps.classpath, d.Javadoc.sourcepaths, homeDir)
 	cmd.Implicits(d.Javadoc.implicits)
 
 	d.stubsFlags(ctx, cmd, stubsDir)
@@ -509,14 +478,8 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	d.inclusionAnnotationsFlags(ctx, cmd)
 	d.apiLevelsAnnotationsFlags(ctx, cmd)
 
-	if android.InList("--generate-documentation", d.Javadoc.args) {
-		// Currently Metalava have the ability to invoke Javadoc in a separate process.
-		// Pass "-nodocs" to suppress the Javadoc invocation when Metalava receives
-		// "--generate-documentation" arg. This is not needed when Metalava removes this feature.
-		d.Javadoc.args = append(d.Javadoc.args, "-nodocs")
-	}
+	d.expandArgs(ctx, cmd)
 
-	cmd.Flag(strings.Join(d.Javadoc.args, " ")).Implicits(d.Javadoc.argFiles)
 	for _, o := range d.Javadoc.properties.Out {
 		cmd.ImplicitOutput(android.PathForModuleGen(ctx, o))
 	}
@@ -625,22 +588,6 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		cmd.FlagWithArg("--error-message:compatibility:released ", msg)
 	}
 
-	if !sandbox {
-		// When sandboxing is enabled RuleBuilder tracks all the inputs needed for remote execution.
-		// Without it we have to do it manually.
-		impRule := android.NewRuleBuilder(pctx, ctx)
-		impCmd := impRule.Command()
-		// An action that copies the ninja generated rsp file to a new location. This allows us to
-		// add a large number of inputs to a file without exceeding bash command length limits (which
-		// would happen if we use the WriteFile rule). The cp is needed because RuleBuilder sets the
-		// rsp file to be ${output}.rsp.
-		impCmd.Text("cp").
-			FlagWithRspFileInputList("", android.PathForModuleOut(ctx, "metalava-implicits.rsp"), cmd.GetImplicits()).
-			Output(implicitsRsp)
-		impRule.Build("implicitsGen", "implicits generation")
-		cmd.Implicit(implicitsRsp)
-	}
-
 	if generateStubs {
 		rule.Command().
 			BuiltTool("soong_zip").
@@ -672,9 +619,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	// TODO(b/183630617): rewrapper doesn't support restat rules
-	if !sandbox {
-		rule.Restat()
-	}
+	// rule.Restat()
 
 	zipSyncCleanupCmd(rule, srcJarDir)
 

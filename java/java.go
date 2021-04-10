@@ -33,12 +33,12 @@ import (
 )
 
 func init() {
-	RegisterJavaBuildComponents(android.InitRegistrationContext)
+	registerJavaBuildComponents(android.InitRegistrationContext)
 
 	RegisterJavaSdkMemberTypes()
 }
 
-func RegisterJavaBuildComponents(ctx android.RegistrationContext) {
+func registerJavaBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("java_defaults", DefaultsFactory)
 
 	ctx.RegisterModuleType("java_library", LibraryFactory)
@@ -304,7 +304,7 @@ type jniLib struct {
 	unstrippedFile android.Path
 }
 
-func sdkDeps(ctx android.BottomUpMutatorContext, sdkContext sdkContext, d dexer) {
+func sdkDeps(ctx android.BottomUpMutatorContext, sdkContext android.SdkContext, d dexer) {
 	sdkDep := decodeSdkDep(ctx, sdkContext)
 	if sdkDep.useModule {
 		ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.bootclasspath...)
@@ -352,11 +352,11 @@ func checkProducesJars(ctx android.ModuleContext, dep android.SourceFileProducer
 	}
 }
 
-func getJavaVersion(ctx android.ModuleContext, javaVersion string, sdkContext sdkContext) javaVersion {
+func getJavaVersion(ctx android.ModuleContext, javaVersion string, sdkContext android.SdkContext) javaVersion {
 	if javaVersion != "" {
 		return normalizeJavaVersion(ctx, javaVersion)
 	} else if ctx.Device() {
-		return sdkContext.sdkVersion().defaultJavaLanguageVersion(ctx)
+		return defaultJavaLanguageVersion(ctx, sdkContext.SdkVersion())
 	} else {
 		return JAVA_VERSION_9
 	}
@@ -776,7 +776,7 @@ func (j *TestHost) AddExtraResource(p android.Path) {
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	if j.testProperties.Test_options.Unit_test == nil && ctx.Host() {
 		// TODO(b/): Clean temporary heuristic to avoid unexpected onboarding.
-		defaultUnitTest := !inList("tradefed", j.properties.Static_libs) && !inList("tradefed", j.properties.Libs) && !inList("cts", j.testProperties.Test_suites)
+		defaultUnitTest := !inList("tradefed", j.properties.Libs) && !inList("cts", j.testProperties.Test_suites)
 		j.testProperties.Test_options.Unit_test = proptools.BoolPtr(defaultUnitTest)
 	}
 	j.testConfig = tradefed.AutoGenJavaTestConfig(ctx, j.testProperties.Test_config, j.testProperties.Test_config_template,
@@ -1074,7 +1074,13 @@ func BinaryHostFactory() android.Module {
 type ImportProperties struct {
 	Jars []string `android:"path,arch_variant"`
 
+	// The version of the SDK that the source prebuilt file was built against. Defaults to the
+	// current version if not specified.
 	Sdk_version *string
+
+	// The minimum version of the SDK that this module supports. Defaults to sdk_version if not
+	// specified.
+	Min_sdk_version *string
 
 	Installable *bool
 
@@ -1126,28 +1132,31 @@ type Import struct {
 	hideApexVariantFromMake bool
 }
 
-func (j *Import) sdkVersion() sdkSpec {
-	return sdkSpecFrom(String(j.properties.Sdk_version))
+func (j *Import) SdkVersion() android.SdkSpec {
+	return android.SdkSpecFrom(String(j.properties.Sdk_version))
 }
 
 func (j *Import) makeSdkVersion() string {
-	return j.sdkVersion().raw
+	return j.SdkVersion().Raw
 }
 
-func (j *Import) systemModules() string {
+func (j *Import) SystemModules() string {
 	return "none"
 }
 
-func (j *Import) minSdkVersion() sdkSpec {
-	return j.sdkVersion()
+func (j *Import) MinSdkVersion() android.SdkSpec {
+	if j.properties.Min_sdk_version != nil {
+		return android.SdkSpecFrom(*j.properties.Min_sdk_version)
+	}
+	return j.SdkVersion()
 }
 
-func (j *Import) targetSdkVersion() sdkSpec {
-	return j.sdkVersion()
+func (j *Import) TargetSdkVersion() android.SdkSpec {
+	return j.SdkVersion()
 }
 
-func (j *Import) MinSdkVersion() string {
-	return j.minSdkVersion().version.String()
+func (j *Import) MinSdkVersionString() string {
+	return j.MinSdkVersion().ApiLevel.String()
 }
 
 func (j *Import) Prebuilt() *android.Prebuilt {
@@ -1178,7 +1187,7 @@ func (j *Import) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
 
 	if ctx.Device() && Bool(j.dexProperties.Compile_dex) {
-		sdkDeps(ctx, sdkContext(j), j.dexer)
+		sdkDeps(ctx, android.SdkContext(j), j.dexer)
 	}
 }
 
@@ -1221,7 +1230,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		} else if dep, ok := module.(SdkLibraryDependency); ok {
 			switch tag {
 			case libTag:
-				flags.classpath = append(flags.classpath, dep.SdkHeaderJars(ctx, j.sdkVersion())...)
+				flags.classpath = append(flags.classpath, dep.SdkHeaderJars(ctx, j.SdkVersion())...)
 			}
 		}
 
@@ -1263,7 +1272,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				ctx.ModuleErrorf("internal error: no dex implementation jar available from prebuilt_apex %q", deapexerModule.Name())
 			}
 		} else if Bool(j.dexProperties.Compile_dex) {
-			sdkDep := decodeSdkDep(ctx, sdkContext(j))
+			sdkDep := decodeSdkDep(ctx, android.SdkContext(j))
 			if sdkDep.invalidVersion {
 				ctx.AddMissingDependencies(sdkDep.bootclasspath)
 				ctx.AddMissingDependencies(sdkDep.java9Classpath)
@@ -1282,7 +1291,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
 
 			var dexOutputFile android.OutputPath
-			dexOutputFile = j.dexer.compileDex(ctx, flags, j.minSdkVersion(), outputFile, jarName)
+			dexOutputFile = j.dexer.compileDex(ctx, flags, j.MinSdkVersion(), outputFile, jarName)
 			if ctx.Failed() {
 				return
 			}
@@ -1350,7 +1359,20 @@ func (j *Import) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 // Implements android.ApexModule
 func (j *Import) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 	sdkVersion android.ApiLevel) error {
-	// Do not check for prebuilts against the min_sdk_version of enclosing APEX
+	sdkSpec := j.MinSdkVersion()
+	if !sdkSpec.Specified() {
+		return fmt.Errorf("min_sdk_version is not specified")
+	}
+	if sdkSpec.Kind == android.SdkCore {
+		return nil
+	}
+	ver, err := sdkSpec.EffectiveVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if ver.GreaterThan(sdkVersion) {
+		return fmt.Errorf("newer SDK(%v)", ver)
+	}
 	return nil
 }
 

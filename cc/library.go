@@ -65,7 +65,8 @@ type LibraryProperties struct {
 		// symbols that are exported for stubs variant of this library.
 		Symbol_file *string `android:"path"`
 
-		// List versions to generate stubs libs for.
+		// List versions to generate stubs libs for. The version name "current" is always
+		// implicitly added.
 		Versions []string
 	}
 
@@ -171,6 +172,8 @@ type LibraryMutatedProperties struct {
 
 	// This variant is a stubs lib
 	BuildStubs bool `blueprint:"mutated"`
+	// This variant is the latest version
+	IsLatestVersion bool `blueprint:"mutated"`
 	// Version of the stubs lib
 	StubsVersion string `blueprint:"mutated"`
 	// List of all stubs versions associated with an implementation lib
@@ -424,11 +427,14 @@ func (handler *staticLibraryBazelHandler) generateBazelBuildActions(ctx android.
 	if !ok {
 		return ok
 	}
-	if len(outputPaths) != 1 {
+	if len(outputPaths) > 1 {
 		// TODO(cparsons): This is actually expected behavior for static libraries with no srcs.
 		// We should support this.
-		ctx.ModuleErrorf("expected exactly one output file for '%s', but got %s", label, objPaths)
+		ctx.ModuleErrorf("expected at most one output file for '%s', but got %s", label, objPaths)
 		return false
+	} else if len(outputPaths) == 0 {
+		handler.module.outputFile = android.OptionalPath{}
+		return true
 	}
 	outputFilePath := android.PathForBazelOut(ctx, outputPaths[0])
 	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
@@ -452,7 +458,15 @@ func (handler *staticLibraryBazelHandler) generateBazelBuildActions(ctx android.
 			Direct(outputFilePath).
 			Build(),
 	})
-	handler.module.outputFile = android.OptionalPathForPath(android.PathForBazelOut(ctx, objPaths[0]))
+	if i, ok := handler.module.linker.(snapshotLibraryInterface); ok {
+		// Dependencies on this library will expect collectedSnapshotHeaders to
+		// be set, otherwise validation will fail. For now, set this to an empty
+		// list.
+		// TODO(cparsons): More closely mirror the collectHeadersForSnapshot
+		// implementation.
+		i.(*libraryDecorator).collectedSnapshotHeaders = android.Paths{}
+	}
+
 	return ok
 }
 
@@ -793,7 +807,7 @@ type libraryInterface interface {
 
 type versionedInterface interface {
 	buildStubs() bool
-	setBuildStubs()
+	setBuildStubs(isLatest bool)
 	hasStubsVariants() bool
 	setStubsVersion(string)
 	stubsVersion() string
@@ -1511,7 +1525,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 			if ctx.isVndk() && !ctx.IsVndkExt() {
 				return
 			}
-		} else if len(library.Properties.Stubs.Versions) > 0 && !ctx.Host() && ctx.directlyInAnyApex() {
+		} else if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
 			// Bionic libraries (e.g. libc.so) is installed to the bootstrap subdirectory.
 			// The original path becomes a symlink to the corresponding file in the
 			// runtime APEX.
@@ -1627,11 +1641,29 @@ func (library *libraryDecorator) symbolFileForAbiCheck(ctx ModuleContext) *strin
 }
 
 func (library *libraryDecorator) hasStubsVariants() bool {
-	return len(library.Properties.Stubs.Versions) > 0
+	// Just having stubs.symbol_file is enough to create a stub variant. In that case
+	// the stub for the future API level is created.
+	return library.Properties.Stubs.Symbol_file != nil ||
+		len(library.Properties.Stubs.Versions) > 0
 }
 
 func (library *libraryDecorator) stubsVersions(ctx android.BaseMutatorContext) []string {
-	return library.Properties.Stubs.Versions
+	if !library.hasStubsVariants() {
+		return nil
+	}
+
+	// Future API level is implicitly added if there isn't
+	vers := library.Properties.Stubs.Versions
+	if inList(android.FutureApiLevel.String(), vers) {
+		return vers
+	}
+	// In some cases, people use the raw value "10000" in the versions property.
+	// We shouldn't add the future API level in that case, otherwise there will
+	// be two identical versions.
+	if inList(strconv.Itoa(android.FutureApiLevel.FinalOrFutureInt()), vers) {
+		return vers
+	}
+	return append(vers, android.FutureApiLevel.String())
 }
 
 func (library *libraryDecorator) setStubsVersion(version string) {
@@ -1642,8 +1674,9 @@ func (library *libraryDecorator) stubsVersion() string {
 	return library.MutatedProperties.StubsVersion
 }
 
-func (library *libraryDecorator) setBuildStubs() {
+func (library *libraryDecorator) setBuildStubs(isLatest bool) {
 	library.MutatedProperties.BuildStubs = true
+	library.MutatedProperties.IsLatestVersion = isLatest
 }
 
 func (library *libraryDecorator) setAllStubsVersions(versions []string) {
@@ -1655,8 +1688,7 @@ func (library *libraryDecorator) allStubsVersions() []string {
 }
 
 func (library *libraryDecorator) isLatestStubVersion() bool {
-	versions := library.Properties.Stubs.Versions
-	return versions[len(versions)-1] == library.stubsVersion()
+	return library.MutatedProperties.IsLatestVersion
 }
 
 func (library *libraryDecorator) availableFor(what string) bool {
@@ -1899,7 +1931,8 @@ func createVersionVariations(mctx android.BottomUpMutatorContext, versions []str
 			c.stl = nil
 			c.Properties.PreventInstall = true
 			lib := moduleLibraryInterface(m)
-			lib.setBuildStubs()
+			isLatest := i == (len(versions) - 1)
+			lib.setBuildStubs(isLatest)
 
 			if variants[i] != "" {
 				// A non-LLNDK stubs module is hidden from make and has a dependency from the
@@ -2042,38 +2075,6 @@ func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.Modu
 	return outputFile
 }
 
-func Bp2BuildParseHeaderLibs(ctx android.TopDownMutatorContext, module *Module) bazel.LabelListAttribute {
-	var headerLibs []string
-	for _, linkerProps := range module.linker.linkerProps() {
-		if baseLinkerProps, ok := linkerProps.(*BaseLinkerProperties); ok {
-			headerLibs = baseLinkerProps.Header_libs
-			// FIXME: re-export include dirs from baseLinkerProps.Export_header_lib_headers?
-			break
-		}
-	}
-	headerLibsLabels := bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, headerLibs))
-	return headerLibsLabels
-}
-
-func Bp2BuildParseExportedIncludes(ctx android.TopDownMutatorContext, module *Module) (bazel.LabelListAttribute, bazel.LabelListAttribute) {
-	libraryDecorator := module.linker.(*libraryDecorator)
-
-	includeDirs := libraryDecorator.flagExporter.Properties.Export_system_include_dirs
-	includeDirs = append(includeDirs, libraryDecorator.flagExporter.Properties.Export_include_dirs...)
-
-	includeDirsLabels := android.BazelLabelForModuleSrc(ctx, includeDirs)
-
-	var includeDirGlobs []string
-	for _, includeDir := range includeDirs {
-		includeDirGlobs = append(includeDirGlobs, includeDir+"/**/*.h")
-		includeDirGlobs = append(includeDirGlobs, includeDir+"/**/*.inc")
-		includeDirGlobs = append(includeDirGlobs, includeDir+"/**/*.hpp")
-	}
-
-	headersLabels := android.BazelLabelForModuleSrc(ctx, includeDirGlobs)
-	return bazel.MakeLabelListAttribute(includeDirsLabels), bazel.MakeLabelListAttribute(headersLabels)
-}
-
 type bazelCcLibraryStaticAttributes struct {
 	Copts      []string
 	Srcs       bazel.LabelListAttribute
@@ -2145,10 +2146,10 @@ func CcLibraryStaticBp2Build(ctx android.TopDownMutatorContext) {
 	allIncludes = append(allIncludes, localIncludeDirs...)
 	includesLabels := android.BazelLabelForModuleSrc(ctx, allIncludes)
 
-	exportedIncludesLabels, exportedIncludesHeadersLabels := Bp2BuildParseExportedIncludes(ctx, module)
+	exportedIncludesLabels, exportedIncludesHeadersLabels := bp2BuildParseExportedIncludes(ctx, module)
 	includesLabels.Append(exportedIncludesLabels.Value)
 
-	headerLibsLabels := Bp2BuildParseHeaderLibs(ctx, module)
+	headerLibsLabels := bp2BuildParseHeaderLibs(ctx, module)
 	depsLabels.Append(headerLibsLabels.Value)
 
 	attrs := &bazelCcLibraryStaticAttributes{

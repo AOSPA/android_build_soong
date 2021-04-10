@@ -39,7 +39,8 @@ var hiddenApiFixtureFactory = android.GroupFixturePreparers(
 	prepareForJavaTest, PrepareForTestWithHiddenApiBuildComponents)
 
 func TestHiddenAPISingleton(t *testing.T) {
-	result := hiddenApiFixtureFactory.Extend(
+	result := android.GroupFixturePreparers(
+		hiddenApiFixtureFactory,
 		fixtureSetBootJarsProductVariable("platform:foo"),
 	).RunTestWithBp(t, `
 		java_library {
@@ -50,13 +51,14 @@ func TestHiddenAPISingleton(t *testing.T) {
 	`)
 
 	hiddenAPI := result.SingletonForTests("hiddenapi")
-	hiddenapiRule := hiddenAPI.Rule("hiddenapi").RelativeToTop()
+	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
 	want := "--boot-dex=out/soong/.intermediates/foo/android_common/aligned/foo.jar"
 	android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, want)
 }
 
 func TestHiddenAPIIndexSingleton(t *testing.T) {
-	result := hiddenApiFixtureFactory.Extend(
+	result := android.GroupFixturePreparers(
+		hiddenApiFixtureFactory,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("bar"),
 		fixtureSetBootJarsProductVariable("platform:foo", "platform:bar"),
@@ -115,7 +117,8 @@ func TestHiddenAPISingletonWithSourceAndPrebuiltPreferredButNoDex(t *testing.T) 
 			" replaced by the prebuilt module \"prebuilt_foo\" but unfortunately it does not provide a" +
 			" suitable boot dex jar"
 
-	hiddenApiFixtureFactory.Extend(
+	android.GroupFixturePreparers(
+		hiddenApiFixtureFactory,
 		fixtureSetBootJarsProductVariable("platform:foo"),
 	).ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(expectedErrorMessage)).
 		RunTestWithBp(t, `
@@ -134,7 +137,8 @@ func TestHiddenAPISingletonWithSourceAndPrebuiltPreferredButNoDex(t *testing.T) 
 }
 
 func TestHiddenAPISingletonWithPrebuilt(t *testing.T) {
-	result := hiddenApiFixtureFactory.Extend(
+	result := android.GroupFixturePreparers(
+		hiddenApiFixtureFactory,
 		fixtureSetBootJarsProductVariable("platform:foo"),
 	).RunTestWithBp(t, `
 		java_import {
@@ -145,13 +149,14 @@ func TestHiddenAPISingletonWithPrebuilt(t *testing.T) {
 	`)
 
 	hiddenAPI := result.SingletonForTests("hiddenapi")
-	hiddenapiRule := hiddenAPI.Rule("hiddenapi").RelativeToTop()
+	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
 	want := "--boot-dex=out/soong/.intermediates/foo/android_common/aligned/foo.jar"
 	android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, want)
 }
 
 func TestHiddenAPISingletonWithPrebuiltUseSource(t *testing.T) {
-	result := hiddenApiFixtureFactory.Extend(
+	result := android.GroupFixturePreparers(
+		hiddenApiFixtureFactory,
 		fixtureSetBootJarsProductVariable("platform:foo"),
 	).RunTestWithBp(t, `
 		java_library {
@@ -169,7 +174,7 @@ func TestHiddenAPISingletonWithPrebuiltUseSource(t *testing.T) {
 	`)
 
 	hiddenAPI := result.SingletonForTests("hiddenapi")
-	hiddenapiRule := hiddenAPI.Rule("hiddenapi").RelativeToTop()
+	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
 	fromSourceJarArg := "--boot-dex=out/soong/.intermediates/foo/android_common/aligned/foo.jar"
 	android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, fromSourceJarArg)
 
@@ -178,7 +183,8 @@ func TestHiddenAPISingletonWithPrebuiltUseSource(t *testing.T) {
 }
 
 func TestHiddenAPISingletonWithPrebuiltOverrideSource(t *testing.T) {
-	result := hiddenApiFixtureFactory.Extend(
+	result := android.GroupFixturePreparers(
+		hiddenApiFixtureFactory,
 		fixtureSetBootJarsProductVariable("platform:foo"),
 	).RunTestWithBp(t, `
 		java_library {
@@ -196,7 +202,7 @@ func TestHiddenAPISingletonWithPrebuiltOverrideSource(t *testing.T) {
 	`)
 
 	hiddenAPI := result.SingletonForTests("hiddenapi")
-	hiddenapiRule := hiddenAPI.Rule("hiddenapi").RelativeToTop()
+	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
 	prebuiltJarArg := "--boot-dex=out/soong/.intermediates/prebuilt_foo/android_common/dex/foo.jar"
 	android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, prebuiltJarArg)
 
@@ -236,7 +242,8 @@ func TestHiddenAPISingletonSdks(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := hiddenApiFixtureFactory.Extend(
+			result := android.GroupFixturePreparers(
+				hiddenApiFixtureFactory,
 				tc.preparer,
 				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 					variables.Always_use_prebuilt_sdks = proptools.BoolPtr(tc.unbundledBuild)
@@ -244,7 +251,7 @@ func TestHiddenAPISingletonSdks(t *testing.T) {
 			).RunTest(t)
 
 			hiddenAPI := result.SingletonForTests("hiddenapi")
-			hiddenapiRule := hiddenAPI.Rule("hiddenapi").RelativeToTop()
+			hiddenapiRule := hiddenAPI.Rule("hiddenapi")
 			wantPublicStubs := "--public-stub-classpath=" + generateSdkDexPath(tc.publicStub, tc.unbundledBuild)
 			android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, wantPublicStubs)
 
@@ -286,7 +293,8 @@ func TestHiddenAPISingletonWithPrebuiltCsvFile(t *testing.T) {
 	// Where to find the prebuilt hiddenapi files:
 	prebuiltHiddenApiDir := "path/to/prebuilt/hiddenapi"
 
-	result := hiddenApiFixtureFactory.Extend(
+	result := android.GroupFixturePreparers(
+		hiddenApiFixtureFactory,
 		fixtureSetBootJarsProductVariable("platform:foo"),
 		fixtureSetPrebuiltHiddenApiDirProductVariable(&prebuiltHiddenApiDir),
 	).RunTestWithBp(t, `
@@ -307,7 +315,7 @@ func TestHiddenAPISingletonWithPrebuiltCsvFile(t *testing.T) {
 	cpRule := hiddenAPI.Rule("Cp")
 	actualCpInput := cpRule.BuildParams.Input
 	actualCpOutput := cpRule.BuildParams.Output
-	encodeDexRule := foo.Rule("hiddenAPIEncodeDex").RelativeToTop()
+	encodeDexRule := foo.Rule("hiddenAPIEncodeDex")
 	actualFlagsCsv := encodeDexRule.BuildParams.Args["flagsCsv"]
 
 	android.AssertPathRelativeToTopEquals(t, "hiddenapi cp rule input", expectedCpInput, actualCpInput)

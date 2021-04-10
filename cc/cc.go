@@ -1650,11 +1650,11 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		c.hideApexVariantFromMake = true
 	}
 
+	c.makeLinkType = GetMakeLinkType(actx, c)
+
 	if c.maybeGenerateBazelActions(actx) {
 		return
 	}
-
-	c.makeLinkType = GetMakeLinkType(actx, c)
 
 	ctx := &moduleContext{
 		ModuleContext: actx,
@@ -1897,8 +1897,8 @@ func (c *Module) deps(ctx DepsContext) Deps {
 	}
 
 	for _, lib := range deps.ReexportStaticLibHeaders {
-		if !inList(lib, deps.StaticLibs) {
-			ctx.PropertyErrorf("export_static_lib_headers", "Static library not in static_libs: '%s'", lib)
+		if !inList(lib, deps.StaticLibs) && !inList(lib, deps.WholeStaticLibs) {
+			ctx.PropertyErrorf("export_static_lib_headers", "Static library not in static_libs or whole_static_libs: '%s'", lib)
 		}
 	}
 
@@ -3304,6 +3304,10 @@ func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 type Defaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
+	// Included to support setting bazel_module.label for multiple Soong modules to the same Bazel
+	// target. This is primarily useful for modules that were architecture specific and instead are
+	// handled in Bazel as a select().
+	android.BazelModuleBase
 	android.ApexModuleBase
 }
 
@@ -3350,6 +3354,8 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&RustBindgenClangProperties{},
 	)
 
+	// Bazel module must be initialized _before_ Defaults to be included in cc_defaults module.
+	android.InitBazelModule(module)
 	android.InitDefaultsModule(module)
 
 	return module
