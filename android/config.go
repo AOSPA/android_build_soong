@@ -1519,6 +1519,10 @@ func (c *deviceConfig) BuildBrokenTrebleSyspropNeverallow() bool {
 	return c.config.productVariables.BuildBrokenTrebleSyspropNeverallow
 }
 
+func (c *deviceConfig) BuildDebugfsRestrictionsEnabled() bool {
+	return c.config.productVariables.BuildDebugfsRestrictionsEnabled
+}
+
 func (c *deviceConfig) BuildBrokenVendorPropertyNamespace() bool {
 	return c.config.productVariables.BuildBrokenVendorPropertyNamespace
 }
