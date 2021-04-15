@@ -339,7 +339,8 @@ func (s *snapshot) DepsMutator(ctx android.BottomUpMutatorContext) {
 		for _, name := range names {
 			snapshotMap[name] = name +
 				getSnapshotNameSuffix(snapshotSuffix+moduleSuffix,
-					s.baseSnapshot.version(), ctx.Arch().ArchType.Name)
+					s.baseSnapshot.version(),
+					ctx.DeviceConfig().Arches()[0].ArchType.String())
 		}
 		return snapshotMap
 	}
@@ -546,9 +547,17 @@ func (p *snapshotLibraryDecorator) link(ctx ModuleContext, flags Flags, deps Pat
 		return nil
 	}
 
+	// Flags specified directly to this module.
 	p.libraryDecorator.reexportDirs(android.PathsForModuleSrc(ctx, p.properties.Export_include_dirs)...)
 	p.libraryDecorator.reexportSystemDirs(android.PathsForModuleSrc(ctx, p.properties.Export_system_include_dirs)...)
 	p.libraryDecorator.reexportFlags(p.properties.Export_flags...)
+
+	// Flags reexported from dependencies. (e.g. vndk_prebuilt_shared)
+	p.libraryDecorator.reexportDirs(deps.ReexportedDirs...)
+	p.libraryDecorator.reexportSystemDirs(deps.ReexportedSystemDirs...)
+	p.libraryDecorator.reexportFlags(deps.ReexportedFlags...)
+	p.libraryDecorator.reexportDeps(deps.ReexportedDeps...)
+	p.libraryDecorator.addExportedGeneratedHeaders(deps.ReexportedGeneratedHeaders...)
 
 	in := android.PathForModuleSrc(ctx, *p.properties.Src)
 	p.unstrippedOutputFile = in
