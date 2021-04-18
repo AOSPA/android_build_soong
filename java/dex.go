@@ -83,7 +83,7 @@ func (d *dexer) effectiveOptimizeEnabled() bool {
 	return BoolDefault(d.dexProperties.Optimize.Enabled, d.dexProperties.Optimize.EnabledByDefault)
 }
 
-var d8, d8RE = remoteexec.MultiCommandStaticRules(pctx, "d8",
+var d8, d8RE = pctx.MultiCommandRemoteStaticRules("d8",
 	blueprint.RuleParams{
 		Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
 			`$d8Template${config.D8Cmd} ${config.DexFlags} --output $outDir $d8Flags $in && ` +
@@ -111,7 +111,7 @@ var d8, d8RE = remoteexec.MultiCommandStaticRules(pctx, "d8",
 		},
 	}, []string{"outDir", "d8Flags", "zipFlags"}, nil)
 
-var r8, r8RE = remoteexec.MultiCommandStaticRules(pctx, "r8",
+var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 	blueprint.RuleParams{
 		Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
 			`rm -f "$outDict" && rm -rf "${outUsageDir}" && ` +
@@ -259,6 +259,9 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, flags javaBuilderFlags) (r8Fl
 	if ctx.Config().Eng() {
 		r8Flags = append(r8Flags, "--debug")
 	}
+
+	// TODO(b/180878971): missing classes should be added to the relevant builds.
+	r8Flags = append(r8Flags, "-ignorewarnings")
 
 	return r8Flags, r8Deps
 }

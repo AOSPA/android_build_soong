@@ -40,13 +40,31 @@ var pctx = android.NewPackageContext("android/soong/sh")
 func init() {
 	pctx.Import("android/soong/android")
 
-	android.RegisterModuleType("sh_binary", ShBinaryFactory)
-	android.RegisterModuleType("sh_binary_host", ShBinaryHostFactory)
-	android.RegisterModuleType("sh_test", ShTestFactory)
-	android.RegisterModuleType("sh_test_host", ShTestHostFactory)
+	registerShBuildComponents(android.InitRegistrationContext)
 
 	android.RegisterBp2BuildMutator("sh_binary", ShBinaryBp2Build)
 }
+
+func registerShBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("sh_binary", ShBinaryFactory)
+	ctx.RegisterModuleType("sh_binary_host", ShBinaryHostFactory)
+	ctx.RegisterModuleType("sh_test", ShTestFactory)
+	ctx.RegisterModuleType("sh_test_host", ShTestHostFactory)
+}
+
+// Test fixture preparer that will register most sh build components.
+//
+// Singletons and mutators should only be added here if they are needed for a majority of sh
+// module types, otherwise they should be added under a separate preparer to allow them to be
+// selected only when needed to reduce test execution time.
+//
+// Module types do not have much of an overhead unless they are used so this should include as many
+// module types as possible. The exceptions are those module types that require mutators and/or
+// singletons in order to function in which case they should be kept together in a separate
+// preparer.
+var PrepareForTestWithShBuildComponents = android.GroupFixturePreparers(
+	android.FixtureRegisterWithContext(registerShBuildComponents),
+)
 
 type shBinaryProperties struct {
 	// Source file of this prebuilt.
@@ -84,9 +102,6 @@ type shBinaryProperties struct {
 
 	// Make this module available when building for recovery.
 	Recovery_available *bool
-
-	// Properties for Bazel migration purposes.
-	bazel.Properties
 }
 
 type TestProperties struct {
@@ -132,6 +147,7 @@ type TestProperties struct {
 
 type ShBinary struct {
 	android.ModuleBase
+	android.BazelModuleBase
 
 	properties shBinaryProperties
 
@@ -427,6 +443,7 @@ func (s *ShTest) AndroidMkEntries() []android.AndroidMkEntries {
 
 func InitShBinaryModule(s *ShBinary) {
 	s.AddProperties(&s.properties)
+	android.InitBazelModule(s)
 }
 
 // sh_binary is for a shell script or batch file to be installed as an
@@ -468,7 +485,7 @@ func ShTestHostFactory() android.Module {
 }
 
 type bazelShBinaryAttributes struct {
-	Srcs bazel.LabelList
+	Srcs bazel.LabelListAttribute
 	// Bazel also supports the attributes below, but (so far) these are not required for Bionic
 	// deps
 	// data
@@ -504,19 +521,22 @@ func BazelShBinaryFactory() android.Module {
 
 func ShBinaryBp2Build(ctx android.TopDownMutatorContext) {
 	m, ok := ctx.Module().(*ShBinary)
-	if !ok || !m.properties.Bazel_module.Bp2build_available {
+	if !ok || !m.ConvertWithBp2build(ctx) {
 		return
 	}
 
-	srcs := android.BazelLabelForModuleSrc(ctx, []string{*m.properties.Src})
+	srcs := bazel.MakeLabelListAttribute(
+		android.BazelLabelForModuleSrc(ctx, []string{*m.properties.Src}))
 
 	attrs := &bazelShBinaryAttributes{
 		Srcs: srcs,
 	}
 
-	props := bazel.NewBazelTargetModuleProperties(m.Name(), "sh_binary", "")
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class: "sh_binary",
+	}
 
-	ctx.CreateBazelTargetModule(BazelShBinaryFactory, props, attrs)
+	ctx.CreateBazelTargetModule(BazelShBinaryFactory, m.Name(), props, attrs)
 }
 
 func (m *bazelShBinary) Name() string {

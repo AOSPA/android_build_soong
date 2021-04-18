@@ -6,16 +6,28 @@ import (
 	"github.com/google/blueprint"
 )
 
+var prepareForTestWithLicenses = GroupFixturePreparers(
+	FixtureRegisterWithContext(RegisterLicenseKindBuildComponents),
+	FixtureRegisterWithContext(RegisterLicenseBuildComponents),
+	FixtureRegisterWithContext(registerLicenseMutators),
+)
+
+func registerLicenseMutators(ctx RegistrationContext) {
+	ctx.PreArchMutators(RegisterLicensesPackageMapper)
+	ctx.PreArchMutators(RegisterLicensesPropertyGatherer)
+	ctx.PostDepsMutators(RegisterLicensesDependencyChecker)
+}
+
 var licensesTests = []struct {
-	name                         string
-	fs                           map[string][]byte
-	expectedErrors               []string
-	effectiveLicenses            map[string][]string
-	effectiveInheritedLicenses   map[string][]string
-	effectivePackage             map[string]string
-	effectiveNotices             map[string][]string
-	effectiveKinds               map[string][]string
-	effectiveConditions          map[string][]string
+	name                       string
+	fs                         MockFS
+	expectedErrors             []string
+	effectiveLicenses          map[string][]string
+	effectiveInheritedLicenses map[string][]string
+	effectivePackage           map[string]string
+	effectiveNotices           map[string][]string
+	effectiveKinds             map[string][]string
+	effectiveConditions        map[string][]string
 }{
 	{
 		name: "invalid module type without licenses property",
@@ -71,28 +83,28 @@ var licensesTests = []struct {
 		},
 		effectiveLicenses: map[string][]string{
 			"libexample1": []string{"top_Apache2"},
-			"libnested": []string{"top_Apache2"},
-			"libother": []string{"top_Apache2"},
+			"libnested":   []string{"top_Apache2"},
+			"libother":    []string{"top_Apache2"},
 		},
 		effectiveKinds: map[string][]string{
 			"libexample1": []string{"notice"},
-			"libnested": []string{"notice"},
-			"libother": []string{"notice"},
+			"libnested":   []string{"notice"},
+			"libother":    []string{"notice"},
 		},
 		effectivePackage: map[string]string{
 			"libexample1": "topDog",
-			"libnested": "topDog",
-			"libother": "topDog",
+			"libnested":   "topDog",
+			"libother":    "topDog",
 		},
 		effectiveConditions: map[string][]string{
 			"libexample1": []string{"shownotice"},
-			"libnested": []string{"shownotice"},
-			"libother": []string{"shownotice"},
+			"libnested":   []string{"shownotice"},
+			"libother":    []string{"shownotice"},
 		},
 		effectiveNotices: map[string][]string{
 			"libexample1": []string{"top/LICENSE", "top/NOTICE"},
-			"libnested": []string{"top/LICENSE", "top/NOTICE"},
-			"libother": []string{"top/LICENSE", "top/NOTICE"},
+			"libnested":   []string{"top/LICENSE", "top/NOTICE"},
+			"libother":    []string{"top/LICENSE", "top/NOTICE"},
 		},
 	},
 
@@ -147,28 +159,28 @@ var licensesTests = []struct {
 				}`),
 		},
 		effectiveLicenses: map[string][]string{
-			"libexample": []string{"nested_other", "top_other"},
+			"libexample":     []string{"nested_other", "top_other"},
 			"libsamepackage": []string{},
-			"libnested": []string{},
-			"libother": []string{},
+			"libnested":      []string{},
+			"libother":       []string{},
 		},
 		effectiveInheritedLicenses: map[string][]string{
-			"libexample": []string{"nested_other", "top_other"},
+			"libexample":     []string{"nested_other", "top_other"},
 			"libsamepackage": []string{"nested_other", "top_other"},
-			"libnested": []string{"nested_other", "top_other"},
-			"libother": []string{"nested_other", "top_other"},
+			"libnested":      []string{"nested_other", "top_other"},
+			"libother":       []string{"nested_other", "top_other"},
 		},
 		effectiveKinds: map[string][]string{
-			"libexample": []string{"nested_notice", "top_notice"},
+			"libexample":     []string{"nested_notice", "top_notice"},
 			"libsamepackage": []string{},
-			"libnested": []string{},
-			"libother": []string{},
+			"libnested":      []string{},
+			"libother":       []string{},
 		},
 		effectiveConditions: map[string][]string{
-			"libexample": []string{"notice"},
+			"libexample":     []string{"notice"},
 			"libsamepackage": []string{},
-			"libnested": []string{},
-			"libother": []string{},
+			"libnested":      []string{},
+			"libother":       []string{},
 		},
 	},
 	{
@@ -218,32 +230,32 @@ var licensesTests = []struct {
 				}`),
 		},
 		effectiveLicenses: map[string][]string{
-			"libexample": []string{"other", "top_nested"},
+			"libexample":     []string{"other", "top_nested"},
 			"libsamepackage": []string{},
-			"libnested": []string{},
-			"libother": []string{},
-			"liboutsider": []string{},
+			"libnested":      []string{},
+			"libother":       []string{},
+			"liboutsider":    []string{},
 		},
 		effectiveInheritedLicenses: map[string][]string{
-			"libexample": []string{"other", "top_nested"},
+			"libexample":     []string{"other", "top_nested"},
 			"libsamepackage": []string{"other", "top_nested"},
-			"libnested": []string{"other", "top_nested"},
-			"libother": []string{"other", "top_nested"},
-			"liboutsider": []string{"other", "top_nested"},
+			"libnested":      []string{"other", "top_nested"},
+			"libother":       []string{"other", "top_nested"},
+			"liboutsider":    []string{"other", "top_nested"},
 		},
 		effectiveKinds: map[string][]string{
-			"libexample": []string{},
+			"libexample":     []string{},
 			"libsamepackage": []string{},
-			"libnested": []string{},
-			"libother": []string{},
-			"liboutsider": []string{},
+			"libnested":      []string{},
+			"libother":       []string{},
+			"liboutsider":    []string{},
 		},
 		effectiveNotices: map[string][]string{
-			"libexample": []string{"top/nested/LICENSE.txt"},
+			"libexample":     []string{"top/nested/LICENSE.txt"},
 			"libsamepackage": []string{},
-			"libnested": []string{},
-			"libother": []string{},
-			"liboutsider": []string{},
+			"libnested":      []string{},
+			"libother":       []string{},
+			"liboutsider":    []string{},
 		},
 	},
 
@@ -285,11 +297,11 @@ var licensesTests = []struct {
 				}`),
 		},
 		effectiveLicenses: map[string][]string{
-			"libexample": []string{"by_exception_only"},
+			"libexample":  []string{"by_exception_only"},
 			"libdefaults": []string{"notice"},
 		},
 		effectiveInheritedLicenses: map[string][]string{
-			"libexample": []string{"by_exception_only"},
+			"libexample":  []string{"by_exception_only"},
 			"libdefaults": []string{"notice"},
 		},
 	},
@@ -327,11 +339,11 @@ var licensesTests = []struct {
 				}`),
 		},
 		effectiveLicenses: map[string][]string{
-			"libexample": []string{"top_notice"},
+			"libexample":  []string{"top_notice"},
 			"liboutsider": []string{},
 		},
 		effectiveInheritedLicenses: map[string][]string{
-			"libexample": []string{"top_notice"},
+			"libexample":  []string{"top_notice"},
 			"liboutsider": []string{"top_notice"},
 		},
 	},
@@ -370,15 +382,15 @@ var licensesTests = []struct {
 				}`),
 		},
 		effectiveLicenses: map[string][]string{
-			"libexample": []string{"top_notice"},
-			"libnested": []string{"outsider"},
-			"libother": []string{},
+			"libexample":  []string{"top_notice"},
+			"libnested":   []string{"outsider"},
+			"libother":    []string{},
 			"liboutsider": []string{},
 		},
 		effectiveInheritedLicenses: map[string][]string{
-			"libexample": []string{"top_notice"},
-			"libnested": []string{"outsider"},
-			"libother": []string{},
+			"libexample":  []string{"top_notice"},
+			"libnested":   []string{"outsider"},
+			"libother":    []string{},
 			"liboutsider": []string{"top_notice", "outsider"},
 		},
 	},
@@ -449,7 +461,7 @@ var licensesTests = []struct {
 		},
 		effectiveInheritedLicenses: map[string][]string{
 			"module": []string{"prebuilt", "top_sources"},
-			"other": []string{"prebuilt", "top_sources"},
+			"other":  []string{"prebuilt", "top_sources"},
 		},
 	},
 }
@@ -457,40 +469,49 @@ var licensesTests = []struct {
 func TestLicenses(t *testing.T) {
 	for _, test := range licensesTests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx, errs := testLicenses(buildDir, test.fs)
-
-			CheckErrorsAgainstExpectations(t, errs, test.expectedErrors)
+			// Customize the common license text fixture factory.
+			result := GroupFixturePreparers(
+				prepareForLicenseTest,
+				FixtureRegisterWithContext(func(ctx RegistrationContext) {
+					ctx.RegisterModuleType("mock_bad_module", newMockLicensesBadModule)
+					ctx.RegisterModuleType("mock_library", newMockLicensesLibraryModule)
+					ctx.RegisterModuleType("mock_defaults", defaultsLicensesFactory)
+				}),
+				test.fs.AddToFixture(),
+			).
+				ExtendWithErrorHandler(FixtureExpectsAllErrorsToMatchAPattern(test.expectedErrors)).
+				RunTest(t)
 
 			if test.effectiveLicenses != nil {
-				checkEffectiveLicenses(t, ctx, test.effectiveLicenses)
+				checkEffectiveLicenses(t, result, test.effectiveLicenses)
 			}
 
 			if test.effectivePackage != nil {
-				checkEffectivePackage(t, ctx, test.effectivePackage)
+				checkEffectivePackage(t, result, test.effectivePackage)
 			}
 
 			if test.effectiveNotices != nil {
-				checkEffectiveNotices(t, ctx, test.effectiveNotices)
+				checkEffectiveNotices(t, result, test.effectiveNotices)
 			}
 
 			if test.effectiveKinds != nil {
-				checkEffectiveKinds(t, ctx, test.effectiveKinds)
+				checkEffectiveKinds(t, result, test.effectiveKinds)
 			}
 
 			if test.effectiveConditions != nil {
-				checkEffectiveConditions(t, ctx, test.effectiveConditions)
+				checkEffectiveConditions(t, result, test.effectiveConditions)
 			}
 
 			if test.effectiveInheritedLicenses != nil {
-				checkEffectiveInheritedLicenses(t, ctx, test.effectiveInheritedLicenses)
+				checkEffectiveInheritedLicenses(t, result, test.effectiveInheritedLicenses)
 			}
 		})
 	}
 }
 
-func checkEffectiveLicenses(t *testing.T, ctx *TestContext, effectiveLicenses map[string][]string) {
+func checkEffectiveLicenses(t *testing.T, result *TestResult, effectiveLicenses map[string][]string) {
 	actualLicenses := make(map[string][]string)
-	ctx.Context.Context.VisitAllModules(func(m blueprint.Module) {
+	result.Context.Context.VisitAllModules(func(m blueprint.Module) {
 		if _, ok := m.(*licenseModule); ok {
 			return
 		}
@@ -523,9 +544,9 @@ func checkEffectiveLicenses(t *testing.T, ctx *TestContext, effectiveLicenses ma
 	}
 }
 
-func checkEffectiveInheritedLicenses(t *testing.T, ctx *TestContext, effectiveInheritedLicenses map[string][]string) {
+func checkEffectiveInheritedLicenses(t *testing.T, result *TestResult, effectiveInheritedLicenses map[string][]string) {
 	actualLicenses := make(map[string][]string)
-	ctx.Context.Context.VisitAllModules(func(m blueprint.Module) {
+	result.Context.Context.VisitAllModules(func(m blueprint.Module) {
 		if _, ok := m.(*licenseModule); ok {
 			return
 		}
@@ -548,7 +569,7 @@ func checkEffectiveInheritedLicenses(t *testing.T, ctx *TestContext, effectiveIn
 		for _, l := range base.commonProperties.Effective_licenses {
 			inherited[l] = true
 		}
-		ctx.Context.Context.VisitDepsDepthFirst(m, func(c blueprint.Module) {
+		result.Context.Context.VisitDepsDepthFirst(m, func(c blueprint.Module) {
 			if _, ok := c.(*licenseModule); ok {
 				return
 			}
@@ -588,9 +609,9 @@ func checkEffectiveInheritedLicenses(t *testing.T, ctx *TestContext, effectiveIn
 	}
 }
 
-func checkEffectivePackage(t *testing.T, ctx *TestContext, effectivePackage map[string]string) {
+func checkEffectivePackage(t *testing.T, result *TestResult, effectivePackage map[string]string) {
 	actualPackage := make(map[string]string)
-	ctx.Context.Context.VisitAllModules(func(m blueprint.Module) {
+	result.Context.Context.VisitAllModules(func(m blueprint.Module) {
 		if _, ok := m.(*licenseModule); ok {
 			return
 		}
@@ -628,9 +649,9 @@ func checkEffectivePackage(t *testing.T, ctx *TestContext, effectivePackage map[
 	}
 }
 
-func checkEffectiveNotices(t *testing.T, ctx *TestContext, effectiveNotices map[string][]string) {
+func checkEffectiveNotices(t *testing.T, result *TestResult, effectiveNotices map[string][]string) {
 	actualNotices := make(map[string][]string)
-	ctx.Context.Context.VisitAllModules(func(m blueprint.Module) {
+	result.Context.Context.VisitAllModules(func(m blueprint.Module) {
 		if _, ok := m.(*licenseModule); ok {
 			return
 		}
@@ -663,9 +684,9 @@ func checkEffectiveNotices(t *testing.T, ctx *TestContext, effectiveNotices map[
 	}
 }
 
-func checkEffectiveKinds(t *testing.T, ctx *TestContext, effectiveKinds map[string][]string) {
+func checkEffectiveKinds(t *testing.T, result *TestResult, effectiveKinds map[string][]string) {
 	actualKinds := make(map[string][]string)
-	ctx.Context.Context.VisitAllModules(func(m blueprint.Module) {
+	result.Context.Context.VisitAllModules(func(m blueprint.Module) {
 		if _, ok := m.(*licenseModule); ok {
 			return
 		}
@@ -698,9 +719,9 @@ func checkEffectiveKinds(t *testing.T, ctx *TestContext, effectiveKinds map[stri
 	}
 }
 
-func checkEffectiveConditions(t *testing.T, ctx *TestContext, effectiveConditions map[string][]string) {
+func checkEffectiveConditions(t *testing.T, result *TestResult, effectiveConditions map[string][]string) {
 	actualConditions := make(map[string][]string)
-	ctx.Context.Context.VisitAllModules(func(m blueprint.Module) {
+	result.Context.Context.VisitAllModules(func(m blueprint.Module) {
 		if _, ok := m.(*licenseModule); ok {
 			return
 		}
@@ -752,41 +773,6 @@ func compareUnorderedStringArrays(expected, actual []string) bool {
 		s[v] -= 1
 	}
 	return true
-}
-
-func testLicenses(buildDir string, fs map[string][]byte) (*TestContext, []error) {
-
-	// Create a new config per test as licenses information is stored in the config.
-	env := make(map[string]string)
-	env["ANDROID_REQUIRE_LICENSES"] = "1"
-	config := TestArchConfig(buildDir, env, "", fs)
-
-	ctx := NewTestArchContext(config)
-	ctx.RegisterModuleType("mock_bad_module", newMockLicensesBadModule)
-	ctx.RegisterModuleType("mock_library", newMockLicensesLibraryModule)
-	ctx.RegisterModuleType("mock_defaults", defaultsLicensesFactory)
-
-	// Order of the following method calls is significant.
-	RegisterPackageBuildComponents(ctx)
-	registerTestPrebuiltBuildComponents(ctx)
-	RegisterLicenseKindBuildComponents(ctx)
-	RegisterLicenseBuildComponents(ctx)
-	ctx.PreArchMutators(RegisterVisibilityRuleChecker)
-	ctx.PreArchMutators(RegisterLicensesPackageMapper)
-	ctx.PreArchMutators(RegisterDefaultsPreArchMutators)
-	ctx.PreArchMutators(RegisterLicensesPropertyGatherer)
-	ctx.PreArchMutators(RegisterVisibilityRuleGatherer)
-	ctx.PostDepsMutators(RegisterVisibilityRuleEnforcer)
-	ctx.PostDepsMutators(RegisterLicensesDependencyChecker)
-	ctx.Register()
-
-	_, errs := ctx.ParseBlueprintsFiles(".")
-	if len(errs) > 0 {
-		return ctx, errs
-	}
-
-	_, errs = ctx.PrepareBuildActions(config)
-	return ctx, errs
 }
 
 type mockLicensesBadProperties struct {

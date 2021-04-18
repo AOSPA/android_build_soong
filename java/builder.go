@@ -40,7 +40,7 @@ var (
 	// (if the rule produces .class files) or a .srcjar file (if the rule produces .java files).
 	// .srcjar files are unzipped into a temporary directory when compiled with javac.
 	// TODO(b/143658984): goma can't handle the --system argument to javac.
-	javac, javacRE = remoteexec.MultiCommandStaticRules(pctx, "javac",
+	javac, javacRE = pctx.MultiCommandRemoteStaticRules("javac",
 		blueprint.RuleParams{
 			Command: `rm -rf "$outDir" "$annoDir" "$srcJarDir" "$out" && mkdir -p "$outDir" "$annoDir" "$srcJarDir" && ` +
 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
@@ -80,6 +80,8 @@ var (
 		func(ctx android.PackageVarContext) string { return ctx.Config().XrefCorpusName() })
 	_ = pctx.VariableFunc("kytheCuEncoding",
 		func(ctx android.PackageVarContext) string { return ctx.Config().XrefCuEncoding() })
+	_ = pctx.VariableFunc("kytheCuJavaSourceMax",
+		func(ctx android.PackageVarContext) string { return ctx.Config().XrefCuJavaSourceMax() })
 	_ = pctx.SourcePathVariable("kytheVnames", "build/soong/vnames.json")
 	// Run it with -add-opens=java.base/java.nio=ALL-UNNAMED to avoid JDK9's warning about
 	// "Illegal reflective access by com.google.protobuf.Utf8$UnsafeProcessor ...
@@ -93,6 +95,7 @@ var (
 				`KYTHE_CORPUS=${kytheCorpus} ` +
 				`KYTHE_VNAMES=${kytheVnames} ` +
 				`KYTHE_KZIP_ENCODING=${kytheCuEncoding} ` +
+				`KYTHE_JAVA_SOURCE_BATCH_SIZE=${kytheCuJavaSourceMax} ` +
 				`${config.SoongJavacWrapper} ${config.JavaCmd} ` +
 				`--add-opens=java.base/java.nio=ALL-UNNAMED ` +
 				`-jar ${config.JavaKytheExtractorJar} ` +
@@ -126,7 +129,7 @@ var (
 		},
 		"abis", "allow-prereleased", "screen-densities", "sdk-version", "stem", "apkcerts", "partition")
 
-	turbine, turbineRE = remoteexec.StaticRules(pctx, "turbine",
+	turbine, turbineRE = pctx.RemoteStaticRules("turbine",
 		blueprint.RuleParams{
 			Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
 				`$reTemplate${config.JavaCmd} ${config.JavaVmFlags} -jar ${config.TurbineJar} --output $out.tmp ` +
@@ -147,14 +150,14 @@ var (
 		&remoteexec.REParams{Labels: map[string]string{"type": "tool", "name": "turbine"},
 			ExecStrategy:      "${config.RETurbineExecStrategy}",
 			Inputs:            []string{"${config.TurbineJar}", "${out}.rsp", "$implicits"},
-			RSPFile:           "${out}.rsp",
+			RSPFiles:          []string{"${out}.rsp"},
 			OutputFiles:       []string{"$out.tmp"},
 			OutputDirectories: []string{"$outDir"},
 			ToolchainInputs:   []string{"${config.JavaCmd}"},
 			Platform:          map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
 		}, []string{"javacFlags", "bootClasspath", "classpath", "srcJars", "outDir", "javaVersion"}, []string{"implicits"})
 
-	jar, jarRE = remoteexec.StaticRules(pctx, "jar",
+	jar, jarRE = pctx.RemoteStaticRules("jar",
 		blueprint.RuleParams{
 			Command:        `$reTemplate${config.SoongZipCmd} -jar -o $out @$out.rsp`,
 			CommandDeps:    []string{"${config.SoongZipCmd}"},
@@ -164,12 +167,12 @@ var (
 		&remoteexec.REParams{
 			ExecStrategy: "${config.REJarExecStrategy}",
 			Inputs:       []string{"${config.SoongZipCmd}", "${out}.rsp"},
-			RSPFile:      "${out}.rsp",
+			RSPFiles:     []string{"${out}.rsp"},
 			OutputFiles:  []string{"$out"},
 			Platform:     map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
 		}, []string{"jarArgs"}, nil)
 
-	zip, zipRE = remoteexec.StaticRules(pctx, "zip",
+	zip, zipRE = pctx.RemoteStaticRules("zip",
 		blueprint.RuleParams{
 			Command:        `${config.SoongZipCmd} -o $out @$out.rsp`,
 			CommandDeps:    []string{"${config.SoongZipCmd}"},
@@ -179,7 +182,7 @@ var (
 		&remoteexec.REParams{
 			ExecStrategy: "${config.REZipExecStrategy}",
 			Inputs:       []string{"${config.SoongZipCmd}", "${out}.rsp", "$implicits"},
-			RSPFile:      "${out}.rsp",
+			RSPFiles:     []string{"${out}.rsp"},
 			OutputFiles:  []string{"$out"},
 			Platform:     map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
 		}, []string{"jarArgs"}, []string{"implicits"})
@@ -241,7 +244,6 @@ var (
 func init() {
 	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/java/config")
-	pctx.Import("android/soong/remoteexec")
 }
 
 type javaBuilderFlags struct {

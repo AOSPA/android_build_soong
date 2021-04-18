@@ -15,22 +15,36 @@
 package java
 
 import (
+	"path/filepath"
+
 	"android/soong/android"
+	"github.com/google/blueprint"
+
 	"fmt"
 )
 
 func init() {
-	android.RegisterSingletonType("platform_compat_config_singleton", platformCompatConfigSingletonFactory)
-	android.RegisterModuleType("platform_compat_config", PlatformCompatConfigFactory)
-	android.RegisterModuleType("global_compat_config", globalCompatConfigFactory)
+	registerPlatformCompatConfigBuildComponents(android.InitRegistrationContext)
+
+	android.RegisterSdkMemberType(&compatConfigMemberType{
+		SdkMemberTypeBase: android.SdkMemberTypeBase{
+			PropertyName: "compat_configs",
+			SupportsSdk:  true,
+		},
+	})
 }
+
+func registerPlatformCompatConfigBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterSingletonType("platform_compat_config_singleton", platformCompatConfigSingletonFactory)
+	ctx.RegisterModuleType("platform_compat_config", PlatformCompatConfigFactory)
+	ctx.RegisterModuleType("prebuilt_platform_compat_config", prebuiltCompatConfigFactory)
+	ctx.RegisterModuleType("global_compat_config", globalCompatConfigFactory)
+}
+
+var PrepareForTestWithPlatformCompatConfig = android.FixtureRegisterWithContext(registerPlatformCompatConfigBuildComponents)
 
 func platformCompatConfigPath(ctx android.PathContext) android.OutputPath {
 	return android.PathForOutput(ctx, "compat_config", "merged_compat_config.xml")
-}
-
-type platformCompatConfigSingleton struct {
-	metadata android.Path
 }
 
 type platformCompatConfigProperties struct {
@@ -39,6 +53,7 @@ type platformCompatConfigProperties struct {
 
 type platformCompatConfig struct {
 	android.ModuleBase
+	android.SdkBase
 
 	properties     platformCompatConfigProperties
 	installDirPath android.InstallPath
@@ -46,7 +61,7 @@ type platformCompatConfig struct {
 	metadataFile   android.OutputPath
 }
 
-func (p *platformCompatConfig) compatConfigMetadata() android.OutputPath {
+func (p *platformCompatConfig) compatConfigMetadata() android.Path {
 	return p.metadataFile
 }
 
@@ -58,52 +73,20 @@ func (p *platformCompatConfig) SubDir() string {
 	return "compatconfig"
 }
 
+type platformCompatConfigMetadataProvider interface {
+	compatConfigMetadata() android.Path
+}
+
 type PlatformCompatConfigIntf interface {
 	android.Module
 
-	compatConfigMetadata() android.OutputPath
 	CompatConfig() android.OutputPath
 	// Sub dir under etc dir.
 	SubDir() string
 }
 
 var _ PlatformCompatConfigIntf = (*platformCompatConfig)(nil)
-
-// compat singleton rules
-func (p *platformCompatConfigSingleton) GenerateBuildActions(ctx android.SingletonContext) {
-
-	var compatConfigMetadata android.Paths
-
-	ctx.VisitAllModules(func(module android.Module) {
-		if c, ok := module.(PlatformCompatConfigIntf); ok {
-			metadata := c.compatConfigMetadata()
-			compatConfigMetadata = append(compatConfigMetadata, metadata)
-		}
-	})
-
-	if compatConfigMetadata == nil {
-		// nothing to do.
-		return
-	}
-
-	rule := android.NewRuleBuilder(pctx, ctx)
-	outputPath := platformCompatConfigPath(ctx)
-
-	rule.Command().
-		BuiltTool("process-compat-config").
-		FlagForEachInput("--xml ", compatConfigMetadata).
-		FlagWithOutput("--merged-config ", outputPath)
-
-	rule.Build("merged-compat-config", "Merge compat config")
-
-	p.metadata = outputPath
-}
-
-func (p *platformCompatConfigSingleton) MakeVars(ctx android.MakeVarsContext) {
-	if p.metadata != nil {
-		ctx.Strict("INTERNAL_PLATFORM_MERGED_COMPAT_CONFIG", p.metadata.String())
-	}
-}
+var _ platformCompatConfigMetadataProvider = (*platformCompatConfig)(nil)
 
 func (p *platformCompatConfig) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	rule := android.NewRuleBuilder(pctx, ctx)
@@ -139,15 +122,170 @@ func (p *platformCompatConfig) AndroidMkEntries() []android.AndroidMkEntries {
 	}}
 }
 
-func platformCompatConfigSingletonFactory() android.Singleton {
-	return &platformCompatConfigSingleton{}
-}
-
 func PlatformCompatConfigFactory() android.Module {
 	module := &platformCompatConfig{}
 	module.AddProperties(&module.properties)
-	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitSdkAwareModule(module)
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	return module
+}
+
+type compatConfigMemberType struct {
+	android.SdkMemberTypeBase
+}
+
+func (b *compatConfigMemberType) AddDependencies(mctx android.BottomUpMutatorContext, dependencyTag blueprint.DependencyTag, names []string) {
+	mctx.AddVariationDependencies(nil, dependencyTag, names...)
+}
+
+func (b *compatConfigMemberType) IsInstance(module android.Module) bool {
+	_, ok := module.(*platformCompatConfig)
+	return ok
+}
+
+func (b *compatConfigMemberType) AddPrebuiltModule(ctx android.SdkMemberContext, member android.SdkMember) android.BpModule {
+	return ctx.SnapshotBuilder().AddPrebuiltModule(member, "prebuilt_platform_compat_config")
+}
+
+func (b *compatConfigMemberType) CreateVariantPropertiesStruct() android.SdkMemberProperties {
+	return &compatConfigSdkMemberProperties{}
+}
+
+type compatConfigSdkMemberProperties struct {
+	android.SdkMemberPropertiesBase
+
+	Metadata android.Path
+}
+
+func (b *compatConfigSdkMemberProperties) PopulateFromVariant(ctx android.SdkMemberContext, variant android.Module) {
+	module := variant.(*platformCompatConfig)
+	b.Metadata = module.metadataFile
+}
+
+func (b *compatConfigSdkMemberProperties) AddToPropertySet(ctx android.SdkMemberContext, propertySet android.BpPropertySet) {
+	builder := ctx.SnapshotBuilder()
+	if b.Metadata != nil {
+		snapshotRelativePath := filepath.Join("compat_configs", ctx.Name(), b.Metadata.Base())
+		builder.CopyToSnapshot(b.Metadata, snapshotRelativePath)
+		propertySet.AddProperty("metadata", snapshotRelativePath)
+	}
+}
+
+var _ android.SdkMemberType = (*compatConfigMemberType)(nil)
+
+// A prebuilt version of the platform compat config module.
+type prebuiltCompatConfigModule struct {
+	android.ModuleBase
+	android.SdkBase
+	prebuilt android.Prebuilt
+
+	properties prebuiltCompatConfigProperties
+
+	metadataFile android.Path
+}
+
+type prebuiltCompatConfigProperties struct {
+	Metadata *string `android:"path"`
+}
+
+func (module *prebuiltCompatConfigModule) Prebuilt() *android.Prebuilt {
+	return &module.prebuilt
+}
+
+func (module *prebuiltCompatConfigModule) Name() string {
+	return module.prebuilt.Name(module.ModuleBase.Name())
+}
+
+func (module *prebuiltCompatConfigModule) compatConfigMetadata() android.Path {
+	return module.metadataFile
+}
+
+var _ platformCompatConfigMetadataProvider = (*prebuiltCompatConfigModule)(nil)
+
+func (module *prebuiltCompatConfigModule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	module.metadataFile = module.prebuilt.SingleSourcePath(ctx)
+}
+
+// A prebuilt version of platform_compat_config that provides the metadata.
+func prebuiltCompatConfigFactory() android.Module {
+	m := &prebuiltCompatConfigModule{}
+	m.AddProperties(&m.properties)
+	android.InitSingleSourcePrebuiltModule(m, &m.properties, "Metadata")
+	android.InitSdkAwareModule(m)
+	android.InitAndroidArchModule(m, android.DeviceSupported, android.MultilibCommon)
+	return m
+}
+
+// compat singleton rules
+type platformCompatConfigSingleton struct {
+	metadata android.Path
+}
+
+// isModulePreferredByCompatConfig checks to see whether the module is preferred for use by
+// platform compat config.
+func isModulePreferredByCompatConfig(module android.Module) bool {
+	// A versioned prebuilt_platform_compat_config, i.e. foo-platform-compat-config@current should be
+	// ignored.
+	if s, ok := module.(android.SdkAware); ok {
+		if !s.ContainingSdk().Unversioned() {
+			return false
+		}
+	}
+
+	// A prebuilt module should only be used when it is preferred.
+	if pi, ok := module.(android.PrebuiltInterface); ok {
+		if p := pi.Prebuilt(); p != nil {
+			return p.UsePrebuilt()
+		}
+	}
+
+	// Otherwise, a module should only be used if it has not been replaced by a prebuilt.
+	return !module.IsReplacedByPrebuilt()
+}
+
+func (p *platformCompatConfigSingleton) GenerateBuildActions(ctx android.SingletonContext) {
+
+	var compatConfigMetadata android.Paths
+
+	ctx.VisitAllModules(func(module android.Module) {
+		if !module.Enabled() {
+			return
+		}
+		if c, ok := module.(platformCompatConfigMetadataProvider); ok {
+			if !isModulePreferredByCompatConfig(module) {
+				return
+			}
+			metadata := c.compatConfigMetadata()
+			compatConfigMetadata = append(compatConfigMetadata, metadata)
+		}
+	})
+
+	if compatConfigMetadata == nil {
+		// nothing to do.
+		return
+	}
+
+	rule := android.NewRuleBuilder(pctx, ctx)
+	outputPath := platformCompatConfigPath(ctx)
+
+	rule.Command().
+		BuiltTool("process-compat-config").
+		FlagForEachInput("--xml ", compatConfigMetadata).
+		FlagWithOutput("--merged-config ", outputPath)
+
+	rule.Build("merged-compat-config", "Merge compat config")
+
+	p.metadata = outputPath
+}
+
+func (p *platformCompatConfigSingleton) MakeVars(ctx android.MakeVarsContext) {
+	if p.metadata != nil {
+		ctx.Strict("INTERNAL_PLATFORM_MERGED_COMPAT_CONFIG", p.metadata.String())
+	}
+}
+
+func platformCompatConfigSingletonFactory() android.Singleton {
+	return &platformCompatConfigSingleton{}
 }
 
 //============== merged_compat_config =================

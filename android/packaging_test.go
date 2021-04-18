@@ -15,7 +15,6 @@
 package android
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/google/blueprint"
@@ -57,7 +56,9 @@ func (m *componentTestModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 type packageTestModule struct {
 	ModuleBase
 	PackagingBase
-
+	properties struct {
+		Install_deps []string `android:`
+	}
 	entries []string
 }
 
@@ -65,6 +66,7 @@ func packageMultiTargetTestModuleFactory() Module {
 	module := &packageTestModule{}
 	InitPackageModule(module)
 	InitAndroidMultiTargetsArchModule(module, DeviceSupported, MultilibCommon)
+	module.AddProperties(&module.properties)
 	return module
 }
 
@@ -72,11 +74,18 @@ func packageTestModuleFactory() Module {
 	module := &packageTestModule{}
 	InitPackageModule(module)
 	InitAndroidArchModule(module, DeviceSupported, MultilibBoth)
+	module.AddProperties(&module.properties)
 	return module
 }
 
+type packagingDepTag struct {
+	blueprint.BaseDependencyTag
+	PackagingItemAlwaysDepTag
+}
+
 func (m *packageTestModule) DepsMutator(ctx BottomUpMutatorContext) {
-	m.AddDeps(ctx, installDepTag{})
+	m.AddDeps(ctx, packagingDepTag{})
+	ctx.AddDependency(ctx.Module(), installDepTag{}, m.properties.Install_deps...)
 }
 
 func (m *packageTestModule) GenerateAndroidBuildActions(ctx ModuleContext) {
@@ -87,33 +96,30 @@ func (m *packageTestModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 func runPackagingTest(t *testing.T, multitarget bool, bp string, expected []string) {
 	t.Helper()
 
-	config := TestArchConfig(buildDir, nil, bp, nil)
-
-	ctx := NewTestArchContext(config)
-	ctx.RegisterModuleType("component", componentTestModuleFactory)
-
 	var archVariant string
+	var moduleFactory ModuleFactory
 	if multitarget {
 		archVariant = "android_common"
-		ctx.RegisterModuleType("package_module", packageMultiTargetTestModuleFactory)
+		moduleFactory = packageMultiTargetTestModuleFactory
 	} else {
 		archVariant = "android_arm64_armv8-a"
-		ctx.RegisterModuleType("package_module", packageTestModuleFactory)
+		moduleFactory = packageTestModuleFactory
 	}
-	ctx.Register()
 
-	_, errs := ctx.ParseFileList(".", []string{"Android.bp"})
-	FailIfErrored(t, errs)
-	_, errs = ctx.PrepareBuildActions(config)
-	FailIfErrored(t, errs)
+	result := GroupFixturePreparers(
+		PrepareForTestWithArchMutator,
+		FixtureRegisterWithContext(func(ctx RegistrationContext) {
+			ctx.RegisterModuleType("component", componentTestModuleFactory)
+			ctx.RegisterModuleType("package_module", moduleFactory)
+		}),
+		FixtureWithRootAndroidBp(bp),
+	).RunTest(t)
 
-	p := ctx.ModuleForTests("package", archVariant).Module().(*packageTestModule)
+	p := result.Module("package", archVariant).(*packageTestModule)
 	actual := p.entries
 	actual = SortedUniqueStrings(actual)
 	expected = SortedUniqueStrings(expected)
-	if !reflect.DeepEqual(actual, expected) {
-		t.Errorf("\ngot: %v\nexpected: %v\n", actual, expected)
-	}
+	AssertDeepEquals(t, "package entries", expected, actual)
 }
 
 func TestPackagingBaseMultiTarget(t *testing.T) {
@@ -341,4 +347,21 @@ func TestPackagingBaseSingleTarget(t *testing.T) {
 			},
 		}
 		`, []string{"lib64/foo", "lib64/bar"})
+
+	runPackagingTest(t, multiTarget,
+		`
+		component {
+			name: "foo",
+		}
+
+		component {
+			name: "bar",
+		}
+
+		package_module {
+			name: "package",
+			deps: ["foo"],
+			install_deps: ["bar"],
+		}
+		`, []string{"lib64/foo"})
 }

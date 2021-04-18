@@ -17,94 +17,36 @@ package sdk
 import (
 	"testing"
 
+	"android/soong/android"
 	"android/soong/java"
 )
 
-func testSdkWithJava(t *testing.T, bp string) *testSdkResult {
-	t.Helper()
+var prepareForSdkTestWithJava = android.GroupFixturePreparers(
+	java.PrepareForTestWithJavaBuildComponents,
+	PrepareForTestWithSdkBuildComponents,
 
-	fs := map[string][]byte{
-		"Test.java":              nil,
-		"resource.test":          nil,
-		"aidl/foo/bar/Test.aidl": nil,
+	// Ensure that all source paths are provided. This helps ensure that the snapshot generation is
+	// consistent and all files referenced from the snapshot's Android.bp file have actually been
+	// copied into the snapshot.
+	android.PrepareForTestDisallowNonExistentPaths,
 
-		// For java_import
-		"prebuilt.jar": nil,
+	// Files needs by most of the tests.
+	android.MockFS{
+		"Test.java": nil,
+	}.AddToFixture(),
+)
 
-		// For java_sdk_library
-		"api/current.txt":                                   nil,
-		"api/removed.txt":                                   nil,
-		"api/system-current.txt":                            nil,
-		"api/system-removed.txt":                            nil,
-		"api/test-current.txt":                              nil,
-		"api/test-removed.txt":                              nil,
-		"api/module-lib-current.txt":                        nil,
-		"api/module-lib-removed.txt":                        nil,
-		"api/system-server-current.txt":                     nil,
-		"api/system-server-removed.txt":                     nil,
-		"build/soong/scripts/gen-java-current-api-files.sh": nil,
-		"docs/known_doctags":                                nil,
-		"100/public/api/myjavalib.txt":                      nil,
-		"100/public/api/myjavalib-removed.txt":              nil,
-		"100/system/api/myjavalib.txt":                      nil,
-		"100/system/api/myjavalib-removed.txt":              nil,
-		"100/module-lib/api/myjavalib.txt":                  nil,
-		"100/module-lib/api/myjavalib-removed.txt":          nil,
-		"100/system-server/api/myjavalib.txt":               nil,
-		"100/system-server/api/myjavalib-removed.txt":       nil,
-	}
-
-	// for java_sdk_library tests
-	bp = `
-java_system_modules_import {
-	name: "core-current-stubs-system-modules",
-}
-java_system_modules_import {
-	name: "stable-core-platform-api-stubs-system-modules",
-}
-java_import {
-	name: "stable.core.platform.api.stubs",
-}
-java_import {
-	name: "android_stubs_current",
-}
-java_import {
-	name: "android_system_stubs_current",
-}
-java_import {
-	name: "android_test_stubs_current",
-}
-java_import {
-	name: "android_module_lib_stubs_current",
-}
-java_import {
-	name: "android_system_server_stubs_current",
-}
-java_import {
-	name: "core-lambda-stubs", 
-	sdk_version: "none",
-}
-java_import {
-	name: "ext", 
-	sdk_version: "none",
-}
-java_import {
-	name: "framework", 
-	sdk_version: "none",
-}
-prebuilt_apis {
-	name: "sdk",
-	api_dirs: ["100"],
-}
-` + bp
-
-	return testSdkWithFs(t, bp, fs)
-}
+var prepareForSdkTestWithJavaSdkLibrary = android.GroupFixturePreparers(
+	prepareForSdkTestWithJava,
+	java.PrepareForTestWithJavaDefaultModules,
+	java.PrepareForTestWithJavaSdkLibraryFiles,
+	java.FixtureWithLastReleaseApis("myjavalib"),
+)
 
 // Contains tests for SDK members provided by the java package.
 
 func TestSdkDependsOnSourceEvenWhenPrebuiltPreferred(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJava).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_header_libs: ["sdkmember"],
@@ -116,46 +58,24 @@ func TestSdkDependsOnSourceEvenWhenPrebuiltPreferred(t *testing.T) {
 			system_modules: "none",
 			sdk_version: "none",
 		}
-
-		java_import {
-			name: "sdkmember",
-			prefer: true,
-			jars: ["prebuilt.jar"],
-		}
 	`)
 
 	// Make sure that the mysdk module depends on "sdkmember" and not "prebuilt_sdkmember".
-	java.CheckModuleDependencies(t, result.ctx, "mysdk", "android_common", []string{"sdkmember"})
+	sdkChecker := func(t *testing.T, result *android.TestResult) {
+		java.CheckModuleDependencies(t, result.TestContext, "mysdk", "android_common", []string{"sdkmember"})
+	}
 
-	result.CheckSnapshot("mysdk", "",
-		checkAndroidBpContents(`// This is auto-generated. DO NOT EDIT.
-
-java_import {
-    name: "mysdk_sdkmember@current",
-    sdk_member_name: "sdkmember",
-    visibility: ["//visibility:public"],
-    apex_available: ["//apex_available:platform"],
-    jars: ["java/sdkmember.jar"],
-}
-
-java_import {
-    name: "sdkmember",
-    prefer: false,
-    visibility: ["//visibility:public"],
-    apex_available: ["//apex_available:platform"],
-    jars: ["java/sdkmember.jar"],
-}
-
-sdk_snapshot {
-    name: "mysdk@current",
-    visibility: ["//visibility:public"],
-    java_header_libs: ["mysdk_sdkmember@current"],
-}
-`))
+	CheckSnapshot(t, result, "mysdk", "",
+		snapshotTestChecker(checkSnapshotWithSourcePreferred, sdkChecker),
+		snapshotTestChecker(checkSnapshotPreferredWithSource, sdkChecker),
+	)
 }
 
 func TestBasicSdkWithJavaLibrary(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJava,
+		prepareForSdkTestWithApex,
+	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_header_libs: ["sdkmember"],
@@ -211,6 +131,7 @@ func TestBasicSdkWithJavaLibrary(t *testing.T) {
 			uses_sdks: ["mysdk@1"],
 			key: "myapex.key",
 			certificate: ":myapex.cert",
+			updatable: false,
 		}
 
 		apex {
@@ -219,14 +140,15 @@ func TestBasicSdkWithJavaLibrary(t *testing.T) {
 			uses_sdks: ["mysdk@2"],
 			key: "myapex.key",
 			certificate: ":myapex.cert",
+			updatable: false,
 		}
 	`)
 
-	sdkMemberV1 := result.ctx.ModuleForTests("sdkmember_mysdk_1", "android_common").Rule("combineJar").Output
-	sdkMemberV2 := result.ctx.ModuleForTests("sdkmember_mysdk_2", "android_common").Rule("combineJar").Output
+	sdkMemberV1 := result.ModuleForTests("sdkmember_mysdk_1", "android_common").Rule("combineJar").Output
+	sdkMemberV2 := result.ModuleForTests("sdkmember_mysdk_2", "android_common").Rule("combineJar").Output
 
-	javalibForMyApex := result.ctx.ModuleForTests("myjavalib", "android_common_apex10000_mysdk_1")
-	javalibForMyApex2 := result.ctx.ModuleForTests("myjavalib", "android_common_apex10000_mysdk_2")
+	javalibForMyApex := result.ModuleForTests("myjavalib", "android_common_apex10000_mysdk_1")
+	javalibForMyApex2 := result.ModuleForTests("myjavalib", "android_common_apex10000_mysdk_2")
 
 	// Depending on the uses_sdks value, different libs are linked
 	ensureListContains(t, pathsToStrings(javalibForMyApex.Rule("javac").Implicits), sdkMemberV1.String())
@@ -234,7 +156,10 @@ func TestBasicSdkWithJavaLibrary(t *testing.T) {
 }
 
 func TestSnapshotWithJavaHeaderLibrary(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJava,
+		android.FixtureAddFile("aidl/foo/bar/Test.aidl", nil),
+	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_header_libs: ["myjavalib"],
@@ -253,7 +178,7 @@ func TestSnapshotWithJavaHeaderLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -288,7 +213,10 @@ aidl/foo/bar/Test.aidl -> aidl/aidl/foo/bar/Test.aidl
 }
 
 func TestHostSnapshotWithJavaHeaderLibrary(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJava,
+		android.FixtureAddFile("aidl/foo/bar/Test.aidl", nil),
+	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			device_supported: false,
@@ -310,7 +238,7 @@ func TestHostSnapshotWithJavaHeaderLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -350,7 +278,7 @@ aidl/foo/bar/Test.aidl -> aidl/aidl/foo/bar/Test.aidl
 }
 
 func TestDeviceAndHostSnapshotWithJavaHeaderLibrary(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJava).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			host_supported: true,
@@ -367,7 +295,7 @@ func TestDeviceAndHostSnapshotWithJavaHeaderLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -418,7 +346,11 @@ sdk_snapshot {
 }
 
 func TestSnapshotWithJavaImplLibrary(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJava,
+		android.FixtureAddFile("aidl/foo/bar/Test.aidl", nil),
+		android.FixtureAddFile("resource.txt", nil),
+	).RunTestWithBp(t, `
 		module_exports {
 			name: "myexports",
 			java_libs: ["myjavalib"],
@@ -438,7 +370,7 @@ func TestSnapshotWithJavaImplLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "",
+	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -473,7 +405,11 @@ aidl/foo/bar/Test.aidl -> aidl/aidl/foo/bar/Test.aidl
 }
 
 func TestSnapshotWithJavaBootLibrary(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJava,
+		android.FixtureAddFile("aidl", nil),
+		android.FixtureAddFile("resource.txt", nil),
+	).RunTestWithBp(t, `
 		module_exports {
 			name: "myexports",
 			java_boot_libs: ["myjavalib"],
@@ -494,7 +430,7 @@ func TestSnapshotWithJavaBootLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "",
+	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -527,7 +463,10 @@ module_exports_snapshot {
 }
 
 func TestHostSnapshotWithJavaImplLibrary(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJava,
+		android.FixtureAddFile("aidl/foo/bar/Test.aidl", nil),
+	).RunTestWithBp(t, `
 		module_exports {
 			name: "myexports",
 			device_supported: false,
@@ -549,7 +488,7 @@ func TestHostSnapshotWithJavaImplLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "",
+	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -589,7 +528,7 @@ aidl/foo/bar/Test.aidl -> aidl/aidl/foo/bar/Test.aidl
 }
 
 func TestSnapshotWithJavaTest(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJava).RunTestWithBp(t, `
 		module_exports {
 			name: "myexports",
 			java_tests: ["myjavatests"],
@@ -605,7 +544,7 @@ func TestSnapshotWithJavaTest(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "",
+	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -641,7 +580,7 @@ module_exports_snapshot {
 }
 
 func TestHostSnapshotWithJavaTest(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJava).RunTestWithBp(t, `
 		module_exports {
 			name: "myexports",
 			device_supported: false,
@@ -660,7 +599,7 @@ func TestHostSnapshotWithJavaTest(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "",
+	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -702,7 +641,7 @@ module_exports_snapshot {
 }
 
 func TestSnapshotWithJavaSystemModules(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJava).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_header_libs: ["exported-system-module"],
@@ -729,7 +668,7 @@ func TestSnapshotWithJavaSystemModules(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -800,7 +739,7 @@ sdk_snapshot {
 }
 
 func TestHostSnapshotWithJavaSystemModules(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJava).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			device_supported: false,
@@ -825,7 +764,7 @@ func TestHostSnapshotWithJavaSystemModules(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -880,7 +819,7 @@ sdk_snapshot {
 }
 
 func TestDeviceAndHostSnapshotWithOsSpecificMembers(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJava).RunTestWithBp(t, `
 		module_exports {
 			name: "myexports",
 			host_supported: true,
@@ -916,7 +855,7 @@ func TestDeviceAndHostSnapshotWithOsSpecificMembers(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("myexports", "",
+	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1013,7 +952,7 @@ module_exports_snapshot {
 }
 
 func TestSnapshotWithJavaSdkLibrary(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1030,7 +969,7 @@ func TestSnapshotWithJavaSdkLibrary(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1100,14 +1039,14 @@ sdk_snapshot {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 .intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
-.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
 .intermediates/myjavalib.stubs.test/android_common/javac/myjavalib.stubs.test.jar -> sdk_library/test/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.test/android_common/myjavalib.stubs.source.test_api.txt -> sdk_library/test/myjavalib.txt
-.intermediates/myjavalib.stubs.source.test/android_common/myjavalib.stubs.source.test_removed.txt -> sdk_library/test/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source.test/android_common/metalava/myjavalib.stubs.source.test_api.txt -> sdk_library/test/myjavalib.txt
+.intermediates/myjavalib.stubs.source.test/android_common/metalava/myjavalib.stubs.source.test_removed.txt -> sdk_library/test/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1117,7 +1056,7 @@ sdk_snapshot {
 }
 
 func TestSnapshotWithJavaSdkLibrary_SdkVersion_None(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1131,7 +1070,7 @@ func TestSnapshotWithJavaSdkLibrary_SdkVersion_None(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1173,8 +1112,8 @@ sdk_snapshot {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1183,7 +1122,7 @@ sdk_snapshot {
 }
 
 func TestSnapshotWithJavaSdkLibrary_SdkVersion_ForScope(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1200,7 +1139,7 @@ func TestSnapshotWithJavaSdkLibrary_SdkVersion_ForScope(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1242,8 +1181,8 @@ sdk_snapshot {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1252,7 +1191,7 @@ sdk_snapshot {
 }
 
 func TestSnapshotWithJavaSdkLibrary_ApiScopes(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1272,7 +1211,7 @@ func TestSnapshotWithJavaSdkLibrary_ApiScopes(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1328,11 +1267,11 @@ sdk_snapshot {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 .intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
-.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1342,7 +1281,7 @@ sdk_snapshot {
 }
 
 func TestSnapshotWithJavaSdkLibrary_ModuleLib(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1365,7 +1304,7 @@ func TestSnapshotWithJavaSdkLibrary_ModuleLib(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1435,14 +1374,14 @@ sdk_snapshot {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 .intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
-.intermediates/myjavalib.stubs.source.system/android_common/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
 .intermediates/myjavalib.stubs.module_lib/android_common/javac/myjavalib.stubs.module_lib.jar -> sdk_library/module-lib/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.module_lib/android_common/myjavalib.stubs.source.module_lib_api.txt -> sdk_library/module-lib/myjavalib.txt
-.intermediates/myjavalib.stubs.source.module_lib/android_common/myjavalib.stubs.source.module_lib_removed.txt -> sdk_library/module-lib/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source.module_lib/android_common/metalava/myjavalib.stubs.source.module_lib_api.txt -> sdk_library/module-lib/myjavalib.txt
+.intermediates/myjavalib.stubs.source.module_lib/android_common/metalava/myjavalib.stubs.source.module_lib_removed.txt -> sdk_library/module-lib/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1453,7 +1392,7 @@ sdk_snapshot {
 }
 
 func TestSnapshotWithJavaSdkLibrary_SystemServer(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1473,7 +1412,7 @@ func TestSnapshotWithJavaSdkLibrary_SystemServer(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1529,11 +1468,11 @@ sdk_snapshot {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 .intermediates/myjavalib.stubs.system_server/android_common/javac/myjavalib.stubs.system_server.jar -> sdk_library/system-server/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.system_server/android_common/myjavalib.stubs.source.system_server_api.txt -> sdk_library/system-server/myjavalib.txt
-.intermediates/myjavalib.stubs.source.system_server/android_common/myjavalib.stubs.source.system_server_removed.txt -> sdk_library/system-server/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source.system_server/android_common/metalava/myjavalib.stubs.source.system_server_api.txt -> sdk_library/system-server/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system_server/android_common/metalava/myjavalib.stubs.source.system_server_removed.txt -> sdk_library/system-server/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1543,7 +1482,7 @@ sdk_snapshot {
 }
 
 func TestSnapshotWithJavaSdkLibrary_NamingScheme(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1561,7 +1500,7 @@ func TestSnapshotWithJavaSdkLibrary_NamingScheme(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1605,8 +1544,8 @@ sdk_snapshot {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1615,7 +1554,10 @@ sdk_snapshot {
 }
 
 func TestSnapshotWithJavaSdkLibrary_DoctagFiles(t *testing.T) {
-	result := testSdkWithJava(t, `
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJavaSdkLibrary,
+		android.FixtureAddFile("docs/known_doctags", nil),
+	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1637,7 +1579,7 @@ func TestSnapshotWithJavaSdkLibrary_DoctagFiles(t *testing.T) {
 		}
 	`)
 
-	result.CheckSnapshot("mysdk", "",
+	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
@@ -1681,8 +1623,8 @@ sdk_snapshot {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 docs/known_doctags -> doctags/docs/known_doctags
 `),
 	)

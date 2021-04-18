@@ -230,6 +230,8 @@ type baseCompiler struct {
 	// other modules and filegroups. May include source files that have not yet been translated to
 	// C/C++ (.aidl, .proto, etc.)
 	srcsBeforeGen android.Paths
+
+	generatedSourceInfo
 }
 
 var _ compiler = (*baseCompiler)(nil)
@@ -252,6 +254,10 @@ func (compiler *baseCompiler) appendAsflags(flags []string) {
 
 func (compiler *baseCompiler) compilerProps() []interface{} {
 	return []interface{}{&compiler.Properties, &compiler.Proto}
+}
+
+func (compiler *baseCompiler) includeBuildDirectory() bool {
+	return proptools.BoolDefault(compiler.Properties.Include_build_directory, true)
 }
 
 func (compiler *baseCompiler) compilerInit(ctx BaseModuleContext) {}
@@ -330,8 +336,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.Local.YasmFlags = append(flags.Local.YasmFlags, f)
 	}
 
-	if compiler.Properties.Include_build_directory == nil ||
-		*compiler.Properties.Include_build_directory {
+	if compiler.includeBuildDirectory() {
 		flags.Local.CommonFlags = append(flags.Local.CommonFlags, "-I"+modulePath)
 		flags.Local.YasmFlags = append(flags.Local.YasmFlags, "-I"+modulePath)
 	}
@@ -355,6 +360,11 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	if ctx.useVndk() {
 		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_VNDK__")
+		if ctx.inVendor() {
+			flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_VENDOR__")
+		} else if ctx.inProduct() {
+			flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_PRODUCT__")
+		}
 	}
 
 	if ctx.inRecovery() {
@@ -404,12 +414,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	target := "-target " + tc.ClangTriple()
 	if ctx.Os().Class == android.Device {
-		// When built for the non-updateble part of platform, minSdkVersion doesn't matter.
-		// It matters only when building we are building for modules that can be unbundled.
-		version := "current"
-		if !ctx.isForPlatform() || ctx.isSdkVariant() {
-			version = ctx.minSdkVersion()
-		}
+		version := ctx.minSdkVersion()
 		if version == "" || version == "current" {
 			target += strconv.Itoa(android.FutureApiLevelInt)
 		} else {
@@ -440,7 +445,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		fmt.Sprintf("${config.%sClangGlobalCflags}", hod))
 
 	if isThirdParty(modulePath) {
-		flags.Global.CommonFlags = append([]string{"${config.ClangExternalCflags}"}, flags.Global.CommonFlags...)
+		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "${config.ClangExternalCflags}")
 	}
 
 	if tc.Bionic() {
@@ -634,10 +639,11 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 
 	srcs := append(android.Paths(nil), compiler.srcsBeforeGen...)
 
-	srcs, genDeps := genSources(ctx, srcs, buildFlags)
+	srcs, genDeps, info := genSources(ctx, srcs, buildFlags)
 	pathDeps = append(pathDeps, genDeps...)
 
 	compiler.pathDeps = pathDeps
+	compiler.generatedSourceInfo = info
 	compiler.cFlagsDeps = flags.CFlagsDeps
 
 	// Save src, buildFlags and context

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -27,15 +28,14 @@ import (
 // testProjectJson run the generation of rust-project.json. It returns the raw
 // content of the generated file.
 func testProjectJson(t *testing.T, bp string) []byte {
-	tctx := newTestRustCtx(t, bp)
-	tctx.env = map[string]string{"SOONG_GEN_RUST_PROJECT": "1"}
-	tctx.generateConfig()
-	tctx.parse(t)
+	result := prepareForRustTest.
+		Extend(android.FixtureMergeEnv(map[string]string{"SOONG_GEN_RUST_PROJECT": "1"})).
+		RunTestWithBp(t, bp)
 
 	// The JSON file is generated via WriteFileToOutputDir. Therefore, it
 	// won't appear in the Output of the TestingSingleton. Manually verify
 	// it exists.
-	content, err := ioutil.ReadFile(filepath.Join(buildDir, rustProjectJsonFileName))
+	content, err := ioutil.ReadFile(filepath.Join(result.Config.BuildDir(), rustProjectJsonFileName))
 	if err != nil {
 		t.Errorf("rust-project.json has not been generated")
 	}
@@ -116,6 +116,41 @@ func TestProjectJsonDep(t *testing.T) {
 	validateJsonCrates(t, jsonContent)
 }
 
+func TestProjectJsonFeature(t *testing.T) {
+	bp := `
+	rust_library {
+		name: "liba",
+		srcs: ["a/src/lib.rs"],
+		crate_name: "a",
+		features: ["f1", "f2"]
+	}
+	`
+	jsonContent := testProjectJson(t, bp)
+	crates := validateJsonCrates(t, jsonContent)
+	for _, c := range crates {
+		crate := validateCrate(t, c)
+		cfgs, ok := crate["cfg"].([]interface{})
+		if !ok {
+			t.Fatalf("Unexpected type for cfgs: %v", crate)
+		}
+		expectedCfgs := []string{"feature=\"f1\"", "feature=\"f2\""}
+		foundCfgs := []string{}
+		for _, cfg := range cfgs {
+			cfg, ok := cfg.(string)
+			if !ok {
+				t.Fatalf("Unexpected type for cfg: %v", cfg)
+			}
+			foundCfgs = append(foundCfgs, cfg)
+		}
+		sort.Strings(foundCfgs)
+		for i, foundCfg := range foundCfgs {
+			if foundCfg != expectedCfgs[i] {
+				t.Errorf("Incorrect features: got %v; want %v", foundCfg, expectedCfgs[i])
+			}
+		}
+	}
+}
+
 func TestProjectJsonBinary(t *testing.T) {
 	bp := `
 	rust_binary {
@@ -190,8 +225,8 @@ func TestProjectJsonBindGen(t *testing.T) {
 				}
 			}
 		}
-		// Check that liba depends on libbindings1
 		if strings.Contains(rootModule, "d/src/lib.rs") {
+			// Check that libd depends on libbindings1
 			found := false
 			for _, depName := range validateDependencies(t, crate) {
 				if depName == "bindings1" {
@@ -200,8 +235,17 @@ func TestProjectJsonBindGen(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Errorf("liba does not depend on libbindings1: %v", crate)
+				t.Errorf("libd does not depend on libbindings1: %v", crate)
 			}
+			// Check that OUT_DIR is populated.
+			env, ok := crate["env"].(map[string]interface{})
+			if !ok {
+				t.Errorf("libd does not have its environment variables set: %v", crate)
+			}
+			if _, ok = env["OUT_DIR"]; !ok {
+				t.Errorf("libd does not have its OUT_DIR set: %v", env)
+			}
+
 		}
 	}
 }

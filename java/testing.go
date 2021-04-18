@@ -24,45 +24,146 @@ import (
 	"android/soong/android"
 	"android/soong/cc"
 	"android/soong/dexpreopt"
-	"android/soong/python"
-
 	"github.com/google/blueprint"
 )
+
+const defaultJavaDir = "default/java"
+
+// Test fixture preparer that will register most java build components.
+//
+// Singletons and mutators should only be added here if they are needed for a majority of java
+// module types, otherwise they should be added under a separate preparer to allow them to be
+// selected only when needed to reduce test execution time.
+//
+// Module types do not have much of an overhead unless they are used so this should include as many
+// module types as possible. The exceptions are those module types that require mutators and/or
+// singletons in order to function in which case they should be kept together in a separate
+// preparer.
+var PrepareForTestWithJavaBuildComponents = android.GroupFixturePreparers(
+	// Make sure that mutators and module types, e.g. prebuilt mutators available.
+	android.PrepareForTestWithAndroidBuildComponents,
+	// Make java build components available to the test.
+	android.FixtureRegisterWithContext(registerRequiredBuildComponentsForTest),
+	android.FixtureRegisterWithContext(registerJavaPluginBuildComponents),
+	// Additional files needed in tests that disallow non-existent source files.
+	// This includes files that are needed by all, or at least most, instances of a java module type.
+	android.MockFS{
+		// Needed for linter used by java_library.
+		"build/soong/java/lint_defaults.txt": nil,
+		// Needed for apps that do not provide their own.
+		"build/make/target/product/security": nil,
+	}.AddToFixture(),
+)
+
+// Test fixture preparer that will define default java modules, e.g. standard prebuilt modules.
+var PrepareForTestWithJavaDefaultModules = android.GroupFixturePreparers(
+	// Make sure that all the module types used in the defaults are registered.
+	PrepareForTestWithJavaBuildComponents,
+	// Additional files needed when test disallows non-existent source.
+	android.MockFS{
+		// Needed for framework-res
+		defaultJavaDir + "/AndroidManifest.xml": nil,
+		// Needed for framework
+		defaultJavaDir + "/framework/aidl": nil,
+		// Needed for various deps defined in GatherRequiredDepsForTest()
+		defaultJavaDir + "/a.java": nil,
+	}.AddToFixture(),
+	// The java default module definitions.
+	android.FixtureAddTextFile(defaultJavaDir+"/Android.bp", gatherRequiredDepsForTest()),
+	// Add dexpreopt compat libs (android.test.base, etc.) and a fake dex2oatd module.
+	dexpreopt.PrepareForTestWithDexpreoptCompatLibs,
+	dexpreopt.PrepareForTestWithFakeDex2oatd,
+)
+
+// Provides everything needed by dexpreopt.
+var PrepareForTestWithDexpreopt = android.GroupFixturePreparers(
+	PrepareForTestWithJavaDefaultModules,
+	dexpreopt.PrepareForTestByEnablingDexpreopt,
+)
+
+var PrepareForTestWithOverlayBuildComponents = android.FixtureRegisterWithContext(registerOverlayBuildComponents)
+
+// Prepare a fixture to use all java module types, mutators and singletons fully.
+//
+// This should only be used by tests that want to run with as much of the build enabled as possible.
+var PrepareForIntegrationTestWithJava = android.GroupFixturePreparers(
+	cc.PrepareForIntegrationTestWithCc,
+	PrepareForTestWithJavaDefaultModules,
+)
+
+// Prepare a fixture with the standard files required by a java_sdk_library module.
+var PrepareForTestWithJavaSdkLibraryFiles = android.FixtureMergeMockFs(android.MockFS{
+	"api/current.txt":               nil,
+	"api/removed.txt":               nil,
+	"api/system-current.txt":        nil,
+	"api/system-removed.txt":        nil,
+	"api/test-current.txt":          nil,
+	"api/test-removed.txt":          nil,
+	"api/module-lib-current.txt":    nil,
+	"api/module-lib-removed.txt":    nil,
+	"api/system-server-current.txt": nil,
+	"api/system-server-removed.txt": nil,
+})
+
+// FixtureWithLastReleaseApis creates a preparer that creates prebuilt versions of the specified
+// modules for the `last` API release. By `last` it just means last in the list of supplied versions
+// and as this only provides one version it can be any value.
+//
+// This uses FixtureWithPrebuiltApis under the covers so the limitations of that apply to this.
+func FixtureWithLastReleaseApis(moduleNames ...string) android.FixturePreparer {
+	return FixtureWithPrebuiltApis(map[string][]string{
+		"30": moduleNames,
+	})
+}
+
+// PrepareForTestWithPrebuiltsOfCurrentApi is a preparer that creates prebuilt versions of the
+// standard modules for the current version.
+//
+// This uses FixtureWithPrebuiltApis under the covers so the limitations of that apply to this.
+var PrepareForTestWithPrebuiltsOfCurrentApi = FixtureWithPrebuiltApis(map[string][]string{
+	"current": {},
+	// Can't have current on its own as it adds a prebuilt_apis module but doesn't add any
+	// .txt files which causes the prebuilt_apis module to fail.
+	"30": {},
+})
+
+// FixtureWithPrebuiltApis creates a preparer that will define prebuilt api modules for the
+// specified releases and modules.
+//
+// The supplied map keys are the releases, e.g. current, 29, 30, etc. The values are a list of
+// modules for that release. Due to limitations in the prebuilt_apis module which this preparer
+// uses the set of releases must include at least one numbered release, i.e. it cannot just include
+// "current".
+//
+// This defines a file in the mock file system in a predefined location (prebuilts/sdk/Android.bp)
+// and so only one instance of this can be used in each fixture.
+func FixtureWithPrebuiltApis(release2Modules map[string][]string) android.FixturePreparer {
+	mockFS := android.MockFS{}
+	path := "prebuilts/sdk/Android.bp"
+
+	bp := fmt.Sprintf(`
+			prebuilt_apis {
+				name: "sdk",
+				api_dirs: ["%s"],
+				imports_sdk_version: "none",
+				imports_compile_dex: true,
+			}
+		`, strings.Join(android.SortedStringKeys(release2Modules), `", "`))
+
+	for release, modules := range release2Modules {
+		libs := append([]string{"android", "core-for-system-modules"}, modules...)
+		mockFS.Merge(prebuiltApisFilesForLibs([]string{release}, libs))
+	}
+	return android.GroupFixturePreparers(
+		android.FixtureAddTextFile(path, bp),
+		android.FixtureMergeMockFs(mockFS),
+	)
+}
 
 func TestConfig(buildDir string, env map[string]string, bp string, fs map[string][]byte) android.Config {
 	bp += GatherRequiredDepsForTest()
 
-	mockFS := map[string][]byte{
-		"api/current.txt":        nil,
-		"api/removed.txt":        nil,
-		"api/system-current.txt": nil,
-		"api/system-removed.txt": nil,
-		"api/test-current.txt":   nil,
-		"api/test-removed.txt":   nil,
-
-		"prebuilts/sdk/tools/core-lambda-stubs.jar": nil,
-		"prebuilts/sdk/Android.bp":                  []byte(`prebuilt_apis { name: "sdk", api_dirs: ["14", "28", "30", "current"], imports_sdk_version: "none", imports_compile_dex:true,}`),
-
-		"bin.py": nil,
-		python.StubTemplateHost: []byte(`PYTHON_BINARY = '%interpreter%'
-		MAIN_FILE = '%main%'`),
-
-		// For java_sdk_library
-		"api/module-lib-current.txt":    nil,
-		"api/module-lib-removed.txt":    nil,
-		"api/system-server-current.txt": nil,
-		"api/system-server-removed.txt": nil,
-	}
-
-	levels := []string{"14", "28", "29", "30", "current"}
-	libs := []string{
-		"android", "foo", "bar", "sdklib", "barney", "betty", "foo-shared_library",
-		"foo-no_shared_library", "core-for-system-modules", "quuz", "qux", "fred",
-		"runtime-library",
-	}
-	for k, v := range prebuiltApisFilesForLibs(levels, libs) {
-		mockFS[k] = v
-	}
+	mockFS := android.MockFS{}
 
 	cc.GatherRequiredFilesForTest(mockFS)
 
@@ -103,7 +204,22 @@ func prebuiltApisFilesForLibs(apiLevels []string, sdkLibs []string) map[string][
 //
 // In particular this must register all the components that are used in the `Android.bp` snippet
 // returned by GatherRequiredDepsForTest()
+//
+// deprecated: Use test fixtures instead, e.g. PrepareForTestWithJavaBuildComponents
 func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
+	registerRequiredBuildComponentsForTest(ctx)
+
+	// Make sure that any tool related module types needed by dexpreopt have been registered.
+	dexpreopt.RegisterToolModulesForTest(ctx)
+}
+
+// registerRequiredBuildComponentsForTest registers the build components used by
+// PrepareForTestWithJavaDefaultModules.
+//
+// As functionality is moved out of here into separate FixturePreparer instances they should also
+// be moved into GatherRequiredDepsForTest for use by tests that have not yet switched to use test
+// fixtures.
+func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterAARBuildComponents(ctx)
 	RegisterAppBuildComponents(ctx)
 	RegisterAppImportBuildComponents(ctx)
@@ -118,15 +234,32 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterSdkLibraryBuildComponents(ctx)
 	RegisterStubsBuildComponents(ctx)
 	RegisterSystemModulesBuildComponents(ctx)
-
-	// Make sure that any tool related module types needed by dexpreopt have been registered.
-	dexpreopt.RegisterToolModulesForTest(ctx)
 }
 
 // Gather the module definitions needed by tests that depend upon code from this package.
 //
 // Returns an `Android.bp` snippet that defines the modules that are needed by this package.
+//
+// deprecated: Use test fixtures instead, e.g. PrepareForTestWithJavaDefaultModules
 func GatherRequiredDepsForTest() string {
+	bp := gatherRequiredDepsForTest()
+
+	// For class loader context and <uses-library> tests.
+	bp += dexpreopt.CompatLibDefinitionsForTest()
+
+	// Make sure that any tools needed for dexpreopting are defined.
+	bp += dexpreopt.BpToolModulesForTest()
+
+	return bp
+}
+
+// gatherRequiredDepsForTest gathers the module definitions used by
+// PrepareForTestWithJavaDefaultModules.
+//
+// As functionality is moved out of here into separate FixturePreparer instances they should also
+// be moved into GatherRequiredDepsForTest for use by tests that have not yet switched to use test
+// fixtures.
+func gatherRequiredDepsForTest() string {
 	var bp string
 
 	extraModules := []string{
@@ -154,24 +287,6 @@ func GatherRequiredDepsForTest() string {
 				sdk_version: "none",
 				system_modules: "stable-core-platform-api-stubs-system-modules",
 				compile_dex: true,
-			}
-		`, extra)
-	}
-
-	// For class loader context and <uses-library> tests.
-	dexpreoptModules := []string{"android.test.runner"}
-	dexpreoptModules = append(dexpreoptModules, dexpreopt.CompatUsesLibs...)
-	dexpreoptModules = append(dexpreoptModules, dexpreopt.OptionalCompatUsesLibs...)
-
-	for _, extra := range dexpreoptModules {
-		bp += fmt.Sprintf(`
-			java_library {
-				name: "%s",
-				srcs: ["a.java"],
-				sdk_version: "none",
-				system_modules: "stable-core-platform-api-stubs-system-modules",
-				compile_dex: true,
-				installable: true,
 			}
 		`, extra)
 	}
@@ -212,9 +327,6 @@ func GatherRequiredDepsForTest() string {
 		`, extra)
 	}
 
-	// Make sure that any tools needed for dexpreopting are defined.
-	bp += dexpreopt.BpToolModulesForTest()
-
 	// Make sure that the dex_bootjars singleton module is instantiated for the tests.
 	bp += `
 		dex_bootjars {
@@ -240,9 +352,19 @@ func CheckModuleDependencies(t *testing.T, ctx *android.TestContext, name, varia
 }
 
 func CheckHiddenAPIRuleInputs(t *testing.T, expected string, hiddenAPIRule android.TestingBuildParams) {
+	t.Helper()
 	actual := strings.TrimSpace(strings.Join(android.NormalizePathsForTesting(hiddenAPIRule.Implicits), "\n"))
 	expected = strings.TrimSpace(expected)
 	if actual != expected {
 		t.Errorf("Expected hiddenapi rule inputs:\n%s\nactual inputs:\n%s", expected, actual)
 	}
+}
+
+// Check that the merged file create by platform_compat_config_singleton has the correct inputs.
+func CheckMergedCompatConfigInputs(t *testing.T, result *android.TestResult, message string, expectedPaths ...string) {
+	sourceGlobalCompatConfig := result.SingletonForTests("platform_compat_config_singleton")
+	allOutputs := sourceGlobalCompatConfig.AllOutputs()
+	android.AssertIntEquals(t, message+": output len", 1, len(allOutputs))
+	output := sourceGlobalCompatConfig.Output(allOutputs[0])
+	android.AssertPathsRelativeToTopEquals(t, message+": inputs", expectedPaths, output.Implicits)
 }

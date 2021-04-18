@@ -57,6 +57,15 @@ var (
 		},
 		"cpFlags")
 
+	// A copy rule that only updates the output if it changed.
+	CpIfChanged = pctx.AndroidStaticRule("CpIfChanged",
+		blueprint.RuleParams{
+			Command:     "if ! cmp -s $in $out; then cp $in $out; fi",
+			Description: "cp if changed $out",
+			Restat:      true,
+		},
+		"cpFlags")
+
 	CpExecutable = pctx.AndroidStaticRule("CpExecutable",
 		blueprint.RuleParams{
 			Command:     "rm -f $out && cp $cpPreserveSymlinks $cpFlags $in $out && chmod +x $out",
@@ -115,6 +124,10 @@ var (
 
 func init() {
 	pctx.Import("github.com/google/blueprint/bootstrap")
+
+	pctx.VariableFunc("RBEWrapper", func(ctx PackageVarContext) string {
+		return ctx.Config().RBEWrapper()
+	})
 }
 
 var (
@@ -136,7 +149,7 @@ var (
 
 func buildWriteFileRule(ctx BuilderContext, outputFile WritablePath, content string) {
 	content = echoEscaper.Replace(content)
-	content = proptools.ShellEscape(content)
+	content = proptools.NinjaEscape(proptools.ShellEscapeIncludingSpaces(content))
 	if content == "" {
 		content = "''"
 	}

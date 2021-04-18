@@ -17,6 +17,7 @@ package filesystem
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -61,6 +62,10 @@ type bootimgProperties struct {
 
 	// Optional kernel commandline
 	Cmdline *string
+
+	// File that contains bootconfig parameters. This can be set only when `vendor_boot` is true
+	// and `header_version` is greater than or equal to 4.
+	Bootconfig *string `android:"arch_variant,path"`
 
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
@@ -107,14 +112,8 @@ func (b *bootimg) partitionName() string {
 }
 
 func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	var unsignedOutput android.OutputPath
-	if proptools.Bool(b.properties.Vendor_boot) {
-		unsignedOutput = b.buildVendorBootImage(ctx)
-	} else {
-		// TODO(jiyong): fix this
-		ctx.PropertyErrorf("vendor_boot", "only vendor_boot:true is supported")
-		return
-	}
+	vendor := proptools.Bool(b.properties.Vendor_boot)
+	unsignedOutput := b.buildBootImage(ctx, vendor)
 
 	if proptools.Bool(b.properties.Use_avb) {
 		b.output = b.signImage(ctx, unsignedOutput)
@@ -126,16 +125,23 @@ func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.InstallFile(b.installDir, b.installFileName(), b.output)
 }
 
-func (b *bootimg) buildVendorBootImage(ctx android.ModuleContext) android.OutputPath {
+func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android.OutputPath {
 	output := android.PathForModuleOut(ctx, "unsigned", b.installFileName()).OutputPath
 
 	builder := android.NewRuleBuilder(pctx, ctx)
 	cmd := builder.Command().BuiltTool("mkbootimg")
 
-	kernel := android.OptionalPathForModuleSrc(ctx, b.properties.Kernel_prebuilt)
-	if kernel.Valid() {
+	kernel := proptools.String(b.properties.Kernel_prebuilt)
+	if vendor && kernel != "" {
 		ctx.PropertyErrorf("kernel_prebuilt", "vendor_boot partition can't have kernel")
 		return output
+	}
+	if !vendor && kernel == "" {
+		ctx.PropertyErrorf("kernel_prebuilt", "boot partition must have kernel")
+		return output
+	}
+	if kernel != "" {
+		cmd.FlagWithInput("--kernel ", android.PathForModuleSrc(ctx, kernel))
 	}
 
 	dtbName := proptools.String(b.properties.Dtb_prebuilt)
@@ -148,7 +154,11 @@ func (b *bootimg) buildVendorBootImage(ctx android.ModuleContext) android.Output
 
 	cmdline := proptools.String(b.properties.Cmdline)
 	if cmdline != "" {
-		cmd.FlagWithArg("--vendor_cmdline ", "\""+cmdline+"\"")
+		flag := "--cmdline "
+		if vendor {
+			flag = "--vendor_cmdline "
+		}
+		cmd.FlagWithArg(flag, proptools.ShellEscapeIncludingSpaces(cmdline))
 	}
 
 	headerVersion := proptools.String(b.properties.Header_version)
@@ -174,33 +184,78 @@ func (b *bootimg) buildVendorBootImage(ctx android.ModuleContext) android.Output
 	}
 	ramdisk := ctx.GetDirectDepWithTag(ramdiskName, bootimgRamdiskDep)
 	if filesystem, ok := ramdisk.(*filesystem); ok {
-		cmd.FlagWithInput("--vendor_ramdisk ", filesystem.OutputPath())
+		flag := "--ramdisk "
+		if vendor {
+			flag = "--vendor_ramdisk "
+		}
+		cmd.FlagWithInput(flag, filesystem.OutputPath())
 	} else {
 		ctx.PropertyErrorf("ramdisk", "%q is not android_filesystem module", ramdisk.Name())
 		return output
 	}
 
-	cmd.FlagWithOutput("--vendor_boot ", output)
+	bootconfig := proptools.String(b.properties.Bootconfig)
+	if bootconfig != "" {
+		if !vendor {
+			ctx.PropertyErrorf("bootconfig", "requires vendor_boot: true")
+			return output
+		}
+		if verNum < 4 {
+			ctx.PropertyErrorf("bootconfig", "requires header_version: 4 or later")
+			return output
+		}
+		cmd.FlagWithInput("--vendor_bootconfig ", android.PathForModuleSrc(ctx, bootconfig))
+	}
 
-	builder.Build("build_vendor_bootimg", fmt.Sprintf("Creating %s", b.BaseModuleName()))
+	flag := "--output "
+	if vendor {
+		flag = "--vendor_boot "
+	}
+	cmd.FlagWithOutput(flag, output)
+
+	builder.Build("build_bootimg", fmt.Sprintf("Creating %s", b.BaseModuleName()))
 	return output
 }
 
 func (b *bootimg) signImage(ctx android.ModuleContext, unsignedImage android.OutputPath) android.OutputPath {
-	output := android.PathForModuleOut(ctx, b.installFileName()).OutputPath
-	key := android.PathForModuleSrc(ctx, proptools.String(b.properties.Avb_private_key))
+	propFile, toolDeps := b.buildPropFile(ctx)
 
+	output := android.PathForModuleOut(ctx, b.installFileName()).OutputPath
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().Text("cp").Input(unsignedImage).Output(output)
-	builder.Command().
-		BuiltTool("avbtool").
-		Flag("add_hash_footer").
-		FlagWithArg("--partition_name ", b.partitionName()).
-		FlagWithInput("--key ", key).
-		FlagWithOutput("--image ", output)
+	builder.Command().BuiltTool("verity_utils").
+		Input(propFile).
+		Implicits(toolDeps).
+		Output(output)
 
 	builder.Build("sign_bootimg", fmt.Sprintf("Signing %s", b.BaseModuleName()))
 	return output
+}
+
+func (b *bootimg) buildPropFile(ctx android.ModuleContext) (propFile android.OutputPath, toolDeps android.Paths) {
+	var sb strings.Builder
+	var deps android.Paths
+	addStr := func(name string, value string) {
+		fmt.Fprintf(&sb, "%s=%s\n", name, value)
+	}
+	addPath := func(name string, path android.Path) {
+		addStr(name, path.String())
+		deps = append(deps, path)
+	}
+
+	addStr("avb_hash_enable", "true")
+	addPath("avb_avbtool", ctx.Config().HostToolPath(ctx, "avbtool"))
+	algorithm := proptools.StringDefault(b.properties.Avb_algorithm, "SHA256_RSA4096")
+	addStr("avb_algorithm", algorithm)
+	key := android.PathForModuleSrc(ctx, proptools.String(b.properties.Avb_private_key))
+	addPath("avb_key_path", key)
+	addStr("avb_add_hash_footer_args", "") // TODO(jiyong): add --rollback_index
+	partitionName := proptools.StringDefault(b.properties.Partition_name, b.Name())
+	addStr("partition_name", partitionName)
+
+	propFile = android.PathForModuleOut(ctx, "prop").OutputPath
+	android.WriteFileRule(ctx, propFile, sb.String())
+	return propFile, deps
 }
 
 var _ android.AndroidMkEntriesProvider = (*bootimg)(nil)
@@ -223,4 +278,21 @@ var _ Filesystem = (*bootimg)(nil)
 
 func (b *bootimg) OutputPath() android.Path {
 	return b.output
+}
+
+func (b *bootimg) SignedOutputPath() android.Path {
+	if proptools.Bool(b.properties.Use_avb) {
+		return b.OutputPath()
+	}
+	return nil
+}
+
+var _ android.OutputFileProducer = (*bootimg)(nil)
+
+// Implements android.OutputFileProducer
+func (b *bootimg) OutputFiles(tag string) (android.Paths, error) {
+	if tag == "" {
+		return []android.Path{b.output}, nil
+	}
+	return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 }

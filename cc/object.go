@@ -46,6 +46,17 @@ type objectLinker struct {
 	Properties ObjectLinkerProperties
 }
 
+type objectBazelHandler struct {
+	bazelHandler
+
+	module *Module
+}
+
+func (handler *objectBazelHandler) generateBazelBuildActions(ctx android.ModuleContext, label string) bool {
+	// TODO(b/181794963): restore mixed builds once cc_object incompatibility resolved
+	return false
+}
+
 type ObjectLinkerProperties struct {
 	// list of modules that should only provide headers for this module.
 	Header_libs []string `android:"arch_variant,variant_prepend"`
@@ -80,6 +91,7 @@ func ObjectFactory() android.Module {
 		baseLinker: NewBaseLinker(module.sanitize),
 	}
 	module.compiler = NewBaseCompiler()
+	module.bazelHandler = &objectBazelHandler{module: module}
 
 	// Clang's address-significance tables are incompatible with ld -r.
 	module.compiler.appendCflags([]string{"-fno-addrsig"})
@@ -91,8 +103,9 @@ func ObjectFactory() android.Module {
 
 // For bp2build conversion.
 type bazelObjectAttributes struct {
-	Srcs               bazel.LabelList
-	Copts              []string
+	Srcs               bazel.LabelListAttribute
+	Deps               bazel.LabelListAttribute
+	Copts              bazel.StringListAttribute
 	Local_include_dirs []string
 }
 
@@ -118,7 +131,7 @@ func BazelObjectFactory() android.Module {
 // Bazel equivalent target, plus any necessary include deps for the cc_object.
 func ObjectBp2Build(ctx android.TopDownMutatorContext) {
 	m, ok := ctx.Module().(*Module)
-	if !ok || !m.Properties.Bazel_module.Bp2build_available {
+	if !ok || !m.ConvertWithBp2build(ctx) {
 		return
 	}
 
@@ -132,31 +145,55 @@ func ObjectBp2Build(ctx android.TopDownMutatorContext) {
 		ctx.ModuleErrorf("compiler must not be nil for a cc_object module")
 	}
 
-	var copts []string
-	var srcs []string
+	// Set arch-specific configurable attributes
+	var copts bazel.StringListAttribute
+	var srcs bazel.LabelListAttribute
 	var localIncludeDirs []string
 	for _, props := range m.compiler.compilerProps() {
 		if baseCompilerProps, ok := props.(*BaseCompilerProperties); ok {
-			copts = baseCompilerProps.Cflags
-			srcs = baseCompilerProps.Srcs
+			copts.Value = baseCompilerProps.Cflags
+			srcs = bazel.MakeLabelListAttribute(
+				android.BazelLabelForModuleSrcExcludes(
+					ctx,
+					baseCompilerProps.Srcs,
+					baseCompilerProps.Exclude_srcs))
 			localIncludeDirs = baseCompilerProps.Local_include_dirs
 			break
 		}
 	}
 
+	if c, ok := m.compiler.(*baseCompiler); ok && c.includeBuildDirectory() {
+		localIncludeDirs = append(localIncludeDirs, ".")
+	}
+
+	var deps bazel.LabelListAttribute
+	for _, props := range m.linker.linkerProps() {
+		if objectLinkerProps, ok := props.(*ObjectLinkerProperties); ok {
+			deps = bazel.MakeLabelListAttribute(
+				android.BazelLabelForModuleDeps(ctx, objectLinkerProps.Objs))
+		}
+	}
+
+	for arch, p := range m.GetArchProperties(&BaseCompilerProperties{}) {
+		if cProps, ok := p.(*BaseCompilerProperties); ok {
+			srcs.SetValueForArch(arch.Name, android.BazelLabelForModuleSrcExcludes(ctx, cProps.Srcs, cProps.Exclude_srcs))
+			copts.SetValueForArch(arch.Name, cProps.Cflags)
+		}
+	}
+
 	attrs := &bazelObjectAttributes{
-		Srcs:               android.BazelLabelForModuleSrc(ctx, srcs),
+		Srcs:               srcs,
+		Deps:               deps,
 		Copts:              copts,
 		Local_include_dirs: localIncludeDirs,
 	}
 
-	props := bazel.NewBazelTargetModuleProperties(
-		m.Name(),
-		"cc_object",
-		"//build/bazel/rules:cc_object.bzl",
-	)
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "cc_object",
+		Bzl_load_location: "//build/bazel/rules:cc_object.bzl",
+	}
 
-	ctx.CreateBazelTargetModule(BazelObjectFactory, props, attrs)
+	ctx.CreateBazelTargetModule(BazelObjectFactory, m.Name(), props, attrs)
 }
 
 func (object *objectLinker) appendLdflags(flags []string) {

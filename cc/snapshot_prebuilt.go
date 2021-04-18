@@ -18,6 +18,7 @@ package cc
 // snapshot mutators and snapshot information maps which are also defined in this file.
 
 import (
+	"path/filepath"
 	"strings"
 
 	"android/soong/android"
@@ -45,9 +46,9 @@ type snapshotImage interface {
 	// directory, such as device/, vendor/, etc.
 	//
 	// For a given snapshot (e.g., vendor, recovery, etc.) if
-	// isProprietaryPath(dir) returns true, then the module in dir will be
-	// built from sources.
-	isProprietaryPath(dir string) bool
+	// isProprietaryPath(dir, deviceConfig) returns true, then the module in dir
+	// will be built from sources.
+	isProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool
 
 	// Whether to include VNDK in the snapshot for this image.
 	includeVndk() bool
@@ -82,6 +83,33 @@ type snapshotImage interface {
 type vendorSnapshotImage struct{}
 type recoverySnapshotImage struct{}
 
+type directoryMap map[string]bool
+
+var (
+	// Modules under following directories are ignored. They are OEM's and vendor's
+	// proprietary modules(device/, kernel/, vendor/, and hardware/).
+	defaultDirectoryExcludedMap = directoryMap{
+		"device":   true,
+		"hardware": true,
+		"kernel":   true,
+		"vendor":   true,
+		// QC specific directories to be ignored
+		"disregard": true,
+	}
+
+	// Modules under following directories are included as they are in AOSP,
+	// although hardware/ and kernel/ are normally for vendor's own.
+	defaultDirectoryIncludedMap = directoryMap{
+		"kernel/configs":              true,
+		"kernel/prebuilts":            true,
+		"kernel/tests":                true,
+		"hardware/interfaces":         true,
+		"hardware/libhardware":        true,
+		"hardware/libhardware_legacy": true,
+		"hardware/ril":                true,
+	}
+)
+
 func (vendorSnapshotImage) init(ctx android.RegistrationContext) {
 	ctx.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
 	ctx.RegisterModuleType("vendor_snapshot", vendorSnapshotFactory)
@@ -107,8 +135,25 @@ func (vendorSnapshotImage) private(m *Module) bool {
 	return m.IsVndkPrivate()
 }
 
-func (vendorSnapshotImage) isProprietaryPath(dir string) bool {
-	return isVendorProprietaryPath(dir)
+func isDirectoryExcluded(dir string, excludedMap directoryMap, includedMap directoryMap) bool {
+	if dir == "." || dir == "/" {
+		return false
+	}
+	if includedMap[dir] {
+		return false
+	} else if excludedMap[dir] {
+		return true
+	} else if defaultDirectoryIncludedMap[dir] {
+		return false
+	} else if defaultDirectoryExcludedMap[dir] {
+		return true
+	} else {
+		return isDirectoryExcluded(filepath.Dir(dir), excludedMap, includedMap)
+	}
+}
+
+func (vendorSnapshotImage) isProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool {
+	return isDirectoryExcluded(dir, deviceConfig.VendorSnapshotDirsExcludedMap(), deviceConfig.VendorSnapshotDirsIncludedMap())
 }
 
 // vendor snapshot includes static/header libraries with vndk: {enabled: true}.
@@ -172,8 +217,8 @@ func (recoverySnapshotImage) private(m *Module) bool {
 	return false
 }
 
-func (recoverySnapshotImage) isProprietaryPath(dir string) bool {
-	return isRecoveryProprietaryPath(dir)
+func (recoverySnapshotImage) isProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool {
+	return isDirectoryExcluded(dir, deviceConfig.RecoverySnapshotDirsExcludedMap(), deviceConfig.RecoverySnapshotDirsIncludedMap())
 }
 
 // recovery snapshot does NOT treat vndk specially.
@@ -280,50 +325,36 @@ func (s *snapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Nothing, the snapshot module is only used to forward dependency information in DepsMutator.
 }
 
+func getSnapshotNameSuffix(moduleSuffix, version, arch string) string {
+	versionSuffix := version
+	if arch != "" {
+		versionSuffix += "." + arch
+	}
+	return moduleSuffix + versionSuffix
+}
+
 func (s *snapshot) DepsMutator(ctx android.BottomUpMutatorContext) {
-	collectSnapshotMap := func(variations []blueprint.Variation, depTag blueprint.DependencyTag,
-		names []string, snapshotSuffix, moduleSuffix string) map[string]string {
-
-		decoratedNames := make([]string, 0, len(names))
-		for _, name := range names {
-			decoratedNames = append(decoratedNames, name+
-				snapshotSuffix+moduleSuffix+
-				s.baseSnapshot.version()+
-				"."+ctx.Arch().ArchType.Name)
-		}
-
-		deps := ctx.AddVariationDependencies(variations, depTag, decoratedNames...)
+	collectSnapshotMap := func(names []string, snapshotSuffix, moduleSuffix string) map[string]string {
 		snapshotMap := make(map[string]string)
-		for _, dep := range deps {
-			if dep == nil {
-				continue
-			}
-
-			snapshotMap[dep.(*Module).BaseModuleName()] = ctx.OtherModuleName(dep)
+		for _, name := range names {
+			snapshotMap[name] = name +
+				getSnapshotNameSuffix(snapshotSuffix+moduleSuffix,
+					s.baseSnapshot.version(), ctx.Arch().ArchType.Name)
 		}
 		return snapshotMap
 	}
 
 	snapshotSuffix := s.image.moduleNameSuffix()
-	headers := collectSnapshotMap(nil, HeaderDepTag(), s.properties.Header_libs, snapshotSuffix, snapshotHeaderSuffix)
-	binaries := collectSnapshotMap(nil, nil, s.properties.Binaries, snapshotSuffix, snapshotBinarySuffix)
-	objects := collectSnapshotMap(nil, nil, s.properties.Objects, snapshotSuffix, snapshotObjectSuffix)
-
-	staticLibs := collectSnapshotMap([]blueprint.Variation{
-		{Mutator: "link", Variation: "static"},
-	}, StaticDepTag(), s.properties.Static_libs, snapshotSuffix, snapshotStaticSuffix)
-
-	sharedLibs := collectSnapshotMap([]blueprint.Variation{
-		{Mutator: "link", Variation: "shared"},
-	}, SharedDepTag(), s.properties.Shared_libs, snapshotSuffix, snapshotSharedSuffix)
-
-	vndkLibs := collectSnapshotMap([]blueprint.Variation{
-		{Mutator: "link", Variation: "shared"},
-	}, SharedDepTag(), s.properties.Vndk_libs, "", vndkSuffix)
-
+	headers := collectSnapshotMap(s.properties.Header_libs, snapshotSuffix, snapshotHeaderSuffix)
+	binaries := collectSnapshotMap(s.properties.Binaries, snapshotSuffix, snapshotBinarySuffix)
+	objects := collectSnapshotMap(s.properties.Objects, snapshotSuffix, snapshotObjectSuffix)
+	staticLibs := collectSnapshotMap(s.properties.Static_libs, snapshotSuffix, snapshotStaticSuffix)
+	sharedLibs := collectSnapshotMap(s.properties.Shared_libs, snapshotSuffix, snapshotSharedSuffix)
+	vndkLibs := collectSnapshotMap(s.properties.Vndk_libs, "", vndkSuffix)
 	for k, v := range vndkLibs {
 		sharedLibs[k] = v
 	}
+
 	ctx.SetProvider(SnapshotInfoProvider, SnapshotInfo{
 		HeaderLibs: headers,
 		Binaries:   binaries,
@@ -395,12 +426,7 @@ func (p *baseSnapshotDecorator) Name(name string) string {
 }
 
 func (p *baseSnapshotDecorator) NameSuffix() string {
-	versionSuffix := p.version()
-	if p.arch() != "" {
-		versionSuffix += "." + p.arch()
-	}
-
-	return p.baseProperties.ModuleSuffix + versionSuffix
+	return getSnapshotNameSuffix(p.moduleSuffix(), p.version(), p.arch())
 }
 
 func (p *baseSnapshotDecorator) version() string {

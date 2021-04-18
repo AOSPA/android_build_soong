@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"android/soong/shared"
 	"android/soong/ui/build"
 	"android/soong/ui/logger"
 	"android/soong/ui/metrics"
@@ -69,7 +70,7 @@ var commands []command = []command{
 			return build.NewConfig(ctx, args...)
 		},
 		stdio: stdio,
-		run:   make,
+		run:   runMake,
 	}, {
 		flag:         "--dumpvar-mode",
 		description:  "print the value of the legacy make variable VAR to stdout",
@@ -91,7 +92,7 @@ var commands []command = []command{
 		description: "build modules based on the specified build action",
 		config:      buildActionConfig,
 		stdio:       stdio,
-		run:         make,
+		run:         runMake,
 	},
 }
 
@@ -118,6 +119,8 @@ func inList(s string, list []string) bool {
 // Command is the type of soong_ui execution. Only one type of
 // execution is specified. The args are specific to the command.
 func main() {
+	shared.ReexecWithDelveMaybe(os.Getenv("SOONG_UI_DELVE"), shared.ResolveDelveBinary())
+
 	buildStarted := time.Now()
 
 	c, args, err := getCommand(os.Args)
@@ -475,7 +478,7 @@ func buildActionConfig(ctx build.Context, args ...string) build.Config {
 	return build.NewBuildActionConfig(buildAction, *dir, ctx, args...)
 }
 
-func make(ctx build.Context, config build.Config, _ []string, logsDir string) {
+func runMake(ctx build.Context, config build.Config, _ []string, logsDir string) {
 	if config.IsVerbose() {
 		writer := ctx.Writer
 		fmt.Fprintln(writer, "! The argument `showcommands` is no longer supported.")

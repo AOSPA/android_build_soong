@@ -33,10 +33,14 @@ func init() {
 	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/java/config")
 
-	android.RegisterModuleType("sdk", SdkModuleFactory)
-	android.RegisterModuleType("sdk_snapshot", SnapshotModuleFactory)
-	android.PreDepsMutators(RegisterPreDepsMutators)
-	android.PostDepsMutators(RegisterPostDepsMutators)
+	registerSdkBuildComponents(android.InitRegistrationContext)
+}
+
+func registerSdkBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("sdk", SdkModuleFactory)
+	ctx.RegisterModuleType("sdk_snapshot", SnapshotModuleFactory)
+	ctx.PreDepsMutators(RegisterPreDepsMutators)
+	ctx.PostDepsMutators(RegisterPostDepsMutators)
 }
 
 type sdk struct {
@@ -354,14 +358,35 @@ var _ android.ExcludeFromApexContentsTag = dependencyTag{}
 
 // For dependencies from an in-development version of an SDK member to frozen versions of the same member
 // e.g. libfoo -> libfoo.mysdk.11 and libfoo.mysdk.12
+//
+// The dependency represented by this tag requires that for every APEX variant created for the
+// `from` module that an equivalent APEX variant is created for the 'to' module. This is because an
+// APEX that requires a specific version of an sdk (via the `uses_sdks` property will replace
+// dependencies on the unversioned sdk member with a dependency on the appropriate versioned sdk
+// member. In order for that to work the versioned sdk member needs to have a variant for that APEX.
+// As it is not known at the time that the APEX variants are created which specific APEX variants of
+// a versioned sdk members will be required it is necessary for the versioned sdk members to have
+// variants for any APEX that it could be used within.
+//
+// If the APEX selects a versioned sdk member then it will not have a dependency on the `from`
+// module at all so any dependencies of that module will not affect the APEX. However, if the APEX
+// selects the unversioned sdk member then it must exclude all the versioned sdk members. In no
+// situation would this dependency cause the `to` module to be added to the APEX hence why this tag
+// also excludes the `to` module from being added to the APEX contents.
 type sdkMemberVersionedDepTag struct {
 	dependencyTag
 	member  string
 	version string
 }
 
+func (t sdkMemberVersionedDepTag) AlwaysRequireApexVariant() bool {
+	return true
+}
+
 // Mark this tag so dependencies that use it are excluded from visibility enforcement.
 func (t sdkMemberVersionedDepTag) ExcludeFromVisibilityEnforcement() {}
+
+var _ android.AlwaysRequireApexVariantTag = sdkMemberVersionedDepTag{}
 
 // Step 1: create dependencies from an SDK module to its members.
 func memberMutator(mctx android.BottomUpMutatorContext) {
@@ -420,20 +445,26 @@ func memberInterVersionMutator(mctx android.BottomUpMutatorContext) {
 	}
 }
 
+// An interface that encapsulates all the functionality needed to manage the sdk dependencies.
+//
+// It is a mixture of apex and sdk module functionality.
+type sdkAndApexModule interface {
+	android.Module
+	android.DepIsInSameApex
+	android.RequiredSdks
+}
+
 // Step 4: transitively ripple down the SDK requirements from the root modules like APEX to its
 // descendants
 func sdkDepsMutator(mctx android.TopDownMutatorContext) {
-	if parent, ok := mctx.Module().(interface {
-		android.DepIsInSameApex
-		android.RequiredSdks
-	}); ok {
+	if parent, ok := mctx.Module().(sdkAndApexModule); ok {
 		// Module types for Mainline modules (e.g. APEX) are expected to implement RequiredSdks()
 		// by reading its own properties like `uses_sdks`.
 		requiredSdks := parent.RequiredSdks()
 		if len(requiredSdks) > 0 {
 			mctx.VisitDirectDeps(func(m android.Module) {
 				// Only propagate required sdks from the apex onto its contents.
-				if dep, ok := m.(android.SdkAware); ok && parent.DepIsInSameApex(mctx, dep) {
+				if dep, ok := m.(android.SdkAware); ok && android.IsDepInSameApex(mctx, parent, dep) {
 					dep.BuildWithSdks(requiredSdks)
 				}
 			})
@@ -455,6 +486,15 @@ func sdkDepsReplaceMutator(mctx android.BottomUpMutatorContext) {
 			// sdk containing sdkmember.
 			memberName := versionedSdkMember.MemberName()
 
+			// Convert a panic into a normal error to allow it to be more easily tested for. This is a
+			// temporary workaround, once http://b/183204176 has been fixed this can be removed.
+			// TODO(b/183204176): Remove this after fixing.
+			defer func() {
+				if r := recover(); r != nil {
+					mctx.ModuleErrorf("%s", r)
+				}
+			}()
+
 			// Replace dependencies on sdkmember with a dependency on the current module which
 			// is a versioned prebuilt of the sdkmember if required.
 			mctx.ReplaceDependenciesIf(memberName, func(from blueprint.Module, tag blueprint.DependencyTag, to blueprint.Module) bool {
@@ -472,10 +512,7 @@ func sdkDepsReplaceMutator(mctx android.BottomUpMutatorContext) {
 
 // Step 6: ensure that the dependencies outside of the APEX are all from the required SDKs
 func sdkRequirementsMutator(mctx android.TopDownMutatorContext) {
-	if m, ok := mctx.Module().(interface {
-		android.DepIsInSameApex
-		android.RequiredSdks
-	}); ok {
+	if m, ok := mctx.Module().(sdkAndApexModule); ok {
 		requiredSdks := m.RequiredSdks()
 		if len(requiredSdks) == 0 {
 			return
@@ -494,9 +531,18 @@ func sdkRequirementsMutator(mctx android.TopDownMutatorContext) {
 				return
 			}
 
-			// If the dep is outside of the APEX, but is not in any of the
-			// required SDKs, we know that the dep is a violation.
+			// If the dep is outside of the APEX, but is not in any of the required SDKs, we know that the
+			// dep is a violation.
 			if sa, ok := dep.(android.SdkAware); ok {
+				// It is not an error if a dependency that is excluded from the apex due to the tag is not
+				// in one of the required SDKs. That is because all of the existing tags that implement it
+				// do not depend on modules which can or should belong to an sdk_snapshot.
+				if _, ok := tag.(android.ExcludeFromApexContentsTag); ok {
+					// The tag defines a dependency that never requires the child module to be part of the
+					// same apex.
+					return
+				}
+
 				if !m.DepIsInSameApex(mctx, dep) && !requiredSdks.Contains(sa.ContainingSdk()) {
 					mctx.ModuleErrorf("depends on %q (in SDK %q) that isn't part of the required SDKs: %v",
 						sa.Name(), sa.ContainingSdk(), requiredSdks)

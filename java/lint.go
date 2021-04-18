@@ -22,6 +22,8 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/java/config"
+	"android/soong/remoteexec"
 )
 
 type LintProperties struct {
@@ -172,28 +174,28 @@ func (l *linter) deps(ctx android.BottomUpMutatorContext) {
 		extraLintCheckTag, extraCheckModules...)
 }
 
-func (l *linter) writeLintProjectXML(ctx android.ModuleContext,
-	rule *android.RuleBuilder) (projectXMLPath, configXMLPath, cacheDir, homeDir android.WritablePath, deps android.Paths) {
+// lintPaths contains the paths to lint's inputs and outputs to make it easier to pass them
+// around.
+type lintPaths struct {
+	projectXML android.WritablePath
+	configXML  android.WritablePath
+	cacheDir   android.WritablePath
+	homeDir    android.WritablePath
+	srcjarDir  android.WritablePath
+}
 
-	var resourcesList android.WritablePath
-	if len(l.resources) > 0 {
-		// The list of resources may be too long to put on the command line, but
-		// we can't use the rsp file because it is already being used for srcs.
-		// Insert a second rule to write out the list of resources to a file.
-		resourcesList = android.PathForModuleOut(ctx, "lint", "resources.list")
-		resListRule := android.NewRuleBuilder(pctx, ctx)
-		resListRule.Command().Text("cp").FlagWithRspFileInputList("", l.resources).Output(resourcesList)
-		resListRule.Build("lint_resources_list", "lint resources list")
-		deps = append(deps, l.resources...)
-	}
+func lintRBEExecStrategy(ctx android.ModuleContext) string {
+	return ctx.Config().GetenvWithDefault("RBE_LINT_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
+}
 
-	projectXMLPath = android.PathForModuleOut(ctx, "lint", "project.xml")
+func (l *linter) writeLintProjectXML(ctx android.ModuleContext, rule *android.RuleBuilder) lintPaths {
+	projectXMLPath := android.PathForModuleOut(ctx, "lint", "project.xml")
 	// Lint looks for a lint.xml file next to the project.xml file, give it one.
-	configXMLPath = android.PathForModuleOut(ctx, "lint", "lint.xml")
-	cacheDir = android.PathForModuleOut(ctx, "lint", "cache")
-	homeDir = android.PathForModuleOut(ctx, "lint", "home")
+	configXMLPath := android.PathForModuleOut(ctx, "lint", "lint.xml")
+	cacheDir := android.PathForModuleOut(ctx, "lint", "cache")
+	homeDir := android.PathForModuleOut(ctx, "lint", "home")
 
-	srcJarDir := android.PathForModuleOut(ctx, "lint-srcjars")
+	srcJarDir := android.PathForModuleOut(ctx, "lint", "srcjars")
 	srcJarList := zipSyncCmd(ctx, rule, srcJarDir, l.srcJars)
 
 	cmd := rule.Command().
@@ -209,36 +211,31 @@ func (l *linter) writeLintProjectXML(ctx android.ModuleContext,
 		cmd.Flag("--test")
 	}
 	if l.manifest != nil {
-		deps = append(deps, l.manifest)
-		cmd.FlagWithArg("--manifest ", l.manifest.String())
+		cmd.FlagWithInput("--manifest ", l.manifest)
 	}
 	if l.mergedManifest != nil {
-		deps = append(deps, l.mergedManifest)
-		cmd.FlagWithArg("--merged_manifest ", l.mergedManifest.String())
+		cmd.FlagWithInput("--merged_manifest ", l.mergedManifest)
 	}
 
 	// TODO(ccross): some of the files in l.srcs are generated sources and should be passed to
 	// lint separately.
-	cmd.FlagWithRspFileInputList("--srcs ", l.srcs)
-	deps = append(deps, l.srcs...)
+	srcsList := android.PathForModuleOut(ctx, "lint-srcs.list")
+	cmd.FlagWithRspFileInputList("--srcs ", srcsList, l.srcs)
 
 	cmd.FlagWithInput("--generated_srcs ", srcJarList)
-	deps = append(deps, l.srcJars...)
 
-	if resourcesList != nil {
-		cmd.FlagWithInput("--resources ", resourcesList)
+	if len(l.resources) > 0 {
+		resourcesList := android.PathForModuleOut(ctx, "lint-resources.list")
+		cmd.FlagWithRspFileInputList("--resources ", resourcesList, l.resources)
 	}
 
 	if l.classes != nil {
-		deps = append(deps, l.classes)
-		cmd.FlagWithArg("--classes ", l.classes.String())
+		cmd.FlagWithInput("--classes ", l.classes)
 	}
 
-	cmd.FlagForEachArg("--classpath ", l.classpath.Strings())
-	deps = append(deps, l.classpath...)
+	cmd.FlagForEachInput("--classpath ", l.classpath)
 
-	cmd.FlagForEachArg("--extra_checks_jar ", l.extraLintCheckJars.Strings())
-	deps = append(deps, l.extraLintCheckJars...)
+	cmd.FlagForEachInput("--extra_checks_jar ", l.extraLintCheckJars)
 
 	cmd.FlagWithArg("--root_dir ", "$PWD")
 
@@ -254,12 +251,18 @@ func (l *linter) writeLintProjectXML(ctx android.ModuleContext,
 	cmd.FlagForEachArg("--error_check ", l.properties.Lint.Error_checks)
 	cmd.FlagForEachArg("--fatal_check ", l.properties.Lint.Fatal_checks)
 
-	return projectXMLPath, configXMLPath, cacheDir, homeDir, deps
+	return lintPaths{
+		projectXML: projectXMLPath,
+		configXML:  configXMLPath,
+		cacheDir:   cacheDir,
+		homeDir:    homeDir,
+	}
+
 }
 
 // generateManifest adds a command to the rule to write a simple manifest that contains the
 // minSdkVersion and targetSdkVersion for modules (like java_library) that don't have a manifest.
-func (l *linter) generateManifest(ctx android.ModuleContext, rule *android.RuleBuilder) android.Path {
+func (l *linter) generateManifest(ctx android.ModuleContext, rule *android.RuleBuilder) android.WritablePath {
 	manifestPath := android.PathForModuleOut(ctx, "lint", "AndroidManifest.xml")
 
 	rule.Command().Text("(").
@@ -290,18 +293,36 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		}
 	}
 
-	rule := android.NewRuleBuilder(pctx, ctx)
+	rule := android.NewRuleBuilder(pctx, ctx).
+		Sbox(android.PathForModuleOut(ctx, "lint"),
+			android.PathForModuleOut(ctx, "lint.sbox.textproto")).
+		SandboxInputs()
+
+	if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_LINT") {
+		pool := ctx.Config().GetenvWithDefault("RBE_LINT_POOL", "java16")
+		rule.Remoteable(android.RemoteRuleSupports{RBE: true})
+		rule.Rewrapper(&remoteexec.REParams{
+			Labels:          map[string]string{"type": "tool", "name": "lint"},
+			ExecStrategy:    lintRBEExecStrategy(ctx),
+			ToolchainInputs: []string{config.JavaCmd(ctx).String()},
+			EnvironmentVariables: []string{
+				"LANG",
+			},
+			Platform: map[string]string{remoteexec.PoolKey: pool},
+		})
+	}
 
 	if l.manifest == nil {
 		manifest := l.generateManifest(ctx, rule)
 		l.manifest = manifest
+		rule.Temporary(manifest)
 	}
 
-	projectXML, lintXML, cacheDir, homeDir, deps := l.writeLintProjectXML(ctx, rule)
+	lintPaths := l.writeLintProjectXML(ctx, rule)
 
-	html := android.PathForModuleOut(ctx, "lint-report.html")
-	text := android.PathForModuleOut(ctx, "lint-report.txt")
-	xml := android.PathForModuleOut(ctx, "lint-report.xml")
+	html := android.PathForModuleOut(ctx, "lint", "lint-report.html")
+	text := android.PathForModuleOut(ctx, "lint", "lint-report.txt")
+	xml := android.PathForModuleOut(ctx, "lint", "lint-report.xml")
 
 	depSetsBuilder := NewLintDepSetBuilder().Direct(html, text, xml)
 
@@ -311,8 +332,9 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		}
 	})
 
-	rule.Command().Text("rm -rf").Flag(cacheDir.String()).Flag(homeDir.String())
-	rule.Command().Text("mkdir -p").Flag(cacheDir.String()).Flag(homeDir.String())
+	rule.Command().Text("rm -rf").Flag(lintPaths.cacheDir.String()).Flag(lintPaths.homeDir.String())
+	rule.Command().Text("mkdir -p").Flag(lintPaths.cacheDir.String()).Flag(lintPaths.homeDir.String())
+	rule.Command().Text("rm -f").Output(html).Output(text).Output(xml)
 
 	var annotationsZipPath, apiVersionsXMLPath android.Path
 	if ctx.Config().AlwaysUsePrebuiltSdks() {
@@ -323,17 +345,17 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		apiVersionsXMLPath = copiedAPIVersionsXmlPath(ctx)
 	}
 
-	cmd := rule.Command().
-		Text("(").
-		Flag("JAVA_OPTS=-Xmx3072m").
-		FlagWithArg("ANDROID_SDK_HOME=", homeDir.String()).
+	cmd := rule.Command()
+
+	cmd.Flag("JAVA_OPTS=-Xmx3072m").
+		FlagWithArg("ANDROID_SDK_HOME=", lintPaths.homeDir.String()).
 		FlagWithInput("SDK_ANNOTATIONS=", annotationsZipPath).
-		FlagWithInput("LINT_OPTS=-DLINT_API_DATABASE=", apiVersionsXMLPath).
-		Tool(android.PathForSource(ctx, "prebuilts/cmdline-tools/tools/bin/lint")).
-		Implicit(android.PathForSource(ctx, "prebuilts/cmdline-tools/tools/lib/lint-classpath.jar")).
+		FlagWithInput("LINT_OPTS=-DLINT_API_DATABASE=", apiVersionsXMLPath)
+
+	cmd.BuiltTool("lint").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "lint.jar")).
 		Flag("--quiet").
-		FlagWithInput("--project ", projectXML).
-		FlagWithInput("--config ", lintXML).
+		FlagWithInput("--project ", lintPaths.projectXML).
+		FlagWithInput("--config ", lintPaths.configXML).
 		FlagWithOutput("--html ", html).
 		FlagWithOutput("--text ", text).
 		FlagWithOutput("--xml ", xml).
@@ -343,7 +365,11 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		FlagWithArg("--url ", fmt.Sprintf(".=.,%s=out", android.PathForOutput(ctx).String())).
 		Flag("--exitcode").
 		Flags(l.properties.Lint.Flags).
-		Implicits(deps)
+		Implicit(annotationsZipPath).
+		Implicit(apiVersionsXMLPath)
+
+	rule.Temporary(lintPaths.projectXML)
+	rule.Temporary(lintPaths.configXML)
 
 	if checkOnly := ctx.Config().Getenv("ANDROID_LINT_CHECK"); checkOnly != "" {
 		cmd.FlagWithArg("--check ", checkOnly)
@@ -362,9 +388,9 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		}
 	}
 
-	cmd.Text("|| (").Text("cat").Input(text).Text("; exit 7)").Text(")")
+	cmd.Text("|| (").Text("if [ -e").Input(text).Text("]; then cat").Input(text).Text("; fi; exit 7)")
 
-	rule.Command().Text("rm -rf").Flag(cacheDir.String()).Flag(homeDir.String())
+	rule.Command().Text("rm -rf").Flag(lintPaths.cacheDir.String()).Flag(lintPaths.homeDir.String())
 
 	rule.Build("lint", "lint")
 
@@ -438,13 +464,13 @@ func (l *lintSingleton) copyLintDependencies(ctx android.SingletonContext) {
 	}
 
 	ctx.Build(pctx, android.BuildParams{
-		Rule:   android.Cp,
+		Rule:   android.CpIfChanged,
 		Input:  android.OutputFileForModule(ctx, frameworkDocStubs, ".annotations.zip"),
 		Output: copiedAnnotationsZipPath(ctx),
 	})
 
 	ctx.Build(pctx, android.BuildParams{
-		Rule:   android.Cp,
+		Rule:   android.CpIfChanged,
 		Input:  android.OutputFileForModule(ctx, frameworkDocStubs, ".api_versions.xml"),
 		Output: copiedAPIVersionsXmlPath(ctx),
 	})
@@ -535,7 +561,7 @@ func lintZip(ctx android.BuilderContext, paths android.Paths, outputPath android
 	rule.Command().BuiltTool("soong_zip").
 		FlagWithOutput("-o ", outputPath).
 		FlagWithArg("-C ", android.PathForIntermediates(ctx).String()).
-		FlagWithRspFileInputList("-r ", paths)
+		FlagWithRspFileInputList("-r ", outputPath.ReplaceExtension(ctx, "rsp"), paths)
 
 	rule.Build(outputPath.Base(), outputPath.Base())
 }

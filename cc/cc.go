@@ -28,7 +28,6 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
-	"android/soong/bazel"
 	"android/soong/cc/config"
 	"android/soong/genrule"
 )
@@ -368,9 +367,7 @@ type BaseProperties struct {
 	// List of APEXes that this module has private access to for testing purpose. The module
 	// can depend on libraries that are not exported by the APEXes and use private symbols
 	// from the exported libraries.
-	Test_for []string
-
-	bazel.Properties
+	Test_for []string `android:"arch_variant"`
 }
 
 type VendorProperties struct {
@@ -584,6 +581,17 @@ type installer interface {
 	makeUninstallable(mod *Module)
 }
 
+// bazelHandler is the interface for a helper object related to deferring to Bazel for
+// processing a module (during Bazel mixed builds). Individual module types should define
+// their own bazel handler if they support deferring to Bazel.
+type bazelHandler interface {
+	// Issue query to Bazel to retrieve information about Bazel's view of the current module.
+	// If Bazel returns this information, set module properties on the current module to reflect
+	// the returned information.
+	// Returns true if information was available from Bazel, false if bazel invocation still needs to occur.
+	generateBazelBuildActions(ctx android.ModuleContext, label string) bool
+}
+
 type xref interface {
 	XrefCcFiles() android.Paths
 }
@@ -769,6 +777,7 @@ type Module struct {
 	android.DefaultableModuleBase
 	android.ApexModuleBase
 	android.SdkBase
+	android.BazelModuleBase
 
 	Properties       BaseProperties
 	VendorProperties VendorProperties
@@ -785,9 +794,10 @@ type Module struct {
 	// type-specific logic. These members may reference different objects or the same object.
 	// Functions of these decorators will be invoked to initialize and register type-specific
 	// build statements.
-	compiler  compiler
-	linker    linker
-	installer installer
+	compiler     compiler
+	linker       linker
+	installer    installer
+	bazelHandler bazelHandler
 
 	features []feature
 	stl      *stl
@@ -1058,6 +1068,7 @@ func (c *Module) Init() android.Module {
 	}
 
 	android.InitAndroidArchModule(c, c.hod, c.multilib)
+	android.InitBazelModule(c)
 	android.InitApexModule(c)
 	android.InitSdkAwareModule(c)
 	android.InitDefaultableModule(c)
@@ -1356,6 +1367,19 @@ func (ctx *moduleContextImpl) minSdkVersion() string {
 	if ver == "apex_inherit" || ver == "" {
 		ver = ctx.sdkVersion()
 	}
+	// For crt objects, the meaning of min_sdk_version is very different from other types of
+	// module. For them, min_sdk_version defines the oldest version that the build system will
+	// create versioned variants for. For example, if min_sdk_version is 16, then sdk variant of
+	// the crt object has local variants of 16, 17, ..., up to the latest version. sdk_version
+	// and min_sdk_version properties of the variants are set to the corresponding version
+	// numbers. However, the platform (non-sdk) variant of the crt object is left untouched.
+	// min_sdk_version: 16 doesn't actually mean that the platform variant has to support such
+	// an old version. Since the variant is for the platform, it's preferred to target the
+	// latest version.
+	if ctx.mod.SplitPerApiLevel() && !ctx.isSdkVariant() {
+		ver = strconv.Itoa(android.FutureApiLevelInt)
+	}
+
 	// Also make sure that minSdkVersion is not greater than sdkVersion, if they are both numbers
 	sdkVersionInt, err := strconv.Atoi(ctx.sdkVersion())
 	minSdkVersionInt, err2 := strconv.Atoi(ver)
@@ -1564,24 +1588,7 @@ func (c *Module) getNameSuffixWithVndkVersion(ctx android.ModuleContext) string 
 	return nameSuffix
 }
 
-func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
-	// Handle the case of a test module split by `test_per_src` mutator.
-	//
-	// The `test_per_src` mutator adds an extra variation named "", depending on all the other
-	// `test_per_src` variations of the test module. Set `outputFile` to an empty path for this
-	// module and return early, as this module does not produce an output file per se.
-	if c.IsTestPerSrcAllTestsVariation() {
-		c.outputFile = android.OptionalPath{}
-		return
-	}
-
-	apexInfo := actx.Provider(android.ApexInfoProvider).(android.ApexInfo)
-	if !apexInfo.IsForPlatform() {
-		c.hideApexVariantFromMake = true
-	}
-
-	c.makeLinkType = GetMakeLinkType(actx, c)
-
+func (c *Module) setSubnameProperty(actx android.ModuleContext) {
 	c.Properties.SubName = ""
 
 	if c.Target().NativeBridge == android.NativeBridgeEnabled {
@@ -1611,6 +1618,43 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			c.Properties.SubName += "." + c.SdkVersion()
 		}
 	}
+}
+
+// Returns true if Bazel was successfully used for the analysis of this module.
+func (c *Module) maybeGenerateBazelActions(actx android.ModuleContext) bool {
+	bazelModuleLabel := c.GetBazelLabel(actx, c)
+	bazelActionsUsed := false
+	if c.bazelHandler != nil && actx.Config().BazelContext.BazelEnabled() && len(bazelModuleLabel) > 0 {
+		bazelActionsUsed = c.bazelHandler.generateBazelBuildActions(actx, bazelModuleLabel)
+	}
+	return bazelActionsUsed
+}
+
+func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
+	// TODO(cparsons): Any logic in this method occurring prior to querying Bazel should be
+	// requested from Bazel instead.
+
+	// Handle the case of a test module split by `test_per_src` mutator.
+	//
+	// The `test_per_src` mutator adds an extra variation named "", depending on all the other
+	// `test_per_src` variations of the test module. Set `outputFile` to an empty path for this
+	// module and return early, as this module does not produce an output file per se.
+	if c.IsTestPerSrcAllTestsVariation() {
+		c.outputFile = android.OptionalPath{}
+		return
+	}
+
+	c.setSubnameProperty(actx)
+	apexInfo := actx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	if !apexInfo.IsForPlatform() {
+		c.hideApexVariantFromMake = true
+	}
+
+	if c.maybeGenerateBazelActions(actx) {
+		return
+	}
+
+	c.makeLinkType = GetMakeLinkType(actx, c)
 
 	ctx := &moduleContext{
 		ModuleContext: actx,
@@ -1807,12 +1851,6 @@ func (c *Module) deps(ctx DepsContext) Deps {
 	if c.compiler != nil {
 		deps = c.compiler.compilerDeps(ctx, deps)
 	}
-	// Add the PGO dependency (the clang_rt.profile runtime library), which
-	// sometimes depends on symbols from libgcc, before libgcc gets added
-	// in linkerDeps().
-	if c.pgo != nil {
-		deps = c.pgo.deps(ctx, deps)
-	}
 	if c.linker != nil {
 		deps = c.linker.linkerDeps(ctx, deps)
 	}
@@ -1907,9 +1945,14 @@ func GetCrtVariations(ctx android.BottomUpMutatorContext,
 		return nil
 	}
 	if m.UseSdk() {
+		// Choose the CRT that best satisfies the min_sdk_version requirement of this module
+		minSdkVersion := m.MinSdkVersion()
+		if minSdkVersion == "" || minSdkVersion == "apex_inherit" {
+			minSdkVersion = m.SdkVersion()
+		}
 		return []blueprint.Variation{
 			{Mutator: "sdk", Variation: "sdk"},
-			{Mutator: "version", Variation: m.SdkVersion()},
+			{Mutator: "version", Variation: minSdkVersion},
 		}
 	}
 	return []blueprint.Variation{
@@ -2426,36 +2469,6 @@ func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
 	}
 }
 
-// Returns the highest version which is <= maxSdkVersion.
-// For example, with maxSdkVersion is 10 and versionList is [9,11]
-// it returns 9 as string.  The list of stubs must be in order from
-// oldest to newest.
-func (c *Module) chooseSdkVersion(ctx android.PathContext, stubsInfo []SharedStubLibrary,
-	maxSdkVersion android.ApiLevel) (SharedStubLibrary, error) {
-
-	for i := range stubsInfo {
-		stubInfo := stubsInfo[len(stubsInfo)-i-1]
-		var ver android.ApiLevel
-		if stubInfo.Version == "" {
-			ver = android.FutureApiLevel
-		} else {
-			var err error
-			ver, err = android.ApiLevelFromUser(ctx, stubInfo.Version)
-			if err != nil {
-				return SharedStubLibrary{}, err
-			}
-		}
-		if ver.LessThanOrEqualTo(maxSdkVersion) {
-			return stubInfo, nil
-		}
-	}
-	var versionList []string
-	for _, stubInfo := range stubsInfo {
-		versionList = append(versionList, stubInfo.Version)
-	}
-	return SharedStubLibrary{}, fmt.Errorf("not found a version(<=%s) in versionList: %v", maxSdkVersion.String(), versionList)
-}
-
 func (c *Module) sdclang(ctx BaseModuleContext) bool {
 	sdclang := Bool(c.Properties.Sdclang)
 
@@ -2638,14 +2651,31 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 						// However, for host, ramdisk, vendor_ramdisk, recovery or bootstrap modules,
 						// always link to non-stub variant
 						useStubs = dep.(android.ApexModule).NotInPlatform() && !c.bootstrap()
-						// Another exception: if this module is bundled with an APEX, then
-						// it is linked with the non-stub variant of a module in the APEX
-						// as if this is part of the APEX.
-						testFor := ctx.Provider(android.ApexTestForInfoProvider).(android.ApexTestForInfo)
-						for _, apexContents := range testFor.ApexContents {
-							if apexContents.DirectlyInApex(depName) {
+						if useStubs {
+							// Another exception: if this module is a test for an APEX, then
+							// it is linked with the non-stub variant of a module in the APEX
+							// as if this is part of the APEX.
+							testFor := ctx.Provider(android.ApexTestForInfoProvider).(android.ApexTestForInfo)
+							for _, apexContents := range testFor.ApexContents {
+								if apexContents.DirectlyInApex(depName) {
+									useStubs = false
+									break
+								}
+							}
+						}
+						if useStubs {
+							// Yet another exception: If this module and the dependency are
+							// available to the same APEXes then skip stubs between their
+							// platform variants. This complements the test_for case above,
+							// which avoids the stubs on a direct APEX library dependency, by
+							// avoiding stubs for indirect test dependencies as well.
+							//
+							// TODO(b/183882457): This doesn't work if the two libraries have
+							// only partially overlapping apex_available. For that test_for
+							// modules would need to be split into APEX variants and resolved
+							// separately for each APEX they have access to.
+							if android.AvailableToSameApexes(c, dep.(android.ApexModule)) {
 								useStubs = false
-								break
 							}
 						}
 					} else {
@@ -2654,16 +2684,12 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 						useStubs = !android.DirectlyInAllApexes(apexInfo, depName)
 					}
 
-					// when to use (unspecified) stubs, check min_sdk_version and choose the right one
+					// when to use (unspecified) stubs, use the latest one.
 					if useStubs {
-						sharedLibraryStubsInfo, err :=
-							c.chooseSdkVersion(ctx, sharedLibraryStubsInfo.SharedStubLibraries, c.apexSdkVersion)
-						if err != nil {
-							ctx.OtherModuleErrorf(dep, err.Error())
-							return
-						}
-						sharedLibraryInfo = sharedLibraryStubsInfo.SharedLibraryInfo
-						depExporterInfo = sharedLibraryStubsInfo.FlagExporterInfo
+						stubs := sharedLibraryStubsInfo.SharedStubLibraries
+						toUse := stubs[len(stubs)-1]
+						sharedLibraryInfo = toUse.SharedLibraryInfo
+						depExporterInfo = toUse.FlagExporterInfo
 					}
 				}
 

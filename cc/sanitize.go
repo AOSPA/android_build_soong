@@ -440,12 +440,6 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Diag.Cfi = boolPtr(false)
 	}
 
-	// Also disable CFI for arm32 until b/35157333 is fixed.
-	if ctx.Arch().ArchType == android.Arm {
-		s.Cfi = boolPtr(false)
-		s.Diag.Cfi = boolPtr(false)
-	}
-
 	// HWASan requires AArch64 hardware feature (top-byte-ignore).
 	if ctx.Arch().ArchType != android.Arm64 {
 		s.Hwaddress = nil
@@ -1172,6 +1166,9 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 			Bool(c.sanitize.Properties.Sanitize.Undefined) ||
 			Bool(c.sanitize.Properties.Sanitize.All_undefined) {
 			runtimeLibrary = config.UndefinedBehaviorSanitizerRuntimeLibrary(toolchain)
+			if c.staticBinary() {
+				runtimeLibrary += ".static"
+			}
 		}
 
 		if runtimeLibrary != "" && (toolchain.Bionic() || c.sanitize.Properties.UbsanRuntimeDep) {

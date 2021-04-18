@@ -257,6 +257,10 @@ func (mod *Module) SdkVersion() string {
 	return ""
 }
 
+func (mod *Module) MinSdkVersion() string {
+	return ""
+}
+
 func (mod *Module) AlwaysSdk() bool {
 	return false
 }
@@ -270,14 +274,15 @@ func (mod *Module) SplitPerApiLevel() bool {
 }
 
 type Deps struct {
-	Dylibs     []string
-	Rlibs      []string
-	Rustlibs   []string
-	Stdlibs    []string
-	ProcMacros []string
-	SharedLibs []string
-	StaticLibs []string
-	HeaderLibs []string
+	Dylibs          []string
+	Rlibs           []string
+	Rustlibs        []string
+	Stdlibs         []string
+	ProcMacros      []string
+	SharedLibs      []string
+	StaticLibs      []string
+	WholeStaticLibs []string
+	HeaderLibs      []string
 
 	CrtBegin, CrtEnd string
 }
@@ -321,12 +326,16 @@ type RustLibrary struct {
 }
 
 type compiler interface {
+	initialize(ctx ModuleContext)
 	compilerFlags(ctx ModuleContext, flags Flags) Flags
 	compilerProps() []interface{}
 	compile(ctx ModuleContext, flags Flags, deps PathDeps) android.Path
 	compilerDeps(ctx DepsContext, deps Deps) Deps
 	crateName() string
 
+	// Output directory in which source-generated code from dependencies is
+	// copied. This is equivalent to Cargo's OUT_DIR variable.
+	CargoOutDir() android.OptionalPath
 	inData() bool
 	install(ctx ModuleContext)
 	relativeInstallPath() string
@@ -712,6 +721,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	if mod.compiler != nil && !mod.compiler.Disabled() {
+		mod.compiler.initialize(ctx)
 		outputFile := mod.compiler.compile(ctx, flags, deps)
 
 		mod.outputFile = android.OptionalPathForPath(outputFile)
@@ -747,7 +757,7 @@ func (mod *Module) deps(ctx DepsContext) Deps {
 	deps.ProcMacros = android.LastUniqueStrings(deps.ProcMacros)
 	deps.SharedLibs = android.LastUniqueStrings(deps.SharedLibs)
 	deps.StaticLibs = android.LastUniqueStrings(deps.StaticLibs)
-
+	deps.WholeStaticLibs = android.LastUniqueStrings(deps.WholeStaticLibs)
 	return deps
 
 }
@@ -907,16 +917,13 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			exportDep := false
 			switch {
 			case cc.IsStaticDepTag(depTag):
-				// Only pass -lstatic for rlibs as it results in dylib bloat.
-				if lib, ok := ctx.Module().(*Module).compiler.(libraryInterface); ok && lib.rlib() {
-					// Link cc static libraries using "-lstatic" so rustc can reason about how to handle these
-					// (for example, bundling them into rlibs).
-					//
-					// rustc does not support linking libraries with the "-l" flag unless they are prefixed by "lib".
-					// If we need to link a library that isn't prefixed by "lib", we'll just link to it directly through
-					// linkObjects; such a library may need to be redeclared by static dependents.
+				if cc.IsWholeStaticLib(depTag) {
+					// rustc will bundle static libraries when they're passed with "-lstatic=<lib>". This will fail
+					// if the library is not prefixed by "lib".
 					if libName, ok := libNameFromFilePath(linkObject.Path()); ok {
 						depPaths.depFlags = append(depPaths.depFlags, "-lstatic="+libName)
+					} else {
+						ctx.ModuleErrorf("'%q' cannot be listed as a whole_static_library in Rust modules unless the output is prefixed by 'lib'", depName, ctx.ModuleName())
 					}
 				}
 
@@ -1095,7 +1102,10 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		cc.SharedDepTag(), deps.SharedLibs...)
 	actx.AddVariationDependencies(append(commonDepVariations,
 		blueprint.Variation{Mutator: "link", Variation: "static"}),
-		cc.StaticDepTag(), deps.StaticLibs...)
+		cc.StaticDepTag(false), deps.StaticLibs...)
+	actx.AddVariationDependencies(append(commonDepVariations,
+		blueprint.Variation{Mutator: "link", Variation: "static"}),
+		cc.StaticDepTag(true), deps.WholeStaticLibs...)
 
 	actx.AddVariationDependencies(nil, cc.HeaderDepTag(), deps.HeaderLibs...)
 

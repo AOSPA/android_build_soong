@@ -60,6 +60,7 @@ const (
 	InstallInData                   = iota
 
 	incorrectSourcesError = "srcs can only contain one path for a rust file and source providers prefixed by \":\""
+	genSubDir             = "out/"
 )
 
 type BaseCompilerProperties struct {
@@ -96,12 +97,24 @@ type BaseCompilerProperties struct {
 	// list of C shared library dependencies
 	Shared_libs []string `android:"arch_variant"`
 
-	// list of C static library dependencies. Note, static libraries prefixed by "lib" will be passed to rustc
-	// along with "-lstatic=<name>". This will bundle the static library into rlib/static libraries so dependents do
-	// not need to also declare the static library as a dependency. Static libraries which are not prefixed by "lib"
-	// cannot be passed to rustc with this flag and will not be bundled into rlib/static libraries, and thus must
-	// be redeclared in dependents.
+	// list of C static library dependencies. These dependencies do not normally propagate to dependents
+	// and may need to be redeclared. See whole_static_libs for bundling static dependencies into a library.
 	Static_libs []string `android:"arch_variant"`
+
+	// Similar to static_libs, but will bundle the static library dependency into a library. This is helpful
+	// to avoid having to redeclare the dependency for dependents of this library, but in some cases may also
+	// result in bloat if multiple dependencies all include the same static library whole.
+	//
+	// The common use case for this is when the static library is unlikely to be a dependency of other modules to avoid
+	// having to redeclare the static library dependency for every dependent module.
+	// If you are not sure what to, for rust_library modules most static dependencies should go in static_libraries,
+	// and for rust_ffi modules most static dependencies should go into whole_static_libraries.
+	//
+	// For rust_ffi static variants, these libraries will be included in the resulting static library archive.
+	//
+	// For rust_library rlib variants, these libraries will be bundled into the resulting rlib library. This will
+	// include all of the static libraries symbols in any dylibs or binaries which use this rlib as well.
+	Whole_static_libs []string `android:"arch_variant"`
 
 	// crate name, required for modules which produce Rust libraries: rust_library, rust_ffi and SourceProvider
 	// modules which create library variants (rust_bindgen). This must be the expected extern crate name used in
@@ -154,6 +167,10 @@ type baseCompiler struct {
 	distFile android.OptionalPath
 	// Stripped output file. If Valid(), this file will be installed instead of outputFile.
 	strippedOutputFile android.OptionalPath
+
+	// If a crate has a source-generated dependency, a copy of the source file
+	// will be available in cargoOutDir (equivalent to Cargo OUT_DIR).
+	cargoOutDir android.ModuleOutPath
 }
 
 func (compiler *baseCompiler) Disabled() bool {
@@ -243,6 +260,14 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 	panic(fmt.Errorf("baseCrater doesn't know how to crate things!"))
 }
 
+func (compiler *baseCompiler) initialize(ctx ModuleContext) {
+	compiler.cargoOutDir = android.PathForModuleOut(ctx, genSubDir)
+}
+
+func (compiler *baseCompiler) CargoOutDir() android.OptionalPath {
+	return android.OptionalPathForPath(compiler.cargoOutDir)
+}
+
 func (compiler *baseCompiler) isDependencyRoot() bool {
 	return false
 }
@@ -253,6 +278,7 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.Rustlibs = append(deps.Rustlibs, compiler.Properties.Rustlibs...)
 	deps.ProcMacros = append(deps.ProcMacros, compiler.Properties.Proc_macros...)
 	deps.StaticLibs = append(deps.StaticLibs, compiler.Properties.Static_libs...)
+	deps.WholeStaticLibs = append(deps.WholeStaticLibs, compiler.Properties.Whole_static_libs...)
 	deps.SharedLibs = append(deps.SharedLibs, compiler.Properties.Shared_libs...)
 
 	if !Bool(compiler.Properties.No_stdlibs) {
@@ -268,7 +294,7 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	return deps
 }
 
-func bionicDeps(deps Deps, static bool) Deps {
+func bionicDeps(ctx DepsContext, deps Deps, static bool) Deps {
 	bionicLibs := []string{}
 	bionicLibs = append(bionicLibs, "liblog")
 	bionicLibs = append(bionicLibs, "libc")
@@ -281,9 +307,9 @@ func bionicDeps(deps Deps, static bool) Deps {
 		deps.SharedLibs = append(deps.SharedLibs, bionicLibs...)
 	}
 
-	//TODO(b/141331117) libstd requires libgcc on Android
-	deps.StaticLibs = append(deps.StaticLibs, "libgcc")
-
+	if libRuntimeBuiltins := config.BuiltinsRuntimeLibrary(ctx.toolchain()); libRuntimeBuiltins != "" {
+		deps.StaticLibs = append(deps.StaticLibs, libRuntimeBuiltins)
+	}
 	return deps
 }
 

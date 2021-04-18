@@ -109,14 +109,54 @@ func TestAndroidAppImport_SigningLineage(t *testing.T) {
 			name: "foo",
 			apk: "prebuilts/apk/app.apk",
 			certificate: "platform",
+			additional_certificates: [":additional_certificate"],
 			lineage: "lineage.bin",
+		}
+
+		android_app_certificate {
+			name: "additional_certificate",
+			certificate: "cert/additional_cert",
 		}
 	`)
 
 	variant := ctx.ModuleForTests("foo", "android_common")
 
-	// Check cert signing lineage flag.
 	signedApk := variant.Output("signed/foo.apk")
+	// Check certificates
+	certificatesFlag := signedApk.Args["certificates"]
+	expected := "build/make/target/product/security/platform.x509.pem " +
+		"build/make/target/product/security/platform.pk8 " +
+		"cert/additional_cert.x509.pem cert/additional_cert.pk8"
+	if expected != certificatesFlag {
+		t.Errorf("Incorrect certificates flags, expected: %q, got: %q", expected, certificatesFlag)
+	}
+	// Check cert signing lineage flag.
+	signingFlag := signedApk.Args["flags"]
+	expected = "--lineage lineage.bin"
+	if expected != signingFlag {
+		t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected, signingFlag)
+	}
+}
+
+func TestAndroidAppImport_SigningLineageFilegroup(t *testing.T) {
+	ctx, _ := testJava(t, `
+	  android_app_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			certificate: "platform",
+			lineage: ":lineage_bin",
+		}
+
+		filegroup {
+			name: "lineage_bin",
+			srcs: ["lineage.bin"],
+		}
+	`)
+
+	variant := ctx.ModuleForTests("foo", "android_common")
+
+	signedApk := variant.Output("signed/foo.apk")
+	// Check cert signing lineage flag.
 	signingFlag := signedApk.Args["flags"]
 	expected := "--lineage lineage.bin"
 	if expected != signingFlag {
@@ -212,14 +252,15 @@ func TestAndroidAppImport_DpiVariants(t *testing.T) {
 
 	jniRuleRe := regexp.MustCompile("^if \\(zipinfo (\\S+)")
 	for _, test := range testCases {
-		config := testAppConfig(nil, bp, nil)
-		config.TestProductVariables.AAPTPreferredConfig = test.aaptPreferredConfig
-		config.TestProductVariables.AAPTPrebuiltDPI = test.aaptPrebuiltDPI
-		ctx := testContext(config)
+		result := android.GroupFixturePreparers(
+			PrepareForTestWithJavaDefaultModules,
+			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+				variables.AAPTPreferredConfig = test.aaptPreferredConfig
+				variables.AAPTPrebuiltDPI = test.aaptPrebuiltDPI
+			}),
+		).RunTestWithBp(t, bp)
 
-		run(t, ctx, config)
-
-		variant := ctx.ModuleForTests("foo", "android_common")
+		variant := result.ModuleForTests("foo", "android_common")
 		jniRuleCommand := variant.Output("jnis-uncompressed/foo.apk").RuleParams.Command
 		matches := jniRuleRe.FindStringSubmatch(jniRuleCommand)
 		if len(matches) != 2 {
@@ -416,12 +457,9 @@ func TestAndroidAppImport_frameworkRes(t *testing.T) {
 		t.Errorf("prebuilt framework-res is not preprocessed")
 	}
 
-	expectedInstallPath := buildDir + "/target/product/test_device/system/framework/framework-res.apk"
+	expectedInstallPath := "out/soong/target/product/test_device/system/framework/framework-res.apk"
 
-	if a.dexpreopter.installPath.String() != expectedInstallPath {
-		t.Errorf("prebuilt framework-res installed to incorrect location, actual: %s, expected: %s", a.dexpreopter.installPath, expectedInstallPath)
-
-	}
+	android.AssertPathRelativeToTopEquals(t, "prebuilt framework-res install location", expectedInstallPath, a.dexpreopter.installPath)
 
 	entries := android.AndroidMkEntriesForTest(t, ctx, mod)[0]
 

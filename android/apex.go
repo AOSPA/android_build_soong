@@ -140,7 +140,22 @@ type DepIsInSameApex interface {
 	// DepIsInSameApex tests if the other module 'dep' is considered as part of the same APEX as
 	// this module. For example, a static lib dependency usually returns true here, while a
 	// shared lib dependency to a stub library returns false.
+	//
+	// This method must not be called directly without first ignoring dependencies whose tags
+	// implement ExcludeFromApexContentsTag. Calls from within the func passed to WalkPayloadDeps()
+	// are fine as WalkPayloadDeps() will ignore those dependencies automatically. Otherwise, use
+	// IsDepInSameApex instead.
 	DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
+}
+
+func IsDepInSameApex(ctx BaseModuleContext, module, dep Module) bool {
+	depTag := ctx.OtherModuleDependencyTag(dep)
+	if _, ok := depTag.(ExcludeFromApexContentsTag); ok {
+		// The tag defines a dependency that never requires the child module to be part of the same
+		// apex as the parent.
+		return false
+	}
+	return module.(DepIsInSameApex).DepIsInSameApex(ctx, dep)
 }
 
 // ApexModule is the interface that a module type is expected to implement if the module has to be
@@ -257,11 +272,29 @@ type ApexProperties struct {
 }
 
 // Marker interface that identifies dependencies that are excluded from APEX contents.
+//
+// Unless the tag also implements the AlwaysRequireApexVariantTag this will prevent an apex variant
+// from being created for the module.
+//
+// At the moment the sdk.sdkRequirementsMutator relies on the fact that the existing tags which
+// implement this interface do not define dependencies onto members of an sdk_snapshot. If that
+// changes then sdk.sdkRequirementsMutator will need fixing.
 type ExcludeFromApexContentsTag interface {
 	blueprint.DependencyTag
 
 	// Method that differentiates this interface from others.
 	ExcludeFromApexContents()
+}
+
+// Marker interface that identifies dependencies that always requires an APEX variant to be created.
+//
+// It is possible for a dependency to require an apex variant but exclude the module from the APEX
+// contents. See sdk.sdkMemberDependencyTag.
+type AlwaysRequireApexVariantTag interface {
+	blueprint.DependencyTag
+
+	// Return true if this tag requires that the target dependency has an apex variant.
+	AlwaysRequireApexVariant() bool
 }
 
 // Marker interface that identifies dependencies that should inherit the DirectlyInAnyApex state
@@ -418,6 +451,23 @@ func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
 			mctx.PropertyErrorf("apex_available", "%q is not a valid module name", n)
 		}
 	}
+}
+
+// AvailableToSameApexes returns true if the two modules are apex_available to
+// exactly the same set of APEXes (and platform), i.e. if their apex_available
+// properties have the same elements.
+func AvailableToSameApexes(mod1, mod2 ApexModule) bool {
+	mod1ApexAvail := SortedUniqueStrings(mod1.apexModuleBase().ApexProperties.Apex_available)
+	mod2ApexAvail := SortedUniqueStrings(mod2.apexModuleBase().ApexProperties.Apex_available)
+	if len(mod1ApexAvail) != len(mod2ApexAvail) {
+		return false
+	}
+	for i, v := range mod1ApexAvail {
+		if v != mod2ApexAvail[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type byApexName []ApexInfo
@@ -719,6 +769,8 @@ func (d *ApexBundleDepsInfo) FullListPath() Path {
 // Generate two module out files:
 // 1. FullList with transitive deps and their parents in the dep graph
 // 2. FlatList with a flat list of transitive deps
+// In both cases transitive deps of external deps are not included. Neither are deps that are only
+// available to APEXes; they are developed with updatability in mind and don't need manual approval.
 func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion string, depInfos DepNameToDepInfoMap) {
 	var fullContent strings.Builder
 	var flatContent strings.Builder
@@ -739,6 +791,8 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 
 	d.flatListPath = PathForModuleOut(ctx, "depsinfo", "flatlist.txt").OutputPath
 	WriteFileRule(ctx, d.flatListPath, flatContent.String())
+
+	ctx.Phony(fmt.Sprintf("%s-depsinfo", ctx.ModuleName()), d.fullListPath, d.flatListPath)
 }
 
 // TODO(b/158059172): remove minSdkVersion allowlist
@@ -847,8 +901,12 @@ func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion ApiL
 		if err := to.ShouldSupportSdkVersion(ctx, minSdkVersion); err != nil {
 			toName := ctx.OtherModuleName(to)
 			if ver, ok := minSdkVersionAllowlist[toName]; !ok || ver.GreaterThan(minSdkVersion) {
-				ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v. Dependency path: %s",
-					minSdkVersion, ctx.ModuleName(), err.Error(), ctx.GetPathString(false))
+				ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v."+
+					"\n\nDependency path: %s\n\n"+
+					"Consider adding 'min_sdk_version: %q' to %q",
+					minSdkVersion, ctx.ModuleName(), err.Error(),
+					ctx.GetPathString(false),
+					minSdkVersion, ctx.ModuleName())
 				return false
 			}
 		}

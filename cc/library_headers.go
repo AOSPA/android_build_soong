@@ -62,9 +62,9 @@ func prebuiltLibraryHeaderFactory() android.Module {
 }
 
 type bazelCcLibraryHeadersAttributes struct {
-	Hdrs     bazel.LabelList
-	Includes bazel.LabelList
-	Deps     bazel.LabelList
+	Hdrs     bazel.LabelListAttribute
+	Includes bazel.LabelListAttribute
+	Deps     bazel.LabelListAttribute
 }
 
 type bazelCcLibraryHeaders struct {
@@ -86,56 +86,30 @@ func CcLibraryHeadersBp2Build(ctx android.TopDownMutatorContext) {
 		return
 	}
 
-	if !module.Properties.Bazel_module.Bp2build_available {
+	if !module.ConvertWithBp2build(ctx) {
 		return
 	}
 
-	lib, ok := module.linker.(*libraryDecorator)
-	if !ok {
-		// Not a cc_library module
-		return
-	}
-	if !lib.header() {
-		// Not a cc_library_headers module
+	if ctx.ModuleType() != "cc_library_headers" {
 		return
 	}
 
-	// list of directories that will be added to the include path (using -I) for this
-	// module and any module that links against this module.
-	includeDirs := lib.flagExporter.Properties.Export_system_include_dirs
-	includeDirs = append(includeDirs, lib.flagExporter.Properties.Export_include_dirs...)
-	includeDirLabels := android.BazelLabelForModuleSrc(ctx, includeDirs)
+	exportedIncludesLabels, exportedIncludesHeadersLabels := Bp2BuildParseExportedIncludes(ctx, module)
 
-	var includeDirGlobs []string
-	for _, includeDir := range includeDirs {
-		includeDirGlobs = append(includeDirGlobs, includeDir+"/**/*.h")
-	}
-
-	headerLabels := android.BazelLabelForModuleSrc(ctx, includeDirGlobs)
-
-	// list of modules that should only provide headers for this module.
-	var headerLibs []string
-	for _, linkerProps := range lib.linkerProps() {
-		if baseLinkerProps, ok := linkerProps.(*BaseLinkerProperties); ok {
-			headerLibs = baseLinkerProps.Export_header_lib_headers
-			break
-		}
-	}
-	headerLibLabels := android.BazelLabelForModuleDeps(ctx, headerLibs)
+	headerLibsLabels := Bp2BuildParseHeaderLibs(ctx, module)
 
 	attrs := &bazelCcLibraryHeadersAttributes{
-		Includes: includeDirLabels,
-		Hdrs:     headerLabels,
-		Deps:     headerLibLabels,
+		Includes: exportedIncludesLabels,
+		Hdrs:     exportedIncludesHeadersLabels,
+		Deps:     headerLibsLabels,
 	}
 
-	props := bazel.NewBazelTargetModuleProperties(
-		module.Name(),
-		"cc_library_headers",
-		"//build/bazel/rules:cc_library_headers.bzl",
-	)
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "cc_library_headers",
+		Bzl_load_location: "//build/bazel/rules:cc_library_headers.bzl",
+	}
 
-	ctx.CreateBazelTargetModule(BazelCcLibraryHeadersFactory, props, attrs)
+	ctx.CreateBazelTargetModule(BazelCcLibraryHeadersFactory, module.Name(), props, attrs)
 }
 
 func (m *bazelCcLibraryHeaders) Name() string {

@@ -16,10 +16,11 @@ package config
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
-        "io/ioutil"
-        "encoding/xml"
+	"io/ioutil"
 	"os"
+
 	//"path"
 	//"path/filepath"
 	"strconv"
@@ -30,19 +31,19 @@ import (
 )
 
 type TechPackage struct {
-    XMLName         xml.Name       `xml:"techpackage"`
-    TechPackageName string         `xml:"techpackagename"`
-    Enabled         string          `xml:"enable"`
-    Library         []string       `xml:"library"`
+	XMLName         xml.Name `xml:"techpackage"`
+	TechPackageName string   `xml:"techpackagename"`
+	Enabled         string   `xml:"enable"`
+	Library         []string `xml:"library"`
 }
 type TechPackages struct {
-    XMLName        xml.Name        `xml:"techpackages"`
-    TechPackages   []TechPackage   `xml:"techpackage"`
+	XMLName      xml.Name      `xml:"techpackages"`
+	TechPackages []TechPackage `xml:"techpackage"`
 }
 
-type TechPackageLibs struct{
-    EnabledLibs    []string
-    DisabledLibs   []string
+type TechPackageLibs struct {
+	EnabledLibs  []string
+	DisabledLibs []string
 }
 
 var (
@@ -121,6 +122,7 @@ var (
 		"-Wl,--exclude-libs,libgcc_stripped.a",
 		"-Wl,--exclude-libs,libunwind_llvm.a",
 		"-Wl,--exclude-libs,libunwind.a",
+		"-Wl,--icf=safe",
 	}
 
 	deviceGlobalLldflags = append(ClangFilterUnknownLldflags(deviceGlobalLdflags),
@@ -168,15 +170,15 @@ var (
 	ExperimentalCStdVersion   = "gnu11"
 	ExperimentalCppStdVersion = "gnu++2a"
 
-	SDClang                  = false
-	SDClangPath              = ""
-        TechPackageLibsList      = &TechPackageLibs{}
-	ForceSDClangOff          = false
+	SDClang             = false
+	SDClangPath         = ""
+	TechPackageLibsList = &TechPackageLibs{}
+	ForceSDClangOff     = false
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r412851"
-	ClangDefaultShortVersion = "12.0.3"
+	ClangDefaultVersion      = "clang-r416183"
+	ClangDefaultShortVersion = "12.0.4"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -194,20 +196,21 @@ func init() {
 	if android.BuildOs == android.Linux {
 		commonGlobalCflags = append(commonGlobalCflags, "-fdebug-prefix-map=/proc/self/cwd=")
 	}
-        if _, err := os.Stat(android.QiifaBuildConfig); !os.IsNotExist(err) {
-                data, _ := ioutil.ReadFile(android.QiifaBuildConfig)
-                var techpackages TechPackages
-                _ = xml.Unmarshal([]byte(data), &techpackages)
-                for i := 0; i < len(techpackages.TechPackages); i++ {
-                         for j := 0; j < len(techpackages.TechPackages[i].Library); j++ {
-                                 if(techpackages.TechPackages[i].Enabled == "enabled") {
-                                        TechPackageLibsList.EnabledLibs = append(TechPackageLibsList.EnabledLibs,techpackages.TechPackages[i].Library[j])
-                                 } else {
-                                        TechPackageLibsList.DisabledLibs = append(TechPackageLibsList.DisabledLibs,techpackages.TechPackages[i].Library[j])
-                                 }
-                         }
-                }
-        }
+	qiifaBuildConfig := os.Getenv("QIIFA_BUILD_CONFIG")
+	if _, err := os.Stat(qiifaBuildConfig); !os.IsNotExist(err) {
+		data, _ := ioutil.ReadFile(qiifaBuildConfig)
+		var techpackages TechPackages
+		_ = xml.Unmarshal([]byte(data), &techpackages)
+		for i := 0; i < len(techpackages.TechPackages); i++ {
+			for j := 0; j < len(techpackages.TechPackages[i].Library); j++ {
+				if techpackages.TechPackages[i].Enabled == "enabled" {
+					TechPackageLibsList.EnabledLibs = append(TechPackageLibsList.EnabledLibs, techpackages.TechPackages[i].Library[j])
+				} else {
+					TechPackageLibsList.DisabledLibs = append(TechPackageLibsList.DisabledLibs, techpackages.TechPackages[i].Library[j])
+				}
+			}
+		}
+	}
 	pctx.StaticVariable("CommonGlobalConlyflags", strings.Join(commonGlobalConlyflags, " "))
 	pctx.StaticVariable("DeviceGlobalCppflags", strings.Join(deviceGlobalCppflags, " "))
 	pctx.StaticVariable("DeviceGlobalLdflags", strings.Join(deviceGlobalLdflags, " "))
@@ -316,13 +319,13 @@ func init() {
 		return ""
 	})
 
-	pctx.VariableFunc("RECXXPool", remoteexec.EnvOverrideFunc("RBE_CXX_POOL", remoteexec.DefaultPool))
-	pctx.VariableFunc("RECXXLinksPool", remoteexec.EnvOverrideFunc("RBE_CXX_LINKS_POOL", remoteexec.DefaultPool))
-	pctx.VariableFunc("REClangTidyPool", remoteexec.EnvOverrideFunc("RBE_CLANG_TIDY_POOL", remoteexec.DefaultPool))
-	pctx.VariableFunc("RECXXLinksExecStrategy", remoteexec.EnvOverrideFunc("RBE_CXX_LINKS_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
-	pctx.VariableFunc("REClangTidyExecStrategy", remoteexec.EnvOverrideFunc("RBE_CLANG_TIDY_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
-	pctx.VariableFunc("REAbiDumperExecStrategy", remoteexec.EnvOverrideFunc("RBE_ABI_DUMPER_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
-	pctx.VariableFunc("REAbiLinkerExecStrategy", remoteexec.EnvOverrideFunc("RBE_ABI_LINKER_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
+	pctx.StaticVariableWithEnvOverride("RECXXPool", "RBE_CXX_POOL", remoteexec.DefaultPool)
+	pctx.StaticVariableWithEnvOverride("RECXXLinksPool", "RBE_CXX_LINKS_POOL", remoteexec.DefaultPool)
+	pctx.StaticVariableWithEnvOverride("REClangTidyPool", "RBE_CLANG_TIDY_POOL", remoteexec.DefaultPool)
+	pctx.StaticVariableWithEnvOverride("RECXXLinksExecStrategy", "RBE_CXX_LINKS_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
+	pctx.StaticVariableWithEnvOverride("REClangTidyExecStrategy", "RBE_CLANG_TIDY_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
+	pctx.StaticVariableWithEnvOverride("REAbiDumperExecStrategy", "RBE_ABI_DUMPER_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
+	pctx.StaticVariableWithEnvOverride("REAbiLinkerExecStrategy", "RBE_ABI_LINKER_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
 }
 
 func setSdclangVars() {
@@ -330,10 +333,10 @@ func setSdclangVars() {
 	sdclangAEFlag := ""
 	sdclangFlags := ""
 
-	product := android.SdclangEnv["TARGET_PRODUCT"]
-	aeConfigPath := android.SdclangEnv["SDCLANG_AE_CONFIG"]
-	sdclangConfigPath := android.SdclangEnv["SDCLANG_CONFIG"]
-	sdclangSA := android.SdclangEnv["SDCLANG_SA_ENABLED"]
+	product := os.Getenv("TARGET_PRODUCT")
+	aeConfigPath := os.Getenv("SDCLANG_AE_CONFIG")
+	sdclangConfigPath := os.Getenv("SDCLANG_CONFIG")
+	sdclangSA := os.Getenv("SDCLANG_SA_ENABLED")
 
 	type sdclangAEConfig struct {
 		SDCLANG_AE_FLAG string
@@ -354,7 +357,7 @@ func setSdclangVars() {
 	var sdclangConfig interface{}
 	if file, err := os.Open(sdclangConfigPath); err == nil {
 		decoder := json.NewDecoder(file)
-                // Parse the config file
+		// Parse the config file
 		if err := decoder.Decode(&sdclangConfig); err == nil {
 			config := sdclangConfig.(map[string]interface{})
 			// Retrieve the default block
@@ -398,7 +401,7 @@ func setSdclangVars() {
 				}
 			}
 			b, _ := strconv.ParseBool(sdclangSA)
-			if(b) {
+			if b {
 				llvmsa_loc := "llvmsa"
 				s := []string{sdclangFlags, "--compile-and-analyze", llvmsa_loc}
 				sdclangFlags = strings.Join(s, " ")
@@ -414,14 +417,14 @@ func setSdclangVars() {
 	}
 
 	// Override SDCLANG if the varialbe is set in the environment
-	if sdclang := android.SdclangEnv["SDCLANG"]; sdclang != "" {
+	if sdclang := os.Getenv("SDCLANG"); sdclang != "" {
 		if override, err := strconv.ParseBool(sdclang); err == nil {
 			SDClang = override
 		}
 	}
 
 	// Sanity check SDCLANG_PATH
-	if envPath := android.SdclangEnv["SDCLANG_PATH"]; sdclangPath == "" && envPath == "" {
+	if envPath := os.Getenv("SDCLANG_PATH"); sdclangPath == "" && envPath == "" {
 		panic("SDCLANG_PATH can not be empty")
 	}
 

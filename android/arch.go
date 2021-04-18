@@ -616,16 +616,8 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 		osTargets = []Target{osTargets[0]}
 	}
 
-	// Some modules want compile_multilib: "first" to mean 32-bit, not 64-bit.
-	// This is used for HOST_PREFER_32_BIT=true support for Art modules.
-	prefer32 := false
-	if base.prefer32 != nil {
-		prefer32 = base.prefer32(mctx, base, os)
-	}
-	if os == Windows {
-		// Windows builds always prefer 32-bit
-		prefer32 = true
-	}
+	// Windows builds always prefer 32-bit
+	prefer32 := os == Windows
 
 	// Determine the multilib selection for this module.
 	multilib, extraMultilib := decodeMultilib(base, os.Class)
@@ -1622,4 +1614,98 @@ func decodeMultilibTargets(multilib string, targets []Target, prefer32 bool) ([]
 	}
 
 	return buildTargets, nil
+}
+
+// GetArchProperties returns a map of architectures to the values of the
+// properties of the 'dst' struct that are specific to that architecture.
+//
+// For example, passing a struct { Foo bool, Bar string } will return an
+// interface{} that can be type asserted back into the same struct, containing
+// the arch specific property value specified by the module if defined.
+func (m *ModuleBase) GetArchProperties(dst interface{}) map[ArchType]interface{} {
+	// Return value of the arch types to the prop values for that arch.
+	archToProp := map[ArchType]interface{}{}
+
+	// Nothing to do for non-arch-specific modules.
+	if !m.ArchSpecific() {
+		return archToProp
+	}
+
+	// archProperties has the type of [][]interface{}. Looks complicated, so let's
+	// explain this step by step.
+	//
+	// Loop over the outer index, which determines the property struct that
+	// contains a matching set of properties in dst that we're interested in.
+	// For example, BaseCompilerProperties or BaseLinkerProperties.
+	for i := range m.archProperties {
+		if m.archProperties[i] == nil {
+			// Skip over nil arch props
+			continue
+		}
+
+		// Non-nil arch prop, let's see if the props match up.
+		for _, arch := range ArchTypeList() {
+			// e.g X86, Arm
+			field := arch.Field
+
+			// If it's not nil, loop over the inner index, which determines the arch variant
+			// of the prop type. In an Android.bp file, this is like looping over:
+			//
+			// arch: { arm: { key: value, ... }, x86: { key: value, ... } }
+			for _, archProperties := range m.archProperties[i] {
+				archPropValues := reflect.ValueOf(archProperties).Elem()
+
+				// This is the archPropRoot struct. Traverse into the Arch nested struct.
+				src := archPropValues.FieldByName("Arch").Elem()
+
+				// Step into non-nil pointers to structs in the src value.
+				if src.Kind() == reflect.Ptr {
+					if src.IsNil() {
+						// Ignore nil pointers.
+						continue
+					}
+					src = src.Elem()
+				}
+
+				// Find the requested field (e.g. x86, x86_64) in the src struct.
+				src = src.FieldByName(field)
+				if !src.IsValid() {
+					continue
+				}
+
+				// We only care about structs. These are not the droids you are looking for.
+				if src.Kind() != reflect.Struct {
+					continue
+				}
+
+				// If the value of the field is a struct  then step into the
+				// BlueprintEmbed field. The special "BlueprintEmbed" name is
+				// used by createArchPropTypeDesc to embed the arch properties
+				// in the parent struct, so the src arch prop should be in this
+				// field.
+				//
+				// See createArchPropTypeDesc for more details on how Arch-specific
+				// module properties are processed from the nested props and written
+				// into the module's archProperties.
+				src = src.FieldByName("BlueprintEmbed")
+
+				// Clone the destination prop, since we want a unique prop struct per arch.
+				dstClone := reflect.New(reflect.ValueOf(dst).Elem().Type()).Interface()
+
+				// Copy the located property struct into the cloned destination property struct.
+				err := proptools.ExtendMatchingProperties([]interface{}{dstClone}, src.Interface(), nil, proptools.OrderReplace)
+				if err != nil {
+					// This is fine, it just means the src struct doesn't match.
+					continue
+				}
+
+				// Found the prop for the arch, you have.
+				archToProp[arch] = dstClone
+
+				// Go to the next prop.
+				break
+			}
+		}
+	}
+	return archToProp
 }

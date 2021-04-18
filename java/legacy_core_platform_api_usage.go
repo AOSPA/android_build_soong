@@ -22,6 +22,7 @@ import (
 var legacyCorePlatformApiModules = []string{
 	"AAECarSystemUI",
 	"AAECarSystemUI-tests",
+	"ArcSettings",
 	"ahat-test-dump",
 	"android.car",
 	"android.test.mock",
@@ -77,6 +78,7 @@ var legacyCorePlatformApiModules = []string{
 	"DownloadProvider",
 	"DownloadProviderTests",
 	"DownloadProviderUi",
+	"ds-car-docs", // for AAOS API documentation only
 	"DynamicSystemInstallationService",
 	"EmergencyInfo-lib",
 	"ethernet-service",
@@ -94,6 +96,7 @@ var legacyCorePlatformApiModules = []string{
 	"FrameworksNetTests",
 	"FrameworksServicesRoboTests",
 	"FrameworksServicesTests",
+	"FrameworksMockingServicesTests",
 	"FrameworksUtilTests",
 	"GtsIncrementalInstallTestCases",
 	"GtsIncrementalInstallTriggerApp",
@@ -141,7 +144,7 @@ var legacyCorePlatformApiModules = []string{
 	"saminterfacelibrary",
 	"sammanagerlibrary",
 	"service-blobstore",
-	"service-connectivity",
+	"service-connectivity-pre-jarjar",
 	"service-jobscheduler",
 	"services",
 	"services.accessibility",
@@ -152,6 +155,7 @@ var legacyCorePlatformApiModules = []string{
 	"services.usage",
 	"services.usb",
 	"Settings-core",
+	"SettingsGoogle",
 	"SettingsGoogleOverlayCoral",
 	"SettingsGoogleOverlayFlame",
 	"SettingsLib",
@@ -226,7 +230,11 @@ func init() {
 }
 
 func useLegacyCorePlatformApi(ctx android.EarlyModuleContext) bool {
-	_, found := legacyCorePlatformApiLookup[ctx.ModuleName()]
+	return useLegacyCorePlatformApiByName(ctx.ModuleName())
+}
+
+func useLegacyCorePlatformApiByName(name string) bool {
+	_, found := legacyCorePlatformApiLookup[name]
 	return found
 }
 
