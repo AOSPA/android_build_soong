@@ -26,6 +26,7 @@ bootstrap_go_package {
         "arch_list.go",
         "bazel.go",
         "bazel_handler.go",
+        "bazel_paths.go",
         "config.go",
         "csuite_config.go",
         "deapexer.go",
@@ -78,18 +79,17 @@ bootstrap_go_package {
         "variable.go",
         "visibility.go",
         "writedocs.go",
-
-        // Lock down environment access last
-        "env.go",
     ],
     testSrcs: [
         "android_test.go",
         "androidmk_test.go",
         "apex_test.go",
         "arch_test.go",
+        "bazel_handler_test.go",
         "bazel_test.go",
         "config_test.go",
         "csuite_config_test.go",
+        "defaults_test.go",
         "depset_test.go",
         "deptag_test.go",
         "expand_test.go",

@@ -16,6 +16,7 @@ package bazel
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 )
@@ -34,17 +35,84 @@ const BazelTargetModuleNamePrefix = "__bp2build__"
 
 var productVariableSubstitutionPattern = regexp.MustCompile("%(d|s)")
 
-// Label is used to represent a Bazel compatible Label. Also stores the original bp text to support
-// string replacement.
+// Label is used to represent a Bazel compatible Label. Also stores the original
+// bp text to support string replacement.
 type Label struct {
-	Bp_text string
-	Label   string
+	// The string representation of a Bazel target label. This can be a relative
+	// or fully qualified label. These labels are used for generating BUILD
+	// files with bp2build.
+	Label string
+
+	// The original Soong/Blueprint module name that the label was derived from.
+	// This is used for replacing references to the original name with the new
+	// label, for example in genrule cmds.
+	//
+	// While there is a reversible 1:1 mapping from the module name to Bazel
+	// label with bp2build that could make computing the original module name
+	// from the label automatic, it is not the case for handcrafted targets,
+	// where modules can have a custom label mapping through the { bazel_module:
+	// { label: <label> } } property.
+	//
+	// With handcrafted labels, those modules don't go through bp2build
+	// conversion, but relies on handcrafted targets in the source tree.
+	OriginalModuleName string
 }
 
 // LabelList is used to represent a list of Bazel labels.
 type LabelList struct {
 	Includes []Label
 	Excludes []Label
+}
+
+// GlobsInDir returns a list of glob expressions for a list of extensions
+// (optionally recursive) within a directory.
+func GlobsInDir(dir string, recursive bool, extensions []string) []string {
+	globs := []string{}
+
+	globInfix := ""
+	if dir == "." {
+		if recursive {
+			// e.g "**/*.h"
+			globInfix = "**/"
+		} // else e.g. "*.h"
+		for _, ext := range extensions {
+			globs = append(globs, globInfix+"*"+ext)
+		}
+	} else {
+		if recursive {
+			// e.g. "foo/bar/**/*.h"
+			dir += "/**"
+		} // else e.g. "foo/bar/*.h"
+		for _, ext := range extensions {
+			globs = append(globs, dir+"/*"+ext)
+		}
+	}
+	return globs
+}
+
+// LooseHdrsGlobs returns the list of non-recursive header globs for each parent directory of
+// each source file in this LabelList's Includes.
+func (ll *LabelList) LooseHdrsGlobs(exts []string) []string {
+	var globs []string
+	for _, parentDir := range ll.uniqueParentDirectories() {
+		globs = append(globs,
+			GlobsInDir(parentDir, false, exts)...)
+	}
+	return globs
+}
+
+// uniqueParentDirectories returns a list of the unique parent directories for
+// all files in ll.Includes.
+func (ll *LabelList) uniqueParentDirectories() []string {
+	dirMap := map[string]bool{}
+	for _, label := range ll.Includes {
+		dirMap[filepath.Dir(label.Label)] = true
+	}
+	dirs := []string{}
+	for dir := range dirMap {
+		dirs = append(dirs, dir)
+	}
+	return dirs
 }
 
 // Append appends the fields of other labelList to the corresponding fields of ll.
@@ -57,7 +125,9 @@ func (ll *LabelList) Append(other LabelList) {
 	}
 }
 
-func UniqueBazelLabels(originalLabels []Label) []Label {
+// UniqueSortedBazelLabels takes a []Label and deduplicates the labels, and returns
+// the slice in a sorted order.
+func UniqueSortedBazelLabels(originalLabels []Label) []Label {
 	uniqueLabelsSet := make(map[Label]bool)
 	for _, l := range originalLabels {
 		uniqueLabelsSet[l] = true
@@ -74,8 +144,8 @@ func UniqueBazelLabels(originalLabels []Label) []Label {
 
 func UniqueBazelLabelList(originalLabelList LabelList) LabelList {
 	var uniqueLabelList LabelList
-	uniqueLabelList.Includes = UniqueBazelLabels(originalLabelList.Includes)
-	uniqueLabelList.Excludes = UniqueBazelLabels(originalLabelList.Excludes)
+	uniqueLabelList.Includes = UniqueSortedBazelLabels(originalLabelList.Includes)
+	uniqueLabelList.Excludes = UniqueSortedBazelLabels(originalLabelList.Excludes)
 	return uniqueLabelList
 }
 
@@ -222,6 +292,26 @@ type LabelListAttribute struct {
 // MakeLabelListAttribute initializes a LabelListAttribute with the non-arch specific value.
 func MakeLabelListAttribute(value LabelList) LabelListAttribute {
 	return LabelListAttribute{Value: UniqueBazelLabelList(value)}
+}
+
+// Append all values, including os and arch specific ones, from another
+// LabelListAttribute to this LabelListAttribute.
+func (attrs *LabelListAttribute) Append(other LabelListAttribute) {
+	for arch := range PlatformArchMap {
+		this := attrs.GetValueForArch(arch)
+		that := other.GetValueForArch(arch)
+		this.Append(that)
+		attrs.SetValueForArch(arch, this)
+	}
+
+	for os := range PlatformOsMap {
+		this := attrs.GetValueForOS(os)
+		that := other.GetValueForOS(os)
+		this.Append(that)
+		attrs.SetValueForOS(os, this)
+	}
+
+	attrs.Value.Append(other.Value)
 }
 
 // HasArchSpecificValues returns true if the attribute contains
@@ -410,6 +500,26 @@ func (attrs *StringListAttribute) SetValueForOS(os string, value []string) {
 		panic(fmt.Errorf("Unknown os: %s", os))
 	}
 	*v = value
+}
+
+// Append appends all values, including os and arch specific ones, from another
+// StringListAttribute to this StringListAttribute
+func (attrs *StringListAttribute) Append(other StringListAttribute) {
+	for arch := range PlatformArchMap {
+		this := attrs.GetValueForArch(arch)
+		that := other.GetValueForArch(arch)
+		this = append(this, that...)
+		attrs.SetValueForArch(arch, this)
+	}
+
+	for os := range PlatformOsMap {
+		this := attrs.GetValueForOS(os)
+		that := other.GetValueForOS(os)
+		this = append(this, that...)
+		attrs.SetValueForOS(os, this)
+	}
+
+	attrs.Value = append(attrs.Value, other.Value...)
 }
 
 // TryVariableSubstitution, replace string substitution formatting within each string in slice with

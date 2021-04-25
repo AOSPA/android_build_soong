@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -176,7 +175,7 @@ func ArchTypeList() []ArchType {
 // MarshalText allows an ArchType to be serialized through any encoder that supports
 // encoding.TextMarshaler.
 func (a ArchType) MarshalText() ([]byte, error) {
-	return []byte(strconv.Quote(a.String())), nil
+	return []byte(a.String()), nil
 }
 
 var _ encoding.TextMarshaler = ArchType{}
@@ -411,6 +410,54 @@ func (target Target) Variations() []blueprint.Variation {
 		{Mutator: "os", Variation: target.OsVariation()},
 		{Mutator: "arch", Variation: target.ArchVariation()},
 	}
+}
+
+func registerBp2buildArchPathDepsMutator(ctx RegisterMutatorsContext) {
+	ctx.BottomUp("bp2build-arch-pathdeps", bp2buildArchPathDepsMutator).Parallel()
+}
+
+// add dependencies for architecture specific properties tagged with `android:"path"`
+func bp2buildArchPathDepsMutator(ctx BottomUpMutatorContext) {
+	var module Module
+	module = ctx.Module()
+
+	m := module.base()
+	if !m.ArchSpecific() {
+		return
+	}
+
+	// addPathDepsForProps does not descend into sub structs, so we need to descend into the
+	// arch-specific properties ourselves
+	properties := []interface{}{}
+	for _, archProperties := range m.archProperties {
+		for _, archProps := range archProperties {
+			archPropValues := reflect.ValueOf(archProps).Elem()
+			// there are three "arch" variations, descend into each
+			for _, variant := range []string{"Arch", "Multilib", "Target"} {
+				// The properties are an interface, get the value (a pointer) that it points to
+				archProps := archPropValues.FieldByName(variant).Elem()
+				if archProps.IsNil() {
+					continue
+				}
+				// And then a pointer to a struct
+				archProps = archProps.Elem()
+				for i := 0; i < archProps.NumField(); i += 1 {
+					f := archProps.Field(i)
+					// If the value of the field is a struct (as opposed to a pointer to a struct) then step
+					// into the BlueprintEmbed field.
+					if f.Kind() == reflect.Struct {
+						f = f.FieldByName("BlueprintEmbed")
+					}
+					if f.IsZero() {
+						continue
+					}
+					props := f.Interface().(interface{})
+					properties = append(properties, props)
+				}
+			}
+		}
+	}
+	addPathDepsForProps(ctx, properties)
 }
 
 // osMutator splits an arch-specific module into a variant for each OS that is enabled for the
@@ -900,13 +947,17 @@ func filterArchStruct(field reflect.StructField, prefix string) (bool, reflect.S
 		if string(field.Tag) != `android:"`+strings.Join(values, ",")+`"` {
 			panic(fmt.Errorf("unexpected tag format %q", field.Tag))
 		}
+		// don't delete path tag as it is needed for bp2build
 		// these tags don't need to be present in the runtime generated struct type.
-		values = RemoveListFromList(values, []string{"arch_variant", "variant_prepend", "path"})
-		if len(values) > 0 {
+		values = RemoveListFromList(values, []string{"arch_variant", "variant_prepend"})
+		if len(values) > 0 && values[0] != "path" {
 			panic(fmt.Errorf("unknown tags %q in field %q", values, prefix+field.Name))
+		} else if len(values) == 1 {
+			field.Tag = reflect.StructTag(`android:"` + strings.Join(values, ",") + `"`)
+		} else {
+			field.Tag = ``
 		}
 
-		field.Tag = ""
 		return true, field
 	}
 	return false, field

@@ -92,12 +92,6 @@ type apexBundleProperties struct {
 
 	Multilib apexMultilibProperties
 
-	// List of boot images that are embedded inside this APEX bundle.
-	//
-	// deprecated: Use Bootclasspath_fragments
-	// TODO(b/177892522): Remove after has been replaced by Bootclasspath_fragments
-	Boot_images []string
-
 	// List of bootclasspath fragments that are embedded inside this APEX bundle.
 	Bootclasspath_fragments []string
 
@@ -115,16 +109,6 @@ type apexBundleProperties struct {
 
 	// List of filesystem images that are embedded inside this APEX bundle.
 	Filesystems []string
-
-	// Name of the apex_key module that provides the private key to sign this APEX bundle.
-	Key *string
-
-	// Specifies the certificate and the private key to sign the zip container of this APEX. If
-	// this is "foo", foo.x509.pem and foo.pk8 under PRODUCT_DEFAULT_DEV_CERTIFICATE are used
-	// as the certificate and the private key, respectively. If this is ":module", then the
-	// certificate and the private key are provided from the android_app_certificate module
-	// named "module".
-	Certificate *string
 
 	// The minimum SDK version that this APEX must support at minimum. This is usually set to
 	// the SDK version that the APEX was first introduced.
@@ -305,6 +289,16 @@ type overridableProperties struct {
 
 	// A txt file containing list of files that are allowed to be included in this APEX.
 	Allowed_files *string `android:"path"`
+
+	// Name of the apex_key module that provides the private key to sign this APEX bundle.
+	Key *string
+
+	// Specifies the certificate and the private key to sign the zip container of this APEX. If
+	// this is "foo", foo.x509.pem and foo.pk8 under PRODUCT_DEFAULT_DEV_CERTIFICATE are used
+	// as the certificate and the private key, respectively. If this is ":module", then the
+	// certificate and the private key are provided from the android_app_certificate module
+	// named "module".
+	Certificate *string
 }
 
 type apexBundle struct {
@@ -573,7 +567,7 @@ var (
 	certificateTag  = dependencyTag{name: "certificate"}
 	executableTag   = dependencyTag{name: "executable", payload: true}
 	fsTag           = dependencyTag{name: "filesystem", payload: true}
-	bootImageTag    = dependencyTag{name: "bootImage", payload: true, sourceOnly: true}
+	bcpfTag         = dependencyTag{name: "bootclasspathFragment", payload: true, sourceOnly: true}
 	compatConfigTag = dependencyTag{name: "compatConfig", payload: true, sourceOnly: true}
 	javaLibTag      = dependencyTag{name: "javaLib", payload: true}
 	jniLibTag       = dependencyTag{name: "jniLib", payload: true}
@@ -753,8 +747,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 	// Common-arch dependencies come next
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
-	ctx.AddFarVariationDependencies(commonVariation, bootImageTag, a.properties.Boot_images...)
-	ctx.AddFarVariationDependencies(commonVariation, bootImageTag, a.properties.Bootclasspath_fragments...)
+	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.properties.Bootclasspath_fragments...)
 	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, bpfTag, a.properties.Bpfs...)
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
@@ -765,20 +758,6 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		if ctx.Config().IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK") {
 			ctx.AddFarVariationDependencies(commonVariation, javaLibTag, "jacocoagent")
 		}
-	}
-
-	// Dependencies for signing
-	if String(a.properties.Key) == "" {
-		ctx.PropertyErrorf("key", "missing")
-		return
-	}
-	ctx.AddDependency(ctx.Module(), keyTag, String(a.properties.Key))
-
-	cert := android.SrcIsModule(a.getCertString(ctx))
-	if cert != "" {
-		ctx.AddDependency(ctx.Module(), certificateTag, cert)
-		// empty cert is not an error. Cert and private keys will be directly found under
-		// PRODUCT_DEFAULT_DEV_CERTIFICATE
 	}
 
 	// Marks that this APEX (in fact all the modules in it) has to be built with the given SDKs.
@@ -804,6 +783,20 @@ func (a *apexBundle) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
 	ctx.AddFarVariationDependencies(commonVariation, androidAppTag, a.overridableProperties.Apps...)
 	ctx.AddFarVariationDependencies(commonVariation, rroTag, a.overridableProperties.Rros...)
+
+	// Dependencies for signing
+	if String(a.overridableProperties.Key) == "" {
+		ctx.PropertyErrorf("key", "missing")
+		return
+	}
+	ctx.AddDependency(ctx.Module(), keyTag, String(a.overridableProperties.Key))
+
+	cert := android.SrcIsModule(a.getCertString(ctx))
+	if cert != "" {
+		ctx.AddDependency(ctx.Module(), certificateTag, cert)
+		// empty cert is not an error. Cert and private keys will be directly found under
+		// PRODUCT_DEFAULT_DEV_CERTIFICATE
+	}
 }
 
 type ApexBundleInfo struct {
@@ -903,7 +896,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	// be built for this apexBundle.
 	apexInfo := android.ApexInfo{
 		ApexVariationName: mctx.ModuleName(),
-		MinSdkVersionStr:  minSdkVersion.String(),
+		MinSdkVersion:     minSdkVersion,
 		RequiredSdks:      a.RequiredSdks(),
 		Updatable:         a.Updatable(),
 		InApexes:          []string{mctx.ModuleName()},
@@ -1299,7 +1292,7 @@ func (a *apexBundle) getCertString(ctx android.BaseModuleContext) string {
 	if overridden {
 		return ":" + certificate
 	}
-	return String(a.properties.Certificate)
+	return String(a.overridableProperties.Certificate)
 }
 
 // See the installable property
@@ -1700,10 +1693,10 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				} else {
 					ctx.PropertyErrorf("binaries", "%q is neither cc_binary, rust_binary, (embedded) py_binary, (host) blueprint_go_binary, (host) bootstrap_go_binary, nor sh_binary", depName)
 				}
-			case bootImageTag:
+			case bcpfTag:
 				{
-					if _, ok := child.(*java.BootImageModule); !ok {
-						ctx.PropertyErrorf("boot_images", "%q is not a boot_image module", depName)
+					if _, ok := child.(*java.BootclasspathFragmentModule); !ok {
+						ctx.PropertyErrorf("bootclasspath_fragments", "%q is not a boot_image module", depName)
 						return false
 					}
 					bootImageInfo := ctx.OtherModuleProvider(child, java.BootImageInfoProvider).(java.BootImageInfo)
@@ -1711,7 +1704,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						dirInApex := filepath.Join("javalib", arch.String())
 						for _, f := range files {
 							androidMkModuleName := "javalib_" + arch.String() + "_" + filepath.Base(f.String())
-							// TODO(b/177892522) - consider passing in the boot image module here instead of nil
+							// TODO(b/177892522) - consider passing in the bootclasspath fragment module here instead of nil
 							af := newApexFile(ctx, f, androidMkModuleName, dirInApex, etc, nil)
 							filesInfo = append(filesInfo, af)
 						}
@@ -1931,19 +1924,19 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					// Rlib is statically linked, but it might have shared lib
 					// dependencies. Track them.
 					return true
-				} else if java.IsbootImageContentDepTag(depTag) {
-					// Add the contents of the boot image to the apex.
+				} else if java.IsBootclasspathFragmentContentDepTag(depTag) {
+					// Add the contents of the bootclasspath fragment to the apex.
 					switch child.(type) {
 					case *java.Library, *java.SdkLibrary:
 						af := apexFileForJavaModule(ctx, child.(javaModule))
 						if !af.ok() {
-							ctx.PropertyErrorf("boot_images", "boot image content %q is not configured to be compiled into dex", depName)
+							ctx.PropertyErrorf("bootclasspath_fragments", "bootclasspath_fragment content %q is not configured to be compiled into dex", depName)
 							return false
 						}
 						filesInfo = append(filesInfo, af)
 						return true // track transitive dependencies
 					default:
-						ctx.PropertyErrorf("boot_images", "boot image content %q of type %q is not supported", depName, ctx.OtherModuleType(child))
+						ctx.PropertyErrorf("bootclasspath_fragments", "bootclasspath_fragment content %q of type %q is not supported", depName, ctx.OtherModuleType(child))
 					}
 
 				} else if _, ok := depTag.(android.CopyDirectlyInAnyApexTag); ok {
@@ -1956,7 +1949,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		return false
 	})
 	if a.privateKeyFile == nil {
-		ctx.PropertyErrorf("key", "private_key for %q could not be found", String(a.properties.Key))
+		ctx.PropertyErrorf("key", "private_key for %q could not be found", String(a.overridableProperties.Key))
 		return
 	}
 
@@ -2272,8 +2265,10 @@ func (a *apexBundle) checkJavaStableSdkVersion(ctx android.ModuleContext) {
 		tag := ctx.OtherModuleDependencyTag(module)
 		switch tag {
 		case javaLibTag, androidAppTag:
-			if m, ok := module.(interface{ CheckStableSdkVersion() error }); ok {
-				if err := m.CheckStableSdkVersion(); err != nil {
+			if m, ok := module.(interface {
+				CheckStableSdkVersion(ctx android.BaseModuleContext) error
+			}); ok {
+				if err := m.CheckStableSdkVersion(ctx); err != nil {
 					ctx.ModuleErrorf("cannot depend on \"%v\": %v", ctx.OtherModuleName(module), err)
 				}
 			}

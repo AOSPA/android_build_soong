@@ -505,6 +505,8 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 	// TODO(b/151177513): Does this code need to set LOCAL_MODULE_IS_CONTAINER ?
 	if amod.commonProperties.Effective_package_name != nil {
 		a.SetString("LOCAL_LICENSE_PACKAGE_NAME", *amod.commonProperties.Effective_package_name)
+	} else if len(amod.commonProperties.Effective_licenses) > 0 {
+		a.SetString("LOCAL_LICENSE_PACKAGE_NAME", strings.Join(amod.commonProperties.Effective_licenses, " "))
 	}
 	a.SetString("LOCAL_MODULE_CLASS", a.Class)
 	a.SetString("LOCAL_PREBUILT_MODULE_FILE", a.OutputFile.String())
@@ -546,9 +548,11 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		}
 
 		if !amod.InRamdisk() && !amod.InVendorRamdisk() {
-			a.AddStrings("LOCAL_INIT_RC", amod.commonProperties.Init_rc...)
+			a.AddPaths("LOCAL_FULL_INIT_RC", amod.initRcPaths)
 		}
-		a.AddStrings("LOCAL_VINTF_FRAGMENTS", amod.commonProperties.Vintf_fragments...)
+		if len(amod.vintfFragmentsPaths) > 0 {
+			a.AddPaths("LOCAL_FULL_VINTF_FRAGMENTS", amod.vintfFragmentsPaths)
+		}
 		a.SetBoolIfTrue("LOCAL_PROPRIETARY_MODULE", Bool(amod.commonProperties.Proprietary))
 		if Bool(amod.commonProperties.Vendor) || Bool(amod.commonProperties.Soc_specific) {
 			a.SetString("LOCAL_VENDOR_MODULE", "true")

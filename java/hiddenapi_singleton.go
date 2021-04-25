@@ -15,10 +15,9 @@
 package java
 
 import (
-	"fmt"
+	"strings"
 
 	"android/soong/android"
-	"android/soong/genrule"
 )
 
 func init() {
@@ -27,8 +26,6 @@ func init() {
 
 func RegisterHiddenApiSingletonComponents(ctx android.RegistrationContext) {
 	ctx.RegisterSingletonType("hiddenapi", hiddenAPISingletonFactory)
-	ctx.RegisterSingletonType("hiddenapi_index", hiddenAPIIndexSingletonFactory)
-	ctx.RegisterModuleType("hiddenapi_flags", hiddenAPIFlagsFactory)
 }
 
 var PrepareForTestWithHiddenApiBuildComponents = android.FixtureRegisterWithContext(RegisterHiddenApiSingletonComponents)
@@ -102,11 +99,15 @@ var hiddenAPISingletonPathsKey = android.NewOnceKey("hiddenAPISingletonPathsKey"
 // yet been created.
 func hiddenAPISingletonPaths(ctx android.PathContext) hiddenAPISingletonPathsStruct {
 	return ctx.Config().Once(hiddenAPISingletonPathsKey, func() interface{} {
+		// Make the paths relative to the out/soong/hiddenapi directory instead of to the out/soong/
+		// directory. This ensures that if they are used as java_resources they do not end up in a
+		// hiddenapi directory in the resulting APK.
+		hiddenapiDir := android.PathForOutput(ctx, "hiddenapi")
 		return hiddenAPISingletonPathsStruct{
-			flags:     android.PathForOutput(ctx, "hiddenapi", "hiddenapi-flags.csv"),
-			index:     android.PathForOutput(ctx, "hiddenapi", "hiddenapi-index.csv"),
-			metadata:  android.PathForOutput(ctx, "hiddenapi", "hiddenapi-unsupported.csv"),
-			stubFlags: android.PathForOutput(ctx, "hiddenapi", "hiddenapi-stub-flags.txt"),
+			flags:     hiddenapiDir.Join(ctx, "hiddenapi-flags.csv"),
+			index:     hiddenapiDir.Join(ctx, "hiddenapi-index.csv"),
+			metadata:  hiddenapiDir.Join(ctx, "hiddenapi-unsupported.csv"),
+			stubFlags: hiddenapiDir.Join(ctx, "hiddenapi-stub-flags.txt"),
 		}
 	}).(hiddenAPISingletonPathsStruct)
 }
@@ -116,7 +117,7 @@ func hiddenAPISingletonFactory() android.Singleton {
 }
 
 type hiddenAPISingleton struct {
-	flags, metadata android.Path
+	flags android.Path
 }
 
 // hiddenAPI singleton rules
@@ -125,8 +126,6 @@ func (h *hiddenAPISingleton) GenerateBuildActions(ctx android.SingletonContext) 
 	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
 		return
 	}
-
-	stubFlagsRule(ctx)
 
 	// If there is a prebuilt hiddenapi dir, generate rules to use the
 	// files within. Generally, we build the hiddenapi files from source
@@ -138,133 +137,25 @@ func (h *hiddenAPISingleton) GenerateBuildActions(ctx android.SingletonContext) 
 
 	if ctx.Config().PrebuiltHiddenApiDir(ctx) != "" {
 		h.flags = prebuiltFlagsRule(ctx)
+		prebuiltIndexRule(ctx)
 		return
 	}
 
 	// These rules depend on files located in frameworks/base, skip them if running in a tree that doesn't have them.
 	if ctx.Config().FrameworksBaseDirExists(ctx) {
 		h.flags = flagsRule(ctx)
-		h.metadata = metadataRule(ctx)
 	} else {
 		h.flags = emptyFlagsRule(ctx)
 	}
 }
 
 // Export paths to Make.  INTERNAL_PLATFORM_HIDDENAPI_FLAGS is used by Make rules in art/ and cts/.
-// Both paths are used to call dist-for-goals.
 func (h *hiddenAPISingleton) MakeVars(ctx android.MakeVarsContext) {
 	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
 		return
 	}
 
 	ctx.Strict("INTERNAL_PLATFORM_HIDDENAPI_FLAGS", h.flags.String())
-
-	if h.metadata != nil {
-		ctx.Strict("INTERNAL_PLATFORM_HIDDENAPI_GREYLIST_METADATA", h.metadata.String())
-	}
-}
-
-// stubFlagsRule creates the rule to build hiddenapi-stub-flags.txt out of dex jars from stub modules and boot image
-// modules.
-func stubFlagsRule(ctx android.SingletonContext) {
-	var publicStubModules []string
-	var systemStubModules []string
-	var testStubModules []string
-	var corePlatformStubModules []string
-
-	if ctx.Config().AlwaysUsePrebuiltSdks() {
-		// Build configuration mandates using prebuilt stub modules
-		publicStubModules = append(publicStubModules, "sdk_public_current_android")
-		systemStubModules = append(systemStubModules, "sdk_system_current_android")
-		testStubModules = append(testStubModules, "sdk_test_current_android")
-	} else {
-		// Use stub modules built from source
-		publicStubModules = append(publicStubModules, "android_stubs_current")
-		systemStubModules = append(systemStubModules, "android_system_stubs_current")
-		testStubModules = append(testStubModules, "android_test_stubs_current")
-	}
-	// We do not have prebuilts of the core platform api yet
-	corePlatformStubModules = append(corePlatformStubModules, "legacy.core.platform.api.stubs")
-
-	// Allow products to define their own stubs for custom product jars that apps can use.
-	publicStubModules = append(publicStubModules, ctx.Config().ProductHiddenAPIStubs()...)
-	systemStubModules = append(systemStubModules, ctx.Config().ProductHiddenAPIStubsSystem()...)
-	testStubModules = append(testStubModules, ctx.Config().ProductHiddenAPIStubsTest()...)
-	if ctx.Config().IsEnvTrue("EMMA_INSTRUMENT") {
-		publicStubModules = append(publicStubModules, "jacoco-stubs")
-	}
-
-	publicStubPaths := make(android.Paths, len(publicStubModules))
-	systemStubPaths := make(android.Paths, len(systemStubModules))
-	testStubPaths := make(android.Paths, len(testStubModules))
-	corePlatformStubPaths := make(android.Paths, len(corePlatformStubModules))
-
-	moduleListToPathList := map[*[]string]android.Paths{
-		&publicStubModules:       publicStubPaths,
-		&systemStubModules:       systemStubPaths,
-		&testStubModules:         testStubPaths,
-		&corePlatformStubModules: corePlatformStubPaths,
-	}
-
-	var bootDexJars android.Paths
-
-	ctx.VisitAllModules(func(module android.Module) {
-		// Collect dex jar paths for the modules listed above.
-		if j, ok := module.(UsesLibraryDependency); ok {
-			name := ctx.ModuleName(module)
-			for moduleList, pathList := range moduleListToPathList {
-				if i := android.IndexList(name, *moduleList); i != -1 {
-					pathList[i] = j.DexJarBuildPath()
-				}
-			}
-		}
-
-		// Collect dex jar paths for modules that had hiddenapi encode called on them.
-		if h, ok := module.(hiddenAPIIntf); ok {
-			if jar := h.bootDexJar(); jar != nil {
-				bootDexJars = append(bootDexJars, jar)
-			}
-		}
-	})
-
-	var missingDeps []string
-	// Ensure all modules were converted to paths
-	for moduleList, pathList := range moduleListToPathList {
-		for i := range pathList {
-			if pathList[i] == nil {
-				moduleName := (*moduleList)[i]
-				pathList[i] = android.PathForOutput(ctx, "missing/module", moduleName)
-				if ctx.Config().AllowMissingDependencies() {
-					missingDeps = append(missingDeps, moduleName)
-				} else {
-					ctx.Errorf("failed to find dex jar path for module %q",
-						moduleName)
-				}
-			}
-		}
-	}
-
-	// Singleton rule which applies hiddenapi on all boot class path dex files.
-	rule := android.NewRuleBuilder(pctx, ctx)
-
-	outputPath := hiddenAPISingletonPaths(ctx).stubFlags
-	tempPath := android.PathForOutput(ctx, outputPath.Rel()+".tmp")
-
-	rule.MissingDeps(missingDeps)
-
-	rule.Command().
-		Tool(ctx.Config().HostToolPath(ctx, "hiddenapi")).
-		Text("list").
-		FlagForEachInput("--boot-dex=", bootDexJars).
-		FlagWithInputList("--public-stub-classpath=", publicStubPaths, ":").
-		FlagWithInputList("--system-stub-classpath=", systemStubPaths, ":").
-		FlagWithInputList("--test-stub-classpath=", testStubPaths, ":").
-		FlagWithInputList("--core-platform-stub-classpath=", corePlatformStubPaths, ":").
-		FlagWithOutput("--out-api-flags=", tempPath)
-
-	commitChangeForRestat(rule, tempPath, outputPath)
-
-	rule.Build("hiddenAPIStubFlagsFile", "hiddenapi stub flags")
 }
 
 // Checks to see whether the supplied module variant is in the list of boot jars.
@@ -321,63 +212,21 @@ func prebuiltFlagsRule(ctx android.SingletonContext) android.Path {
 	return outputPath
 }
 
-// flagsRule creates a rule to build hiddenapi-flags.csv out of flags.csv files generated for boot image modules and
-// the unsupported API.
-func flagsRule(ctx android.SingletonContext) android.Path {
-	var flagsCSV android.Paths
-	var combinedRemovedApis android.Path
+func prebuiltIndexRule(ctx android.SingletonContext) {
+	outputPath := hiddenAPISingletonPaths(ctx).index
+	inputPath := android.PathForSource(ctx, ctx.Config().PrebuiltHiddenApiDir(ctx), "hiddenapi-index.csv")
 
-	ctx.VisitAllModules(func(module android.Module) {
-		if h, ok := module.(hiddenAPIIntf); ok {
-			if csv := h.flagsCSV(); csv != nil {
-				flagsCSV = append(flagsCSV, csv)
-			}
-		} else if g, ok := module.(*genrule.Module); ok {
-			if ctx.ModuleName(module) == "combined-removed-dex" {
-				if len(g.GeneratedSourceFiles()) != 1 || combinedRemovedApis != nil {
-					ctx.Errorf("Expected 1 combined-removed-dex module that generates 1 output file.")
-				}
-				combinedRemovedApis = g.GeneratedSourceFiles()[0]
-			}
-		}
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   android.Cp,
+		Output: outputPath,
+		Input:  inputPath,
 	})
+}
 
-	if combinedRemovedApis == nil {
-		ctx.Errorf("Failed to find combined-removed-dex.")
-	}
-
-	rule := android.NewRuleBuilder(pctx, ctx)
-
+// flagsRule is a placeholder that simply returns the location of the file, the generation of the
+// ninja rules is done in generateHiddenAPIBuildActions.
+func flagsRule(ctx android.SingletonContext) android.Path {
 	outputPath := hiddenAPISingletonPaths(ctx).flags
-	tempPath := android.PathForOutput(ctx, outputPath.Rel()+".tmp")
-
-	stubFlags := hiddenAPISingletonPaths(ctx).stubFlags
-
-	rule.Command().
-		BuiltTool("generate_hiddenapi_lists").
-		FlagWithInput("--csv ", stubFlags).
-		Inputs(flagsCSV).
-		FlagWithInput("--unsupported ",
-			android.PathForSource(ctx, "frameworks/base/boot/hiddenapi/hiddenapi-unsupported.txt")).
-		FlagWithInput("--unsupported ", combinedRemovedApis).Flag("--ignore-conflicts ").FlagWithArg("--tag ", "removed").
-		FlagWithInput("--max-target-r ",
-			android.PathForSource(ctx, "frameworks/base/boot/hiddenapi/hiddenapi-max-target-r-loprio.txt")).FlagWithArg("--tag ", "lo-prio").
-		FlagWithInput("--max-target-q ",
-			android.PathForSource(ctx, "frameworks/base/boot/hiddenapi/hiddenapi-max-target-q.txt")).
-		FlagWithInput("--max-target-p ",
-			android.PathForSource(ctx, "frameworks/base/boot/hiddenapi/hiddenapi-max-target-p.txt")).
-		FlagWithInput("--max-target-o ", android.PathForSource(
-			ctx, "frameworks/base/boot/hiddenapi/hiddenapi-max-target-o.txt")).Flag("--ignore-conflicts ").FlagWithArg("--tag ", "lo-prio").
-		FlagWithInput("--blocked ",
-			android.PathForSource(ctx, "frameworks/base/boot/hiddenapi/hiddenapi-force-blocked.txt")).
-		FlagWithInput("--unsupported ", android.PathForSource(
-			ctx, "frameworks/base/boot/hiddenapi/hiddenapi-unsupported-packages.txt")).Flag("--packages ").
-		FlagWithOutput("--output ", tempPath)
-
-	commitChangeForRestat(rule, tempPath, outputPath)
-
-	rule.Build("hiddenAPIFlagsFile", "hiddenapi flags")
-
 	return outputPath
 }
 
@@ -396,32 +245,14 @@ func emptyFlagsRule(ctx android.SingletonContext) android.Path {
 	return outputPath
 }
 
-// metadataRule creates a rule to build hiddenapi-unsupported.csv out of the metadata.csv files generated for boot image
-// modules.
-func metadataRule(ctx android.SingletonContext) android.Path {
-	var metadataCSV android.Paths
-
-	ctx.VisitAllModules(func(module android.Module) {
-		if h, ok := module.(hiddenAPIIntf); ok {
-			if csv := h.metadataCSV(); csv != nil {
-				metadataCSV = append(metadataCSV, csv)
-			}
-		}
-	})
-
-	rule := android.NewRuleBuilder(pctx, ctx)
-
-	outputPath := hiddenAPISingletonPaths(ctx).metadata
-
-	rule.Command().
-		BuiltTool("merge_csv").
-		Flag("--key_field signature").
-		FlagWithOutput("--output=", outputPath).
-		Inputs(metadataCSV)
-
-	rule.Build("hiddenAPIGreylistMetadataFile", "hiddenapi greylist metadata")
-
-	return outputPath
+// tempPathForRestat creates a path of the same type as the supplied type but with a name of
+// <path>.tmp.
+//
+// e.g. If path is an OutputPath for out/soong/hiddenapi/hiddenapi-flags.csv then this will return
+// an OutputPath for out/soong/hiddenapi/hiddenapi-flags.csv.tmp
+func tempPathForRestat(ctx android.PathContext, path android.WritablePath) android.WritablePath {
+	extWithoutLeadingDot := strings.TrimPrefix(path.Ext(), ".")
+	return path.ReplaceExtension(ctx, extWithoutLeadingDot+".tmp")
 }
 
 // commitChangeForRestat adds a command to a rule that updates outputPath from tempPath if they are different.  It
@@ -440,106 +271,4 @@ func commitChangeForRestat(rule *android.RuleBuilder, tempPath, outputPath andro
 		Text("mv").Input(tempPath).Output(outputPath).Text(";").
 		Text("fi").
 		Text(")")
-}
-
-type hiddenAPIFlagsProperties struct {
-	// name of the file into which the flags will be copied.
-	Filename *string
-}
-
-type hiddenAPIFlags struct {
-	android.ModuleBase
-
-	properties hiddenAPIFlagsProperties
-
-	outputFilePath android.OutputPath
-}
-
-func (h *hiddenAPIFlags) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	filename := String(h.properties.Filename)
-
-	inputPath := hiddenAPISingletonPaths(ctx).flags
-	h.outputFilePath = android.PathForModuleOut(ctx, filename).OutputPath
-
-	// This ensures that outputFilePath has the correct name for others to
-	// use, as the source file may have a different name.
-	ctx.Build(pctx, android.BuildParams{
-		Rule:   android.Cp,
-		Output: h.outputFilePath,
-		Input:  inputPath,
-	})
-}
-
-func (h *hiddenAPIFlags) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{h.outputFilePath}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
-// hiddenapi-flags provides access to the hiddenapi-flags.csv file generated during the build.
-func hiddenAPIFlagsFactory() android.Module {
-	module := &hiddenAPIFlags{}
-	module.AddProperties(&module.properties)
-	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
-	return module
-}
-
-func hiddenAPIIndexSingletonFactory() android.Singleton {
-	return &hiddenAPIIndexSingleton{}
-}
-
-type hiddenAPIIndexSingleton struct {
-	index android.Path
-}
-
-func (h *hiddenAPIIndexSingleton) GenerateBuildActions(ctx android.SingletonContext) {
-	// Don't run any hiddenapi rules if UNSAFE_DISABLE_HIDDENAPI_FLAGS=true
-	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
-		return
-	}
-
-	if ctx.Config().PrebuiltHiddenApiDir(ctx) != "" {
-		outputPath := hiddenAPISingletonPaths(ctx).index
-		inputPath := android.PathForSource(ctx, ctx.Config().PrebuiltHiddenApiDir(ctx), "hiddenapi-index.csv")
-
-		ctx.Build(pctx, android.BuildParams{
-			Rule:   android.Cp,
-			Output: outputPath,
-			Input:  inputPath,
-		})
-
-		h.index = outputPath
-		return
-	}
-
-	indexes := android.Paths{}
-	ctx.VisitAllModules(func(module android.Module) {
-		if h, ok := module.(hiddenAPIIntf); ok {
-			if h.indexCSV() != nil {
-				indexes = append(indexes, h.indexCSV())
-			}
-		}
-	})
-
-	rule := android.NewRuleBuilder(pctx, ctx)
-	rule.Command().
-		BuiltTool("merge_csv").
-		Flag("--key_field signature").
-		FlagWithArg("--header=", "signature,file,startline,startcol,endline,endcol,properties").
-		FlagWithOutput("--output=", hiddenAPISingletonPaths(ctx).index).
-		Inputs(indexes)
-	rule.Build("singleton-merged-hiddenapi-index", "Singleton merged Hidden API index")
-
-	h.index = hiddenAPISingletonPaths(ctx).index
-}
-
-func (h *hiddenAPIIndexSingleton) MakeVars(ctx android.MakeVarsContext) {
-	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
-		return
-	}
-
-	ctx.Strict("INTERNAL_PLATFORM_HIDDENAPI_INDEX", h.index.String())
 }

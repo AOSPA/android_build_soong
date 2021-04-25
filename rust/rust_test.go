@@ -113,6 +113,24 @@ func testRustError(t *testing.T, pattern string, bp string) {
 		RunTestWithBp(t, bp)
 }
 
+// testRustVndkError is similar to testRustError, but can be used to test VNDK-related errors.
+func testRustVndkError(t *testing.T, pattern string, bp string) {
+	skipTestIfOsNotSupported(t)
+	android.GroupFixturePreparers(
+		prepareForRustTest,
+		rustMockedFiles.AddToFixture(),
+		android.FixtureModifyProductVariables(
+			func(variables android.FixtureProductVariables) {
+				variables.DeviceVndkVersion = StringPtr("current")
+				variables.ProductVndkVersion = StringPtr("current")
+				variables.Platform_vndk_version = StringPtr("VER")
+			},
+		),
+	).
+		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(pattern)).
+		RunTestWithBp(t, bp)
+}
+
 // testRustCtx is used to build a particular test environment. Unless your
 // tests requires a specific setup, prefer the wrapping functions: testRust,
 // testRustCov or testRustError.
@@ -383,4 +401,18 @@ func TestMultilib(t *testing.T) {
 
 	_ = ctx.ModuleForTests("libfoo", "android_arm64_armv8-a_rlib_dylib-std")
 	_ = ctx.ModuleForTests("libfoo", "android_arm_armv7-a-neon_rlib_dylib-std")
+}
+
+// Test that library size measurements are generated.
+func TestLibrarySizes(t *testing.T) {
+	ctx := testRust(t, `
+		rust_library_dylib {
+			name: "libwaldo",
+			srcs: ["foo.rs"],
+			crate_name: "waldo",
+		}`)
+
+	m := ctx.SingletonForTests("file_metrics")
+	m.Output("libwaldo.dylib.so.bloaty.csv")
+	m.Output("stripped/libwaldo.dylib.so.bloaty.csv")
 }

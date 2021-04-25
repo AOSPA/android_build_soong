@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	"android/soong/shared"
+	"github.com/google/blueprint/deptools"
 
 	soong_metrics_proto "android/soong/ui/metrics/metrics_proto"
 	"github.com/google/blueprint"
@@ -31,6 +32,11 @@ import (
 
 	"android/soong/ui/metrics"
 	"android/soong/ui/status"
+)
+
+const (
+	availableEnvFile = "soong.environment.available"
+	usedEnvFile      = "soong.environment.used"
 )
 
 func writeEnvironmentFile(ctx Context, envFile string, envDeps map[string]string) error {
@@ -87,11 +93,22 @@ func (c BlueprintConfig) DebugCompilation() bool {
 	return c.debugCompilation
 }
 
-func bootstrapBlueprint(ctx Context, config Config) {
+func environmentArgs(config Config, suffix string) []string {
+	return []string{
+		"--available_env", shared.JoinPath(config.SoongOutDir(), availableEnvFile),
+		"--used_env", shared.JoinPath(config.SoongOutDir(), usedEnvFile+suffix),
+	}
+}
+func bootstrapBlueprint(ctx Context, config Config, integratedBp2Build bool) {
 	ctx.BeginTrace(metrics.RunSoong, "blueprint bootstrap")
 	defer ctx.EndTrace()
 
 	var args bootstrap.Args
+
+	mainNinjaFile := shared.JoinPath(config.SoongOutDir(), "build.ninja")
+	globFile := shared.JoinPath(config.SoongOutDir(), ".bootstrap/soong-build-globs.ninja")
+	bootstrapGlobFile := shared.JoinPath(config.SoongOutDir(), ".bootstrap/build-globs.ninja")
+	bootstrapDepFile := shared.JoinPath(config.SoongOutDir(), ".bootstrap/build.ninja.d")
 
 	args.RunGoTests = !config.skipSoongTests
 	args.UseValidations = true // Use validations to depend on tests
@@ -100,9 +117,51 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	args.TopFile = "Android.bp"
 	args.ModuleListFile = filepath.Join(config.FileListDir(), "Android.bp.list")
 	args.OutFile = shared.JoinPath(config.SoongOutDir(), ".bootstrap/build.ninja")
-	args.DepFile = shared.JoinPath(config.SoongOutDir(), ".bootstrap/build.ninja.d")
-	args.GlobFile = shared.JoinPath(config.SoongOutDir(), ".bootstrap/soong-build-globs.ninja")
+	args.GlobFile = globFile
 	args.GeneratingPrimaryBuilder = true
+
+	args.DelveListen = os.Getenv("SOONG_DELVE")
+	if args.DelveListen != "" {
+		args.DelvePath = shared.ResolveDelveBinary()
+	}
+
+	commonArgs := bootstrap.PrimaryBuilderExtraFlags(args, bootstrapGlobFile, mainNinjaFile)
+	bp2BuildMarkerFile := shared.JoinPath(config.SoongOutDir(), ".bootstrap/bp2build_workspace_marker")
+	mainSoongBuildInputs := []string{"Android.bp"}
+
+	if integratedBp2Build {
+		mainSoongBuildInputs = append(mainSoongBuildInputs, bp2BuildMarkerFile)
+	}
+
+	soongBuildArgs := make([]string, 0)
+	soongBuildArgs = append(soongBuildArgs, commonArgs...)
+	soongBuildArgs = append(soongBuildArgs, environmentArgs(config, "")...)
+	soongBuildArgs = append(soongBuildArgs, "Android.bp")
+
+	mainSoongBuildInvocation := bootstrap.PrimaryBuilderInvocation{
+		Inputs:  mainSoongBuildInputs,
+		Outputs: []string{mainNinjaFile},
+		Args:    soongBuildArgs,
+	}
+
+	if integratedBp2Build {
+		bp2buildArgs := []string{"--bp2build_marker", bp2BuildMarkerFile}
+		bp2buildArgs = append(bp2buildArgs, commonArgs...)
+		bp2buildArgs = append(bp2buildArgs, environmentArgs(config, ".bp2build")...)
+		bp2buildArgs = append(bp2buildArgs, "Android.bp")
+
+		bp2buildInvocation := bootstrap.PrimaryBuilderInvocation{
+			Inputs:  []string{"Android.bp"},
+			Outputs: []string{bp2BuildMarkerFile},
+			Args:    bp2buildArgs,
+		}
+		args.PrimaryBuilderInvocations = []bootstrap.PrimaryBuilderInvocation{
+			bp2buildInvocation,
+			mainSoongBuildInvocation,
+		}
+	} else {
+		args.PrimaryBuilderInvocations = []bootstrap.PrimaryBuilderInvocation{mainSoongBuildInvocation}
+	}
 
 	blueprintCtx := blueprint.NewContext()
 	blueprintCtx.SetIgnoreUnknownModuleTypes(true)
@@ -113,7 +172,21 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		debugCompilation: os.Getenv("SOONG_DELVE") != "",
 	}
 
-	bootstrap.RunBlueprint(args, blueprintCtx, blueprintConfig)
+	bootstrapDeps := bootstrap.RunBlueprint(args, blueprintCtx, blueprintConfig)
+	err := deptools.WriteDepFile(bootstrapDepFile, args.OutFile, bootstrapDeps)
+	if err != nil {
+		ctx.Fatalf("Error writing depfile '%s': %s", bootstrapDepFile, err)
+	}
+}
+
+func checkEnvironmentFile(currentEnv *Environment, envFile string) {
+	getenv := func(k string) string {
+		v, _ := currentEnv.Get(k)
+		return v
+	}
+	if stale, _ := shared.StaleEnvFile(envFile, getenv); stale {
+		os.Remove(envFile)
+	}
 }
 
 func runSoong(ctx Context, config Config) {
@@ -124,7 +197,7 @@ func runSoong(ctx Context, config Config) {
 	// .used with the ones that were actually used. The latter is used to
 	// determine whether Soong needs to be re-run since why re-run it if only
 	// unused variables were changed?
-	envFile := filepath.Join(config.SoongOutDir(), "soong.environment.available")
+	envFile := filepath.Join(config.SoongOutDir(), availableEnvFile)
 
 	for _, n := range []string{".bootstrap", ".minibootstrap"} {
 		dir := filepath.Join(config.SoongOutDir(), n)
@@ -133,16 +206,14 @@ func runSoong(ctx Context, config Config) {
 		}
 	}
 
+	buildMode := config.bazelBuildMode()
+	integratedBp2Build := (buildMode == mixedBuild) || (buildMode == generateBuildFiles)
+
 	// This is done unconditionally, but does not take a measurable amount of time
-	bootstrapBlueprint(ctx, config)
+	bootstrapBlueprint(ctx, config, integratedBp2Build)
 
 	soongBuildEnv := config.Environment().Copy()
 	soongBuildEnv.Set("TOP", os.Getenv("TOP"))
-	// These two dependencies are read from bootstrap.go, but also need to be here
-	// so that soong_build can declare a dependency on them
-	soongBuildEnv.Set("SOONG_DELVE", os.Getenv("SOONG_DELVE"))
-	soongBuildEnv.Set("SOONG_DELVE_PATH", os.Getenv("SOONG_DELVE_PATH"))
-	soongBuildEnv.Set("SOONG_OUTDIR", config.SoongOutDir())
 	// For Bazel mixed builds.
 	soongBuildEnv.Set("BAZEL_PATH", "./tools/bazel")
 	soongBuildEnv.Set("BAZEL_HOME", filepath.Join(config.BazelOutDir(), "bazelhome"))
@@ -164,13 +235,12 @@ func runSoong(ctx Context, config Config) {
 		ctx.BeginTrace(metrics.RunSoong, "environment check")
 		defer ctx.EndTrace()
 
-		envFile := filepath.Join(config.SoongOutDir(), "soong.environment.used")
-		getenv := func(k string) string {
-			v, _ := soongBuildEnv.Get(k)
-			return v
-		}
-		if stale, _ := shared.StaleEnvFile(envFile, getenv); stale {
-			os.Remove(envFile)
+		soongBuildEnvFile := filepath.Join(config.SoongOutDir(), usedEnvFile)
+		checkEnvironmentFile(soongBuildEnv, soongBuildEnvFile)
+
+		if integratedBp2Build {
+			bp2buildEnvFile := filepath.Join(config.SoongOutDir(), usedEnvFile+".bp2build")
+			checkEnvironmentFile(soongBuildEnv, bp2buildEnvFile)
 		}
 	}()
 
@@ -215,7 +285,6 @@ func runSoong(ctx Context, config Config) {
 		// This is currently how the command line to invoke soong_build finds the
 		// root of the source tree and the output root
 		ninjaEnv.Set("TOP", os.Getenv("TOP"))
-		ninjaEnv.Set("SOONG_OUTDIR", config.SoongOutDir())
 
 		qcEnvVars := []string{
 			"TARGET_PRODUCT",
@@ -226,12 +295,6 @@ func runSoong(ctx Context, config Config) {
 		}
 		for _, qcVar := range qcEnvVars {
 			ninjaEnv.Set(qcVar, os.Getenv(qcVar))
-		}
-
-		// For debugging
-		if os.Getenv("SOONG_DELVE") != "" {
-			ninjaEnv.Set("SOONG_DELVE", os.Getenv("SOONG_DELVE"))
-			ninjaEnv.Set("SOONG_DELVE_PATH", shared.ResolveDelveBinary())
 		}
 
 		cmd.Environment = &ninjaEnv
@@ -261,7 +324,7 @@ func runSoong(ctx Context, config Config) {
 
 func shouldCollectBuildSoongMetrics(config Config) bool {
 	// Do not collect metrics protobuf if the soong_build binary ran as the bp2build converter.
-	return config.Environment().IsFalse("GENERATE_BAZEL_FILES")
+	return config.bazelBuildMode() != generateBuildFiles
 }
 
 func loadSoongBuildMetrics(ctx Context, config Config) *soong_metrics_proto.SoongBuildMetrics {

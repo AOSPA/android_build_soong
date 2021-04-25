@@ -77,10 +77,10 @@ type BaseCompilerProperties struct {
 	Lints *string
 
 	// flags to pass to rustc. To enable configuration options or features, use the "cfgs" or "features" properties.
-	Flags []string `android:"path,arch_variant"`
+	Flags []string `android:"arch_variant"`
 
 	// flags to pass to the linker
-	Ld_flags []string `android:"path,arch_variant"`
+	Ld_flags []string `android:"arch_variant"`
 
 	// list of rust rlib crate dependencies
 	Rlibs []string `android:"arch_variant"`
@@ -239,7 +239,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 	flags.RustFlags = append(flags.RustFlags, compiler.Properties.Flags...)
 	flags.RustFlags = append(flags.RustFlags, compiler.cfgsToFlags()...)
 	flags.RustFlags = append(flags.RustFlags, compiler.featuresToFlags()...)
+	flags.RustdocFlags = append(flags.RustdocFlags, compiler.cfgsToFlags()...)
+	flags.RustdocFlags = append(flags.RustdocFlags, compiler.featuresToFlags()...)
 	flags.RustFlags = append(flags.RustFlags, "--edition="+compiler.edition())
+	flags.RustdocFlags = append(flags.RustdocFlags, "--edition="+compiler.edition())
 	flags.LinkFlags = append(flags.LinkFlags, compiler.Properties.Ld_flags...)
 	flags.GlobalRustFlags = append(flags.GlobalRustFlags, config.GlobalRustFlags...)
 	flags.GlobalRustFlags = append(flags.GlobalRustFlags, ctx.toolchain().ToolchainRustFlags())
@@ -270,6 +273,12 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 
 func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathDeps) android.Path {
 	panic(fmt.Errorf("baseCrater doesn't know how to crate things!"))
+}
+
+func (compiler *baseCompiler) rustdoc(ctx ModuleContext, flags Flags,
+	deps PathDeps) android.OptionalPath {
+
+	return android.OptionalPath{}
 }
 
 func (compiler *baseCompiler) initialize(ctx ModuleContext) {
@@ -303,7 +312,6 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 			if ctx.Target().Os == android.BuildOs {
 				stdlib = stdlib + "_" + ctx.toolchain().RustTriple()
 			}
-
 			deps.Stdlibs = append(deps.Stdlibs, stdlib)
 		}
 	}
@@ -343,6 +351,10 @@ func (compiler *baseCompiler) installDir(ctx ModuleContext) android.InstallPath 
 	}
 	if !ctx.Host() && ctx.Config().HasMultilibConflict(ctx.Arch().ArchType) {
 		dir = filepath.Join(dir, ctx.Arch().ArchType.String())
+	}
+
+	if compiler.location == InstallInData && ctx.RustModule().UseVndk() {
+		dir = filepath.Join(dir, "vendor")
 	}
 	return android.PathForModuleInstall(ctx, dir, compiler.subDir,
 		compiler.relativeInstallPath(), compiler.relative)
