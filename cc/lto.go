@@ -16,8 +16,6 @@ package cc
 
 import (
 	"android/soong/android"
-	"android/soong/cc/config"
-	"strings"
 )
 
 // LTO (link-time optimization) allows the compiler to optimize and generate
@@ -103,13 +101,7 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 	if lto.LTO() {
 		var ltoFlag string
 		if lto.ThinLTO() {
-			// TODO(b/129607781) sdclang does not currently support
-			// the "-fsplit-lto-unit" option
-			if flags.Sdclang && !strings.Contains(config.SDClangPath, "9.0") {
-				ltoFlag = "-flto=thin"
-			} else {
-				ltoFlag = "-flto=thin -fsplit-lto-unit"
-			}
+			ltoFlag = "-flto=thin -fsplit-lto-unit"
 		} else {
 			ltoFlag = "-flto"
 		}
