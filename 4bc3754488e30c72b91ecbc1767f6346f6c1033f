@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9cea4280_972ea7f4",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000447
+      },
+      "writtenOn": "2021-05-04T14:09:50Z",
+      "side": 1,
+      "message": "I\u0027m good on this, also needed for 5.4 kernel scripts.",
+      "revId": "4bc3754488e30c72b91ecbc1767f6346f6c1033f",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
