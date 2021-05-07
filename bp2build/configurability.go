@@ -69,20 +69,26 @@ func prettyPrintAttribute(v bazel.Attribute, indent int) (string, error) {
 		return ret, err
 	}
 
-	// Create the selects for arch specific values.
-	selectMap, err := prettyPrintSelectMap(archSelects, "[]", indent)
+	// Convenience function to append selects components to an attribute value.
+	appendSelects := func(selectsData selects, defaultValue, s string) (string, error) {
+		selectMap, err := prettyPrintSelectMap(selectsData, defaultValue, indent)
+		if err != nil {
+			return "", err
+		}
+		if s != "" && selectMap != "" {
+			s += " + "
+		}
+		s += selectMap
+
+		return s, nil
+	}
+
+	ret, err = appendSelects(archSelects, "[]", ret)
 	if err != nil {
 		return "", err
 	}
-	ret += selectMap
 
-	// Create the selects for target os specific values.
-	selectMap, err = prettyPrintSelectMap(osSelects, "[]", indent)
-	if err != nil {
-		return "", err
-	}
-	ret += selectMap
-
+	ret, err = appendSelects(osSelects, "[]", ret)
 	return ret, err
 }
 
@@ -104,7 +110,11 @@ func prettyPrintSelectMap(selectMap map[string]reflect.Value, defaultValue strin
 		if err != nil {
 			return "", err
 		}
-		selects += s + ",\n"
+		// s could still be an empty string, e.g. unset slices of structs with
+		// length of 0.
+		if s != "" {
+			selects += s + ",\n"
+		}
 	}
 
 	if len(selects) == 0 {
@@ -113,7 +123,7 @@ func prettyPrintSelectMap(selectMap map[string]reflect.Value, defaultValue strin
 	}
 
 	// Create the map.
-	ret := " + select({\n"
+	ret := "select({\n"
 	ret += selects
 	// default condition comes last.
 	ret += fmt.Sprintf("%s\"%s\": %s,\n", makeIndent(indent+1), "//conditions:default", defaultValue)
@@ -130,6 +140,9 @@ func prettyPrintSelectEntry(value reflect.Value, key string, indent int) (string
 	v, err := prettyPrint(value, indent+1)
 	if err != nil {
 		return "", err
+	}
+	if v == "" {
+		return "", nil
 	}
 	s += fmt.Sprintf("\"%s\": %s", key, v)
 	return s, nil

@@ -22,6 +22,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bloaty"
 	"android/soong/cc"
 	cc_config "android/soong/cc/config"
 	"android/soong/rust/config"
@@ -58,6 +59,7 @@ type Flags struct {
 	RustFlags       []string // Flags that apply to rust
 	LinkFlags       []string // Flags that apply to linker
 	ClippyFlags     []string // Flags that apply to clippy-driver, during the linting
+	RustdocFlags    []string // Flags that apply to rustdoc
 	Toolchain       config.Toolchain
 	Coverage        bool
 	Clippy          bool
@@ -73,6 +75,11 @@ type BaseProperties struct {
 	ImageVariationPrefix string `blueprint:"mutated"`
 	VndkVersion          string `blueprint:"mutated"`
 	SubName              string `blueprint:"mutated"`
+
+	// SubName is used by CC for tracking image variants / SDK versions. RustSubName is used for Rust-specific
+	// subnaming which shouldn't be visible to CC modules (such as the rlib stdlinkage subname). This should be
+	// appended before SubName.
+	RustSubName string `blueprint:"mutated"`
 
 	// Set by imageMutator
 	CoreVariantNeeded          bool     `blueprint:"mutated"`
@@ -119,6 +126,7 @@ type Module struct {
 	// as a library. The stripped output which is used for installation can be found via
 	// compiler.strippedOutputFile if it exists.
 	unstrippedOutputFile android.OptionalPath
+	docTimestampFile     android.OptionalPath
 
 	hideApexVariantFromMake bool
 }
@@ -130,11 +138,6 @@ func (mod *Module) Header() bool {
 
 func (mod *Module) SetPreventInstall() {
 	mod.Properties.PreventInstall = true
-}
-
-// Returns true if the module is "vendor" variant. Usually these modules are installed in /vendor
-func (mod *Module) InVendor() bool {
-	return mod.Properties.ImageVariationPrefix == cc.VendorVariationPrefix
 }
 
 func (mod *Module) SetHideFromMake() {
@@ -232,7 +235,11 @@ func (mod *Module) UseVndk() bool {
 }
 
 func (mod *Module) MustUseVendorVariant() bool {
-	return false
+	return true
+}
+
+func (mod *Module) SubName() string {
+	return mod.Properties.SubName
 }
 
 func (mod *Module) IsVndk() bool {
@@ -253,6 +260,22 @@ func (c *Module) IsLlndk() bool {
 }
 
 func (c *Module) IsLlndkPublic() bool {
+	return false
+}
+
+func (m *Module) IsLlndkHeaders() bool {
+	return false
+}
+
+func (m *Module) IsLlndkLibrary() bool {
+	return false
+}
+
+func (mod *Module) KernelHeadersDecorator() bool {
+	return false
+}
+
+func (m *Module) HasLlndkStubs() bool {
 	return false
 }
 
@@ -335,10 +358,12 @@ type compiler interface {
 	compile(ctx ModuleContext, flags Flags, deps PathDeps) android.Path
 	compilerDeps(ctx DepsContext, deps Deps) Deps
 	crateName() string
+	rustdoc(ctx ModuleContext, flags Flags, deps PathDeps) android.OptionalPath
 
 	// Output directory in which source-generated code from dependencies is
 	// copied. This is equivalent to Cargo's OUT_DIR variable.
 	CargoOutDir() android.OptionalPath
+
 	inData() bool
 	install(ctx ModuleContext)
 	relativeInstallPath() string
@@ -435,6 +460,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 	module.AddProperties(
 		&BaseProperties{},
 		&cc.VendorProperties{},
+		&BenchmarkProperties{},
 		&BindgenProperties{},
 		&BaseCompilerProperties{},
 		&BinaryCompilerProperties{},
@@ -731,8 +757,10 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if mod.compiler != nil && !mod.compiler.Disabled() {
 		mod.compiler.initialize(ctx)
 		unstrippedOutputFile := mod.compiler.compile(ctx, flags, deps)
-
 		mod.unstrippedOutputFile = android.OptionalPathForPath(unstrippedOutputFile)
+		bloaty.MeasureSizeForPaths(ctx, mod.compiler.strippedOutputFilePath(), mod.unstrippedOutputFile)
+
+		mod.docTimestampFile = mod.compiler.rustdoc(ctx, flags, deps)
 
 		apexInfo := actx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 		if mod.installable(apexInfo) {
@@ -843,8 +871,10 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depName := ctx.OtherModuleName(dep)
 		depTag := ctx.OtherModuleDependencyTag(dep)
+
 		if rustDep, ok := dep.(*Module); ok && !rustDep.CcLibraryInterface() {
 			//Handle Rust Modules
+			makeLibName := cc.MakeLibName(ctx, mod, rustDep, depName+rustDep.Properties.RustSubName)
 
 			switch depTag {
 			case dylibDepTag:
@@ -854,19 +884,19 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					return
 				}
 				directDylibDeps = append(directDylibDeps, rustDep)
-				mod.Properties.AndroidMkDylibs = append(mod.Properties.AndroidMkDylibs, depName)
+				mod.Properties.AndroidMkDylibs = append(mod.Properties.AndroidMkDylibs, makeLibName)
 			case rlibDepTag:
 
 				rlib, ok := rustDep.compiler.(libraryInterface)
 				if !ok || !rlib.rlib() {
-					ctx.ModuleErrorf("mod %q not an rlib library", depName+rustDep.Properties.SubName)
+					ctx.ModuleErrorf("mod %q not an rlib library", makeLibName)
 					return
 				}
 				directRlibDeps = append(directRlibDeps, rustDep)
-				mod.Properties.AndroidMkRlibs = append(mod.Properties.AndroidMkRlibs, depName+rustDep.Properties.SubName)
+				mod.Properties.AndroidMkRlibs = append(mod.Properties.AndroidMkRlibs, makeLibName)
 			case procMacroDepTag:
 				directProcMacroDeps = append(directProcMacroDeps, rustDep)
-				mod.Properties.AndroidMkProcMacroLibs = append(mod.Properties.AndroidMkProcMacroLibs, depName)
+				mod.Properties.AndroidMkProcMacroLibs = append(mod.Properties.AndroidMkProcMacroLibs, makeLibName)
 			case android.SourceDepTag:
 				// Since these deps are added in path_properties.go via AddDependencies, we need to ensure the correct
 				// OS/Arch variant is used.
@@ -910,6 +940,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 		} else if ccDep, ok := dep.(cc.LinkableInterface); ok {
 			//Handle C dependencies
+			makeLibName := cc.MakeLibName(ctx, mod, ccDep, depName)
 			if _, ok := ccDep.(*Module); !ok {
 				if ccDep.Module().Target().Os != ctx.Os() {
 					ctx.ModuleErrorf("OS mismatch between %q and %q", ctx.ModuleName(), depName)
@@ -951,7 +982,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				depPaths.depClangFlags = append(depPaths.depClangFlags, exportedInfo.Flags...)
 				depPaths.depGeneratedHeaders = append(depPaths.depGeneratedHeaders, exportedInfo.GeneratedHeaders...)
 				directStaticLibDeps = append(directStaticLibDeps, ccDep)
-				mod.Properties.AndroidMkStaticLibs = append(mod.Properties.AndroidMkStaticLibs, depName)
+				mod.Properties.AndroidMkStaticLibs = append(mod.Properties.AndroidMkStaticLibs, makeLibName)
 			case cc.IsSharedDepTag(depTag):
 				depPaths.linkDirs = append(depPaths.linkDirs, linkPath)
 				depPaths.linkObjects = append(depPaths.linkObjects, linkObject.String())
@@ -961,7 +992,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				depPaths.depClangFlags = append(depPaths.depClangFlags, exportedInfo.Flags...)
 				depPaths.depGeneratedHeaders = append(depPaths.depGeneratedHeaders, exportedInfo.GeneratedHeaders...)
 				directSharedLibDeps = append(directSharedLibDeps, ccDep)
-				mod.Properties.AndroidMkSharedLibs = append(mod.Properties.AndroidMkSharedLibs, depName)
+				mod.Properties.AndroidMkSharedLibs = append(mod.Properties.AndroidMkSharedLibs, makeLibName)
 				exportDep = true
 			case cc.IsHeaderDepTag(depTag):
 				exportedInfo := ctx.OtherModuleProvider(dep, cc.FlagExporterInfoProvider).(cc.FlagExporterInfo)

@@ -23,11 +23,7 @@ import (
 	"github.com/google/blueprint/proptools"
 )
 
-func fixtureSetBootJarsProductVariable(bootJars ...string) android.FixturePreparer {
-	return android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-		variables.BootJars = android.CreateTestConfiguredJarList(bootJars)
-	})
-}
+// TODO(b/177892522): Move these tests into a more appropriate place.
 
 func fixtureSetPrebuiltHiddenApiDirProductVariable(prebuiltHiddenApiDir *string) android.FixturePreparer {
 	return android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
@@ -35,13 +31,20 @@ func fixtureSetPrebuiltHiddenApiDirProductVariable(prebuiltHiddenApiDir *string)
 	})
 }
 
+var prepareForTestWithDefaultPlatformBootclasspath = android.FixtureAddTextFile("frameworks/base/boot/Android.bp", `
+	platform_bootclasspath {
+		name: "platform-bootclasspath",
+	}
+`)
+
 var hiddenApiFixtureFactory = android.GroupFixturePreparers(
 	prepareForJavaTest, PrepareForTestWithHiddenApiBuildComponents)
 
 func TestHiddenAPISingleton(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		hiddenApiFixtureFactory,
-		fixtureSetBootJarsProductVariable("platform:foo"),
+		FixtureConfigureBootJars("platform:foo"),
+		prepareForTestWithDefaultPlatformBootclasspath,
 	).RunTestWithBp(t, `
 		java_library {
 			name: "foo",
@@ -50,65 +53,10 @@ func TestHiddenAPISingleton(t *testing.T) {
 		}
 	`)
 
-	hiddenAPI := result.SingletonForTests("hiddenapi")
-	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
+	hiddenAPI := result.ModuleForTests("platform-bootclasspath", "android_common")
+	hiddenapiRule := hiddenAPI.Rule("platform-bootclasspath-monolithic-hiddenapi-stub-flags")
 	want := "--boot-dex=out/soong/.intermediates/foo/android_common/aligned/foo.jar"
 	android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, want)
-}
-
-func TestHiddenAPIIndexSingleton(t *testing.T) {
-	result := android.GroupFixturePreparers(
-		hiddenApiFixtureFactory,
-		PrepareForTestWithJavaSdkLibraryFiles,
-		FixtureWithLastReleaseApis("bar"),
-		fixtureSetBootJarsProductVariable("platform:foo", "platform:bar"),
-	).RunTestWithBp(t, `
-		java_library {
-			name: "foo",
-			srcs: ["a.java"],
-			compile_dex: true,
-
-			hiddenapi_additional_annotations: [
-				"foo-hiddenapi-annotations",
-			],
-		}
-
-		java_library {
-			name: "foo-hiddenapi-annotations",
-			srcs: ["a.java"],
-			compile_dex: true,
-		}
-
-		java_import {
-			name: "foo",
-			jars: ["a.jar"],
-			compile_dex: true,
-			prefer: false,
-		}
-
-		java_sdk_library {
-			name: "bar",
-			srcs: ["a.java"],
-			compile_dex: true,
-		}
-	`)
-
-	hiddenAPIIndex := result.SingletonForTests("hiddenapi_index")
-	indexRule := hiddenAPIIndex.Rule("singleton-merged-hiddenapi-index")
-	CheckHiddenAPIRuleInputs(t, `
-.intermediates/bar/android_common/hiddenapi/index.csv
-.intermediates/foo/android_common/hiddenapi/index.csv
-`,
-		indexRule)
-
-	// Make sure that the foo-hiddenapi-annotations.jar is included in the inputs to the rules that
-	// creates the index.csv file.
-	foo := result.ModuleForTests("foo", "android_common")
-	indexParams := foo.Output("hiddenapi/index.csv")
-	CheckHiddenAPIRuleInputs(t, `
-.intermediates/foo-hiddenapi-annotations/android_common/javac/foo-hiddenapi-annotations.jar
-.intermediates/foo/android_common/javac/foo.jar
-`, indexParams)
 }
 
 func TestHiddenAPISingletonWithSourceAndPrebuiltPreferredButNoDex(t *testing.T) {
@@ -119,7 +67,8 @@ func TestHiddenAPISingletonWithSourceAndPrebuiltPreferredButNoDex(t *testing.T) 
 
 	android.GroupFixturePreparers(
 		hiddenApiFixtureFactory,
-		fixtureSetBootJarsProductVariable("platform:foo"),
+		FixtureConfigureBootJars("platform:foo"),
+		prepareForTestWithDefaultPlatformBootclasspath,
 	).ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(expectedErrorMessage)).
 		RunTestWithBp(t, `
 		java_library {
@@ -139,7 +88,8 @@ func TestHiddenAPISingletonWithSourceAndPrebuiltPreferredButNoDex(t *testing.T) 
 func TestHiddenAPISingletonWithPrebuilt(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		hiddenApiFixtureFactory,
-		fixtureSetBootJarsProductVariable("platform:foo"),
+		FixtureConfigureBootJars("platform:foo"),
+		prepareForTestWithDefaultPlatformBootclasspath,
 	).RunTestWithBp(t, `
 		java_import {
 			name: "foo",
@@ -148,8 +98,8 @@ func TestHiddenAPISingletonWithPrebuilt(t *testing.T) {
 	}
 	`)
 
-	hiddenAPI := result.SingletonForTests("hiddenapi")
-	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
+	hiddenAPI := result.ModuleForTests("platform-bootclasspath", "android_common")
+	hiddenapiRule := hiddenAPI.Rule("platform-bootclasspath-monolithic-hiddenapi-stub-flags")
 	want := "--boot-dex=out/soong/.intermediates/foo/android_common/aligned/foo.jar"
 	android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, want)
 }
@@ -157,7 +107,8 @@ func TestHiddenAPISingletonWithPrebuilt(t *testing.T) {
 func TestHiddenAPISingletonWithPrebuiltUseSource(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		hiddenApiFixtureFactory,
-		fixtureSetBootJarsProductVariable("platform:foo"),
+		FixtureConfigureBootJars("platform:foo"),
+		prepareForTestWithDefaultPlatformBootclasspath,
 	).RunTestWithBp(t, `
 		java_library {
 			name: "foo",
@@ -173,8 +124,8 @@ func TestHiddenAPISingletonWithPrebuiltUseSource(t *testing.T) {
 		}
 	`)
 
-	hiddenAPI := result.SingletonForTests("hiddenapi")
-	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
+	hiddenAPI := result.ModuleForTests("platform-bootclasspath", "android_common")
+	hiddenapiRule := hiddenAPI.Rule("platform-bootclasspath-monolithic-hiddenapi-stub-flags")
 	fromSourceJarArg := "--boot-dex=out/soong/.intermediates/foo/android_common/aligned/foo.jar"
 	android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, fromSourceJarArg)
 
@@ -185,7 +136,8 @@ func TestHiddenAPISingletonWithPrebuiltUseSource(t *testing.T) {
 func TestHiddenAPISingletonWithPrebuiltOverrideSource(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		hiddenApiFixtureFactory,
-		fixtureSetBootJarsProductVariable("platform:foo"),
+		FixtureConfigureBootJars("platform:foo"),
+		prepareForTestWithDefaultPlatformBootclasspath,
 	).RunTestWithBp(t, `
 		java_library {
 			name: "foo",
@@ -201,8 +153,8 @@ func TestHiddenAPISingletonWithPrebuiltOverrideSource(t *testing.T) {
 		}
 	`)
 
-	hiddenAPI := result.SingletonForTests("hiddenapi")
-	hiddenapiRule := hiddenAPI.Rule("hiddenapi")
+	hiddenAPI := result.ModuleForTests("platform-bootclasspath", "android_common")
+	hiddenapiRule := hiddenAPI.Rule("platform-bootclasspath-monolithic-hiddenapi-stub-flags")
 	prebuiltJarArg := "--boot-dex=out/soong/.intermediates/prebuilt_foo/android_common/dex/foo.jar"
 	android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, prebuiltJarArg)
 
@@ -245,13 +197,14 @@ func TestHiddenAPISingletonSdks(t *testing.T) {
 			result := android.GroupFixturePreparers(
 				hiddenApiFixtureFactory,
 				tc.preparer,
+				prepareForTestWithDefaultPlatformBootclasspath,
 				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 					variables.Always_use_prebuilt_sdks = proptools.BoolPtr(tc.unbundledBuild)
 				}),
 			).RunTest(t)
 
-			hiddenAPI := result.SingletonForTests("hiddenapi")
-			hiddenapiRule := hiddenAPI.Rule("hiddenapi")
+			hiddenAPI := result.ModuleForTests("platform-bootclasspath", "android_common")
+			hiddenapiRule := hiddenAPI.Rule("platform-bootclasspath-monolithic-hiddenapi-stub-flags")
 			wantPublicStubs := "--public-stub-classpath=" + generateSdkDexPath(tc.publicStub, tc.unbundledBuild)
 			android.AssertStringDoesContain(t, "hiddenapi command", hiddenapiRule.RuleParams.Command, wantPublicStubs)
 
@@ -295,7 +248,7 @@ func TestHiddenAPISingletonWithPrebuiltCsvFile(t *testing.T) {
 
 	result := android.GroupFixturePreparers(
 		hiddenApiFixtureFactory,
-		fixtureSetBootJarsProductVariable("platform:foo"),
+		FixtureConfigureBootJars("platform:foo"),
 		fixtureSetPrebuiltHiddenApiDirProductVariable(&prebuiltHiddenApiDir),
 	).RunTestWithBp(t, `
 		java_import {

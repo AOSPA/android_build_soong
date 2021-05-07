@@ -84,6 +84,11 @@ type hiddenAPI struct {
 	// created by the unsupported app usage annotation processor during compilation of the class
 	// implementation jar.
 	indexCSVPath android.Path
+
+	// The paths to the classes jars that contain classes and class members annotated with
+	// the UnsupportedAppUsage annotation that need to be extracted as part of the hidden API
+	// processing.
+	classesJarPaths android.Paths
 }
 
 func (h *hiddenAPI) flagsCSV() android.Path {
@@ -102,14 +107,26 @@ func (h *hiddenAPI) indexCSV() android.Path {
 	return h.indexCSVPath
 }
 
+func (h *hiddenAPI) classesJars() android.Paths {
+	return h.classesJarPaths
+}
+
 type hiddenAPIIntf interface {
 	bootDexJar() android.Path
 	flagsCSV() android.Path
 	indexCSV() android.Path
 	metadataCSV() android.Path
+	classesJars() android.Paths
 }
 
 var _ hiddenAPIIntf = (*hiddenAPI)(nil)
+
+// hiddenAPISupportingModule is the interface that is implemented by any module that supports
+// contributing to the hidden API processing.
+type hiddenAPISupportingModule interface {
+	android.Module
+	hiddenAPIIntf
+}
 
 // Initialize the hiddenapi structure
 func (h *hiddenAPI) initHiddenAPI(ctx android.BaseModuleContext, configurationName string) {
@@ -149,16 +166,24 @@ func (h *hiddenAPI) initHiddenAPI(ctx android.BaseModuleContext, configurationNa
 
 		// A source module that has been replaced by a prebuilt can never be the primary module.
 		if module.IsReplacedByPrebuilt() {
-			ctx.VisitDirectDepsWithTag(android.PrebuiltDepTag, func(prebuilt android.Module) {
-				if h, ok := prebuilt.(hiddenAPIIntf); ok && h.bootDexJar() != nil {
-					primary = false
-				} else {
-					ctx.ModuleErrorf(
-						"hiddenapi has determined that the source module %q should be ignored as it has been"+
-							" replaced by the prebuilt module %q but unfortunately it does not provide a"+
-							" suitable boot dex jar", ctx.ModuleName(), ctx.OtherModuleName(prebuilt))
-				}
-			})
+			if ctx.HasProvider(android.ApexInfoProvider) {
+				// The source module is in an APEX but the prebuilt module on which it depends is not in an
+				// APEX and so is not the one that will actually be used for hidden API processing. That
+				// means it is not possible to check to see if it is a suitable replacement so just assume
+				// that it is.
+				primary = false
+			} else {
+				ctx.VisitDirectDepsWithTag(android.PrebuiltDepTag, func(prebuilt android.Module) {
+					if h, ok := prebuilt.(hiddenAPIIntf); ok && h.bootDexJar() != nil {
+						primary = false
+					} else {
+						ctx.ModuleErrorf(
+							"hiddenapi has determined that the source module %q should be ignored as it has been"+
+								" replaced by the prebuilt module %q but unfortunately it does not provide a"+
+								" suitable boot dex jar", ctx.ModuleName(), ctx.OtherModuleName(prebuilt))
+					}
+				})
+			}
 		}
 	}
 	h.primary = primary
@@ -229,6 +254,7 @@ func (h *hiddenAPI) hiddenAPIExtractInformation(ctx android.ModuleContext, dexJa
 		javaInfo := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
 		classesJars = append(classesJars, javaInfo.ImplementationJars...)
 	})
+	h.classesJarPaths = classesJars
 
 	stubFlagsCSV := hiddenAPISingletonPaths(ctx).stubFlags
 
