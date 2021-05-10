@@ -437,21 +437,28 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		productVndkVersion = platformVndkVersion
 	}
 
-	if m.IsLlndkLibrary() || m.IsLlndkHeaders() || m.HasLlndkStubs() {
+	if m.NeedsLlndkVariants() {
 		// This is an LLNDK library.  The implementation of the library will be on /system,
 		// and vendor and product variants will be created with LLNDK stubs.
 		// The LLNDK libraries need vendor variants even if there is no VNDK.
-		// The obsolete llndk_library and llndk_headers modules also need the vendor variants
-		// so the cc_library LLNDK stubs can depend on them.
-		if m.HasLlndkStubs() {
-			coreVariantNeeded = true
-		}
+		coreVariantNeeded = true
 		if platformVndkVersion != "" {
 			vendorVariants = append(vendorVariants, platformVndkVersion)
 			productVariants = append(productVariants, platformVndkVersion)
 		}
 		if boardVndkVersion != "" {
 			vendorVariants = append(vendorVariants, boardVndkVersion)
+		}
+		if productVndkVersion != "" {
+			productVariants = append(productVariants, productVndkVersion)
+		}
+	} else if m.NeedsVendorPublicLibraryVariants() {
+		// A vendor public library has the implementation on /vendor, with stub variants
+		// for system and product.
+		coreVariantNeeded = true
+		vendorVariants = append(vendorVariants, boardVndkVersion)
+		if platformVndkVersion != "" {
+			productVariants = append(productVariants, platformVndkVersion)
 		}
 		if productVndkVersion != "" {
 			productVariants = append(productVariants, productVndkVersion)
@@ -601,6 +608,10 @@ func (c *Module) VendorRamdiskVariantNeeded(ctx android.BaseModuleContext) bool 
 	return c.Properties.VendorRamdiskVariantNeeded
 }
 
+func (c *Module) DebugRamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
+	return false
+}
+
 func (c *Module) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
 	return c.Properties.RecoveryVariantNeeded
 }
@@ -680,5 +691,10 @@ func (c *Module) SetImageVariation(ctx android.BaseModuleContext, variant string
 		m.Properties.ImageVariationPrefix = ProductVariationPrefix
 		m.Properties.VndkVersion = strings.TrimPrefix(variant, ProductVariationPrefix)
 		squashProductSrcs(m)
+	}
+
+	if c.NeedsVendorPublicLibraryVariants() &&
+		(variant == android.CoreVariation || strings.HasPrefix(variant, ProductVariationPrefix)) {
+		c.VendorProperties.IsVendorPublicLibrary = true
 	}
 }

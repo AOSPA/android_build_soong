@@ -157,8 +157,8 @@ sdk_snapshot {
     name: "mysdk@current",
     visibility: ["//visibility:public"],
     host_supported: true,
-    native_shared_libs: ["mysdk_sdkmember@current"],
     compile_multilib: "64",
+    native_shared_libs: ["mysdk_sdkmember@current"],
     target: {
         host: {
             enabled: false,
@@ -191,12 +191,12 @@ func TestBasicSdkWithCc(t *testing.T) {
 
 		sdk_snapshot {
 			name: "mysdk@1",
-			native_shared_libs: ["sdkmember_mysdk_1"],
+			native_shared_libs: ["sdkmember_mysdk@1"],
 		}
 
 		sdk_snapshot {
 			name: "mysdk@2",
-			native_shared_libs: ["sdkmember_mysdk_2"],
+			native_shared_libs: ["sdkmember_mysdk@2"],
 		}
 
 		cc_prebuilt_library_shared {
@@ -208,7 +208,7 @@ func TestBasicSdkWithCc(t *testing.T) {
 		}
 
 		cc_prebuilt_library_shared {
-			name: "sdkmember_mysdk_1",
+			name: "sdkmember_mysdk@1",
 			sdk_member_name: "sdkmember",
 			srcs: ["libfoo.so"],
 			system_shared_libs: [],
@@ -221,7 +221,7 @@ func TestBasicSdkWithCc(t *testing.T) {
 		}
 
 		cc_prebuilt_library_shared {
-			name: "sdkmember_mysdk_2",
+			name: "sdkmember_mysdk@2",
 			sdk_member_name: "sdkmember",
 			srcs: ["libfoo.so"],
 			system_shared_libs: [],
@@ -272,8 +272,8 @@ func TestBasicSdkWithCc(t *testing.T) {
 		}
 	`)
 
-	sdkMemberV1 := result.ModuleForTests("sdkmember_mysdk_1", "android_arm64_armv8-a_shared_apex10000_mysdk_1").Rule("toc").Output
-	sdkMemberV2 := result.ModuleForTests("sdkmember_mysdk_2", "android_arm64_armv8-a_shared_apex10000_mysdk_2").Rule("toc").Output
+	sdkMemberV1 := result.ModuleForTests("sdkmember_mysdk@1", "android_arm64_armv8-a_shared_apex10000_mysdk_1").Rule("toc").Output
+	sdkMemberV2 := result.ModuleForTests("sdkmember_mysdk@2", "android_arm64_armv8-a_shared_apex10000_mysdk_2").Rule("toc").Output
 
 	cpplibForMyApex := result.ModuleForTests("mycpplib", "android_arm64_armv8-a_shared_apex10000_mysdk_1")
 	cpplibForMyApex2 := result.ModuleForTests("mycpplib", "android_arm64_armv8-a_shared_apex10000_mysdk_2")
@@ -960,9 +960,9 @@ module_exports_snapshot {
     visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
+    compile_multilib: "64",
     native_binaries: ["myexports_mynativebinary@current"],
     native_shared_libs: ["myexports_mynativelib@current"],
-    compile_multilib: "64",
     target: {
         host: {
             enabled: false,
@@ -1920,8 +1920,8 @@ module_exports_snapshot {
     visibility: ["//visibility:public"],
     device_supported: false,
     host_supported: true,
-    native_static_libs: ["myexports_mynativelib@current"],
     compile_multilib: "64",
+    native_static_libs: ["myexports_mynativelib@current"],
     target: {
         host: {
             enabled: false,

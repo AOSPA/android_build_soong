@@ -120,7 +120,7 @@ func dexpreoptDisabled(ctx android.PathContext, global *GlobalConfig, module *Mo
 	// /data. If we don't do this they will need to be extracted which is not favorable for RAM usage
 	// or performance. If PreoptExtractedApk is true, we ignore the only preopt boot image options.
 	if global.OnlyPreoptBootImageAndSystemServer && !global.BootJars.ContainsJar(module.Name) &&
-		!contains(global.SystemServerJars, module.Name) && !module.PreoptExtractedApk {
+		!global.SystemServerJars.ContainsJar(module.Name) && !module.PreoptExtractedApk {
 		return true
 	}
 
@@ -134,7 +134,8 @@ func profileCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, glo
 	profileInstalledPath := module.DexLocation + ".prof"
 
 	if !module.ProfileIsTextListing {
-		rule.Command().FlagWithOutput("touch ", profilePath)
+		rule.Command().Text("rm -f").Output(profilePath)
+		rule.Command().Text("touch").Output(profilePath)
 	}
 
 	cmd := rule.Command().
@@ -154,6 +155,7 @@ func profileCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, glo
 	}
 
 	cmd.
+		Flag("--output-profile-type=app").
 		FlagWithInput("--apk=", module.DexPath).
 		Flag("--dex-location="+module.DexLocation).
 		FlagWithOutput("--reference-profile-file=", profilePath)
@@ -173,7 +175,8 @@ func bootProfileCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig,
 	profileInstalledPath := module.DexLocation + ".bprof"
 
 	if !module.ProfileIsTextListing {
-		rule.Command().FlagWithOutput("touch ", profilePath)
+		rule.Command().Text("rm -f").Output(profilePath)
+		rule.Command().Text("touch").Output(profilePath)
 	}
 
 	cmd := rule.Command().
@@ -185,7 +188,7 @@ func bootProfileCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig,
 	cmd.FlagWithInput("--create-profile-from=", module.ProfileBootListing.Path())
 
 	cmd.
-		Flag("--generate-boot-profile").
+		Flag("--output-profile-type=bprof").
 		FlagWithInput("--apk=", module.DexPath).
 		Flag("--dex-location="+module.DexLocation).
 		FlagWithOutput("--reference-profile-file=", profilePath)
@@ -327,7 +330,7 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 		Flag("--runtime-arg").FlagWithList("-Xbootclasspath-locations:", module.PreoptBootClassPathDexLocations, ":").
 		Flag("${class_loader_context_arg}").
 		Flag("${stored_class_loader_context_arg}").
-		FlagWithArg("--boot-image=", strings.Join(module.DexPreoptImageLocations, ":")).Implicits(module.DexPreoptImagesDeps[archIdx].Paths()).
+		FlagWithArg("--boot-image=", strings.Join(module.DexPreoptImageLocationsOnHost, ":")).Implicits(module.DexPreoptImagesDeps[archIdx].Paths()).
 		FlagWithInput("--dex-file=", module.DexPath).
 		FlagWithArg("--dex-location=", dexLocationArg).
 		FlagWithOutput("--oat-file=", odexPath).ImplicitOutput(vdexPath).
@@ -359,7 +362,7 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 
 	if !android.PrefixInList(preoptFlags, "--compiler-filter=") {
 		var compilerFilter string
-		if contains(global.SystemServerJars, module.Name) {
+		if global.SystemServerJars.ContainsJar(module.Name) {
 			// Jars of system server, use the product option if it is set, speed otherwise.
 			if global.SystemServerCompilerFilter != "" {
 				compilerFilter = global.SystemServerCompilerFilter
@@ -413,7 +416,7 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 
 	// PRODUCT_SYSTEM_SERVER_DEBUG_INFO overrides WITH_DEXPREOPT_DEBUG_INFO.
 	// PRODUCT_OTHER_JAVA_DEBUG_INFO overrides WITH_DEXPREOPT_DEBUG_INFO.
-	if contains(global.SystemServerJars, module.Name) {
+	if global.SystemServerJars.ContainsJar(module.Name) {
 		if global.AlwaysSystemServerDebugInfo {
 			debugInfo = true
 		} else if global.NeverSystemServerDebugInfo {
@@ -521,7 +524,7 @@ var nonUpdatableSystemServerJarsKey = android.NewOnceKey("nonUpdatableSystemServ
 // from java subpackage to dexpreopt.
 func NonUpdatableSystemServerJars(ctx android.PathContext, global *GlobalConfig) []string {
 	return ctx.Config().Once(nonUpdatableSystemServerJarsKey, func() interface{} {
-		return android.RemoveListFromList(global.SystemServerJars, global.UpdatableSystemServerJars.CopyOfJars())
+		return android.RemoveListFromList(global.SystemServerJars.CopyOfJars(), global.UpdatableSystemServerJars.CopyOfJars())
 	}).([]string)
 }
 

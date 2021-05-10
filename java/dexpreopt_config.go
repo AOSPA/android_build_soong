@@ -39,10 +39,9 @@ func systemServerClasspath(ctx android.PathContext) []string {
 		// 2) The jars that are from an updatable apex.
 		systemServerClasspathLocations = append(systemServerClasspathLocations,
 			global.UpdatableSystemServerJars.DevicePaths(ctx.Config(), android.Android)...)
-		if len(systemServerClasspathLocations) != len(global.SystemServerJars)+global.UpdatableSystemServerJars.Len() {
-			panic(fmt.Errorf("Wrong number of system server jars, got %d, expected %d",
-				len(systemServerClasspathLocations),
-				len(global.SystemServerJars)+global.UpdatableSystemServerJars.Len()))
+
+		if expectedLen := global.SystemServerJars.Len() + global.UpdatableSystemServerJars.Len(); expectedLen != len(systemServerClasspathLocations) {
+			panic(fmt.Errorf("wrong number of system server jars, got %d, expected %d", len(systemServerClasspathLocations), expectedLen))
 		}
 		return systemServerClasspathLocations
 	})
@@ -84,26 +83,26 @@ func genBootImageConfigs(ctx android.PathContext) map[string]*bootImageConfig {
 		artModules := global.ArtApexJars
 		frameworkModules := global.BootJars.RemoveList(artModules)
 
-		artSubdir := "apex/art_boot_images/javalib"
+		artDirOnHost := "apex/art_boot_images/javalib"
 		frameworkSubdir := "system/framework"
 
 		// ART config for the primary boot image in the ART apex.
 		// It includes the Core Libraries.
 		artCfg := bootImageConfig{
-			name:          artBootImageName,
-			stem:          "boot",
-			installSubdir: artSubdir,
-			modules:       artModules,
+			name:             artBootImageName,
+			stem:             "boot",
+			installDirOnHost: artDirOnHost,
+			modules:          artModules,
 		}
 
 		// Framework config for the boot image extension.
 		// It includes framework libraries and depends on the ART config.
 		frameworkCfg := bootImageConfig{
-			extends:       &artCfg,
-			name:          frameworkBootImageName,
-			stem:          "boot",
-			installSubdir: frameworkSubdir,
-			modules:       frameworkModules,
+			extends:          &artCfg,
+			name:             frameworkBootImageName,
+			stem:             "boot",
+			installDirOnHost: frameworkSubdir,
+			modules:          frameworkModules,
 		}
 
 		configs := map[string]*bootImageConfig{
@@ -130,11 +129,11 @@ func genBootImageConfigs(ctx android.PathContext) map[string]*bootImageConfig {
 			// Create target-specific variants.
 			for _, target := range targets {
 				arch := target.Arch.ArchType
-				imageDir := c.dir.Join(ctx, target.Os.String(), c.installSubdir, arch.String())
+				imageDir := c.dir.Join(ctx, target.Os.String(), c.installDirOnHost, arch.String())
 				variant := &bootImageVariant{
 					bootImageConfig: c,
 					target:          target,
-					images:          imageDir.Join(ctx, imageName),
+					imagePathOnHost: imageDir.Join(ctx, imageName),
 					imagesDeps:      c.moduleFiles(ctx, imageDir, ".art", ".oat", ".vdex"),
 					dexLocations:    c.modules.DevicePaths(ctx.Config(), target.Os),
 				}
@@ -148,7 +147,7 @@ func genBootImageConfigs(ctx android.PathContext) map[string]*bootImageConfig {
 		// specific to the framework config
 		frameworkCfg.dexPathsDeps = append(artCfg.dexPathsDeps, frameworkCfg.dexPathsDeps...)
 		for i := range targets {
-			frameworkCfg.variants[i].primaryImages = artCfg.variants[i].images
+			frameworkCfg.variants[i].primaryImages = artCfg.variants[i].imagePathOnHost
 			frameworkCfg.variants[i].dexLocationsDeps = append(artCfg.variants[i].dexLocations, frameworkCfg.variants[i].dexLocationsDeps...)
 		}
 
@@ -162,18 +161,6 @@ func artBootImageConfig(ctx android.PathContext) *bootImageConfig {
 
 func defaultBootImageConfig(ctx android.PathContext) *bootImageConfig {
 	return genBootImageConfigs(ctx)[frameworkBootImageName]
-}
-
-func defaultBootclasspath(ctx android.PathContext) []string {
-	return ctx.Config().OnceStringSlice(defaultBootclasspathKey, func() []string {
-		global := dexpreopt.GetGlobalConfig(ctx)
-		image := defaultBootImageConfig(ctx)
-
-		updatableBootclasspath := global.UpdatableBootJars.DevicePaths(ctx.Config(), android.Android)
-
-		bootclasspath := append(copyOf(image.getAnyAndroidVariant().dexLocationsDeps), updatableBootclasspath...)
-		return bootclasspath
-	})
 }
 
 // Updatable boot config allows to access build/install paths of updatable boot jars without going

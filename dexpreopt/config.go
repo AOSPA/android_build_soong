@@ -49,7 +49,7 @@ type GlobalConfig struct {
 
 	ArtApexJars android.ConfiguredJarList // modules for jars that are in the ART APEX
 
-	SystemServerJars          []string                  // jars that form the system server
+	SystemServerJars          android.ConfiguredJarList // jars that form the system server
 	SystemServerApps          []string                  // apps that are loaded into system server
 	UpdatableSystemServerJars android.ConfiguredJarList // jars within apex that are loaded into system server
 	SpeedApps                 []string                  // apps that should be speed optimized
@@ -130,10 +130,9 @@ type ModuleConfig struct {
 	ProvidesUsesLibrary            string       // library name (usually the same as module name)
 	ClassLoaderContexts            ClassLoaderContextMap
 
-	Archs                   []android.ArchType
-	DexPreoptImages         android.Paths
-	DexPreoptImagesDeps     []android.OutputPaths
-	DexPreoptImageLocations []string
+	Archs                         []android.ArchType
+	DexPreoptImagesDeps           []android.OutputPaths
+	DexPreoptImageLocationsOnHost []string // boot image location on host (file path without the arch subdirectory)
 
 	PreoptBootClassPathDexFiles     android.Paths // file paths of boot class path files
 	PreoptBootClassPathDexLocations []string      // virtual locations of boot class path files
@@ -276,7 +275,6 @@ type moduleJSONConfig struct {
 	EnforceUsesLibrariesStatusFile string
 	ClassLoaderContexts            jsonClassLoaderContextMap
 
-	DexPreoptImages     []string
 	DexPreoptImagesDeps [][]string
 
 	PreoptBootClassPathDexFiles []string
@@ -302,11 +300,10 @@ func ParseModuleConfig(ctx android.PathContext, data []byte) (*ModuleConfig, err
 	config.ModuleConfig.ProfileClassListing = android.OptionalPathForPath(constructPath(ctx, config.ProfileClassListing))
 	config.ModuleConfig.EnforceUsesLibrariesStatusFile = constructPath(ctx, config.EnforceUsesLibrariesStatusFile)
 	config.ModuleConfig.ClassLoaderContexts = fromJsonClassLoaderContext(ctx, config.ClassLoaderContexts)
-	config.ModuleConfig.DexPreoptImages = constructPaths(ctx, config.DexPreoptImages)
 	config.ModuleConfig.PreoptBootClassPathDexFiles = constructPaths(ctx, config.PreoptBootClassPathDexFiles)
 
 	// This needs to exist, but dependencies are already handled in Make, so we don't need to pass them through JSON.
-	config.ModuleConfig.DexPreoptImagesDeps = make([]android.OutputPaths, len(config.ModuleConfig.DexPreoptImages))
+	config.ModuleConfig.DexPreoptImagesDeps = make([]android.OutputPaths, len(config.ModuleConfig.Archs))
 
 	return config.ModuleConfig, nil
 }
@@ -328,7 +325,6 @@ func moduleConfigToJSON(config *ModuleConfig) ([]byte, error) {
 		ProfileBootListing:             config.ProfileBootListing.String(),
 		EnforceUsesLibrariesStatusFile: config.EnforceUsesLibrariesStatusFile.String(),
 		ClassLoaderContexts:            toJsonClassLoaderContext(config.ClassLoaderContexts),
-		DexPreoptImages:                config.DexPreoptImages.Strings(),
 		DexPreoptImagesDeps:            pathsListToStringLists(config.DexPreoptImagesDeps),
 		PreoptBootClassPathDexFiles:    config.PreoptBootClassPathDexFiles.Strings(),
 		ModuleConfig:                   config,
@@ -408,14 +404,14 @@ func dex2oatPathFromDep(ctx android.ModuleContext) android.Path {
 		if parent == ctx.Module() && ctx.OtherModuleDependencyTag(child) == Dex2oatDepTag {
 			// Found the source module, or prebuilt module that has replaced the source.
 			dex2oatModule = child
-			if p, ok := child.(android.PrebuiltInterface); ok && p.Prebuilt() != nil {
+			if android.IsModulePrebuilt(child) {
 				return false // If it's the prebuilt we're done.
 			} else {
 				return true // Recurse to check if the source has a prebuilt dependency.
 			}
 		}
 		if parent == dex2oatModule && ctx.OtherModuleDependencyTag(child) == android.PrebuiltDepTag {
-			if p, ok := child.(android.PrebuiltInterface); ok && p.Prebuilt() != nil && p.Prebuilt().UsePrebuilt() {
+			if p := android.GetEmbeddedPrebuilt(child); p != nil && p.UsePrebuilt() {
 				dex2oatModule = child // Found a prebuilt that should be used.
 			}
 		}
@@ -608,7 +604,7 @@ func GlobalConfigForTests(ctx android.PathContext) *GlobalConfig {
 		BootJars:                           android.EmptyConfiguredJarList(),
 		UpdatableBootJars:                  android.EmptyConfiguredJarList(),
 		ArtApexJars:                        android.EmptyConfiguredJarList(),
-		SystemServerJars:                   nil,
+		SystemServerJars:                   android.EmptyConfiguredJarList(),
 		SystemServerApps:                   nil,
 		UpdatableSystemServerJars:          android.EmptyConfiguredJarList(),
 		SpeedApps:                          nil,

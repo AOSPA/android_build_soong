@@ -30,6 +30,11 @@ func getStringListValues(list bazel.StringListAttribute) (reflect.Value, selects
 	return value, archSelects, osSelects
 }
 
+func getLabelValue(label bazel.LabelAttribute) (reflect.Value, selects, selects) {
+	value := reflect.ValueOf(label.Value)
+	return value, nil, nil
+}
+
 func getLabelListValues(list bazel.LabelListAttribute) (reflect.Value, selects, selects) {
 	value := reflect.ValueOf(list.Value.Includes)
 	if !list.HasConfigurableValues() {
@@ -54,21 +59,30 @@ func getLabelListValues(list bazel.LabelListAttribute) (reflect.Value, selects, 
 func prettyPrintAttribute(v bazel.Attribute, indent int) (string, error) {
 	var value reflect.Value
 	var archSelects, osSelects selects
-
+	var defaultSelectValue string
 	switch list := v.(type) {
 	case bazel.StringListAttribute:
 		value, archSelects, osSelects = getStringListValues(list)
+		defaultSelectValue = "[]"
 	case bazel.LabelListAttribute:
 		value, archSelects, osSelects = getLabelListValues(list)
+		defaultSelectValue = "[]"
+	case bazel.LabelAttribute:
+		value, archSelects, osSelects = getLabelValue(list)
+		defaultSelectValue = "None"
 	default:
 		return "", fmt.Errorf("Not a supported Bazel attribute type: %s", v)
 	}
 
-	ret, err := prettyPrint(value, indent)
-	if err != nil {
-		return ret, err
-	}
+	ret := ""
+	if value.Kind() != reflect.Invalid {
+		s, err := prettyPrint(value, indent)
+		if err != nil {
+			return ret, err
+		}
 
+		ret += s
+	}
 	// Convenience function to append selects components to an attribute value.
 	appendSelects := func(selectsData selects, defaultValue, s string) (string, error) {
 		selectMap, err := prettyPrintSelectMap(selectsData, defaultValue, indent)
@@ -83,12 +97,12 @@ func prettyPrintAttribute(v bazel.Attribute, indent int) (string, error) {
 		return s, nil
 	}
 
-	ret, err = appendSelects(archSelects, "[]", ret)
+	ret, err := appendSelects(archSelects, defaultSelectValue, ret)
 	if err != nil {
 		return "", err
 	}
 
-	ret, err = appendSelects(osSelects, "[]", ret)
+	ret, err = appendSelects(osSelects, defaultSelectValue, ret)
 	return ret, err
 }
 
@@ -99,8 +113,15 @@ func prettyPrintSelectMap(selectMap map[string]reflect.Value, defaultValue strin
 		return "", nil
 	}
 
+	// addConditionsDefault := false
+	conditionsDefaultKey := bazel.PlatformArchMap[bazel.CONDITIONS_DEFAULT]
+
 	var selects string
 	for _, selectKey := range android.SortedStringKeys(selectMap) {
+		if selectKey == conditionsDefaultKey {
+			// Handle default condition later.
+			continue
+		}
 		value := selectMap[selectKey]
 		if isZero(value) {
 			// Ignore zero values to not generate empty lists.
@@ -125,8 +146,22 @@ func prettyPrintSelectMap(selectMap map[string]reflect.Value, defaultValue strin
 	// Create the map.
 	ret := "select({\n"
 	ret += selects
-	// default condition comes last.
-	ret += fmt.Sprintf("%s\"%s\": %s,\n", makeIndent(indent+1), "//conditions:default", defaultValue)
+
+	// Handle the default condition
+	s, err := prettyPrintSelectEntry(selectMap[conditionsDefaultKey], conditionsDefaultKey, indent)
+	if err != nil {
+		return "", err
+	}
+	if s == "" {
+		// Print an explicit empty list (the default value) even if the value is
+		// empty, to avoid errors about not finding a configuration that matches.
+		ret += fmt.Sprintf("%s\"%s\": %s,\n", makeIndent(indent+1), "//conditions:default", defaultValue)
+	} else {
+		// Print the custom default value.
+		ret += s
+		ret += ",\n"
+	}
+
 	ret += makeIndent(indent)
 	ret += "})"
 
