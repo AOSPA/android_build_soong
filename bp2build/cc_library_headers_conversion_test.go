@@ -136,17 +136,6 @@ cc_library_headers {
         ":lib-1",
         ":lib-2",
     ],
-    hdrs = [
-        "dir-1/dir1a.h",
-        "dir-1/dir1b.h",
-        "dir-2/dir2a.h",
-        "dir-2/dir2b.h",
-    ] + select({
-        "//build/bazel/platforms/arch:arm64": ["arch_arm64_exported_include_dir/a.h"],
-        "//build/bazel/platforms/arch:x86": ["arch_x86_exported_include_dir/b.h"],
-        "//build/bazel/platforms/arch:x86_64": ["arch_x86_64_exported_include_dir/c.h"],
-        "//conditions:default": [],
-    }),
     includes = [
         "dir-1",
         "dir-2",
@@ -159,18 +148,10 @@ cc_library_headers {
 )`, `cc_library_headers(
     name = "lib-1",
     copts = ["-I."],
-    hdrs = [
-        "lib-1/lib1a.h",
-        "lib-1/lib1b.h",
-    ],
     includes = ["lib-1"],
 )`, `cc_library_headers(
     name = "lib-2",
     copts = ["-I."],
-    hdrs = [
-        "lib-2/lib2a.h",
-        "lib-2/lib2b.h",
-    ],
     includes = ["lib-2"],
 )`},
 		},
@@ -267,6 +248,63 @@ cc_library_headers {
             ":android-lib",
             ":exported-lib",
         ],
+        "//conditions:default": [],
+    }),
+)`},
+		},
+		{
+			description:                        "cc_library_headers test with arch-specific and target-specific export_system_include_dirs props",
+			moduleTypeUnderTest:                "cc_library_headers",
+			moduleTypeUnderTestFactory:         cc.LibraryHeaderFactory,
+			moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryHeadersBp2Build,
+			depsMutators:                       []android.RegisterMutatorFunc{cc.RegisterDepsBp2Build},
+			filesystem:                         map[string]string{},
+			bp: soongCcLibraryPreamble + `cc_library_headers {
+    name: "foo_headers",
+    export_system_include_dirs: [
+	"shared_include_dir",
+    ],
+    target: {
+	android: {
+	    export_system_include_dirs: [
+		"android_include_dir",
+            ],
+	},
+        linux_glibc: {
+            export_system_include_dirs: [
+                "linux_include_dir",
+            ],
+        },
+        darwin: {
+            export_system_include_dirs: [
+                "darwin_include_dir",
+            ],
+        },
+    },
+    arch: {
+        arm: {
+	    export_system_include_dirs: [
+		"arm_include_dir",
+            ],
+	},
+        x86_64: {
+            export_system_include_dirs: [
+                "x86_64_include_dir",
+            ],
+        },
+    },
+}`,
+			expectedBazelTargets: []string{`cc_library_headers(
+    name = "foo_headers",
+    copts = ["-I."],
+    includes = ["shared_include_dir"] + select({
+        "//build/bazel/platforms/arch:arm": ["arm_include_dir"],
+        "//build/bazel/platforms/arch:x86_64": ["x86_64_include_dir"],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/platforms/os:android": ["android_include_dir"],
+        "//build/bazel/platforms/os:darwin": ["darwin_include_dir"],
+        "//build/bazel/platforms/os:linux": ["linux_include_dir"],
         "//conditions:default": [],
     }),
 )`},

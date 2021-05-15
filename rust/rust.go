@@ -263,19 +263,15 @@ func (c *Module) IsLlndkPublic() bool {
 	return false
 }
 
-func (m *Module) IsLlndkHeaders() bool {
-	return false
-}
-
-func (m *Module) IsLlndkLibrary() bool {
-	return false
-}
-
 func (mod *Module) KernelHeadersDecorator() bool {
 	return false
 }
 
-func (m *Module) HasLlndkStubs() bool {
+func (m *Module) NeedsLlndkVariants() bool {
+	return false
+}
+
+func (m *Module) NeedsVendorPublicLibraryVariants() bool {
 	return false
 }
 

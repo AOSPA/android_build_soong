@@ -149,19 +149,9 @@ func (h *hiddenAPISingleton) GenerateBuildActions(ctx android.SingletonContext) 
 	}
 }
 
-// Export paths to Make.  INTERNAL_PLATFORM_HIDDENAPI_FLAGS is used by Make rules in art/ and cts/.
-func (h *hiddenAPISingleton) MakeVars(ctx android.MakeVarsContext) {
-	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
-		return
-	}
-
-	ctx.Strict("INTERNAL_PLATFORM_HIDDENAPI_FLAGS", h.flags.String())
-}
-
 // Checks to see whether the supplied module variant is in the list of boot jars.
 //
-// This is similar to logic in getBootImageJar() so any changes needed here are likely to be needed
-// there too.
+// Apart from the context this is identical to isModuleInConfiguredListForSingleton.
 //
 // TODO(b/179354495): Avoid having to perform this type of check or if necessary dedup it.
 func isModuleInConfiguredList(ctx android.BaseModuleContext, module android.Module, configuredBootJars android.ConfiguredJarList) bool {
@@ -178,7 +168,7 @@ func isModuleInConfiguredList(ctx android.BaseModuleContext, module android.Modu
 
 	// It is an error if the module is not an ApexModule.
 	if _, ok := module.(android.ApexModule); !ok {
-		ctx.ModuleErrorf("is configured in boot jars but does not support being added to an apex")
+		ctx.ModuleErrorf("%s is configured in boot jars but does not support being added to an apex", ctx.OtherModuleName(module))
 		return false
 	}
 
@@ -186,7 +176,7 @@ func isModuleInConfiguredList(ctx android.BaseModuleContext, module android.Modu
 
 	// Now match the apex part of the boot image configuration.
 	requiredApex := configuredBootJars.Apex(index)
-	if requiredApex == "platform" {
+	if requiredApex == "platform" || requiredApex == "system_ext" {
 		if len(apexInfo.InApexes) != 0 {
 			// A platform variant is required but this is for an apex so ignore it.
 			return false

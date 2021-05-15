@@ -35,9 +35,8 @@ func init() {
 	// Register sdk member types.
 	android.RegisterSdkMemberType(&systemModulesSdkMemberType{
 		android.SdkMemberTypeBase{
-			PropertyName:         "java_system_modules",
-			SupportsSdk:          true,
-			TransitiveSdkMembers: true,
+			PropertyName: "java_system_modules",
+			SupportsSdk:  true,
 		},
 	})
 }
@@ -77,8 +76,9 @@ var (
 		"classpath", "outDir", "workDir")
 
 	// Dependency tag that causes the added dependencies to be added as java_header_libs
-	// to the sdk/module_exports/snapshot.
-	systemModulesLibsTag = android.DependencyTagForSdkMemberType(javaHeaderLibsSdkMemberType)
+	// to the sdk/module_exports/snapshot. Dependencies that are added automatically via this tag are
+	// not automatically exported.
+	systemModulesLibsTag = android.DependencyTagForSdkMemberType(javaHeaderLibsSdkMemberType, false)
 )
 
 func TransformJarsToSystemModules(ctx android.ModuleContext, jars android.Paths) (android.Path, android.Paths) {
@@ -114,6 +114,7 @@ func SystemModulesFactory() android.Module {
 	module.AddProperties(&module.properties)
 	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
+	android.InitSdkAwareModule(module)
 	return module
 }
 

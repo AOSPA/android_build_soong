@@ -106,14 +106,11 @@ type LinkableInterface interface {
 	// IsLlndkPublic returns true only for LLNDK (public) libs.
 	IsLlndkPublic() bool
 
-	// IsLlndkHeaders returns true if this module is an LLNDK headers module.
-	IsLlndkHeaders() bool
+	// NeedsLlndkVariants returns true if this module has LLNDK stubs or provides LLNDK headers.
+	NeedsLlndkVariants() bool
 
-	// IsLlndkLibrary returns true if this module is an LLNDK library module.
-	IsLlndkLibrary() bool
-
-	// HasLlndkStubs returns true if this module has LLNDK stubs.
-	HasLlndkStubs() bool
+	// NeedsVendorPublicLibraryVariants returns true if this module has vendor public library stubs.
+	NeedsVendorPublicLibraryVariants() bool
 
 	UseVndk() bool
 	MustUseVendorVariant() bool
@@ -283,7 +280,7 @@ func flagExporterInfoFromCcInfo(ctx android.ModuleContext, ccInfo cquery.CcInfo)
 	systemIncludes := android.PathsForBazelOut(ctx, ccInfo.SystemIncludes)
 
 	return FlagExporterInfo{
-		IncludeDirs:       includes,
-		SystemIncludeDirs: systemIncludes,
+		IncludeDirs:       android.FirstUniquePaths(includes),
+		SystemIncludeDirs: android.FirstUniquePaths(systemIncludes),
 	}
 }

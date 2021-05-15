@@ -41,6 +41,11 @@ type sdkAwareWithoutModule interface {
 	sdkBase() *SdkBase
 	MakeMemberOf(sdk SdkRef)
 	IsInAnySdk() bool
+
+	// IsVersioned determines whether the module is versioned, i.e. has a name of the form
+	// <name>@<version>
+	IsVersioned() bool
+
 	ContainingSdk() SdkRef
 	MemberName() string
 	BuildWithSdks(sdks SdkRefs)
@@ -82,7 +87,7 @@ const SdkVersionSeparator = '@'
 func ParseSdkRef(ctx BaseModuleContext, str string, property string) SdkRef {
 	tokens := strings.Split(str, string(SdkVersionSeparator))
 	if len(tokens) < 1 || len(tokens) > 2 {
-		ctx.PropertyErrorf(property, "%q does not follow name#version syntax", str)
+		ctx.PropertyErrorf(property, "%q does not follow name@version syntax", str)
 		return SdkRef{Name: "invalid sdk name", Version: "invalid sdk version"}
 	}
 
@@ -140,6 +145,11 @@ func (s *SdkBase) IsInAnySdk() bool {
 	return s.properties.ContainingSdk != nil
 }
 
+// IsVersioned returns true if this module is versioned.
+func (s *SdkBase) IsVersioned() bool {
+	return strings.Contains(s.module.Name(), "@")
+}
+
 // ContainingSdk returns the SDK that this module is a member of
 func (s *SdkBase) ContainingSdk() SdkRef {
 	if s.properties.ContainingSdk != nil {
@@ -169,6 +179,16 @@ func InitSdkAwareModule(m SdkAware) {
 	base := m.sdkBase()
 	base.module = m
 	m.AddProperties(&base.properties)
+}
+
+// IsModuleInVersionedSdk returns true if the module is an versioned sdk.
+func IsModuleInVersionedSdk(module Module) bool {
+	if s, ok := module.(SdkAware); ok {
+		if !s.ContainingSdk().Unversioned() {
+			return true
+		}
+	}
+	return false
 }
 
 // Provide support for generating the build rules which will build the snapshot.
@@ -281,10 +301,29 @@ type SdkMember interface {
 	Variants() []SdkAware
 }
 
+// SdkMemberTypeDependencyTag is the interface that a tag must implement in order to allow the
+// dependent module to be automatically added to the sdk.
 type SdkMemberTypeDependencyTag interface {
 	blueprint.DependencyTag
 
-	SdkMemberType() SdkMemberType
+	// SdkMemberType returns the SdkMemberType that will be used to automatically add the child module
+	// to the sdk.
+	SdkMemberType(child Module) SdkMemberType
+
+	// ExportMember determines whether a module added to the sdk through this tag will be exported
+	// from the sdk or not.
+	//
+	// An exported member is added to the sdk using its own name, e.g. if "foo" was exported from sdk
+	// "bar" then its prebuilt would be simply called "foo". A member can be added to the sdk via
+	// multiple tags and if any of those tags returns true from this method then the membe will be
+	// exported. Every module added directly to the sdk via one of the member type specific
+	// properties, e.g. java_libs, will automatically be exported.
+	//
+	// If a member is not exported then it is treated as an internal implementation detail of the
+	// sdk and so will be added with an sdk specific name. e.g. if "foo" was an internal member of sdk
+	// "bar" then its prebuilt would be called "bar_foo". Additionally its visibility will be set to
+	// "//visibility:private" so it will not be accessible from outside its Android.bp file.
+	ExportMember() bool
 }
 
 var _ SdkMemberTypeDependencyTag = (*sdkMemberDependencyTag)(nil)
@@ -293,10 +332,15 @@ var _ ReplaceSourceWithPrebuilt = (*sdkMemberDependencyTag)(nil)
 type sdkMemberDependencyTag struct {
 	blueprint.BaseDependencyTag
 	memberType SdkMemberType
+	export     bool
 }
 
-func (t *sdkMemberDependencyTag) SdkMemberType() SdkMemberType {
+func (t *sdkMemberDependencyTag) SdkMemberType(_ Module) SdkMemberType {
 	return t.memberType
+}
+
+func (t *sdkMemberDependencyTag) ExportMember() bool {
+	return t.export
 }
 
 // Prevent dependencies from the sdk/module_exports onto their members from being
@@ -305,8 +349,11 @@ func (t *sdkMemberDependencyTag) ReplaceSourceWithPrebuilt() bool {
 	return false
 }
 
-func DependencyTagForSdkMemberType(memberType SdkMemberType) SdkMemberTypeDependencyTag {
-	return &sdkMemberDependencyTag{memberType: memberType}
+// DependencyTagForSdkMemberType creates an SdkMemberTypeDependencyTag that will cause any
+// dependencies added by the tag to be added to the sdk as the specified SdkMemberType and exported
+// (or not) as specified by the export parameter.
+func DependencyTagForSdkMemberType(memberType SdkMemberType, export bool) SdkMemberTypeDependencyTag {
+	return &sdkMemberDependencyTag{memberType: memberType, export: export}
 }
 
 // Interface that must be implemented for every type that can be a member of an
@@ -335,13 +382,6 @@ type SdkMemberType interface {
 
 	// True if the member type supports the sdk/sdk_snapshot, false otherwise.
 	UsableWithSdkAndSdkSnapshot() bool
-
-	// Return true if modules of this type can have dependencies which should be
-	// treated as if they are sdk members.
-	//
-	// Any dependency that is to be treated as a member of the sdk needs to implement
-	// SdkAware and be added with an SdkMemberTypeDependencyTag tag.
-	HasTransitiveSdkMembers() bool
 
 	// Return true if prebuilt host artifacts may be specific to the host OS. Only
 	// applicable to modules where HostSupported() is true. If this is true,
@@ -408,10 +448,9 @@ type SdkMemberType interface {
 
 // Base type for SdkMemberType implementations.
 type SdkMemberTypeBase struct {
-	PropertyName         string
-	SupportsSdk          bool
-	TransitiveSdkMembers bool
-	HostOsDependent      bool
+	PropertyName    string
+	SupportsSdk     bool
+	HostOsDependent bool
 }
 
 func (b *SdkMemberTypeBase) SdkPropertyName() string {
@@ -420,10 +459,6 @@ func (b *SdkMemberTypeBase) SdkPropertyName() string {
 
 func (b *SdkMemberTypeBase) UsableWithSdkAndSdkSnapshot() bool {
 	return b.SupportsSdk
-}
-
-func (b *SdkMemberTypeBase) HasTransitiveSdkMembers() bool {
-	return b.TransitiveSdkMembers
 }
 
 func (b *SdkMemberTypeBase) IsHostOsDependent() bool {
