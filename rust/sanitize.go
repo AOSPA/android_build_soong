@@ -23,11 +23,12 @@ import (
 )
 
 type SanitizeProperties struct {
-	// enable AddressSanitizer, ThreadSanitizer, or UndefinedBehaviorSanitizer
+	// enable AddressSanitizer, HWAddressSanitizer, and others.
 	Sanitize struct {
-		Address *bool `android:"arch_variant"`
-		Fuzzer  *bool `android:"arch_variant"`
-		Never   *bool `android:"arch_variant"`
+		Address   *bool `android:"arch_variant"`
+		Hwaddress *bool `android:"arch_variant"`
+		Fuzzer    *bool `android:"arch_variant"`
+		Never     *bool `android:"arch_variant"`
 	}
 	SanitizerEnabled bool `blueprint:"mutated"`
 	SanitizeDep      bool `blueprint:"mutated"`
@@ -40,13 +41,11 @@ var fuzzerFlags = []string{
 	"-C passes='sancov'",
 
 	"--cfg fuzzing",
-	"-C llvm-args=-sanitizer-coverage-level=4",
+	"-C llvm-args=-sanitizer-coverage-level=3",
 	"-C llvm-args=-sanitizer-coverage-trace-compares",
 	"-C llvm-args=-sanitizer-coverage-inline-8bit-counters",
 	"-C llvm-args=-sanitizer-coverage-trace-geps",
 	"-C llvm-args=-sanitizer-coverage-prune-blocks=0",
-	"-C llvm-args=-sanitizer-coverage-pc-table",
-	"-Z sanitizer=address",
 
 	// Sancov breaks with lto
 	// TODO: Remove when https://bugs.llvm.org/show_bug.cgi?id=41734 is resolved and sancov works with LTO
@@ -55,6 +54,11 @@ var fuzzerFlags = []string{
 
 var asanFlags = []string{
 	"-Z sanitizer=address",
+}
+
+var hwasanFlags = []string{
+	"-Z sanitizer=hwaddress",
+	"-C target-feature=+tagged-globals",
 }
 
 func boolPtr(v bool) *bool {
@@ -83,6 +87,15 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 	if ctx.Os() == android.Android && Bool(s.Address) {
 		sanitize.Properties.SanitizerEnabled = true
 	}
+
+	// HWASan requires AArch64 hardware feature (top-byte-ignore).
+	if ctx.Arch().ArchType != android.Arm64 {
+		s.Hwaddress = nil
+	}
+
+	if ctx.Os() == android.Android && Bool(s.Hwaddress) {
+		sanitize.Properties.SanitizerEnabled = true
+	}
 }
 
 type sanitize struct {
@@ -95,9 +108,17 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags, deps PathDeps) (
 	}
 	if Bool(sanitize.Properties.Sanitize.Fuzzer) {
 		flags.RustFlags = append(flags.RustFlags, fuzzerFlags...)
+		if ctx.Arch().ArchType == android.Arm64 {
+			flags.RustFlags = append(flags.RustFlags, hwasanFlags...)
+		} else {
+			flags.RustFlags = append(flags.RustFlags, asanFlags...)
+		}
 	}
 	if Bool(sanitize.Properties.Sanitize.Address) {
 		flags.RustFlags = append(flags.RustFlags, asanFlags...)
+	}
+	if Bool(sanitize.Properties.Sanitize.Hwaddress) {
+		flags.RustFlags = append(flags.RustFlags, hwasanFlags...)
 	}
 	return flags, deps
 }
@@ -111,11 +132,40 @@ func rustSanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 		if !mod.Enabled() {
 			return
 		}
-		if Bool(mod.sanitize.Properties.Sanitize.Fuzzer) || Bool(mod.sanitize.Properties.Sanitize.Address) {
-			mctx.AddFarVariationDependencies(append(mctx.Target().Variations(), []blueprint.Variation{
-				{Mutator: "link", Variation: "shared"},
-			}...), cc.SharedDepTag(), config.LibclangRuntimeLibrary(mod.toolchain(mctx), "asan"))
+
+		variations := mctx.Target().Variations()
+		var depTag blueprint.DependencyTag
+		var deps []string
+
+		if mod.IsSanitizerEnabled(cc.Asan) ||
+			(mod.IsSanitizerEnabled(cc.Fuzzer) && mctx.Arch().ArchType != android.Arm64) {
+			variations = append(variations,
+				blueprint.Variation{Mutator: "link", Variation: "shared"})
+			depTag = cc.SharedDepTag()
+			deps = []string{config.LibclangRuntimeLibrary(mod.toolchain(mctx), "asan")}
+		} else if mod.IsSanitizerEnabled(cc.Hwasan) ||
+			(mod.IsSanitizerEnabled(cc.Fuzzer) && mctx.Arch().ArchType == android.Arm64) {
+			// TODO(b/180495975): HWASan for static Rust binaries isn't supported yet.
+			if binary, ok := mod.compiler.(*binaryDecorator); ok {
+				if Bool(binary.Properties.Static_executable) {
+					mctx.ModuleErrorf("HWASan is not supported for static Rust executables yet.")
+				}
+			}
+
+			if mod.StaticallyLinked() {
+				variations = append(variations,
+					blueprint.Variation{Mutator: "link", Variation: "static"})
+				depTag = cc.StaticDepTag(false)
+				deps = []string{config.LibclangRuntimeLibrary(mod.toolchain(mctx), "hwasan_static")}
+			} else {
+				variations = append(variations,
+					blueprint.Variation{Mutator: "link", Variation: "shared"})
+				depTag = cc.SharedDepTag()
+				deps = []string{config.LibclangRuntimeLibrary(mod.toolchain(mctx), "hwasan")}
+			}
 		}
+
+		mctx.AddFarVariationDependencies(variations, depTag, deps...)
 	}
 }
 
@@ -127,6 +177,9 @@ func (sanitize *sanitize) SetSanitizer(t cc.SanitizerType, b bool) {
 		sanitizerSet = true
 	case cc.Asan:
 		sanitize.Properties.Sanitize.Address = boolPtr(b)
+		sanitizerSet = true
+	case cc.Hwasan:
+		sanitize.Properties.Sanitize.Hwaddress = boolPtr(b)
 		sanitizerSet = true
 	default:
 		panic(fmt.Errorf("setting unsupported sanitizerType %d", t))
@@ -169,8 +222,20 @@ func (sanitize *sanitize) getSanitizerBoolPtr(t cc.SanitizerType) *bool {
 		return sanitize.Properties.Sanitize.Fuzzer
 	case cc.Asan:
 		return sanitize.Properties.Sanitize.Address
+	case cc.Hwasan:
+		return sanitize.Properties.Sanitize.Hwaddress
 	default:
 		return nil
+	}
+}
+
+func (sanitize *sanitize) AndroidMk(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
+	// Add a suffix for hwasan rlib libraries to allow surfacing both the sanitized and
+	// non-sanitized variants to make without a name conflict.
+	if entries.Class == "RLIB_LIBRARIES" || entries.Class == "STATIC_LIBRARIES" {
+		if sanitize.isSanitizerEnabled(cc.Hwasan) {
+			entries.SubName += ".hwasan"
+		}
 	}
 }
 
@@ -182,6 +247,8 @@ func (mod *Module) SanitizerSupported(t cc.SanitizerType) bool {
 	case cc.Fuzzer:
 		return true
 	case cc.Asan:
+		return true
+	case cc.Hwasan:
 		return true
 	default:
 		return false
@@ -224,11 +291,9 @@ func (mod *Module) SetSanitizeDep(b bool) {
 
 func (mod *Module) StaticallyLinked() bool {
 	if lib, ok := mod.compiler.(libraryInterface); ok {
-		if lib.rlib() || lib.static() {
-			return true
-		}
-	} else if Bool(mod.compiler.(*binaryDecorator).Properties.Static_executable) {
-		return true
+		return lib.rlib() || lib.static()
+	} else if binary, ok := mod.compiler.(*binaryDecorator); ok {
+		return Bool(binary.Properties.Static_executable)
 	}
 	return false
 }

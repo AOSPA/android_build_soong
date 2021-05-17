@@ -670,7 +670,8 @@ func TestGenruleAllowMissingDependencies(t *testing.T) {
 			cmd: "cat $(in) > $(out)",
 		}
        `
-	result := prepareForGenRuleTest.Extend(
+	result := android.GroupFixturePreparers(
+		prepareForGenRuleTest,
 		android.FixtureModifyConfigAndContext(
 			func(config android.Config, ctx *android.TestContext) {
 				config.TestProductVariables.Allow_missing_dependencies = proptools.BoolPtr(true)
@@ -695,7 +696,8 @@ func TestGenruleWithBazel(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForGenRuleTest, android.FixtureModifyConfig(func(config android.Config) {
 			config.BazelContext = android.MockBazelContext{
-				AllFiles: map[string][]string{
+				OutputBaseDir: "outputbase",
+				LabelToOutputFiles: map[string][]string{
 					"//foo/bar:bar": []string{"bazelone.txt", "bazeltwo.txt"}}}
 		})).RunTestWithBp(t, testGenruleBp()+bp)
 

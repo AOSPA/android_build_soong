@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -167,7 +166,8 @@ func newArch(name, multilib string) ArchType {
 	return archType
 }
 
-// ArchTypeList returns the 4 supported ArchTypes for arm, arm64, x86 and x86_64.
+// ArchTypeList returns the a slice copy of the 4 supported ArchTypes for arm,
+// arm64, x86 and x86_64.
 func ArchTypeList() []ArchType {
 	return append([]ArchType(nil), archTypeList...)
 }
@@ -175,7 +175,7 @@ func ArchTypeList() []ArchType {
 // MarshalText allows an ArchType to be serialized through any encoder that supports
 // encoding.TextMarshaler.
 func (a ArchType) MarshalText() ([]byte, error) {
-	return []byte(strconv.Quote(a.String())), nil
+	return []byte(a.String()), nil
 }
 
 var _ encoding.TextMarshaler = ArchType{}
@@ -266,7 +266,7 @@ func newOsType(name string, class OsClass, defDisabled bool, archTypes ...ArchTy
 
 		DefaultDisabled: defDisabled,
 	}
-	OsTypeList = append(OsTypeList, os)
+	osTypeList = append(osTypeList, os)
 
 	if _, found := commonTargetMap[name]; found {
 		panic(fmt.Errorf("Found Os type duplicate during OsType registration: %q", name))
@@ -280,7 +280,7 @@ func newOsType(name string, class OsClass, defDisabled bool, archTypes ...ArchTy
 
 // osByName returns the OsType that has the given name, or NoOsType if none match.
 func osByName(name string) OsType {
-	for _, os := range OsTypeList {
+	for _, os := range osTypeList {
 		if os.Name == name {
 			return os
 		}
@@ -312,9 +312,9 @@ var BuildArch = func() ArchType {
 }()
 
 var (
-	// OsTypeList contains a list of all the supported OsTypes, including ones not supported
+	// osTypeList contains a list of all the supported OsTypes, including ones not supported
 	// by the current build host or the target device.
-	OsTypeList []OsType
+	osTypeList []OsType
 	// commonTargetMap maps names of OsTypes to the corresponding common Target, i.e. the
 	// Target with the same OsType and the common ArchType.
 	commonTargetMap = make(map[string]Target)
@@ -346,6 +346,11 @@ var (
 	// for example most Java modules.
 	CommonArch = Arch{ArchType: Common}
 )
+
+// OsTypeList returns a slice copy of the supported OsTypes.
+func OsTypeList() []OsType {
+	return append([]OsType(nil), osTypeList...)
+}
 
 // Target specifies the OS and architecture that a module is being compiled for.
 type Target struct {
@@ -407,6 +412,54 @@ func (target Target) Variations() []blueprint.Variation {
 	}
 }
 
+func registerBp2buildArchPathDepsMutator(ctx RegisterMutatorsContext) {
+	ctx.BottomUp("bp2build-arch-pathdeps", bp2buildArchPathDepsMutator).Parallel()
+}
+
+// add dependencies for architecture specific properties tagged with `android:"path"`
+func bp2buildArchPathDepsMutator(ctx BottomUpMutatorContext) {
+	var module Module
+	module = ctx.Module()
+
+	m := module.base()
+	if !m.ArchSpecific() {
+		return
+	}
+
+	// addPathDepsForProps does not descend into sub structs, so we need to descend into the
+	// arch-specific properties ourselves
+	properties := []interface{}{}
+	for _, archProperties := range m.archProperties {
+		for _, archProps := range archProperties {
+			archPropValues := reflect.ValueOf(archProps).Elem()
+			// there are three "arch" variations, descend into each
+			for _, variant := range []string{"Arch", "Multilib", "Target"} {
+				// The properties are an interface, get the value (a pointer) that it points to
+				archProps := archPropValues.FieldByName(variant).Elem()
+				if archProps.IsNil() {
+					continue
+				}
+				// And then a pointer to a struct
+				archProps = archProps.Elem()
+				for i := 0; i < archProps.NumField(); i += 1 {
+					f := archProps.Field(i)
+					// If the value of the field is a struct (as opposed to a pointer to a struct) then step
+					// into the BlueprintEmbed field.
+					if f.Kind() == reflect.Struct {
+						f = f.FieldByName("BlueprintEmbed")
+					}
+					if f.IsZero() {
+						continue
+					}
+					props := f.Interface().(interface{})
+					properties = append(properties, props)
+				}
+			}
+		}
+	}
+	addPathDepsForProps(ctx, properties)
+}
+
 // osMutator splits an arch-specific module into a variant for each OS that is enabled for the
 // module.  It uses the HostOrDevice value passed to InitAndroidArchModule and the
 // device_supported and host_supported properties to determine which OsTypes are enabled for this
@@ -448,7 +501,7 @@ func osMutator(bpctx blueprint.BottomUpMutatorContext) {
 	// Collect a list of OSTypes supported by this module based on the HostOrDevice value
 	// passed to InitAndroidArchModule and the device_supported and host_supported properties.
 	var moduleOSList []OsType
-	for _, os := range OsTypeList {
+	for _, os := range osTypeList {
 		for _, t := range mctx.Config().Targets[os] {
 			if base.supportsTarget(t) {
 				moduleOSList = append(moduleOSList, os)
@@ -838,7 +891,7 @@ func createArchPropTypeDesc(props reflect.Type) []archPropTypeDesc {
 			"Arm_on_x86_64",
 			"Native_bridge",
 		}
-		for _, os := range OsTypeList {
+		for _, os := range osTypeList {
 			// Add all the OSes.
 			targets = append(targets, os.Field)
 
@@ -894,13 +947,17 @@ func filterArchStruct(field reflect.StructField, prefix string) (bool, reflect.S
 		if string(field.Tag) != `android:"`+strings.Join(values, ",")+`"` {
 			panic(fmt.Errorf("unexpected tag format %q", field.Tag))
 		}
+		// don't delete path tag as it is needed for bp2build
 		// these tags don't need to be present in the runtime generated struct type.
-		values = RemoveListFromList(values, []string{"arch_variant", "variant_prepend", "path"})
-		if len(values) > 0 {
+		values = RemoveListFromList(values, []string{"arch_variant", "variant_prepend"})
+		if len(values) > 0 && values[0] != "path" {
 			panic(fmt.Errorf("unknown tags %q in field %q", values, prefix+field.Name))
+		} else if len(values) == 1 {
+			field.Tag = reflect.StructTag(`android:"` + strings.Join(values, ",") + `"`)
+		} else {
+			field.Tag = ``
 		}
 
-		field.Tag = ""
 		return true, field
 	}
 	return false, field
@@ -1708,4 +1765,91 @@ func (m *ModuleBase) GetArchProperties(dst interface{}) map[ArchType]interface{}
 		}
 	}
 	return archToProp
+}
+
+// GetTargetProperties returns a map of OS target (e.g. android, windows) to the
+// values of the properties of the 'dst' struct that are specific to that OS
+// target.
+//
+// For example, passing a struct { Foo bool, Bar string } will return an
+// interface{} that can be type asserted back into the same struct, containing
+// the os-specific property value specified by the module if defined.
+//
+// While this looks similar to GetArchProperties, the internal representation of
+// the properties have a slightly different layout to warrant a standalone
+// lookup function.
+func (m *ModuleBase) GetTargetProperties(dst interface{}) map[OsType]interface{} {
+	// Return value of the arch types to the prop values for that arch.
+	osToProp := map[OsType]interface{}{}
+
+	// Nothing to do for non-OS/arch-specific modules.
+	if !m.ArchSpecific() {
+		return osToProp
+	}
+
+	// archProperties has the type of [][]interface{}. Looks complicated, so
+	// let's explain this step by step.
+	//
+	// Loop over the outer index, which determines the property struct that
+	// contains a matching set of properties in dst that we're interested in.
+	// For example, BaseCompilerProperties or BaseLinkerProperties.
+	for i := range m.archProperties {
+		if m.archProperties[i] == nil {
+			continue
+		}
+
+		// Iterate over the supported OS types
+		for _, os := range osTypeList {
+			// e.g android, linux_bionic
+			field := os.Field
+
+			// If it's not nil, loop over the inner index, which determines the arch variant
+			// of the prop type. In an Android.bp file, this is like looping over:
+			//
+			// target: { android: { key: value, ... }, linux_bionic: { key: value, ... } }
+			for _, archProperties := range m.archProperties[i] {
+				archPropValues := reflect.ValueOf(archProperties).Elem()
+
+				// This is the archPropRoot struct. Traverse into the Targetnested struct.
+				src := archPropValues.FieldByName("Target").Elem()
+
+				// Step into non-nil pointers to structs in the src value.
+				if src.Kind() == reflect.Ptr {
+					if src.IsNil() {
+						continue
+					}
+					src = src.Elem()
+				}
+
+				// Find the requested field (e.g. android, linux_bionic) in the src struct.
+				src = src.FieldByName(field)
+
+				// Validation steps. We want valid non-nil pointers to structs.
+				if !src.IsValid() || src.IsNil() {
+					continue
+				}
+
+				if src.Kind() != reflect.Ptr || src.Elem().Kind() != reflect.Struct {
+					continue
+				}
+
+				// Clone the destination prop, since we want a unique prop struct per arch.
+				dstClone := reflect.New(reflect.ValueOf(dst).Elem().Type()).Interface()
+
+				// Copy the located property struct into the cloned destination property struct.
+				err := proptools.ExtendMatchingProperties([]interface{}{dstClone}, src.Interface(), nil, proptools.OrderReplace)
+				if err != nil {
+					// This is fine, it just means the src struct doesn't match.
+					continue
+				}
+
+				// Found the prop for the os, you have.
+				osToProp[os] = dstClone
+
+				// Go to the next prop.
+				break
+			}
+		}
+	}
+	return osToProp
 }

@@ -108,6 +108,11 @@ type Bp2BuildConfig map[string]BazelConversionConfigEntry
 type BazelConversionConfigEntry int
 
 const (
+	// A sentinel value to be used as a key in Bp2BuildConfig for modules with
+	// no package path. This is also the module dir for top level Android.bp
+	// modules.
+	BP2BUILD_TOPLEVEL = "."
+
 	// iota + 1 ensures that the int value is not 0 when used in the Bp2buildAllowlist map,
 	// which can also mean that the key doesn't exist in a lookup.
 
@@ -121,56 +126,143 @@ const (
 )
 
 var (
+	// Do not write BUILD files for these directories
+	// NOTE: this is not recursive
+	bp2buildDoNotWriteBuildFileList = []string{
+		// Don't generate these BUILD files - because external BUILD files already exist
+		"external/boringssl",
+		"external/brotli",
+		"external/dagger2",
+		"external/flatbuffers",
+		"external/gflags",
+		"external/google-fruit",
+		"external/grpc-grpc",
+		"external/grpc-grpc/test/core/util",
+		"external/grpc-grpc/test/cpp/common",
+		"external/grpc-grpc/third_party/address_sorting",
+		"external/nanopb-c",
+		"external/nos/host/generic",
+		"external/nos/host/generic/libnos",
+		"external/nos/host/generic/libnos/generator",
+		"external/nos/host/generic/libnos_datagram",
+		"external/nos/host/generic/libnos_transport",
+		"external/nos/host/generic/nugget/proto",
+		"external/perfetto",
+		"external/protobuf",
+		"external/rust/cxx",
+		"external/rust/cxx/demo",
+		"external/ruy",
+		"external/tensorflow",
+		"external/tensorflow/tensorflow/lite",
+		"external/tensorflow/tensorflow/lite/java",
+		"external/tensorflow/tensorflow/lite/kernels",
+		"external/tflite-support",
+		"external/tinyalsa_new",
+		"external/wycheproof",
+		"external/libyuv",
+	}
+
 	// Configure modules in these directories to enable bp2build_available: true or false by default.
 	bp2buildDefaultConfig = Bp2BuildConfig{
 		"bionic":                Bp2BuildDefaultTrueRecursively,
+		"external/gwp_asan":     Bp2BuildDefaultTrueRecursively,
 		"system/core/libcutils": Bp2BuildDefaultTrueRecursively,
 		"system/logging/liblog": Bp2BuildDefaultTrueRecursively,
 	}
 
-	// Per-module denylist to always opt modules out.
-	bp2buildModuleDoNotConvert = map[string]bool{
-		"libBionicBenchmarksUtils":      true,
-		"libbionic_spawn_benchmark":     true,
-		"libc_jemalloc_wrapper":         true,
-		"libc_bootstrap":                true,
-		"libc_init_static":              true,
-		"libc_init_dynamic":             true,
-		"libc_tzcode":                   true,
-		"libc_freebsd":                  true,
-		"libc_freebsd_large_stack":      true,
-		"libc_netbsd":                   true,
-		"libc_openbsd_ndk":              true,
-		"libc_openbsd_large_stack":      true,
-		"libc_openbsd":                  true,
-		"libc_gdtoa":                    true,
-		"libc_fortify":                  true,
-		"libc_bionic":                   true,
-		"libc_bionic_ndk":               true,
-		"libc_bionic_systrace":          true,
-		"libc_pthread":                  true,
-		"libc_syscalls":                 true,
-		"libc_aeabi":                    true,
-		"libc_ndk":                      true,
-		"libc_nopthread":                true,
-		"libc_common":                   true,
-		"libc_static_dispatch":          true,
-		"libc_dynamic_dispatch":         true,
-		"libc_common_static":            true,
-		"libc_common_shared":            true,
-		"libc_unwind_static":            true,
-		"libc_nomalloc":                 true,
-		"libasync_safe":                 true,
-		"libc_malloc_debug_backtrace":   true,
-		"libsystemproperties":           true,
-		"libdl_static":                  true,
-		"liblinker_main":                true,
-		"liblinker_malloc":              true,
-		"liblinker_debuggerd_stub":      true,
-		"libbionic_tests_headers_posix": true,
-		"libc_dns":                      true,
+	// Per-module denylist to always opt modules out of both bp2build and mixed builds.
+	bp2buildModuleDoNotConvertList = []string{
+		"libBionicBenchmarksUtils",      // ruperts@, cc_library_static, 'map' file not found
+		"libbionic_spawn_benchmark",     // ruperts@, cc_library_static, depends on //system/libbase
+		"libc_jemalloc_wrapper",         // ruperts@, cc_library_static, depends on //external/jemalloc_new
+		"libc_bootstrap",                // ruperts@, cc_library_static, 'private/bionic_auxv.h' file not found
+		"libc_init_static",              // ruperts@, cc_library_static, 'private/bionic_elf_tls.h' file not found
+		"libc_init_dynamic",             // ruperts@, cc_library_static, 'private/bionic_defs.h' file not found
+		"libc_tzcode",                   // ruperts@, cc_library_static, error: expected expression
+		"libc_netbsd",                   // ruperts@, cc_library_static, 'engine.c' file not found
+		"libc_fortify",                  // ruperts@, cc_library_static, 'private/bionic_fortify.h' file not found
+		"libc_bionic",                   // ruperts@, cc_library_static, 'private/bionic_asm.h' file not found
+		"libc_bionic_ndk",               // ruperts@, cc_library_static, depends on //bionic/libc/system_properties
+		"libc_bionic_systrace",          // ruperts@, cc_library_static, 'private/bionic_systrace.h' file not found
+		"libc_pthread",                  // ruperts@, cc_library_static, 'private/bionic_defs.h' file not found
+		"libc_syscalls",                 // eakammer@, cc_library_static,  'private/bionic_asm.h' file not found
+		"libc_ndk",                      // ruperts@, cc_library_static, depends on //bionic/libm:libm
+		"libc_nopthread",                // ruperts@, cc_library_static, depends on //external/arm-optimized-routines
+		"libc_common",                   // ruperts@, cc_library_static, depends on //bionic/libc:libc_nopthread
+		"libc_common_static",            // ruperts@, cc_library_static, depends on //bionic/libc:libc_common
+		"libc_common_shared",            // ruperts@, cc_library_static, depends on //bionic/libc:libc_common
+		"libc_unwind_static",            // ruperts@, cc_library_static, 'private/bionic_elf_tls.h' file not found
+		"libc_nomalloc",                 // ruperts@, cc_library_static, depends on //bionic/libc:libc_common
+		"libasync_safe",                 // ruperts@, cc_library_static, 'private/CachedProperty.h' file not found
+		"libc_malloc_debug_backtrace",   // ruperts@, cc_library_static, depends on //system/libbase
+		"libsystemproperties",           // ruperts@, cc_library_static, depends on //system/core/property_service/libpropertyinfoparser
+		"libdl_static",                  // ruperts@, cc_library_static, 'private/CFIShadow.h' file not found
+		"liblinker_main",                // ruperts@, cc_library_static, depends on //system/libbase
+		"liblinker_malloc",              // ruperts@, cc_library_static, depends on //system/logging/liblog:liblog
+		"liblinker_debuggerd_stub",      // ruperts@, cc_library_static, depends on //system/libbase
+		"libbionic_tests_headers_posix", // ruperts@, cc_library_static, 'complex.h' file not found
+		"libc_dns",                      // ruperts@, cc_library_static, 'private/android_filesystem_config.h' file not found
+		"libc_static_dispatch",          // eakammer@, cc_library_static, 'private/bionic_asm.h' file not found
+		"libc_dynamic_dispatch",         // eakammer@, cc_library_static, 'private/bionic_ifuncs.h' file not found
+		"note_memtag_heap_async",        // jingwen@, cc_library_static, 'private/bionic_asm.h' file not found (arm64)
+		"note_memtag_heap_sync",         // jingwen@, cc_library_static, 'private/bionic_asm.h' file not found (arm64)
+
+		// List of all full_cc_libraries in //bionic, with their immediate failures
+		"libc",              // jingwen@, cc_library, depends on //external/gwp_asan
+		"libc_malloc_debug", // jingwen@, cc_library, fatal error: 'assert.h' file not found
+		"libc_malloc_hooks", // jingwen@, cc_library, fatal error: 'errno.h' file not found
+		"libdl",             // jingwen@, cc_library, ld.lld: error: no input files
+		"libm",              // lberki@, cc_library, compiler error: "Unexpected token in argument list"
+		"libseccomp_policy", // lberki@, cc_library, 'linux/filter.h' not found, caused by missing -isystem bionic/libc/kernel/uapi, dunno where it comes from in Soong
+		"libstdc++",         // jingwen@, cc_library, depends on //external/gwp_asan
 	}
+
+	// Per-module denylist to opt modules out of mixed builds. Such modules will
+	// still be generated via bp2build.
+	mixedBuildsDisabledList = []string{
+		"libc_gdtoa",   // ruperts@, cc_library_static, OK for bp2build but undefined symbol: __strtorQ for mixed builds
+		"libc_openbsd", // ruperts@, cc_library_static, OK for bp2build but error: duplicate symbol: strcpy for mixed builds
+	}
+
+	// Used for quicker lookups
+	bp2buildDoNotWriteBuildFile = map[string]bool{}
+	bp2buildModuleDoNotConvert  = map[string]bool{}
+	mixedBuildsDisabled         = map[string]bool{}
 )
+
+func init() {
+	for _, moduleName := range bp2buildDoNotWriteBuildFileList {
+		bp2buildDoNotWriteBuildFile[moduleName] = true
+	}
+
+	for _, moduleName := range bp2buildModuleDoNotConvertList {
+		bp2buildModuleDoNotConvert[moduleName] = true
+	}
+
+	for _, moduleName := range mixedBuildsDisabledList {
+		mixedBuildsDisabled[moduleName] = true
+	}
+}
+
+func ShouldWriteBuildFileForDir(dir string) bool {
+	if _, ok := bp2buildDoNotWriteBuildFile[dir]; ok {
+		return false
+	} else {
+		return true
+	}
+}
+
+// MixedBuildsEnabled checks that a module is ready to be replaced by a
+// converted or handcrafted Bazel target.
+func (b *BazelModuleBase) MixedBuildsEnabled(ctx BazelConversionPathContext) bool {
+	if !ctx.Config().BazelContext.BazelEnabled() {
+		return false
+	}
+	if len(b.GetBazelLabel(ctx, ctx.Module())) == 0 {
+		return false
+	}
+	return !mixedBuildsDisabled[ctx.Module().Name()]
+}
 
 // ConvertWithBp2build returns whether the given BazelModuleBase should be converted with bp2build.
 func (b *BazelModuleBase) ConvertWithBp2build(ctx BazelConversionPathContext) bool {
@@ -212,10 +304,15 @@ func (b *BazelModuleBase) ConvertWithBp2build(ctx BazelConversionPathContext) bo
 func bp2buildDefaultTrueRecursively(packagePath string, config Bp2BuildConfig) bool {
 	ret := false
 
+	// Return exact matches in the config.
+	if config[packagePath] == Bp2BuildDefaultTrueRecursively {
+		return true
+	}
 	if config[packagePath] == Bp2BuildDefaultFalse {
 		return false
 	}
 
+	// If not, check for the config recursively.
 	packagePrefix := ""
 	// e.g. for x/y/z, iterate over x, x/y, then x/y/z, taking the final value from the allowlist.
 	for _, part := range strings.Split(packagePath, "/") {

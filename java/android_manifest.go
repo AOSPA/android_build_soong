@@ -43,7 +43,7 @@ var manifestMergerRule = pctx.AndroidStaticRule("manifestMerger",
 	"args", "libs")
 
 // Uses manifest_fixer.py to inject minSdkVersion, etc. into an AndroidManifest.xml
-func manifestFixer(ctx android.ModuleContext, manifest android.Path, sdkContext sdkContext,
+func manifestFixer(ctx android.ModuleContext, manifest android.Path, sdkContext android.SdkContext,
 	classLoaderContexts dexpreopt.ClassLoaderContextMap, isLibrary, useEmbeddedNativeLibs, usesNonSdkApis,
 	useEmbeddedDex, hasNoCode bool, loggingParent string) android.Path {
 
@@ -51,11 +51,11 @@ func manifestFixer(ctx android.ModuleContext, manifest android.Path, sdkContext 
 	if isLibrary {
 		args = append(args, "--library")
 	} else {
-		minSdkVersion, err := sdkContext.minSdkVersion().effectiveVersion(ctx)
+		minSdkVersion, err := sdkContext.MinSdkVersion(ctx).EffectiveVersion(ctx)
 		if err != nil {
 			ctx.ModuleErrorf("invalid minSdkVersion: %s", err)
 		}
-		if minSdkVersion >= 23 {
+		if minSdkVersion.FinalOrFutureInt() >= 23 {
 			args = append(args, fmt.Sprintf("--extract-native-libs=%v", !useEmbeddedNativeLibs))
 		} else if useEmbeddedNativeLibs {
 			ctx.ModuleErrorf("module attempted to store uncompressed native libraries, but minSdkVersion=%d doesn't support it",
@@ -87,7 +87,7 @@ func manifestFixer(ctx android.ModuleContext, manifest android.Path, sdkContext 
 		args = append(args, "--logging-parent", loggingParent)
 	}
 	var deps android.Paths
-	targetSdkVersion, err := sdkContext.targetSdkVersion().effectiveVersionString(ctx)
+	targetSdkVersion, err := sdkContext.TargetSdkVersion(ctx).EffectiveVersionString(ctx)
 	if err != nil {
 		ctx.ModuleErrorf("invalid targetSdkVersion: %s", err)
 	}
@@ -96,7 +96,7 @@ func manifestFixer(ctx android.ModuleContext, manifest android.Path, sdkContext 
 		deps = append(deps, ApiFingerprintPath(ctx))
 	}
 
-	minSdkVersion, err := sdkContext.minSdkVersion().effectiveVersionString(ctx)
+	minSdkVersion, err := sdkContext.MinSdkVersion(ctx).EffectiveVersionString(ctx)
 	if err != nil {
 		ctx.ModuleErrorf("invalid minSdkVersion: %s", err)
 	}

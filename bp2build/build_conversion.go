@@ -176,7 +176,7 @@ func propsToAttributes(props map[string]string) string {
 	return attributes
 }
 
-func GenerateBazelTargets(ctx *CodegenContext) (map[string]BazelTargets, CodegenMetrics) {
+func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (map[string]BazelTargets, CodegenMetrics) {
 	buildFileToTargets := make(map[string]BazelTargets)
 	buildFileToAppend := make(map[string]bool)
 
@@ -185,9 +185,13 @@ func GenerateBazelTargets(ctx *CodegenContext) (map[string]BazelTargets, Codegen
 		RuleClassCount: make(map[string]int),
 	}
 
+	dirs := make(map[string]bool)
+
 	bpCtx := ctx.Context()
 	bpCtx.VisitAllModules(func(m blueprint.Module) {
 		dir := bpCtx.ModuleDir(m)
+		dirs[dir] = true
+
 		var t BazelTarget
 
 		switch ctx.Mode() {
@@ -230,6 +234,17 @@ func GenerateBazelTargets(ctx *CodegenContext) (map[string]BazelTargets, Codegen
 
 		buildFileToTargets[dir] = append(buildFileToTargets[dir], t)
 	})
+	if generateFilegroups {
+		// Add a filegroup target that exposes all sources in the subtree of this package
+		// NOTE: This also means we generate a BUILD file for every Android.bp file (as long as it has at least one module)
+		for dir, _ := range dirs {
+			buildFileToTargets[dir] = append(buildFileToTargets[dir], BazelTarget{
+				name:      "bp2build_all_srcs",
+				content:   `filegroup(name = "bp2build_all_srcs", srcs = glob(["**/*"]))`,
+				ruleClass: "filegroup",
+			})
+		}
+	}
 
 	return buildFileToTargets, metrics
 }
@@ -374,16 +389,9 @@ func prettyPrint(propertyValue reflect.Value, indent int) (string, error) {
 		// value>)" to set the default value of unset attributes. In the cases
 		// where the bp2build converter didn't set the default value within the
 		// mutator when creating the BazelTargetModule, this would be a zero
-		// value. For those cases, we return a non-surprising default value so
-		// generated BUILD files are syntactically correct.
-		switch propertyValue.Kind() {
-		case reflect.Slice:
-			return "[]", nil
-		case reflect.Map:
-			return "{}", nil
-		default:
-			return "", nil
-		}
+		// value. For those cases, we return an empty string so we don't
+		// unnecessarily generate empty values.
+		return "", nil
 	}
 
 	var ret string
@@ -397,82 +405,45 @@ func prettyPrint(propertyValue reflect.Value, indent int) (string, error) {
 	case reflect.Ptr:
 		return prettyPrint(propertyValue.Elem(), indent)
 	case reflect.Slice:
-		ret = "[\n"
-		for i := 0; i < propertyValue.Len(); i++ {
-			indexedValue, err := prettyPrint(propertyValue.Index(i), indent+1)
+		if propertyValue.Len() == 0 {
+			return "", nil
+		}
+
+		if propertyValue.Len() == 1 {
+			// Single-line list for list with only 1 element
+			ret += "["
+			indexedValue, err := prettyPrint(propertyValue.Index(0), indent)
 			if err != nil {
 				return "", err
 			}
+			ret += indexedValue
+			ret += "]"
+		} else {
+			// otherwise, use a multiline list.
+			ret += "[\n"
+			for i := 0; i < propertyValue.Len(); i++ {
+				indexedValue, err := prettyPrint(propertyValue.Index(i), indent+1)
+				if err != nil {
+					return "", err
+				}
 
-			if indexedValue != "" {
-				ret += makeIndent(indent + 1)
-				ret += indexedValue
-				ret += ",\n"
+				if indexedValue != "" {
+					ret += makeIndent(indent + 1)
+					ret += indexedValue
+					ret += ",\n"
+				}
 			}
+			ret += makeIndent(indent)
+			ret += "]"
 		}
-		ret += makeIndent(indent)
-		ret += "]"
+
 	case reflect.Struct:
 		// Special cases where the bp2build sends additional information to the codegenerator
 		// by wrapping the attributes in a custom struct type.
-		if labels, ok := propertyValue.Interface().(bazel.LabelListAttribute); ok {
-			// TODO(b/165114590): convert glob syntax
-			ret, err := prettyPrint(reflect.ValueOf(labels.Value.Includes), indent)
-			if err != nil {
-				return ret, err
-			}
-
-			if !labels.HasArchSpecificValues() {
-				// Select statement not needed.
-				return ret, nil
-			}
-
-			ret += " + " + "select({\n"
-			for _, arch := range android.ArchTypeList() {
-				value := labels.GetValueForArch(arch.Name)
-				if len(value.Includes) > 0 {
-					ret += makeIndent(indent + 1)
-					list, _ := prettyPrint(reflect.ValueOf(value.Includes), indent+1)
-					ret += fmt.Sprintf("\"%s\": %s,\n", platformArchMap[arch], list)
-				}
-			}
-
-			ret += makeIndent(indent + 1)
-			ret += fmt.Sprintf("\"%s\": [],\n", "//conditions:default")
-
-			ret += makeIndent(indent)
-			ret += "})"
-			return ret, err
+		if attr, ok := propertyValue.Interface().(bazel.Attribute); ok {
+			return prettyPrintAttribute(attr, indent)
 		} else if label, ok := propertyValue.Interface().(bazel.Label); ok {
 			return fmt.Sprintf("%q", label.Label), nil
-		} else if stringList, ok := propertyValue.Interface().(bazel.StringListAttribute); ok {
-			// A Bazel string_list attribute that may contain a select statement.
-			ret, err := prettyPrint(reflect.ValueOf(stringList.Value), indent)
-			if err != nil {
-				return ret, err
-			}
-
-			if !stringList.HasArchSpecificValues() {
-				// Select statement not needed.
-				return ret, nil
-			}
-
-			ret += " + " + "select({\n"
-			for _, arch := range android.ArchTypeList() {
-				value := stringList.GetValueForArch(arch.Name)
-				if len(value) > 0 {
-					ret += makeIndent(indent + 1)
-					list, _ := prettyPrint(reflect.ValueOf(value), indent+1)
-					ret += fmt.Sprintf("\"%s\": %s,\n", platformArchMap[arch], list)
-				}
-			}
-
-			ret += makeIndent(indent + 1)
-			ret += fmt.Sprintf("\"%s\": [],\n", "//conditions:default")
-
-			ret += makeIndent(indent)
-			ret += "})"
-			return ret, err
 		}
 
 		ret = "{\n"
@@ -568,6 +539,13 @@ func isZero(value reflect.Value) bool {
 
 func escapeString(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
+
+	// b/184026959: Reverse the application of some common control sequences.
+	// These must be generated literally in the BUILD file.
+	s = strings.ReplaceAll(s, "\t", "\\t")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+
 	return strings.ReplaceAll(s, "\"", "\\\"")
 }
 

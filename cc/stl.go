@@ -140,6 +140,17 @@ func needsLibAndroidSupport(ctx BaseModuleContext) bool {
 }
 
 func staticUnwinder(ctx android.BaseModuleContext) string {
+	vndkVersion := ctx.Module().(*Module).VndkVersion()
+
+	// Modules using R vndk use different unwinder
+	if vndkVersion == "30" {
+		if ctx.Arch().ArchType == android.Arm {
+			return "libunwind_llvm"
+		} else {
+			return "libgcc_stripped"
+		}
+	}
+
 	return "libunwind"
 }
 
@@ -188,12 +199,7 @@ func (stl *stl) deps(ctx BaseModuleContext, deps Deps) Deps {
 		if needsLibAndroidSupport(ctx) {
 			deps.StaticLibs = append(deps.StaticLibs, "ndk_libandroid_support")
 		}
-		// TODO: Switch the NDK over to the LLVM unwinder for non-arm32 architectures.
-		if ctx.Arch().ArchType == android.Arm {
-			deps.StaticLibs = append(deps.StaticLibs, "ndk_libunwind")
-		} else {
-			deps.StaticLibs = append(deps.StaticLibs, "libgcc_stripped")
-		}
+		deps.StaticLibs = append(deps.StaticLibs, "ndk_libunwind")
 	default:
 		panic(fmt.Errorf("Unknown stl: %q", stl.Properties.SelectedStl))
 	}

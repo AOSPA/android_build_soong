@@ -43,10 +43,8 @@ type ApexInfo struct {
 	// mergeApexVariations.
 	ApexVariationName string
 
-	// Serialized ApiLevel that this module has to support at minimum. Should be accessed via
-	// MinSdkVersion() method. Cannot be stored in its struct form because this is cloned into
-	// properties structs, and ApiLevel has private members.
-	MinSdkVersionStr string
+	// ApiLevel that this module has to support at minimum.
+	MinSdkVersion ApiLevel
 
 	// True if this module comes from an updatable apexBundle.
 	Updatable bool
@@ -82,17 +80,11 @@ var ApexInfoProvider = blueprint.NewMutatorProvider(ApexInfo{}, "apex")
 // have to be built twice, but only once. In that case, the two apex variations apex.a and apex.b
 // are configured to have the same alias variation named apex29.
 func (i ApexInfo) mergedName(ctx PathContext) string {
-	name := "apex" + strconv.Itoa(i.MinSdkVersion(ctx).FinalOrFutureInt())
+	name := "apex" + strconv.Itoa(i.MinSdkVersion.FinalOrFutureInt())
 	for _, sdk := range i.RequiredSdks {
 		name += "_" + sdk.Name + "_" + sdk.Version
 	}
 	return name
-}
-
-// MinSdkVersion gives the api level that this module has to support at minimum. This is from the
-// min_sdk_version property of the containing apexBundle.
-func (i ApexInfo) MinSdkVersion(ctx PathContext) ApiLevel {
-	return ApiLevelOrPanic(ctx, i.MinSdkVersionStr)
 }
 
 // IsForPlatform tells whether this module is for the platform or not. If false is returned, it
@@ -803,60 +795,73 @@ var minSdkVersionAllowlist = func(apiMap map[string]int) map[string]ApiLevel {
 	}
 	return list
 }(map[string]int{
-	"adbd":                           30,
-	"android.net.ipsec.ike":          30,
-	"apache-commons-compress":        29,
-	"bouncycastle_ike_digests":       30,
-	"brotli-java":                    29,
-	"captiveportal-lib":              28,
-	"flatbuffer_headers":             30,
-	"framework-permission":           30,
-	"gemmlowp_headers":               30,
-	"ike-internals":                  30,
-	"kotlinx-coroutines-android":     28,
-	"kotlinx-coroutines-core":        28,
-	"libadb_crypto":                  30,
-	"libadb_pairing_auth":            30,
-	"libadb_pairing_connection":      30,
-	"libadb_pairing_server":          30,
-	"libadb_protos":                  30,
-	"libadb_tls_connection":          30,
-	"libadbconnection_client":        30,
-	"libadbconnection_server":        30,
-	"libadbd_core":                   30,
-	"libadbd_services":               30,
-	"libadbd":                        30,
-	"libapp_processes_protos_lite":   30,
-	"libasyncio":                     30,
-	"libbrotli":                      30,
-	"libbuildversion":                30,
-	"libcrypto_static":               30,
-	"libcrypto_utils":                30,
-	"libdiagnose_usb":                30,
-	"libeigen":                       30,
-	"liblz4":                         30,
-	"libmdnssd":                      30,
-	"libneuralnetworks_common":       30,
-	"libneuralnetworks_headers":      30,
-	"libneuralnetworks":              30,
-	"libprocpartition":               30,
-	"libprotobuf-java-lite":          30,
-	"libprotoutil":                   30,
-	"libqemu_pipe":                   30,
-	"libsync":                        30,
-	"libtextclassifier_hash_headers": 30,
-	"libtextclassifier_hash_static":  30,
-	"libtflite_kernel_utils":         30,
-	"libwatchdog":                    29,
-	"libzstd":                        30,
-	"metrics-constants-protos":       28,
-	"net-utils-framework-common":     29,
-	"permissioncontroller-statsd":    28,
-	"philox_random_headers":          30,
-	"philox_random":                  30,
-	"service-permission":             30,
-	"tensorflow_headers":             30,
-	"xz-java":                        29,
+	"adbd":                                                     30,
+	"android.net.ipsec.ike":                                    30,
+	"androidx.annotation_annotation-nodeps":                    29,
+	"androidx.arch.core_core-common-nodeps":                    29,
+	"androidx.collection_collection-nodeps":                    29,
+	"androidx.collection_collection-ktx-nodeps":                30,
+	"androidx.concurrent_concurrent-futures-nodeps":            30,
+	"androidx.lifecycle_lifecycle-common-java8-nodeps":         30,
+	"androidx.lifecycle_lifecycle-common-nodeps":               29,
+	"androidx.room_room-common-nodeps":                         30,
+	"androidx-constraintlayout_constraintlayout-solver-nodeps": 29,
+	"apache-commons-compress":                                  29,
+	"bouncycastle_ike_digests":                                 30,
+	"brotli-java":                                              29,
+	"captiveportal-lib":                                        28,
+	"error_prone_annotations":                                  30,
+	"flatbuffer_headers":                                       30,
+	"framework-permission":                                     30,
+	"gemmlowp_headers":                                         30,
+	"guava-listenablefuture-prebuilt-jar":                      30,
+	"ike-internals":                                            30,
+	"kotlinx-coroutines-android":                               28,
+	"kotlinx-coroutines-android-nodeps":                        30,
+	"kotlinx-coroutines-core":                                  28,
+	"kotlinx-coroutines-core-nodeps":                           30,
+	"libadb_crypto":                                            30,
+	"libadb_pairing_auth":                                      30,
+	"libadb_pairing_connection":                                30,
+	"libadb_pairing_server":                                    30,
+	"libadb_protos":                                            30,
+	"libadb_tls_connection":                                    30,
+	"libadbconnection_client":                                  30,
+	"libadbconnection_server":                                  30,
+	"libadbd_core":                                             30,
+	"libadbd_services":                                         30,
+	"libadbd":                                                  30,
+	"libapp_processes_protos_lite":                             30,
+	"libasyncio":                                               30,
+	"libbrotli":                                                30,
+	"libbuildversion":                                          30,
+	"libcrypto_static":                                         30,
+	"libcrypto_utils":                                          30,
+	"libdiagnose_usb":                                          30,
+	"libeigen":                                                 30,
+	"liblz4":                                                   30,
+	"libmdnssd":                                                30,
+	"libneuralnetworks_common":                                 30,
+	"libneuralnetworks_headers":                                30,
+	"libneuralnetworks":                                        30,
+	"libprocpartition":                                         30,
+	"libprotobuf-java-lite":                                    30,
+	"libprotoutil":                                             30,
+	"libqemu_pipe":                                             30,
+	"libsync":                                                  30,
+	"libtextclassifier_hash_headers":                           30,
+	"libtextclassifier_hash_static":                            30,
+	"libtflite_kernel_utils":                                   30,
+	"libwatchdog":                                              29,
+	"libzstd":                                                  30,
+	"metrics-constants-protos":                                 28,
+	"net-utils-framework-common":                               29,
+	"permissioncontroller-statsd":                              28,
+	"philox_random_headers":                                    30,
+	"philox_random":                                            30,
+	"service-permission":                                       30,
+	"tensorflow_headers":                                       30,
+	"xz-java":                                                  29,
 })
 
 // Function called while walking an APEX's payload dependencies.
@@ -906,7 +911,7 @@ func CheckMinSdkVersion(m UpdatableModule, ctx ModuleContext, minSdkVersion ApiL
 					"Consider adding 'min_sdk_version: %q' to %q",
 					minSdkVersion, ctx.ModuleName(), err.Error(),
 					ctx.GetPathString(false),
-					minSdkVersion, ctx.ModuleName())
+					minSdkVersion, toName)
 				return false
 			}
 		}

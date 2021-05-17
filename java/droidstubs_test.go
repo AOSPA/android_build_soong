@@ -66,13 +66,15 @@ func TestDroidstubs(t *testing.T) {
 	}
 	for _, c := range testcases {
 		m := ctx.ModuleForTests(c.moduleName, "android_common")
-		metalava := m.Rule("metalava")
-		rp := metalava.RuleParams
+		manifest := m.Output("metalava.sbox.textproto")
+		sboxProto := android.RuleBuilderSboxProtoForTests(t, manifest)
 		expected := "--android-jar-pattern ./%/public/" + c.expectedJarFilename
-		if actual := rp.Command; !strings.Contains(actual, expected) {
+		if actual := String(sboxProto.Commands[0].Command); !strings.Contains(actual, expected) {
 			t.Errorf("For %q, expected metalava argument %q, but was not found %q", c.moduleName, expected, actual)
 		}
 
+		metalava := m.Rule("metalava")
+		rp := metalava.RuleParams
 		if actual := rp.Pool != nil && strings.Contains(rp.Pool.String(), "highmem"); actual != c.high_mem {
 			t.Errorf("Expected %q high_mem to be %v, was %v", c.moduleName, c.high_mem, actual)
 		}
@@ -81,10 +83,18 @@ func TestDroidstubs(t *testing.T) {
 
 func TestDroidstubsSandbox(t *testing.T) {
 	ctx, _ := testJavaWithFS(t, `
+		genrule {
+			name: "foo",
+			out: ["foo.txt"],
+			cmd: "touch $(out)",
+		}
+
 		droidstubs {
 			name: "bar-stubs",
 			srcs: ["bar-doc/a.java"],
-			sandbox: true,
+
+			args: "--reference $(location :foo)",
+			arg_files: [":foo"],
 		}
 		`,
 		map[string][]byte{
@@ -95,6 +105,11 @@ func TestDroidstubsSandbox(t *testing.T) {
 	metalava := m.Rule("metalava")
 	if g, w := metalava.Inputs.Strings(), []string{"bar-doc/a.java"}; !reflect.DeepEqual(w, g) {
 		t.Errorf("Expected inputs %q, got %q", w, g)
+	}
+
+	manifest := android.RuleBuilderSboxProtoForTests(t, m.Output("metalava.sbox.textproto"))
+	if g, w := manifest.Commands[0].GetCommand(), "reference __SBOX_SANDBOX_DIR__/out/.intermediates/foo/gen/foo.txt"; !strings.Contains(g, w) {
+		t.Errorf("Expected command to contain %q, got %q", w, g)
 	}
 }
 

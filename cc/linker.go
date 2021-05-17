@@ -321,10 +321,9 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	}
 
 	if ctx.toolchain().Bionic() {
-		// libclang_rt.builtins and libatomic have to be last on the command line
+		// libclang_rt.builtins has to be last on the command line
 		if !Bool(linker.Properties.No_libcrt) {
 			deps.LateStaticLibs = append(deps.LateStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
-			deps.LateStaticLibs = append(deps.LateStaticLibs, "libatomic")
 		}
 
 		deps.SystemSharedLibs = linker.Properties.System_shared_libs
@@ -599,21 +598,20 @@ var (
 	_                   = pctx.SourcePathVariable("genSortedBssSymbolsPath", "build/soong/scripts/gen_sorted_bss_symbols.sh")
 	genSortedBssSymbols = pctx.AndroidStaticRule("gen_sorted_bss_symbols",
 		blueprint.RuleParams{
-			Command:     "CROSS_COMPILE=$crossCompile $genSortedBssSymbolsPath ${in} ${out}",
-			CommandDeps: []string{"$genSortedBssSymbolsPath", "${crossCompile}nm"},
+			Command:     "CLANG_BIN=${clangBin} $genSortedBssSymbolsPath ${in} ${out}",
+			CommandDeps: []string{"$genSortedBssSymbolsPath", "${clangBin}/llvm-nm"},
 		},
-		"crossCompile")
+		"clangBin")
 )
 
 func (linker *baseLinker) sortBssSymbolsBySize(ctx ModuleContext, in android.Path, symbolOrderingFile android.ModuleOutPath, flags builderFlags) string {
-	crossCompile := gccCmd(flags.toolchain, "")
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        genSortedBssSymbols,
 		Description: "generate bss symbol order " + symbolOrderingFile.Base(),
 		Output:      symbolOrderingFile,
 		Input:       in,
 		Args: map[string]string{
-			"crossCompile": crossCompile,
+			"clangBin": "${config.ClangBin}",
 		},
 	})
 	return "-Wl,--symbol-ordering-file," + symbolOrderingFile.String()

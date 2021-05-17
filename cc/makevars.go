@@ -292,10 +292,17 @@ func makeVarsToolchain(ctx android.MakeVarsContext, secondPrefix string,
 		ctx.Strict(makePrefix+"OTOOL", "${config.MacToolPath}/otool")
 		ctx.Strict(makePrefix+"STRIP", "${config.MacStripPath}")
 	} else {
-		ctx.Strict(makePrefix+"AR", "${config.ClangBin}/llvm-ar")
-		ctx.Strict(makePrefix+"READELF", gccCmd(toolchain, "readelf"))
-		ctx.Strict(makePrefix+"NM", gccCmd(toolchain, "nm"))
-		ctx.Strict(makePrefix+"STRIP", gccCmd(toolchain, "strip"))
+		if config.SDClang {
+			ctx.Strict(makePrefix+"AR", "${config.SDClangBin}/llvm-ar")
+			ctx.Strict(makePrefix+"READELF", "${config.SDClangBin}/llvm-readelf")
+			ctx.Strict(makePrefix+"NM", "${config.SDClangBin}/llvm-nm")
+			ctx.Strict(makePrefix+"STRIP", "${config.SDClangBin}/llvm-strip")
+		} else {
+			ctx.Strict(makePrefix+"AR", "${config.ClangBin}/llvm-ar")
+			ctx.Strict(makePrefix+"READELF", "${config.ClangBin}/llvm-readelf")
+			ctx.Strict(makePrefix+"NM", "${config.ClangBin}/llvm-nm")
+			ctx.Strict(makePrefix+"STRIP", "${config.ClangBin}/llvm-strip")
+		}
 	}
 
 	if target.Os.Class == android.Device {

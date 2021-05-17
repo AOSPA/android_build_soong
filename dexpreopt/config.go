@@ -17,6 +17,7 @@ package dexpreopt
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -115,7 +116,7 @@ type ModuleConfig struct {
 	DexLocation     string // dex location on device
 	BuildPath       android.OutputPath
 	DexPath         android.Path
-	ManifestPath    android.Path
+	ManifestPath    android.OptionalPath
 	UncompressedDex bool
 	HasApkLibraries bool
 	PreoptFlags     []string
@@ -130,7 +131,7 @@ type ModuleConfig struct {
 	ClassLoaderContexts            ClassLoaderContextMap
 
 	Archs                   []android.ArchType
-	DexPreoptImages         []android.Path
+	DexPreoptImages         android.Paths
 	DexPreoptImagesDeps     []android.OutputPaths
 	DexPreoptImageLocations []string
 
@@ -259,29 +260,35 @@ func SetTestGlobalConfig(config android.Config, globalConfig *GlobalConfig) {
 	config.Once(testGlobalConfigOnceKey, func() interface{} { return globalConfigAndRaw{globalConfig, nil} })
 }
 
+// This struct is required to convert ModuleConfig from/to JSON.
+// The types of fields in ModuleConfig are not convertible,
+// so moduleJSONConfig has those fields as a convertible type.
+type moduleJSONConfig struct {
+	*ModuleConfig
+
+	BuildPath    string
+	DexPath      string
+	ManifestPath string
+
+	ProfileClassListing string
+	ProfileBootListing  string
+
+	EnforceUsesLibrariesStatusFile string
+	ClassLoaderContexts            jsonClassLoaderContextMap
+
+	DexPreoptImages     []string
+	DexPreoptImagesDeps [][]string
+
+	PreoptBootClassPathDexFiles []string
+}
+
 // ParseModuleConfig parses a per-module dexpreopt.config file into a
 // ModuleConfig struct. It is not used in Soong, which receives a ModuleConfig
 // struct directly from java/dexpreopt.go. It is used in dexpreopt_gen called
 // from Make to read the module dexpreopt.config written in the Make config
 // stage.
 func ParseModuleConfig(ctx android.PathContext, data []byte) (*ModuleConfig, error) {
-	type ModuleJSONConfig struct {
-		*ModuleConfig
-
-		// Copies of entries in ModuleConfig that are not constructable without extra parameters.  They will be
-		// used to construct the real value manually below.
-		BuildPath                      string
-		DexPath                        string
-		ManifestPath                   string
-		ProfileClassListing            string
-		EnforceUsesLibrariesStatusFile string
-		ClassLoaderContexts            jsonClassLoaderContextMap
-		DexPreoptImages                []string
-		DexPreoptImageLocations        []string
-		PreoptBootClassPathDexFiles    []string
-	}
-
-	config := ModuleJSONConfig{}
+	config := moduleJSONConfig{}
 
 	err := json.Unmarshal(data, &config)
 	if err != nil {
@@ -291,12 +298,11 @@ func ParseModuleConfig(ctx android.PathContext, data []byte) (*ModuleConfig, err
 	// Construct paths that require a PathContext.
 	config.ModuleConfig.BuildPath = constructPath(ctx, config.BuildPath).(android.OutputPath)
 	config.ModuleConfig.DexPath = constructPath(ctx, config.DexPath)
-	config.ModuleConfig.ManifestPath = constructPath(ctx, config.ManifestPath)
+	config.ModuleConfig.ManifestPath = android.OptionalPathForPath(constructPath(ctx, config.ManifestPath))
 	config.ModuleConfig.ProfileClassListing = android.OptionalPathForPath(constructPath(ctx, config.ProfileClassListing))
 	config.ModuleConfig.EnforceUsesLibrariesStatusFile = constructPath(ctx, config.EnforceUsesLibrariesStatusFile)
 	config.ModuleConfig.ClassLoaderContexts = fromJsonClassLoaderContext(ctx, config.ClassLoaderContexts)
 	config.ModuleConfig.DexPreoptImages = constructPaths(ctx, config.DexPreoptImages)
-	config.ModuleConfig.DexPreoptImageLocations = config.DexPreoptImageLocations
 	config.ModuleConfig.PreoptBootClassPathDexFiles = constructPaths(ctx, config.PreoptBootClassPathDexFiles)
 
 	// This needs to exist, but dependencies are already handled in Make, so we don't need to pass them through JSON.
@@ -305,34 +311,38 @@ func ParseModuleConfig(ctx android.PathContext, data []byte) (*ModuleConfig, err
 	return config.ModuleConfig, nil
 }
 
-// WriteSlimModuleConfigForMake serializes a subset of ModuleConfig into a per-module
-// dexpreopt.config JSON file. It is a way to pass dexpreopt information about Soong modules to
-// Make, which is needed when a Make module has a <uses-library> dependency on a Soong module.
-func WriteSlimModuleConfigForMake(ctx android.ModuleContext, config *ModuleConfig, path android.WritablePath) {
+func pathsListToStringLists(pathsList []android.OutputPaths) [][]string {
+	ret := make([][]string, 0, len(pathsList))
+	for _, paths := range pathsList {
+		ret = append(ret, paths.Strings())
+	}
+	return ret
+}
+
+func moduleConfigToJSON(config *ModuleConfig) ([]byte, error) {
+	return json.MarshalIndent(&moduleJSONConfig{
+		BuildPath:                      config.BuildPath.String(),
+		DexPath:                        config.DexPath.String(),
+		ManifestPath:                   config.ManifestPath.String(),
+		ProfileClassListing:            config.ProfileClassListing.String(),
+		ProfileBootListing:             config.ProfileBootListing.String(),
+		EnforceUsesLibrariesStatusFile: config.EnforceUsesLibrariesStatusFile.String(),
+		ClassLoaderContexts:            toJsonClassLoaderContext(config.ClassLoaderContexts),
+		DexPreoptImages:                config.DexPreoptImages.Strings(),
+		DexPreoptImagesDeps:            pathsListToStringLists(config.DexPreoptImagesDeps),
+		PreoptBootClassPathDexFiles:    config.PreoptBootClassPathDexFiles.Strings(),
+		ModuleConfig:                   config,
+	}, "", "    ")
+}
+
+// WriteModuleConfig serializes a ModuleConfig into a per-module dexpreopt.config JSON file.
+// These config files are used for post-processing.
+func WriteModuleConfig(ctx android.ModuleContext, config *ModuleConfig, path android.WritablePath) {
 	if path == nil {
 		return
 	}
 
-	// JSON representation of the slim module dexpreopt.config.
-	type slimModuleJSONConfig struct {
-		Name                 string
-		DexLocation          string
-		BuildPath            string
-		EnforceUsesLibraries bool
-		ProvidesUsesLibrary  string
-		ClassLoaderContexts  jsonClassLoaderContextMap
-	}
-
-	jsonConfig := &slimModuleJSONConfig{
-		Name:                 config.Name,
-		DexLocation:          config.DexLocation,
-		BuildPath:            config.BuildPath.String(),
-		EnforceUsesLibraries: config.EnforceUsesLibraries,
-		ProvidesUsesLibrary:  config.ProvidesUsesLibrary,
-		ClassLoaderContexts:  toJsonClassLoaderContext(config.ClassLoaderContexts),
-	}
-
-	data, err := json.MarshalIndent(jsonConfig, "", "    ")
+	data, err := moduleConfigToJSON(config)
 	if err != nil {
 		ctx.ModuleErrorf("failed to JSON marshal module dexpreopt.config: %v", err)
 		return
@@ -513,7 +523,27 @@ func ParseGlobalSoongConfig(ctx android.PathContext, data []byte) (*GlobalSoongC
 	return config, nil
 }
 
+// checkBootJarsConfigConsistency checks the consistency of BootJars and UpdatableBootJars fields in
+// DexpreoptGlobalConfig and Config.productVariables.
+func checkBootJarsConfigConsistency(ctx android.SingletonContext, dexpreoptConfig *GlobalConfig, config android.Config) {
+	compareBootJars := func(property string, dexpreoptJars, variableJars android.ConfiguredJarList) {
+		dexpreoptPairs := dexpreoptJars.CopyOfApexJarPairs()
+		variablePairs := variableJars.CopyOfApexJarPairs()
+		if !reflect.DeepEqual(dexpreoptPairs, variablePairs) {
+			ctx.Errorf("Inconsistent configuration of %[1]s\n"+
+				"    dexpreopt.GlobalConfig.%[1]s = %[2]s\n"+
+				"    productVariables.%[1]s       = %[3]s",
+				property, dexpreoptPairs, variablePairs)
+		}
+	}
+
+	compareBootJars("BootJars", dexpreoptConfig.BootJars, config.NonUpdatableBootJars())
+	compareBootJars("UpdatableBootJars", dexpreoptConfig.UpdatableBootJars, config.UpdatableBootJars())
+}
+
 func (s *globalSoongConfigSingleton) GenerateBuildActions(ctx android.SingletonContext) {
+	checkBootJarsConfigConsistency(ctx, GetGlobalConfig(ctx), ctx.Config())
+
 	if GetGlobalConfig(ctx).DisablePreopt {
 		return
 	}

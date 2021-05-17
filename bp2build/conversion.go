@@ -2,6 +2,7 @@ package bp2build
 
 import (
 	"android/soong/android"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -19,12 +20,13 @@ func CreateBazelFiles(
 	ruleShims map[string]RuleShim,
 	buildToTargets map[string]BazelTargets,
 	mode CodegenMode) []BazelFile {
-	files := make([]BazelFile, 0, len(ruleShims)+len(buildToTargets)+numAdditionalFiles)
 
-	// Write top level files: WORKSPACE. These files are empty.
-	files = append(files, newFile("", "WORKSPACE", ""))
+	var files []BazelFile
 
 	if mode == QueryView {
+		// Write top level WORKSPACE.
+		files = append(files, newFile("", "WORKSPACE", ""))
+
 		// Used to denote that the top level directory is a package.
 		files = append(files, newFile("", GeneratedBuildFileName, ""))
 
@@ -47,6 +49,10 @@ func CreateBazelFiles(
 func createBuildFiles(buildToTargets map[string]BazelTargets, mode CodegenMode) []BazelFile {
 	files := make([]BazelFile, 0, len(buildToTargets))
 	for _, dir := range android.SortedStringKeys(buildToTargets) {
+		if mode == Bp2Build && !android.ShouldWriteBuildFileForDir(dir) {
+			fmt.Printf("[bp2build] Not writing generated BUILD file for dir: '%s'\n", dir)
+			continue
+		}
 		targets := buildToTargets[dir]
 		sort.Slice(targets, func(i, j int) bool {
 			// this will cover all bp2build generated targets

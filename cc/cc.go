@@ -56,8 +56,8 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 		ctx.TopDown("asan_deps", sanitizerDepsMutator(Asan))
 		ctx.BottomUp("asan", sanitizerMutator(Asan)).Parallel()
 
-		ctx.TopDown("hwasan_deps", sanitizerDepsMutator(hwasan))
-		ctx.BottomUp("hwasan", sanitizerMutator(hwasan)).Parallel()
+		ctx.TopDown("hwasan_deps", sanitizerDepsMutator(Hwasan))
+		ctx.BottomUp("hwasan", sanitizerMutator(Hwasan)).Parallel()
 
 		ctx.TopDown("fuzzer_deps", sanitizerDepsMutator(Fuzzer))
 		ctx.BottomUp("fuzzer", sanitizerMutator(Fuzzer)).Parallel()
@@ -1117,14 +1117,31 @@ func (c *Module) IsNdk(config android.Config) bool {
 	return inList(c.BaseModuleName(), *getNDKKnownLibs(config))
 }
 
-// isLLndk returns true for both LLNDK (public) and LLNDK-private libs.
 func (c *Module) IsLlndk() bool {
 	return c.VendorProperties.IsLLNDK
 }
 
-// IsLlndkPublic returns true only for LLNDK (public) libs.
 func (c *Module) IsLlndkPublic() bool {
 	return c.VendorProperties.IsLLNDK && !c.VendorProperties.IsVNDKPrivate
+}
+
+func (c *Module) IsLlndkHeaders() bool {
+	if _, ok := c.linker.(*llndkHeadersDecorator); ok {
+		return true
+	}
+	return false
+}
+
+func (c *Module) IsLlndkLibrary() bool {
+	if _, ok := c.linker.(*llndkStubDecorator); ok {
+		return true
+	}
+	return false
+}
+
+func (m *Module) HasLlndkStubs() bool {
+	lib := moduleLibraryInterface(m)
+	return lib != nil && lib.hasLLNDKStubs()
 }
 
 // isImplementationForLLNDKPublic returns true for any variant of a cc_library that has LLNDK stubs
@@ -1132,12 +1149,7 @@ func (c *Module) IsLlndkPublic() bool {
 func (c *Module) isImplementationForLLNDKPublic() bool {
 	library, _ := c.library.(*libraryDecorator)
 	return library != nil && library.hasLLNDKStubs() &&
-		(!Bool(library.Properties.Llndk.Private) ||
-			// TODO(b/170784825): until the LLNDK properties are moved into the cc_library,
-			// the non-Vendor variants of the cc_library don't know if the corresponding
-			// llndk_library set private: true.  Since libft2 is the only private LLNDK
-			// library, hardcode it during the transition.
-			c.BaseModuleName() != "libft2")
+		!Bool(library.Properties.Llndk.Private)
 }
 
 // Returns true for LLNDK-private, VNDK-SP-private, and VNDK-core-private.
@@ -1188,6 +1200,10 @@ func (c *Module) IsVndkExt() bool {
 		return vndkdep.isVndkExt()
 	}
 	return false
+}
+
+func (c *Module) SubName() string {
+	return c.Properties.SubName
 }
 
 func (c *Module) MustUseVendorVariant() bool {
@@ -1250,7 +1266,7 @@ func (c *Module) nativeCoverage() bool {
 	return c.linker != nil && c.linker.nativeCoverage()
 }
 
-func (c *Module) isSnapshotPrebuilt() bool {
+func (c *Module) IsSnapshotPrebuilt() bool {
 	if p, ok := c.linker.(snapshotInterface); ok {
 		return p.isSnapshotPrebuilt()
 	}
@@ -1624,7 +1640,7 @@ func (c *Module) setSubnameProperty(actx android.ModuleContext) {
 func (c *Module) maybeGenerateBazelActions(actx android.ModuleContext) bool {
 	bazelModuleLabel := c.GetBazelLabel(actx, c)
 	bazelActionsUsed := false
-	if c.bazelHandler != nil && actx.Config().BazelContext.BazelEnabled() && len(bazelModuleLabel) > 0 {
+	if c.MixedBuildsEnabled(actx) && c.bazelHandler != nil {
 		bazelActionsUsed = c.bazelHandler.generateBazelBuildActions(actx, bazelModuleLabel)
 	}
 	return bazelActionsUsed
@@ -1650,11 +1666,11 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		c.hideApexVariantFromMake = true
 	}
 
+	c.makeLinkType = GetMakeLinkType(actx, c)
+
 	if c.maybeGenerateBazelActions(actx) {
 		return
 	}
-
-	c.makeLinkType = GetMakeLinkType(actx, c)
 
 	ctx := &moduleContext{
 		ModuleContext: actx,
@@ -1897,8 +1913,8 @@ func (c *Module) deps(ctx DepsContext) Deps {
 	}
 
 	for _, lib := range deps.ReexportStaticLibHeaders {
-		if !inList(lib, deps.StaticLibs) {
-			ctx.PropertyErrorf("export_static_lib_headers", "Static library not in static_libs: '%s'", lib)
+		if !inList(lib, deps.StaticLibs) && !inList(lib, deps.WholeStaticLibs) {
+			ctx.PropertyErrorf("export_static_lib_headers", "Static library not in static_libs or whole_static_libs: '%s'", lib)
 		}
 	}
 
@@ -2294,12 +2310,7 @@ func checkLinkType(ctx android.BaseModuleContext, from LinkableInterface, to Lin
 			if ccFrom.vndkdep != nil {
 				ccFrom.vndkdep.vndkCheckLinkType(ctx, ccTo, tag)
 			}
-		} else if linkableMod, ok := to.(LinkableInterface); ok {
-			// Static libraries from other languages can be linked
-			if !linkableMod.Static() {
-				ctx.ModuleErrorf("Attempting to link VNDK cc.Module with unsupported module type")
-			}
-		} else {
+		} else if _, ok := to.(LinkableInterface); !ok {
 			ctx.ModuleErrorf("Attempting to link VNDK cc.Module with unsupported module type")
 		}
 		return
@@ -2503,7 +2514,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	c.apexSdkVersion = android.FutureApiLevel
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	if !apexInfo.IsForPlatform() {
-		c.apexSdkVersion = apexInfo.MinSdkVersion(ctx)
+		c.apexSdkVersion = apexInfo.MinSdkVersion
 	}
 
 	if android.InList("hwaddress", ctx.Config().SanitizeDevice()) {
@@ -2827,7 +2838,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					c.sabi.Properties.ReexportedIncludes, depExporterInfo.IncludeDirs.Strings()...)
 			}
 
-			makeLibName := c.makeLibName(ctx, ccDep, depName) + libDepTag.makeSuffix
+			makeLibName := MakeLibName(ctx, c, ccDep, depName) + libDepTag.makeSuffix
 			switch {
 			case libDepTag.header():
 				c.Properties.AndroidMkHeaderLibs = append(
@@ -2866,7 +2877,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			switch depTag {
 			case runtimeDepTag:
 				c.Properties.AndroidMkRuntimeLibs = append(
-					c.Properties.AndroidMkRuntimeLibs, c.makeLibName(ctx, ccDep, depName)+libDepTag.makeSuffix)
+					c.Properties.AndroidMkRuntimeLibs, MakeLibName(ctx, c, ccDep, depName)+libDepTag.makeSuffix)
 				// Record baseLibName for snapshots.
 				c.Properties.SnapshotRuntimeLibs = append(c.Properties.SnapshotRuntimeLibs, baseLibName(depName))
 			case objDepTag:
@@ -2944,7 +2955,8 @@ func baseLibName(depName string) string {
 	return libName
 }
 
-func (c *Module) makeLibName(ctx android.ModuleContext, ccDep LinkableInterface, depName string) string {
+func MakeLibName(ctx android.ModuleContext, c LinkableInterface, ccDep LinkableInterface, depName string) string {
+
 	vendorPublicLibraries := vendorPublicLibraries(ctx.Config())
 
 	libName := baseLibName(depName)
@@ -2954,6 +2966,7 @@ func (c *Module) makeLibName(ctx android.ModuleContext, ccDep LinkableInterface,
 	nonSystemVariantsExist := ccDep.HasNonSystemVariants() || isLLndk
 
 	if ccDepModule != nil {
+		// TODO(ivanlozano) Support snapshots for Rust-produced C library variants.
 		// Use base module name for snapshots when exporting to Makefile.
 		if snapshotPrebuilt, ok := ccDepModule.linker.(snapshotInterface); ok {
 			baseName := ccDepModule.BaseModuleName()
@@ -2967,10 +2980,10 @@ func (c *Module) makeLibName(ctx android.ModuleContext, ccDep LinkableInterface,
 		// The vendor module is a no-vendor-variant VNDK library.  Depend on the
 		// core module instead.
 		return libName
-	} else if ccDep.UseVndk() && nonSystemVariantsExist && ccDepModule != nil {
+	} else if ccDep.UseVndk() && nonSystemVariantsExist {
 		// The vendor and product modules in Make will have been renamed to not conflict with the
 		// core module, so update the dependency name here accordingly.
-		return libName + ccDepModule.Properties.SubName
+		return libName + ccDep.SubName()
 	} else if (ctx.Platform() || ctx.ProductSpecific()) && isVendorPublicLib {
 		return libName + vendorPublicLibrarySuffix
 	} else if ccDep.InRamdisk() && !ccDep.OnlyInRamdisk() {
@@ -3304,6 +3317,10 @@ func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 type Defaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
+	// Included to support setting bazel_module.label for multiple Soong modules to the same Bazel
+	// target. This is primarily useful for modules that were architecture specific and instead are
+	// handled in Bazel as a select().
+	android.BazelModuleBase
 	android.ApexModuleBase
 }
 
@@ -3350,6 +3367,8 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&RustBindgenClangProperties{},
 	)
 
+	// Bazel module must be initialized _before_ Defaults to be included in cc_defaults module.
+	android.InitBazelModule(module)
 	android.InitDefaultsModule(module)
 
 	return module

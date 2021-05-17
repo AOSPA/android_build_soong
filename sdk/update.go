@@ -103,7 +103,7 @@ func (gf *generatedFile) build(pctx android.PackageContext, ctx android.BuilderC
 
 	rb.Command().
 		Implicits(implicits).
-		Text("echo").Text(proptools.ShellEscape(content)).
+		Text("echo -n").Text(proptools.ShellEscape(content)).
 		// convert \\n to \n
 		Text("| sed 's/\\\\n/\\n/g' >").Output(gf.path)
 	rb.Command().
@@ -1350,7 +1350,7 @@ func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModu
 // Compute the list of possible os types that this sdk could support.
 func (s *sdk) getPossibleOsTypes() []android.OsType {
 	var osTypes []android.OsType
-	for _, osType := range android.OsTypeList {
+	for _, osType := range android.OsTypeList() {
 		if s.DeviceSupported() {
 			if osType.Class == android.Device && osType != android.Fuchsia {
 				osTypes = append(osTypes, osType)

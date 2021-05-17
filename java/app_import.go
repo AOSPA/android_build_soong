@@ -394,12 +394,12 @@ func (a *AndroidAppImport) DepIsInSameApex(_ android.BaseModuleContext, _ androi
 	return false
 }
 
-func (a *AndroidAppImport) sdkVersion() sdkSpec {
-	return sdkSpecFrom("")
+func (a *AndroidAppImport) SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	return android.SdkSpecPrivate
 }
 
-func (a *AndroidAppImport) minSdkVersion() sdkSpec {
-	return sdkSpecFrom("")
+func (a *AndroidAppImport) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	return android.SdkSpecPrivate
 }
 
 var _ android.ApexModule = (*AndroidAppImport)(nil)

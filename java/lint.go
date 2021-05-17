@@ -26,6 +26,10 @@ import (
 	"android/soong/remoteexec"
 )
 
+// lint checks automatically enforced for modules that have different min_sdk_version than
+// sdk_version
+var updatabilityChecks = []string{"NewApi"}
+
 type LintProperties struct {
 	// Controls for running Android Lint on the module.
 	Lint struct {
@@ -53,28 +57,32 @@ type LintProperties struct {
 
 		// Name of the file that lint uses as the baseline. Defaults to "lint-baseline.xml".
 		Baseline_filename *string
+
+		// If true, baselining updatability lint checks (e.g. NewApi) is prohibited. Defaults to false.
+		Strict_updatability_linting *bool
 	}
 }
 
 type linter struct {
-	name                string
-	manifest            android.Path
-	mergedManifest      android.Path
-	srcs                android.Paths
-	srcJars             android.Paths
-	resources           android.Paths
-	classpath           android.Paths
-	classes             android.Path
-	extraLintCheckJars  android.Paths
-	test                bool
-	library             bool
-	minSdkVersion       string
-	targetSdkVersion    string
-	compileSdkVersion   string
-	javaLanguageLevel   string
-	kotlinLanguageLevel string
-	outputs             lintOutputs
-	properties          LintProperties
+	name                    string
+	manifest                android.Path
+	mergedManifest          android.Path
+	srcs                    android.Paths
+	srcJars                 android.Paths
+	resources               android.Paths
+	classpath               android.Paths
+	classes                 android.Path
+	extraLintCheckJars      android.Paths
+	test                    bool
+	library                 bool
+	minSdkVersion           string
+	targetSdkVersion        string
+	compileSdkVersion       string
+	javaLanguageLevel       string
+	kotlinLanguageLevel     string
+	outputs                 lintOutputs
+	properties              LintProperties
+	extraMainlineLintErrors []string
 
 	reports android.Paths
 
@@ -199,7 +207,7 @@ func (l *linter) writeLintProjectXML(ctx android.ModuleContext, rule *android.Ru
 	srcJarList := zipSyncCmd(ctx, rule, srcJarDir, l.srcJars)
 
 	cmd := rule.Command().
-		BuiltTool("lint-project-xml").
+		BuiltTool("lint_project_xml").
 		FlagWithOutput("--project_out ", projectXMLPath).
 		FlagWithOutput("--config_out ", configXMLPath).
 		FlagWithArg("--name ", ctx.ModuleName())
@@ -246,10 +254,19 @@ func (l *linter) writeLintProjectXML(ctx android.ModuleContext, rule *android.Ru
 	cmd.FlagWithInput("@",
 		android.PathForSource(ctx, "build/soong/java/lint_defaults.txt"))
 
+	cmd.FlagForEachArg("--error_check ", l.extraMainlineLintErrors)
 	cmd.FlagForEachArg("--disable_check ", l.properties.Lint.Disabled_checks)
 	cmd.FlagForEachArg("--warning_check ", l.properties.Lint.Warning_checks)
 	cmd.FlagForEachArg("--error_check ", l.properties.Lint.Error_checks)
 	cmd.FlagForEachArg("--fatal_check ", l.properties.Lint.Fatal_checks)
+
+	if BoolDefault(l.properties.Lint.Strict_updatability_linting, false) {
+		// Verify the module does not baseline issues that endanger safe updatability.
+		if baselinePath := l.getBaselineFilepath(ctx); baselinePath.Valid() {
+			cmd.FlagWithInput("--baseline ", baselinePath.Path())
+			cmd.FlagForEachArg("--disallowed_issues ", updatabilityChecks)
+		}
+	}
 
 	return lintPaths{
 		projectXML: projectXMLPath,
@@ -277,9 +294,36 @@ func (l *linter) generateManifest(ctx android.ModuleContext, rule *android.RuleB
 	return manifestPath
 }
 
+func (l *linter) getBaselineFilepath(ctx android.ModuleContext) android.OptionalPath {
+	var lintBaseline android.OptionalPath
+	if lintFilename := proptools.StringDefault(l.properties.Lint.Baseline_filename, "lint-baseline.xml"); lintFilename != "" {
+		if String(l.properties.Lint.Baseline_filename) != "" {
+			// if manually specified, we require the file to exist
+			lintBaseline = android.OptionalPathForPath(android.PathForModuleSrc(ctx, lintFilename))
+		} else {
+			lintBaseline = android.ExistentPathForSource(ctx, ctx.ModuleDir(), lintFilename)
+		}
+	}
+	return lintBaseline
+}
+
 func (l *linter) lint(ctx android.ModuleContext) {
 	if !l.enabled() {
 		return
+	}
+
+	if l.minSdkVersion != l.compileSdkVersion {
+		l.extraMainlineLintErrors = append(l.extraMainlineLintErrors, updatabilityChecks...)
+		_, filtered := android.FilterList(l.properties.Lint.Warning_checks, updatabilityChecks)
+		if len(filtered) != 0 {
+			ctx.PropertyErrorf("lint.warning_checks",
+				"Can't treat %v checks as warnings if min_sdk_version is different from sdk_version.", filtered)
+		}
+		_, filtered = android.FilterList(l.properties.Lint.Disabled_checks, updatabilityChecks)
+		if len(filtered) != 0 {
+			ctx.PropertyErrorf("lint.disabled_checks",
+				"Can't disable %v checks if min_sdk_version is different from sdk_version.", filtered)
+		}
 	}
 
 	extraLintCheckModules := ctx.GetDirectDepsWithTag(extraLintCheckTag)
@@ -347,7 +391,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	cmd := rule.Command()
 
-	cmd.Flag("JAVA_OPTS=-Xmx3072m").
+	cmd.Flag(`JAVA_OPTS="-Xmx3072m --add-opens java.base/java.util=ALL-UNNAMED"`).
 		FlagWithArg("ANDROID_SDK_HOME=", lintPaths.homeDir.String()).
 		FlagWithInput("SDK_ANNOTATIONS=", annotationsZipPath).
 		FlagWithInput("LINT_OPTS=-DLINT_API_DATABASE=", apiVersionsXMLPath)
@@ -375,22 +419,17 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		cmd.FlagWithArg("--check ", checkOnly)
 	}
 
-	if lintFilename := proptools.StringDefault(l.properties.Lint.Baseline_filename, "lint-baseline.xml"); lintFilename != "" {
-		var lintBaseline android.OptionalPath
-		if String(l.properties.Lint.Baseline_filename) != "" {
-			// if manually specified, we require the file to exist
-			lintBaseline = android.OptionalPathForPath(android.PathForModuleSrc(ctx, lintFilename))
-		} else {
-			lintBaseline = android.ExistentPathForSource(ctx, ctx.ModuleDir(), lintFilename)
-		}
-		if lintBaseline.Valid() {
-			cmd.FlagWithInput("--baseline ", lintBaseline.Path())
-		}
+	lintBaseline := l.getBaselineFilepath(ctx)
+	if lintBaseline.Valid() {
+		cmd.FlagWithInput("--baseline ", lintBaseline.Path())
 	}
 
 	cmd.Text("|| (").Text("if [ -e").Input(text).Text("]; then cat").Input(text).Text("; fi; exit 7)")
 
 	rule.Command().Text("rm -rf").Flag(lintPaths.cacheDir.String()).Flag(lintPaths.homeDir.String())
+
+	// The HTML output contains a date, remove it to make the output deterministic.
+	rule.Command().Text(`sed -i.tmp -e 's|Check performed at .*\(</nav>\)|\1|'`).Output(html)
 
 	rule.Build("lint", "lint")
 

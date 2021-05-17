@@ -345,7 +345,7 @@ func TestArchConfig(buildDir string, env map[string]string, bp string, fs map[st
 // multiple runs in the same program execution is carried over (such as Bazel
 // context or environment deps).
 func ConfigForAdditionalRun(c Config) (Config, error) {
-	newConfig, err := NewConfig(c.srcDir, c.buildDir, c.moduleListFile)
+	newConfig, err := NewConfig(c.srcDir, c.buildDir, c.moduleListFile, c.env)
 	if err != nil {
 		return Config{}, err
 	}
@@ -356,12 +356,12 @@ func ConfigForAdditionalRun(c Config) (Config, error) {
 
 // NewConfig creates a new Config object. The srcDir argument specifies the path
 // to the root source directory. It also loads the config file, if found.
-func NewConfig(srcDir, buildDir string, moduleListFile string) (Config, error) {
+func NewConfig(srcDir, buildDir string, moduleListFile string, availableEnv map[string]string) (Config, error) {
 	// Make a config with default options.
 	config := &config{
 		ProductVariablesFileName: filepath.Join(buildDir, productVariablesFileName),
 
-		env: originalEnv,
+		env: availableEnv,
 
 		srcDir:            srcDir,
 		buildDir:          buildDir,
@@ -1280,7 +1280,7 @@ func (c *config) CFIEnabledForPath(path string) bool {
 	if len(c.productVariables.CFIIncludePaths) == 0 {
 		return false
 	}
-	return HasAnyPrefix(path, c.productVariables.CFIIncludePaths)
+	return HasAnyPrefix(path, c.productVariables.CFIIncludePaths) && !c.CFIDisabledForPath(path)
 }
 
 func (c *config) MemtagHeapDisabledForPath(path string) bool {
@@ -1294,14 +1294,14 @@ func (c *config) MemtagHeapAsyncEnabledForPath(path string) bool {
 	if len(c.productVariables.MemtagHeapAsyncIncludePaths) == 0 {
 		return false
 	}
-	return HasAnyPrefix(path, c.productVariables.MemtagHeapAsyncIncludePaths)
+	return HasAnyPrefix(path, c.productVariables.MemtagHeapAsyncIncludePaths) && !c.MemtagHeapDisabledForPath(path)
 }
 
 func (c *config) MemtagHeapSyncEnabledForPath(path string) bool {
 	if len(c.productVariables.MemtagHeapSyncIncludePaths) == 0 {
 		return false
 	}
-	return HasAnyPrefix(path, c.productVariables.MemtagHeapSyncIncludePaths)
+	return HasAnyPrefix(path, c.productVariables.MemtagHeapSyncIncludePaths) && !c.MemtagHeapDisabledForPath(path)
 }
 
 func (c *config) VendorConfig(name string) VendorConfig {
@@ -1314,10 +1314,6 @@ func (c *config) NdkAbis() bool {
 
 func (c *config) AmlAbis() bool {
 	return Bool(c.productVariables.Aml_abis)
-}
-
-func (c *config) ExcludeDraftNdkApis() bool {
-	return Bool(c.productVariables.Exclude_draft_ndk_apis)
 }
 
 func (c *config) FlattenApex() bool {
@@ -1517,6 +1513,10 @@ func (c *deviceConfig) BuildBrokenEnforceSyspropOwner() bool {
 
 func (c *deviceConfig) BuildBrokenTrebleSyspropNeverallow() bool {
 	return c.config.productVariables.BuildBrokenTrebleSyspropNeverallow
+}
+
+func (c *deviceConfig) BuildDebugfsRestrictionsEnabled() bool {
+	return c.config.productVariables.BuildDebugfsRestrictionsEnabled
 }
 
 func (c *deviceConfig) BuildBrokenVendorPropertyNamespace() bool {

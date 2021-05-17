@@ -160,28 +160,6 @@ func FixtureWithPrebuiltApis(release2Modules map[string][]string) android.Fixtur
 	)
 }
 
-func TestConfig(buildDir string, env map[string]string, bp string, fs map[string][]byte) android.Config {
-	bp += GatherRequiredDepsForTest()
-
-	mockFS := android.MockFS{}
-
-	cc.GatherRequiredFilesForTest(mockFS)
-
-	for k, v := range fs {
-		mockFS[k] = v
-	}
-
-	if env == nil {
-		env = make(map[string]string)
-	}
-	if env["ANDROID_JAVA8_HOME"] == "" {
-		env["ANDROID_JAVA8_HOME"] = "jdk8"
-	}
-	config := android.TestArchConfig(buildDir, env, bp, mockFS)
-
-	return config
-}
-
 func prebuiltApisFilesForLibs(apiLevels []string, sdkLibs []string) map[string][]byte {
 	fs := make(map[string][]byte)
 	for _, level := range apiLevels {
@@ -200,17 +178,47 @@ func prebuiltApisFilesForLibs(apiLevels []string, sdkLibs []string) map[string][
 	return fs
 }
 
-// Register build components provided by this package that are needed by tests.
-//
-// In particular this must register all the components that are used in the `Android.bp` snippet
-// returned by GatherRequiredDepsForTest()
-//
-// deprecated: Use test fixtures instead, e.g. PrepareForTestWithJavaBuildComponents
-func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
-	registerRequiredBuildComponentsForTest(ctx)
+// FixtureConfigureBootJars configures the boot jars in both the dexpreopt.GlobalConfig and
+// Config.productVariables structs. As a side effect that enables dexpreopt.
+func FixtureConfigureBootJars(bootJars ...string) android.FixturePreparer {
+	artBootJars := []string{}
+	for _, j := range bootJars {
+		artApex := false
+		for _, artApexName := range artApexNames {
+			if strings.HasPrefix(j, artApexName+":") {
+				artApex = true
+				break
+			}
+		}
+		if artApex {
+			artBootJars = append(artBootJars, j)
+		}
+	}
+	return android.GroupFixturePreparers(
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BootJars = android.CreateTestConfiguredJarList(bootJars)
+		}),
+		dexpreopt.FixtureSetBootJars(bootJars...),
+		dexpreopt.FixtureSetArtBootJars(artBootJars...),
 
-	// Make sure that any tool related module types needed by dexpreopt have been registered.
-	dexpreopt.RegisterToolModulesForTest(ctx)
+		// Add a fake dex2oatd module.
+		dexpreopt.PrepareForTestWithFakeDex2oatd,
+	)
+}
+
+// FixtureConfigureUpdatableBootJars configures the updatable boot jars in both the
+// dexpreopt.GlobalConfig and Config.productVariables structs. As a side effect that enables
+// dexpreopt.
+func FixtureConfigureUpdatableBootJars(bootJars ...string) android.FixturePreparer {
+	return android.GroupFixturePreparers(
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.UpdatableBootJars = android.CreateTestConfiguredJarList(bootJars)
+		}),
+		dexpreopt.FixtureSetUpdatableBootJars(bootJars...),
+
+		// Add a fake dex2oatd module.
+		dexpreopt.PrepareForTestWithFakeDex2oatd,
+	)
 }
 
 // registerRequiredBuildComponentsForTest registers the build components used by
@@ -224,33 +232,18 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterAppBuildComponents(ctx)
 	RegisterAppImportBuildComponents(ctx)
 	RegisterAppSetBuildComponents(ctx)
-	RegisterBootImageBuildComponents(ctx)
+	registerBootclasspathBuildComponents(ctx)
+	registerBootclasspathFragmentBuildComponents(ctx)
 	RegisterDexpreoptBootJarsComponents(ctx)
 	RegisterDocsBuildComponents(ctx)
 	RegisterGenRuleBuildComponents(ctx)
-	RegisterJavaBuildComponents(ctx)
+	registerJavaBuildComponents(ctx)
+	registerPlatformBootclasspathBuildComponents(ctx)
 	RegisterPrebuiltApisBuildComponents(ctx)
 	RegisterRuntimeResourceOverlayBuildComponents(ctx)
 	RegisterSdkLibraryBuildComponents(ctx)
 	RegisterStubsBuildComponents(ctx)
 	RegisterSystemModulesBuildComponents(ctx)
-}
-
-// Gather the module definitions needed by tests that depend upon code from this package.
-//
-// Returns an `Android.bp` snippet that defines the modules that are needed by this package.
-//
-// deprecated: Use test fixtures instead, e.g. PrepareForTestWithJavaDefaultModules
-func GatherRequiredDepsForTest() string {
-	bp := gatherRequiredDepsForTest()
-
-	// For class loader context and <uses-library> tests.
-	bp += dexpreopt.CompatLibDefinitionsForTest()
-
-	// Make sure that any tools needed for dexpreopting are defined.
-	bp += dexpreopt.BpToolModulesForTest()
-
-	return bp
 }
 
 // gatherRequiredDepsForTest gathers the module definitions used by
@@ -349,6 +342,46 @@ func CheckModuleDependencies(t *testing.T, ctx *android.TestContext, name, varia
 	if actual := deps; !reflect.DeepEqual(expected, actual) {
 		t.Errorf("expected %#q, found %#q", expected, actual)
 	}
+}
+
+// CheckPlatformBootclasspathModules returns the apex:module pair for the modules depended upon by
+// the platform-bootclasspath module.
+func CheckPlatformBootclasspathModules(t *testing.T, result *android.TestResult, name string, expected []string) {
+	t.Helper()
+	platformBootclasspath := result.Module(name, "android_common").(*platformBootclasspathModule)
+	pairs := ApexNamePairsFromModules(result.TestContext, platformBootclasspath.configuredModules)
+	android.AssertDeepEquals(t, fmt.Sprintf("%s modules", "platform-bootclasspath"), expected, pairs)
+}
+
+// ApexNamePairsFromModules returns the apex:module pair for the supplied modules.
+func ApexNamePairsFromModules(ctx *android.TestContext, modules []android.Module) []string {
+	pairs := []string{}
+	for _, module := range modules {
+		pairs = append(pairs, apexNamePairFromModule(ctx, module))
+	}
+	return pairs
+}
+
+func apexNamePairFromModule(ctx *android.TestContext, module android.Module) string {
+	name := module.Name()
+	var apex string
+	apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+	if apexInfo.IsForPlatform() {
+		apex = "platform"
+	} else {
+		apex = apexInfo.InApexes[0]
+	}
+
+	return fmt.Sprintf("%s:%s", apex, name)
+}
+
+// CheckPlatformBootclasspathFragments returns the apex:module pair for the fragments depended upon
+// by the platform-bootclasspath module.
+func CheckPlatformBootclasspathFragments(t *testing.T, result *android.TestResult, name string, expected []string) {
+	t.Helper()
+	platformBootclasspath := result.Module(name, "android_common").(*platformBootclasspathModule)
+	pairs := ApexNamePairsFromModules(result.TestContext, platformBootclasspath.fragments)
+	android.AssertDeepEquals(t, fmt.Sprintf("%s fragments", "platform-bootclasspath"), expected, pairs)
 }
 
 func CheckHiddenAPIRuleInputs(t *testing.T, expected string, hiddenAPIRule android.TestingBuildParams) {

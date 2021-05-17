@@ -132,7 +132,7 @@ var (
 		blueprint.RuleParams{
 			Depfile:     "${out}.d",
 			Deps:        blueprint.DepsGCC,
-			Command:     "CROSS_COMPILE=$crossCompile XZ=$xzCmd CLANG_BIN=${config.ClangBin} $stripPath ${args} -i ${in} -o ${out} -d ${out}.d",
+			Command:     "XZ=$xzCmd CLANG_BIN=${config.ClangBin} $stripPath ${args} -i ${in} -o ${out} -d ${out}.d",
 			CommandDeps: []string{"$stripPath", "$xzCmd"},
 			Pool:        darwinStripPool,
 		},
@@ -182,11 +182,11 @@ var (
 		blueprint.RuleParams{
 			Depfile:     "${out}.d",
 			Deps:        blueprint.DepsGCC,
-			Command:     "CROSS_COMPILE=$crossCompile $tocPath $format -i ${in} -o ${out} -d ${out}.d",
+			Command:     "CLANG_BIN=$clangBin $tocPath $format -i ${in} -o ${out} -d ${out}.d",
 			CommandDeps: []string{"$tocPath"},
 			Restat:      true,
 		},
-		"crossCompile", "format")
+		"clangBin", "format")
 
 	// Rule for invoking clang-tidy (a clang-based linter).
 	clangTidy, clangTidyRE = pctx.RemoteStaticRules("clangTidy",
@@ -948,16 +948,12 @@ func transformSharedObjectToToc(ctx android.ModuleContext, inputFile android.Pat
 	outputFile android.WritablePath, flags builderFlags) {
 
 	var format string
-	var crossCompile string
 	if ctx.Darwin() {
 		format = "--macho"
-		crossCompile = "${config.MacToolPath}"
 	} else if ctx.Windows() {
 		format = "--pe"
-		crossCompile = gccCmd(flags.toolchain, "")
 	} else {
 		format = "--elf"
-		crossCompile = gccCmd(flags.toolchain, "")
 	}
 
 	ctx.Build(pctx, android.BuildParams{
@@ -966,8 +962,8 @@ func transformSharedObjectToToc(ctx android.ModuleContext, inputFile android.Pat
 		Output:      outputFile,
 		Input:       inputFile,
 		Args: map[string]string{
-			"crossCompile": crossCompile,
-			"format":       format,
+			"clangBin": "${config.ClangBin}",
+			"format":   format,
 		},
 	})
 }
@@ -1009,7 +1005,7 @@ func transformObjsToObj(ctx android.ModuleContext, objFiles android.Paths,
 func transformBinaryPrefixSymbols(ctx android.ModuleContext, prefix string, inputFile android.Path,
 	flags builderFlags, outputFile android.WritablePath) {
 
-	objcopyCmd := gccCmd(flags.toolchain, "objcopy")
+	objcopyCmd := "${config.ClangBin}/llvm-objcopy"
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        prefixSymbols,

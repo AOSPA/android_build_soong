@@ -91,7 +91,7 @@ type RuntimeResourceOverlayModule interface {
 }
 
 func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext) {
-	sdkDep := decodeSdkDep(ctx, sdkContext(r))
+	sdkDep := decodeSdkDep(ctx, android.SdkContext(r))
 	if sdkDep.hasFrameworkLibs() {
 		r.aapt.deps(ctx, sdkDep)
 	}
@@ -141,23 +141,23 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 	ctx.InstallFile(r.installDir, r.outputFile.Base(), r.outputFile)
 }
 
-func (r *RuntimeResourceOverlay) sdkVersion() sdkSpec {
-	return sdkSpecFrom(String(r.properties.Sdk_version))
+func (r *RuntimeResourceOverlay) SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	return android.SdkSpecFrom(ctx, String(r.properties.Sdk_version))
 }
 
-func (r *RuntimeResourceOverlay) systemModules() string {
+func (r *RuntimeResourceOverlay) SystemModules() string {
 	return ""
 }
 
-func (r *RuntimeResourceOverlay) minSdkVersion() sdkSpec {
+func (r *RuntimeResourceOverlay) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
 	if r.properties.Min_sdk_version != nil {
-		return sdkSpecFrom(*r.properties.Min_sdk_version)
+		return android.SdkSpecFrom(ctx, *r.properties.Min_sdk_version)
 	}
-	return r.sdkVersion()
+	return r.SdkVersion(ctx)
 }
 
-func (r *RuntimeResourceOverlay) targetSdkVersion() sdkSpec {
-	return r.sdkVersion()
+func (r *RuntimeResourceOverlay) TargetSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	return r.SdkVersion(ctx)
 }
 
 func (r *RuntimeResourceOverlay) Certificate() Certificate {

@@ -229,11 +229,16 @@ func (c *Module) generateBazelBuildActions(ctx android.ModuleContext, label stri
 	filePaths, ok := bazelCtx.GetOutputFiles(label, ctx.Arch().ArchType)
 	if ok {
 		var bazelOutputFiles android.Paths
+		exportIncludeDirs := map[string]bool{}
 		for _, bazelOutputFile := range filePaths {
 			bazelOutputFiles = append(bazelOutputFiles, android.PathForBazelOut(ctx, bazelOutputFile))
+			exportIncludeDirs[filepath.Dir(bazelOutputFile)] = true
 		}
 		c.outputFiles = bazelOutputFiles
 		c.outputDeps = bazelOutputFiles
+		for includePath, _ := range exportIncludeDirs {
+			c.exportedIncludeDirs = append(c.exportedIncludeDirs, android.PathForBazelOut(ctx, includePath))
+		}
 	}
 	return ok
 }
@@ -538,7 +543,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	bazelModuleLabel := g.GetBazelLabel(ctx, g)
 	bazelActionsUsed := false
-	if ctx.Config().BazelContext.BazelEnabled() && len(bazelModuleLabel) > 0 {
+	if g.MixedBuildsEnabled(ctx) {
 		bazelActionsUsed = g.generateBazelBuildActions(ctx, bazelModuleLabel)
 	}
 	if !bazelActionsUsed {
@@ -850,8 +855,8 @@ func GenruleBp2Build(ctx android.TopDownMutatorContext) {
 			cmd = strings.Replace(cmd, "$(locations)", fmt.Sprintf("$(locations %s)", tools.Value.Includes[0].Label), -1)
 		}
 		for _, l := range allReplacements.Includes {
-			bpLoc := fmt.Sprintf("$(location %s)", l.Bp_text)
-			bpLocs := fmt.Sprintf("$(locations %s)", l.Bp_text)
+			bpLoc := fmt.Sprintf("$(location %s)", l.OriginalModuleName)
+			bpLocs := fmt.Sprintf("$(locations %s)", l.OriginalModuleName)
 			bazelLoc := fmt.Sprintf("$(location %s)", l.Label)
 			bazelLocs := fmt.Sprintf("$(locations %s)", l.Label)
 			cmd = strings.Replace(cmd, bpLoc, bazelLoc, -1)
