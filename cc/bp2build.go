@@ -17,6 +17,7 @@ import (
 	"android/soong/android"
 	"android/soong/bazel"
 	"path/filepath"
+	"strings"
 )
 
 // bp2build functions and helpers for converting cc_* modules to Bazel.
@@ -85,7 +86,11 @@ func depsBp2BuildMutator(ctx android.BottomUpMutatorContext) {
 }
 
 type sharedAttributes struct {
-	staticDeps bazel.LabelListAttribute
+	copts            bazel.StringListAttribute
+	srcs             bazel.LabelListAttribute
+	staticDeps       bazel.LabelListAttribute
+	dynamicDeps      bazel.LabelListAttribute
+	wholeArchiveDeps bazel.LabelListAttribute
 }
 
 // bp2buildParseSharedProps returns the attributes for the shared variant of a cc_library.
@@ -95,17 +100,35 @@ func bp2BuildParseSharedProps(ctx android.TopDownMutatorContext, module *Module)
 		return sharedAttributes{}
 	}
 
-	var staticDeps bazel.LabelListAttribute
+	copts := bazel.StringListAttribute{Value: lib.SharedProperties.Shared.Cflags}
 
-	staticDeps.Value = android.BazelLabelForModuleDeps(ctx, lib.SharedProperties.Shared.Whole_static_libs)
+	srcs := bazel.LabelListAttribute{
+		Value: android.BazelLabelForModuleSrc(ctx, lib.SharedProperties.Shared.Srcs)}
+
+	staticDeps := bazel.LabelListAttribute{
+		Value: android.BazelLabelForModuleDeps(ctx, lib.SharedProperties.Shared.Static_libs)}
+
+	dynamicDeps := bazel.LabelListAttribute{
+		Value: android.BazelLabelForModuleDeps(ctx, lib.SharedProperties.Shared.Shared_libs)}
+
+	wholeArchiveDeps := bazel.LabelListAttribute{
+		Value: android.BazelLabelForModuleDeps(ctx, lib.SharedProperties.Shared.Whole_static_libs)}
 
 	return sharedAttributes{
-		staticDeps: staticDeps,
+		copts:            copts,
+		srcs:             srcs,
+		staticDeps:       staticDeps,
+		dynamicDeps:      dynamicDeps,
+		wholeArchiveDeps: wholeArchiveDeps,
 	}
 }
 
 type staticAttributes struct {
-	srcs bazel.LabelListAttribute
+	copts            bazel.StringListAttribute
+	srcs             bazel.LabelListAttribute
+	staticDeps       bazel.LabelListAttribute
+	dynamicDeps      bazel.LabelListAttribute
+	wholeArchiveDeps bazel.LabelListAttribute
 }
 
 // bp2buildParseStaticProps returns the attributes for the static variant of a cc_library.
@@ -115,11 +138,26 @@ func bp2BuildParseStaticProps(ctx android.TopDownMutatorContext, module *Module)
 		return staticAttributes{}
 	}
 
-	var srcs bazel.LabelListAttribute
-	srcs.Value = android.BazelLabelForModuleSrc(ctx, lib.StaticProperties.Static.Srcs)
+	copts := bazel.StringListAttribute{Value: lib.StaticProperties.Static.Cflags}
+
+	srcs := bazel.LabelListAttribute{
+		Value: android.BazelLabelForModuleSrc(ctx, lib.StaticProperties.Static.Srcs)}
+
+	staticDeps := bazel.LabelListAttribute{
+		Value: android.BazelLabelForModuleDeps(ctx, lib.StaticProperties.Static.Static_libs)}
+
+	dynamicDeps := bazel.LabelListAttribute{
+		Value: android.BazelLabelForModuleDeps(ctx, lib.StaticProperties.Static.Shared_libs)}
+
+	wholeArchiveDeps := bazel.LabelListAttribute{
+		Value: android.BazelLabelForModuleDeps(ctx, lib.StaticProperties.Static.Whole_static_libs)}
 
 	return staticAttributes{
-		srcs: srcs,
+		copts:            copts,
+		srcs:             srcs,
+		staticDeps:       staticDeps,
+		dynamicDeps:      dynamicDeps,
+		wholeArchiveDeps: wholeArchiveDeps,
 	}
 }
 
@@ -151,7 +189,13 @@ func bp2BuildParseCompilerProps(ctx android.TopDownMutatorContext, module *Modul
 
 	// Parse the list of copts.
 	parseCopts := func(baseCompilerProps *BaseCompilerProperties) []string {
-		copts := append([]string{}, baseCompilerProps.Cflags...)
+		var copts []string
+		for _, flag := range baseCompilerProps.Cflags {
+			// Soong's cflags can contain spaces, like `-include header.h`. For
+			// Bazel's copts, split them up to be compatible with the
+			// no_copts_tokenization feature.
+			copts = append(copts, strings.Split(flag, " ")...)
+		}
 		for _, dir := range parseLocalIncludeDirs(baseCompilerProps) {
 			copts = append(copts, includeFlag(dir))
 		}
@@ -246,15 +290,28 @@ func bp2BuildParseCompilerProps(ctx android.TopDownMutatorContext, module *Modul
 
 // Convenience struct to hold all attributes parsed from linker properties.
 type linkerAttributes struct {
-	deps          bazel.LabelListAttribute
-	linkopts      bazel.StringListAttribute
-	versionScript bazel.LabelAttribute
+	deps             bazel.LabelListAttribute
+	dynamicDeps      bazel.LabelListAttribute
+	wholeArchiveDeps bazel.LabelListAttribute
+	linkopts         bazel.StringListAttribute
+	versionScript    bazel.LabelAttribute
+}
+
+// FIXME(b/187655838): Use the existing linkerFlags() function instead of duplicating logic here
+func getBp2BuildLinkerFlags(linkerProperties *BaseLinkerProperties) []string {
+	flags := linkerProperties.Ldflags
+	if !BoolDefault(linkerProperties.Pack_relocations, true) {
+		flags = append(flags, "-Wl,--pack-dyn-relocs=none")
+	}
+	return flags
 }
 
 // bp2BuildParseLinkerProps parses the linker properties of a module, including
 // configurable attribute values.
 func bp2BuildParseLinkerProps(ctx android.TopDownMutatorContext, module *Module) linkerAttributes {
 	var deps bazel.LabelListAttribute
+	var dynamicDeps bazel.LabelListAttribute
+	var wholeArchiveDeps bazel.LabelListAttribute
 	var linkopts bazel.StringListAttribute
 	var versionScript bazel.LabelAttribute
 
@@ -263,14 +320,19 @@ func bp2BuildParseLinkerProps(ctx android.TopDownMutatorContext, module *Module)
 			libs := baseLinkerProps.Header_libs
 			libs = append(libs, baseLinkerProps.Export_header_lib_headers...)
 			libs = append(libs, baseLinkerProps.Static_libs...)
-			libs = append(libs, baseLinkerProps.Whole_static_libs...)
+			wholeArchiveLibs := baseLinkerProps.Whole_static_libs
 			libs = android.SortedUniqueStrings(libs)
 			deps = bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, libs))
-			linkopts.Value = baseLinkerProps.Ldflags
+			linkopts.Value = getBp2BuildLinkerFlags(baseLinkerProps)
+			wholeArchiveDeps = bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, wholeArchiveLibs))
 
 			if baseLinkerProps.Version_script != nil {
 				versionScript.Value = android.BazelLabelForModuleSrcSingle(ctx, *baseLinkerProps.Version_script)
 			}
+
+			sharedLibs := baseLinkerProps.Shared_libs
+			dynamicDeps = bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, sharedLibs))
+
 			break
 		}
 	}
@@ -280,14 +342,19 @@ func bp2BuildParseLinkerProps(ctx android.TopDownMutatorContext, module *Module)
 			libs := baseLinkerProps.Header_libs
 			libs = append(libs, baseLinkerProps.Export_header_lib_headers...)
 			libs = append(libs, baseLinkerProps.Static_libs...)
-			libs = append(libs, baseLinkerProps.Whole_static_libs...)
+			wholeArchiveLibs := baseLinkerProps.Whole_static_libs
 			libs = android.SortedUniqueStrings(libs)
 			deps.SetValueForArch(arch.Name, android.BazelLabelForModuleDeps(ctx, libs))
-			linkopts.SetValueForArch(arch.Name, baseLinkerProps.Ldflags)
+			linkopts.SetValueForArch(arch.Name, getBp2BuildLinkerFlags(baseLinkerProps))
+			wholeArchiveDeps.SetValueForArch(arch.Name, android.BazelLabelForModuleDeps(ctx, wholeArchiveLibs))
+
 			if baseLinkerProps.Version_script != nil {
 				versionScript.SetValueForArch(arch.Name,
 					android.BazelLabelForModuleSrcSingle(ctx, *baseLinkerProps.Version_script))
 			}
+
+			sharedLibs := baseLinkerProps.Shared_libs
+			dynamicDeps.SetValueForArch(arch.Name, android.BazelLabelForModuleDeps(ctx, sharedLibs))
 		}
 	}
 
@@ -296,17 +363,24 @@ func bp2BuildParseLinkerProps(ctx android.TopDownMutatorContext, module *Module)
 			libs := baseLinkerProps.Header_libs
 			libs = append(libs, baseLinkerProps.Export_header_lib_headers...)
 			libs = append(libs, baseLinkerProps.Static_libs...)
-			libs = append(libs, baseLinkerProps.Whole_static_libs...)
+			wholeArchiveLibs := baseLinkerProps.Whole_static_libs
 			libs = android.SortedUniqueStrings(libs)
+			wholeArchiveDeps.SetValueForOS(os.Name, android.BazelLabelForModuleDeps(ctx, wholeArchiveLibs))
 			deps.SetValueForOS(os.Name, android.BazelLabelForModuleDeps(ctx, libs))
-			linkopts.SetValueForOS(os.Name, baseLinkerProps.Ldflags)
+
+			linkopts.SetValueForOS(os.Name, getBp2BuildLinkerFlags(baseLinkerProps))
+
+			sharedLibs := baseLinkerProps.Shared_libs
+			dynamicDeps.SetValueForOS(os.Name, android.BazelLabelForModuleDeps(ctx, sharedLibs))
 		}
 	}
 
 	return linkerAttributes{
-		deps:          deps,
-		linkopts:      linkopts,
-		versionScript: versionScript,
+		deps:             deps,
+		dynamicDeps:      dynamicDeps,
+		wholeArchiveDeps: wholeArchiveDeps,
+		linkopts:         linkopts,
+		versionScript:    versionScript,
 	}
 }
 

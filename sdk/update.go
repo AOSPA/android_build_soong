@@ -29,6 +29,14 @@ import (
 	"android/soong/android"
 )
 
+// Environment variables that affect the generated snapshot
+// ========================================================
+//
+// SOONG_SDK_SNAPSHOT_PREFER
+//     By default every unversioned module in the generated snapshot has prefer: false. Building it
+//     with SOONG_SDK_SNAPSHOT_PREFER=true will force them to use prefer: true.
+//
+
 var pctx = android.NewPackageContext("android/soong/sdk")
 
 var (
@@ -220,6 +228,7 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 
 	allMembersByName := make(map[string]struct{})
 	exportedMembersByName := make(map[string]struct{})
+	hasLicenses := false
 	var memberVariantDeps []sdkMemberVariantDep
 	for _, sdkVariant := range sdkVariants {
 		memberVariantDeps = append(memberVariantDeps, sdkVariant.memberVariantDeps...)
@@ -232,6 +241,10 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 
 			if memberVariantDep.export {
 				exportedMembersByName[name] = struct{}{}
+			}
+
+			if memberVariantDep.memberType == android.LicenseModuleSdkMemberType {
+				hasLicenses = true
 			}
 		}
 	}
@@ -258,8 +271,27 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 	}
 	s.builderForTests = builder
 
-	// Create the prebuilt modules for each of the member modules.
+	// If the sdk snapshot includes any license modules then add a package module which has a
+	// default_applicable_licenses property. That will prevent the LSC license process from updating
+	// the generated Android.bp file to add a package module that includes all licenses used by all
+	// the modules in that package. That would be unnecessary as every module in the sdk should have
+	// their own licenses property specified.
+	if hasLicenses {
+		pkg := bpFile.newModule("package")
+		property := "default_applicable_licenses"
+		pkg.AddCommentForProperty(property, `
+A default list here prevents the license LSC from adding its own list which would
+be unnecessary as every module in the sdk already has its own licenses property.
+`)
+		pkg.AddProperty(property, []string{"Android-Apache-2.0"})
+		bpFile.AddModule(pkg)
+	}
+
+	// Group the variants for each member module together and then group the members of each member
+	// type together.
 	members := s.groupMemberVariantsByMemberThenType(ctx, memberVariantDeps)
+
+	// Create the prebuilt modules for each of the member modules.
 	for _, member := range members {
 		memberType := member.memberType
 
@@ -274,7 +306,9 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) andro
 
 	// Create a transformer that will transform an unversioned module by replacing any references
 	// to internal members with a unique module name and setting prefer: false.
-	unversionedTransformer := unversionedTransformation{builder: builder}
+	unversionedTransformer := unversionedTransformation{
+		builder: builder,
+	}
 
 	for _, unversioned := range builder.prebuiltOrder {
 		// Prune any empty property sets.
@@ -503,15 +537,19 @@ func (s *sdk) collateSnapshotModuleInfo(ctx android.BaseModuleContext, sdkVarian
 		}
 
 		combined := sdkVariantToCombinedProperties[memberVariantDep.sdkVariant]
-		memberTypeProperty := s.memberListProperty(memberVariantDep.memberType)
+		memberListProperty := s.memberListProperty(memberVariantDep.memberType)
 		memberName := ctx.OtherModuleName(memberVariantDep.variant)
 
+		if memberListProperty.getter == nil {
+			continue
+		}
+
 		// Append the member to the appropriate list, if it is not already present in the list.
-		memberList := memberTypeProperty.getter(combined.dynamicProperties)
+		memberList := memberListProperty.getter(combined.dynamicProperties)
 		if !android.InList(memberName, memberList) {
 			memberList = append(memberList, memberName)
 		}
-		memberTypeProperty.setter(combined.dynamicProperties, memberList)
+		memberListProperty.setter(combined.dynamicProperties, memberList)
 	}
 
 	return list
@@ -563,6 +601,9 @@ func (s *sdk) addSnapshotPropertiesToPropertySet(builder *snapshotBuilder, prope
 
 	dynamicMemberTypeListProperties := combined.dynamicProperties
 	for _, memberListProperty := range s.memberListProperties() {
+		if memberListProperty.getter == nil {
+			continue
+		}
 		names := memberListProperty.getter(dynamicMemberTypeListProperties)
 		if len(names) > 0 {
 			propertySet.AddProperty(memberListProperty.propertyName(), builder.versionedSdkMemberNames(names, false))
@@ -596,9 +637,11 @@ type unversionedToVersionedTransformation struct {
 func (t unversionedToVersionedTransformation) transformModule(module *bpModule) *bpModule {
 	// Use a versioned name for the module but remember the original name for the
 	// snapshot.
-	name := module.getValue("name").(string)
+	name := module.Name()
 	module.setProperty("name", t.builder.versionedSdkMemberName(name, true))
 	module.insertAfter("name", "sdk_member_name", name)
+	// Remove the prefer property if present as versioned modules never need marking with prefer.
+	module.removeProperty("prefer")
 	return module
 }
 
@@ -618,12 +661,8 @@ type unversionedTransformation struct {
 
 func (t unversionedTransformation) transformModule(module *bpModule) *bpModule {
 	// If the module is an internal member then use a unique name for it.
-	name := module.getValue("name").(string)
+	name := module.Name()
 	module.setProperty("name", t.builder.unversionedSdkMemberName(name, true))
-
-	// Set prefer: false - this is not strictly required as that is the default.
-	module.insertAfter("name", "prefer", false)
-
 	return module
 }
 
@@ -674,12 +713,26 @@ func generateFilteredBpContents(contents *generatedContents, bpFile *bpFile, mod
 func outputPropertySet(contents *generatedContents, set *bpPropertySet) {
 	contents.Indent()
 
+	addComment := func(name string) {
+		if text, ok := set.comments[name]; ok {
+			for _, line := range strings.Split(text, "\n") {
+				contents.Printfln("// %s", line)
+			}
+		}
+	}
+
 	// Output the properties first, followed by the nested sets. This ensures a
 	// consistent output irrespective of whether property sets are created before
 	// or after the properties. This simplifies the creation of the module.
 	for _, name := range set.order {
 		value := set.getValue(name)
 
+		// Do not write property sets in the properties phase.
+		if _, ok := value.(*bpPropertySet); ok {
+			continue
+		}
+
+		addComment(name)
 		switch v := value.(type) {
 		case []string:
 			length := len(v)
@@ -700,9 +753,6 @@ func outputPropertySet(contents *generatedContents, set *bpPropertySet) {
 		case bool:
 			contents.Printfln("%s: %t,", name, v)
 
-		case *bpPropertySet:
-			// Do not write property sets in the properties phase.
-
 		default:
 			contents.Printfln("%s: %q,", name, value)
 		}
@@ -714,6 +764,7 @@ func outputPropertySet(contents *generatedContents, set *bpPropertySet) {
 		// Only write property sets in the sets phase.
 		switch v := value.(type) {
 		case *bpPropertySet:
+			addComment(name)
 			contents.Printfln("%s: {", name)
 			outputPropertySet(contents, v)
 			contents.Printfln("},")
@@ -732,7 +783,9 @@ func (s *sdk) GetAndroidBpContentsForTests() string {
 func (s *sdk) GetUnversionedAndroidBpContentsForTests() string {
 	contents := &generatedContents{}
 	generateFilteredBpContents(contents, s.builderForTests.bpFile, func(module *bpModule) bool {
-		return !strings.Contains(module.properties["name"].(string), "@")
+		name := module.Name()
+		// Include modules that are either unversioned or have no name.
+		return !strings.Contains(name, "@")
 	})
 	return contents.content.String()
 }
@@ -740,7 +793,9 @@ func (s *sdk) GetUnversionedAndroidBpContentsForTests() string {
 func (s *sdk) GetVersionedAndroidBpContentsForTests() string {
 	contents := &generatedContents{}
 	generateFilteredBpContents(contents, s.builderForTests.bpFile, func(module *bpModule) bool {
-		return strings.Contains(module.properties["name"].(string), "@")
+		name := module.Name()
+		// Include modules that are either versioned or have no name.
+		return name == "" || strings.Contains(name, "@")
 	})
 	return contents.content.String()
 }
@@ -859,6 +914,13 @@ func (s *snapshotBuilder) AddPrebuiltModule(member android.SdkMember, moduleType
 		m.AddProperty("apex_available", apexAvailable)
 	}
 
+	// The licenses are the same for all variants.
+	mctx := s.ctx
+	licenseInfo := mctx.OtherModuleProvider(variant, android.LicenseInfoProvider).(android.LicenseInfo)
+	if len(licenseInfo.Licenses) > 0 {
+		m.AddPropertyWithTag("licenses", licenseInfo.Licenses, s.OptionalSdkMemberReferencePropertyTag())
+	}
+
 	deviceSupported := false
 	hostSupported := false
 
@@ -886,6 +948,12 @@ func (s *snapshotBuilder) AddPrebuiltModule(member android.SdkMember, moduleType
 }
 
 func addHostDeviceSupportedProperties(deviceSupported bool, hostSupported bool, bpModule *bpModule) {
+	// If neither device or host is supported then this module does not support either so will not
+	// recognize the properties.
+	if !deviceSupported && !hostSupported {
+		return
+	}
+
 	if !deviceSupported {
 		bpModule.AddProperty("device_supported", false)
 	}
@@ -1361,6 +1429,21 @@ func (m *memberContext) Name() string {
 func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModule *bpModule) {
 
 	memberType := member.memberType
+
+	// Do not add the prefer property if the member snapshot module is a source module type.
+	if !memberType.UsesSourceModuleTypeInSnapshot() {
+		// Set the prefer based on the environment variable. This is a temporary work around to allow a
+		// snapshot to be created that sets prefer: true.
+		// TODO(b/174997203): Remove once the ability to select the modules to prefer can be done
+		//  dynamically at build time not at snapshot generation time.
+		prefer := ctx.sdkMemberContext.Config().IsEnvTrue("SOONG_SDK_SNAPSHOT_PREFER")
+
+		// Set prefer. Setting this to false is not strictly required as that is the default but it does
+		// provide a convenient hook to post-process the generated Android.bp file, e.g. in tests to
+		// check the behavior when a prebuilt is preferred. It also makes it explicit what the default
+		// behavior is for the module.
+		bpModule.insertAfter("name", "prefer", prefer)
+	}
 
 	// Group the variants by os type.
 	variantsByOsType := make(map[android.OsType][]android.Module)
