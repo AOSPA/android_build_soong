@@ -16,7 +16,6 @@ package cc
 
 import (
 	"sync"
-
 	"android/soong/android"
 	"android/soong/cc/config"
 )
@@ -180,8 +179,15 @@ func shouldCreateSourceAbiDumpForLibrary(ctx android.BaseModuleContext) bool {
 // Mark the direct and transitive dependencies of libraries that need ABI check, so that ABI dumps
 // of their dependencies would be generated.
 func sabiDepsMutator(mctx android.TopDownMutatorContext) {
+	isQiifaLibrary := false
+        if m, ok := mctx.Module().(*Module); ok && m.library != nil {
+		m.library.loadQiifaMetadata(mctx)
+			if (m.library.isLibraryQiifaEnabled()){
+				isQiifaLibrary = true
+			}
+	}
 	// Escape hatch to not check any ABI dump.
-	if mctx.Config().IsEnvTrue("SKIP_ABI_CHECKS") {
+	if mctx.Config().IsEnvTrue("SKIP_ABI_CHECKS") && !isQiifaLibrary {
 		return
 	}
 	// Only create ABI dump for native shared libraries and their static library dependencies.
