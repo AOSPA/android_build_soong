@@ -257,24 +257,74 @@ cc_library {
 			depsMutators:                       []android.RegisterMutatorFunc{cc.RegisterDepsBp2Build},
 			dir:                                "foo/bar",
 			filesystem: map[string]string{
-				"foo/bar/a.cpp": "",
+				"foo/bar/both.cpp":       "",
+				"foo/bar/sharedonly.cpp": "",
+				"foo/bar/staticonly.cpp": "",
 				"foo/bar/Android.bp": `
 cc_library {
     name: "a",
-    shared: { whole_static_libs: ["b"] },
-    static: { srcs: ["a.cpp"] },
+    srcs: ["both.cpp"],
+    cflags: ["bothflag"],
+    shared_libs: ["shared_dep_for_both"],
+    static_libs: ["static_dep_for_both"],
+    whole_static_libs: ["whole_static_lib_for_both"],
+    static: {
+        srcs: ["staticonly.cpp"],
+        cflags: ["staticflag"],
+        shared_libs: ["shared_dep_for_static"],
+        static_libs: ["static_dep_for_static"],
+        whole_static_libs: ["whole_static_lib_for_static"],
+    },
+    shared: {
+        srcs: ["sharedonly.cpp"],
+        cflags: ["sharedflag"],
+        shared_libs: ["shared_dep_for_shared"],
+        static_libs: ["static_dep_for_shared"],
+        whole_static_libs: ["whole_static_lib_for_shared"],
+    },
     bazel_module: { bp2build_available: true },
 }
 
-cc_library_static { name: "b" }
+cc_library_static { name: "static_dep_for_shared" }
+
+cc_library_static { name: "static_dep_for_static" }
+
+cc_library_static { name: "static_dep_for_both" }
+
+cc_library_static { name: "whole_static_lib_for_shared" }
+
+cc_library_static { name: "whole_static_lib_for_static" }
+
+cc_library_static { name: "whole_static_lib_for_both" }
+
+cc_library { name: "shared_dep_for_shared" }
+
+cc_library { name: "shared_dep_for_static" }
+
+cc_library { name: "shared_dep_for_both" }
 `,
 			},
 			bp: soongCcLibraryPreamble,
 			expectedBazelTargets: []string{`cc_library(
     name = "a",
-    copts = ["-Ifoo/bar"],
-    srcs = ["a.cpp"],
-    static_deps_for_shared = [":b"],
+    copts = [
+        "bothflag",
+        "-Ifoo/bar",
+    ],
+    deps = [":static_dep_for_both"],
+    dynamic_deps = [":shared_dep_for_both"],
+    dynamic_deps_for_shared = [":shared_dep_for_shared"],
+    dynamic_deps_for_static = [":shared_dep_for_static"],
+    shared_copts = ["sharedflag"],
+    shared_srcs = ["sharedonly.cpp"],
+    srcs = ["both.cpp"],
+    static_copts = ["staticflag"],
+    static_deps_for_shared = [":static_dep_for_shared"],
+    static_deps_for_static = [":static_dep_for_static"],
+    static_srcs = ["staticonly.cpp"],
+    whole_archive_deps = [":whole_static_lib_for_both"],
+    whole_archive_deps_for_shared = [":whole_static_lib_for_shared"],
+    whole_archive_deps_for_static = [":whole_static_lib_for_static"],
 )`},
 		},
 		{
@@ -300,6 +350,162 @@ cc_library {
     copts = ["-Ifoo/bar"],
     srcs = ["a.cpp"],
     version_script = "v.map",
+)`},
+		},
+		{
+			description:                        "cc_library configured version script",
+			moduleTypeUnderTest:                "cc_library",
+			moduleTypeUnderTestFactory:         cc.LibraryFactory,
+			moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryBp2Build,
+			depsMutators:                       []android.RegisterMutatorFunc{cc.RegisterDepsBp2Build},
+			dir:                                "foo/bar",
+			filesystem: map[string]string{
+				"foo/bar/Android.bp": `
+		cc_library {
+		   name: "a",
+		   srcs: ["a.cpp"],
+		   arch: {
+		     arm: {
+		       version_script: "arm.map",
+		     },
+		     arm64: {
+		       version_script: "arm64.map",
+		     },
+		   },
+
+		   bazel_module: { bp2build_available: true },
+		}
+		`,
+			},
+			bp: soongCcLibraryPreamble,
+			expectedBazelTargets: []string{`cc_library(
+    name = "a",
+    copts = ["-Ifoo/bar"],
+    srcs = ["a.cpp"],
+    version_script = select({
+        "//build/bazel/platforms/arch:arm": "arm.map",
+        "//build/bazel/platforms/arch:arm64": "arm64.map",
+        "//conditions:default": None,
+    }),
+)`},
+		},
+		{
+			description:                        "cc_library shared_libs",
+			moduleTypeUnderTest:                "cc_library",
+			moduleTypeUnderTestFactory:         cc.LibraryFactory,
+			moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryBp2Build,
+			depsMutators:                       []android.RegisterMutatorFunc{cc.RegisterDepsBp2Build},
+			dir:                                "foo/bar",
+			filesystem: map[string]string{
+				"foo/bar/Android.bp": `
+cc_library {
+    name: "mylib",
+    bazel_module: { bp2build_available: true },
+}
+
+cc_library {
+    name: "a",
+    shared_libs: ["mylib",],
+    bazel_module: { bp2build_available: true },
+}
+`,
+			},
+			bp: soongCcLibraryPreamble,
+			expectedBazelTargets: []string{`cc_library(
+    name = "a",
+    copts = ["-Ifoo/bar"],
+    dynamic_deps = [":mylib"],
+)`, `cc_library(
+    name = "mylib",
+    copts = ["-Ifoo/bar"],
+)`},
+		},
+		{
+			description:                        "cc_library pack_relocations test",
+			moduleTypeUnderTest:                "cc_library",
+			moduleTypeUnderTestFactory:         cc.LibraryFactory,
+			moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryBp2Build,
+			depsMutators:                       []android.RegisterMutatorFunc{cc.RegisterDepsBp2Build},
+			dir:                                "foo/bar",
+			filesystem: map[string]string{
+				"foo/bar/Android.bp": `
+cc_library {
+    name: "a",
+    srcs: ["a.cpp"],
+    pack_relocations: false,
+    bazel_module: { bp2build_available: true },
+}
+
+cc_library {
+    name: "b",
+    srcs: ["b.cpp"],
+    arch: {
+        x86_64: {
+		pack_relocations: false,
+	},
+    },
+    bazel_module: { bp2build_available: true },
+}
+
+cc_library {
+    name: "c",
+    srcs: ["c.cpp"],
+    target: {
+        darwin: {
+		pack_relocations: false,
+	},
+    },
+    bazel_module: { bp2build_available: true },
+}`,
+			},
+			bp: soongCcLibraryPreamble,
+			expectedBazelTargets: []string{`cc_library(
+    name = "a",
+    copts = ["-Ifoo/bar"],
+    linkopts = ["-Wl,--pack-dyn-relocs=none"],
+    srcs = ["a.cpp"],
+)`, `cc_library(
+    name = "b",
+    copts = ["-Ifoo/bar"],
+    linkopts = select({
+        "//build/bazel/platforms/arch:x86_64": ["-Wl,--pack-dyn-relocs=none"],
+        "//conditions:default": [],
+    }),
+    srcs = ["b.cpp"],
+)`, `cc_library(
+    name = "c",
+    copts = ["-Ifoo/bar"],
+    linkopts = select({
+        "//build/bazel/platforms/os:darwin": ["-Wl,--pack-dyn-relocs=none"],
+        "//conditions:default": [],
+    }),
+    srcs = ["c.cpp"],
+)`},
+		},
+		{
+			description:                        "cc_library spaces in copts",
+			moduleTypeUnderTest:                "cc_library",
+			moduleTypeUnderTestFactory:         cc.LibraryFactory,
+			moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryBp2Build,
+			depsMutators:                       []android.RegisterMutatorFunc{cc.RegisterDepsBp2Build},
+			dir:                                "foo/bar",
+			filesystem: map[string]string{
+				"foo/bar/Android.bp": `
+cc_library {
+    name: "a",
+    cflags: ["-include header.h",],
+    bazel_module: { bp2build_available: true },
+}
+`,
+			},
+			bp: soongCcLibraryPreamble,
+			expectedBazelTargets: []string{`cc_library(
+    name = "a",
+    copts = [
+        "-include",
+        "header.h",
+        "-Ifoo/bar",
+    ],
 )`},
 		},
 	}

@@ -50,8 +50,13 @@ func registerApexBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("override_apex", overrideApexFactory)
 	ctx.RegisterModuleType("apex_set", apexSetFactory)
 
+	ctx.PreArchMutators(registerPreArchMutators)
 	ctx.PreDepsMutators(RegisterPreDepsMutators)
 	ctx.PostDepsMutators(RegisterPostDepsMutators)
+}
+
+func registerPreArchMutators(ctx android.RegisterMutatorsContext) {
+	ctx.TopDown("prebuilt_apex_module_creator", prebuiltApexModuleCreatorMutator).Parallel()
 }
 
 func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
@@ -1204,7 +1209,7 @@ func (a *apexBundle) IsNativeCoverageNeeded(ctx android.BaseModuleContext) bool 
 }
 
 // Implements cc.Coverage
-func (a *apexBundle) PreventInstall() {
+func (a *apexBundle) SetPreventInstall() {
 	a.properties.PreventInstall = true
 }
 
@@ -2043,6 +2048,11 @@ func apexBootclasspathFragmentFiles(ctx android.ModuleContext, module blueprint.
 			filesToAdd = append(filesToAdd, af)
 		}
 	}
+
+	// Add classpaths.proto config.
+	classpathProtoOutput := bootclasspathFragmentInfo.ClasspathFragmentProtoOutput
+	classpathProto := newApexFile(ctx, classpathProtoOutput, classpathProtoOutput.Base(), bootclasspathFragmentInfo.ClasspathFragmentProtoInstallDir.Rel(), etc, nil)
+	filesToAdd = append(filesToAdd, classpathProto)
 
 	return filesToAdd
 }

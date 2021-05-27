@@ -845,6 +845,10 @@ func (c *Module) SetHideFromMake() {
 	c.Properties.HideFromMake = true
 }
 
+func (c *Module) HiddenFromMake() bool {
+	return c.Properties.HideFromMake
+}
+
 func (c *Module) Toc() android.OptionalPath {
 	if c.linker != nil {
 		if library, ok := c.linker.(libraryInterface); ok {
@@ -1092,12 +1096,6 @@ func (c *Module) IsDependencyRoot() bool {
 	return false
 }
 
-// Returns true if the module is using VNDK libraries instead of the libraries in /system/lib or /system/lib64.
-// "product" and "vendor" variant modules return true for this function.
-// When BOARD_VNDK_VERSION is set, vendor variants of "vendor_available: true", "vendor: true",
-// "soc_specific: true" and more vendor installed modules are included here.
-// When PRODUCT_PRODUCT_VNDK_VERSION is set, product variants of "product_available: true" or
-// "product_specific: true" modules are included here.
 func (c *Module) UseVndk() bool {
 	return c.Properties.VndkVersion != ""
 }
@@ -1145,6 +1143,18 @@ func (c *Module) IsVendorPublicLibrary() bool {
 	return c.VendorProperties.IsVendorPublicLibrary
 }
 
+func (c *Module) HasLlndkStubs() bool {
+	lib := moduleLibraryInterface(c)
+	return lib != nil && lib.hasLLNDKStubs()
+}
+
+func (c *Module) StubsVersion() string {
+	if lib, ok := c.linker.(versionedInterface); ok {
+		return lib.stubsVersion()
+	}
+	panic(fmt.Errorf("StubsVersion called on non-versioned module: %q", c.BaseModuleName()))
+}
+
 // isImplementationForLLNDKPublic returns true for any variant of a cc_library that has LLNDK stubs
 // and does not set llndk.vendor_available: false.
 func (c *Module) isImplementationForLLNDKPublic() bool {
@@ -1189,7 +1199,7 @@ func (c *Module) isNDKStubLibrary() bool {
 	return false
 }
 
-func (c *Module) isVndkSp() bool {
+func (c *Module) IsVndkSp() bool {
 	if vndkdep := c.vndkdep; vndkdep != nil {
 		return vndkdep.isVndkSp()
 	}
@@ -1208,7 +1218,7 @@ func (c *Module) SubName() string {
 }
 
 func (c *Module) MustUseVendorVariant() bool {
-	return c.isVndkSp() || c.Properties.MustUseVendorVariant
+	return c.IsVndkSp() || c.Properties.MustUseVendorVariant
 }
 
 func (c *Module) getVndkExtendsModuleName() string {
@@ -1347,11 +1357,11 @@ func (ctx *moduleContextImpl) header() bool {
 }
 
 func (ctx *moduleContextImpl) binary() bool {
-	return ctx.mod.binary()
+	return ctx.mod.Binary()
 }
 
 func (ctx *moduleContextImpl) object() bool {
-	return ctx.mod.object()
+	return ctx.mod.Object()
 }
 
 func (ctx *moduleContextImpl) canUseSdk() bool {
@@ -1449,7 +1459,7 @@ func (ctx *moduleContextImpl) isNDKStubLibrary() bool {
 }
 
 func (ctx *moduleContextImpl) isVndkSp() bool {
-	return ctx.mod.isVndkSp()
+	return ctx.mod.IsVndkSp()
 }
 
 func (ctx *moduleContextImpl) IsVndkExt() bool {
@@ -1791,7 +1801,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		// glob exported headers for snapshot, if BOARD_VNDK_VERSION is current or
 		// RECOVERY_SNAPSHOT_VERSION is current.
 		if i, ok := c.linker.(snapshotLibraryInterface); ok {
-			if shouldCollectHeadersForSnapshot(ctx, c, apexInfo) {
+			if ShouldCollectHeadersForSnapshot(ctx, c, apexInfo) {
 				i.collectHeadersForSnapshot(ctx)
 			}
 		}
@@ -1804,7 +1814,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		// modules can be hidden from make as some are needed for resolving make side
 		// dependencies.
 		c.HideFromMake()
-	} else if !c.installable(apexInfo) {
+	} else if !installable(c, apexInfo) {
 		c.SkipInstall()
 	}
 
@@ -2456,7 +2466,7 @@ func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
 			return true
 		}
 
-		if to.isVndkSp() || to.IsLlndk() {
+		if to.IsVndkSp() || to.IsLlndk() {
 			return false
 		}
 
@@ -3082,7 +3092,7 @@ func (c *Module) Header() bool {
 	return false
 }
 
-func (c *Module) binary() bool {
+func (c *Module) Binary() bool {
 	if b, ok := c.linker.(interface {
 		binary() bool
 	}); ok {
@@ -3091,7 +3101,7 @@ func (c *Module) binary() bool {
 	return false
 }
 
-func (c *Module) object() bool {
+func (c *Module) Object() bool {
 	if o, ok := c.linker.(interface {
 		object() bool
 	}); ok {
@@ -3173,18 +3183,25 @@ func (c *Module) UniqueApexVariations() bool {
 	}
 }
 
-// Return true if the module is ever installable.
 func (c *Module) EverInstallable() bool {
 	return c.installer != nil &&
 		// Check to see whether the module is actually ever installable.
 		c.installer.everInstallable()
 }
 
-func (c *Module) installable(apexInfo android.ApexInfo) bool {
+func (c *Module) PreventInstall() bool {
+	return c.Properties.PreventInstall
+}
+
+func (c *Module) Installable() *bool {
+	return c.Properties.Installable
+}
+
+func installable(c LinkableInterface, apexInfo android.ApexInfo) bool {
 	ret := c.EverInstallable() &&
 		// Check to see whether the module has been configured to not be installed.
-		proptools.BoolDefault(c.Properties.Installable, true) &&
-		!c.Properties.PreventInstall && c.outputFile.Valid()
+		proptools.BoolDefault(c.Installable(), true) &&
+		!c.PreventInstall() && c.OutputFile().Valid()
 
 	// The platform variant doesn't need further condition. Apex variants however might not
 	// be installable because it will likely to be included in the APEX and won't appear
