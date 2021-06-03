@@ -30,20 +30,9 @@ import (
 	"android/soong/remoteexec"
 )
 
-type TechPackage struct {
-	XMLName         xml.Name `xml:"techpackage"`
-	TechPackageName string   `xml:"techpackagename"`
-	Enabled         string   `xml:"enable"`
-	Library         []string `xml:"library"`
-}
-type TechPackages struct {
-	XMLName      xml.Name      `xml:"techpackages"`
-	TechPackages []TechPackage `xml:"techpackage"`
-}
-
-type TechPackageLibs struct {
-	EnabledLibs  []string
-	DisabledLibs []string
+type QiifaAbiLibs struct {
+	XMLName         xml.Name `xml:"abilibs"`
+        Library         []string `xml:"library"`
 }
 
 var (
@@ -172,7 +161,6 @@ var (
 
 	SDClang             = false
 	SDClangPath         = ""
-	TechPackageLibsList = &TechPackageLibs{}
 	ForceSDClangOff     = false
 
 	// prebuilts/clang default settings.
@@ -188,6 +176,7 @@ var (
 
 	// Directories with warnings from Android.mk files.
 	WarningAllowedOldProjects = []string{}
+        QiifaAbiLibraryList       = []string{}
 )
 
 var pctx = android.NewPackageContext("android/soong/cc/config")
@@ -199,18 +188,13 @@ func init() {
 	qiifaBuildConfig := os.Getenv("QIIFA_BUILD_CONFIG")
 	if _, err := os.Stat(qiifaBuildConfig); !os.IsNotExist(err) {
 		data, _ := ioutil.ReadFile(qiifaBuildConfig)
-		var techpackages TechPackages
-		_ = xml.Unmarshal([]byte(data), &techpackages)
-		for i := 0; i < len(techpackages.TechPackages); i++ {
-			for j := 0; j < len(techpackages.TechPackages[i].Library); j++ {
-				if techpackages.TechPackages[i].Enabled == "enabled" {
-					TechPackageLibsList.EnabledLibs = append(TechPackageLibsList.EnabledLibs, techpackages.TechPackages[i].Library[j])
-				} else {
-					TechPackageLibsList.DisabledLibs = append(TechPackageLibsList.DisabledLibs, techpackages.TechPackages[i].Library[j])
-				}
-			}
-		}
-	}
+		var qiifalibs QiifaAbiLibs
+		_ = xml.Unmarshal([]byte(data), &qiifalibs)
+                for i := 0; i < len(qiifalibs.Library); i++ {
+                    QiifaAbiLibraryList = append(QiifaAbiLibraryList, qiifalibs.Library[i])
+
+                }
+        }
 	pctx.StaticVariable("CommonGlobalConlyflags", strings.Join(commonGlobalConlyflags, " "))
 	pctx.StaticVariable("DeviceGlobalCppflags", strings.Join(deviceGlobalCppflags, " "))
 	pctx.StaticVariable("DeviceGlobalLdflags", strings.Join(deviceGlobalLdflags, " "))
