@@ -155,6 +155,8 @@ func TestPlatformBootclasspath(t *testing.T) {
 func TestPlatformBootclasspath_Fragments(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForTestWithPlatformBootclasspath,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
 		android.FixtureWithRootAndroidBp(`
 			platform_bootclasspath {
 				name: "platform-bootclasspath",
@@ -192,6 +194,9 @@ func TestPlatformBootclasspath_Fragments(t *testing.T) {
 			bootclasspath_fragment {
 				name: "bar-fragment",
 				contents: ["bar"],
+				api: {
+					stub_libs: ["foo"],
+				},
 				hidden_api: {
 					unsupported: [
 							"bar-unsupported.txt",
@@ -227,19 +232,34 @@ func TestPlatformBootclasspath_Fragments(t *testing.T) {
 				sdk_version: "none",
 				compile_dex: true,
 			}
+
+			java_sdk_library {
+				name: "foo",
+				srcs: ["a.java"],
+				public: {
+					enabled: true,
+				},
+				compile_dex: true,
+			}
 		`),
 	).RunTest(t)
 
 	pbcp := result.Module("platform-bootclasspath", "android_common")
-	info := result.ModuleProvider(pbcp, hiddenAPIFlagFileInfoProvider).(hiddenAPIFlagFileInfo)
+	info := result.ModuleProvider(pbcp, monolithicHiddenAPIInfoProvider).(MonolithicHiddenAPIInfo)
 
 	for _, category := range hiddenAPIFlagFileCategories {
 		name := category.propertyName
 		message := fmt.Sprintf("category %s", name)
 		filename := strings.ReplaceAll(name, "_", "-")
 		expected := []string{fmt.Sprintf("%s.txt", filename), fmt.Sprintf("bar-%s.txt", filename)}
-		android.AssertPathsRelativeToTopEquals(t, message, expected, info.categoryToPaths[category])
+		android.AssertPathsRelativeToTopEquals(t, message, expected, info.FlagsFilesByCategory[category])
 	}
+
+	android.AssertPathsRelativeToTopEquals(t, "stub flags", []string{"out/soong/.intermediates/bar-fragment/android_common/modular-hiddenapi/stub-flags.csv"}, info.StubFlagsPaths)
+	android.AssertPathsRelativeToTopEquals(t, "annotation flags", []string{"out/soong/.intermediates/bar-fragment/android_common/modular-hiddenapi/annotation-flags.csv"}, info.AnnotationFlagsPaths)
+	android.AssertPathsRelativeToTopEquals(t, "metadata flags", []string{"out/soong/.intermediates/bar-fragment/android_common/modular-hiddenapi/metadata.csv"}, info.MetadataPaths)
+	android.AssertPathsRelativeToTopEquals(t, "index flags", []string{"out/soong/.intermediates/bar-fragment/android_common/modular-hiddenapi/index.csv"}, info.IndexPaths)
+	android.AssertPathsRelativeToTopEquals(t, "all flags", []string{"out/soong/.intermediates/bar-fragment/android_common/modular-hiddenapi/all-flags.csv"}, info.AllFlagsPaths)
 }
 
 func TestPlatformBootclasspathVariant(t *testing.T) {
@@ -267,7 +287,7 @@ func TestPlatformBootclasspath_ClasspathFragmentPaths(t *testing.T) {
 	).RunTest(t)
 
 	p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
-	android.AssertStringEquals(t, "output filepath", p.Name()+".pb", p.ClasspathFragmentBase.outputFilepath.Base())
+	android.AssertStringEquals(t, "output filepath", "bootclasspath.pb", p.ClasspathFragmentBase.outputFilepath.Base())
 	android.AssertPathRelativeToTopEquals(t, "install filepath", "out/soong/target/product/test_device/system/etc/classpaths", p.ClasspathFragmentBase.installDirPath)
 }
 
@@ -307,7 +327,7 @@ func TestPlatformBootclasspathModule_AndroidMkEntries(t *testing.T) {
 		want := map[string][]string{
 			"LOCAL_MODULE":                {"platform-bootclasspath"},
 			"LOCAL_MODULE_CLASS":          {"ETC"},
-			"LOCAL_INSTALLED_MODULE_STEM": {"platform-bootclasspath.pb"},
+			"LOCAL_INSTALLED_MODULE_STEM": {"bootclasspath.pb"},
 			// Output and Install paths are tested separately in TestPlatformBootclasspath_ClasspathFragmentPaths
 		}
 
@@ -407,20 +427,14 @@ func TestPlatformBootclasspath_HiddenAPIMonolithicFiles(t *testing.T) {
 		}
 	`)
 
-	platformBootclasspath := result.ModuleForTests("myplatform-bootclasspath", "android_common")
-	indexRule := platformBootclasspath.Rule("platform-bootclasspath-monolithic-hiddenapi-index")
-	CheckHiddenAPIRuleInputs(t, `
-.intermediates/bar/android_common/hiddenapi/index.csv
-.intermediates/foo/android_common/hiddenapi/index.csv
-`,
-		indexRule)
-
 	// Make sure that the foo-hiddenapi-annotations.jar is included in the inputs to the rules that
 	// creates the index.csv file.
-	foo := result.ModuleForTests("foo", "android_common")
-	indexParams := foo.Output("hiddenapi/index.csv")
+	platformBootclasspath := result.ModuleForTests("myplatform-bootclasspath", "android_common")
+	indexRule := platformBootclasspath.Rule("monolithic_hidden_API_index")
 	CheckHiddenAPIRuleInputs(t, `
+.intermediates/bar/android_common/javac/bar.jar
 .intermediates/foo-hiddenapi-annotations/android_common/javac/foo-hiddenapi-annotations.jar
 .intermediates/foo/android_common/javac/foo.jar
-`, indexParams)
+`,
+		indexRule)
 }
