@@ -51,6 +51,7 @@ type licenseProperties struct {
 type licenseModule struct {
 	ModuleBase
 	DefaultableModuleBase
+	SdkBase
 
 	properties licenseProperties
 }
@@ -60,7 +61,17 @@ func (m *licenseModule) DepsMutator(ctx BottomUpMutatorContext) {
 }
 
 func (m *licenseModule) GenerateAndroidBuildActions(ctx ModuleContext) {
-	// Nothing to do.
+	// license modules have no licenses, but license_kinds must refer to license_kind modules
+	mergeStringProps(&m.base().commonProperties.Effective_licenses, ctx.ModuleName())
+	mergePathProps(&m.base().commonProperties.Effective_license_text, PathsForModuleSrc(ctx, m.properties.License_text)...)
+	for _, module := range ctx.GetDirectDepsWithTag(licenseKindTag) {
+		if lk, ok := module.(*licenseKindModule); ok {
+			mergeStringProps(&m.base().commonProperties.Effective_license_conditions, lk.properties.Conditions...)
+			mergeStringProps(&m.base().commonProperties.Effective_license_kinds, ctx.OtherModuleName(module))
+		} else {
+			ctx.ModuleErrorf("license_kinds property %q is not a license_kind module", ctx.OtherModuleName(module))
+		}
+	}
 }
 
 func LicenseFactory() Module {
@@ -75,6 +86,7 @@ func LicenseFactory() Module {
 	// The visibility property needs to be checked and parsed by the visibility module.
 	setPrimaryVisibilityProperty(module, "visibility", &module.properties.Visibility)
 
+	InitSdkAwareModule(module)
 	initAndroidModuleBase(module)
 	InitDefaultableModule(module)
 

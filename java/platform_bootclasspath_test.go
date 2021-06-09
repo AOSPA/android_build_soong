@@ -33,7 +33,7 @@ var prepareForTestWithPlatformBootclasspath = android.GroupFixturePreparers(
 func TestPlatformBootclasspath(t *testing.T) {
 	preparer := android.GroupFixturePreparers(
 		prepareForTestWithPlatformBootclasspath,
-		FixtureConfigureBootJars("platform:foo", "platform:bar"),
+		FixtureConfigureBootJars("platform:foo", "system_ext:bar"),
 		android.FixtureWithRootAndroidBp(`
 			platform_bootclasspath {
 				name: "platform-bootclasspath",
@@ -45,6 +45,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 				system_modules: "none",
 				sdk_version: "none",
 				compile_dex: true,
+				system_ext_specific: true,
 			}
 		`),
 	)
@@ -125,6 +126,23 @@ func TestPlatformBootclasspath(t *testing.T) {
 			preparer,
 			addSourceBootclassPathModule,
 			addPrebuiltPreferredBootclassPathModule,
+		).RunTest(t)
+
+		CheckPlatformBootclasspathModules(t, result, "platform-bootclasspath", []string{
+			"platform:prebuilt_foo",
+			"platform:bar",
+		})
+	})
+
+	t.Run("dex import", func(t *testing.T) {
+		result := android.GroupFixturePreparers(
+			preparer,
+			android.FixtureAddTextFile("deximport/Android.bp", `
+				dex_import {
+					name: "foo",
+					jars: ["a.jar"],
+				}
+			`),
 		).RunTest(t)
 
 		CheckPlatformBootclasspathModules(t, result, "platform-bootclasspath", []string{

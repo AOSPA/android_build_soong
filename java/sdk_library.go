@@ -339,12 +339,7 @@ func init() {
 	})
 
 	// Register sdk member types.
-	android.RegisterSdkMemberType(&sdkLibrarySdkMemberType{
-		android.SdkMemberTypeBase{
-			PropertyName: "java_sdk_libs",
-			SupportsSdk:  true,
-		},
-	})
+	android.RegisterSdkMemberType(javaSdkLibrarySdkMemberType)
 }
 
 func RegisterSdkLibraryBuildComponents(ctx android.RegistrationContext) {
@@ -1761,6 +1756,7 @@ func SdkLibraryFactory() android.Module {
 
 	module.InitSdkLibraryProperties()
 	android.InitApexModule(module)
+	android.InitSdkAwareModule(module)
 	InitJavaModule(module, android.HostAndDeviceSupported)
 
 	// Initialize the map from scope to scope specific properties.
@@ -2199,6 +2195,20 @@ func (module *SdkLibraryImport) LintDepSets() LintDepSets {
 	}
 }
 
+func (module *SdkLibraryImport) getStrictUpdatabilityLinting() bool {
+	if module.implLibraryModule == nil {
+		return false
+	} else {
+		return module.implLibraryModule.getStrictUpdatabilityLinting()
+	}
+}
+
+func (module *SdkLibraryImport) setStrictUpdatabilityLinting(strictLinting bool) {
+	if module.implLibraryModule != nil {
+		module.implLibraryModule.setStrictUpdatabilityLinting(strictLinting)
+	}
+}
+
 // to satisfy apex.javaDependency interface
 func (module *SdkLibraryImport) Stem() string {
 	return module.BaseModuleName()
@@ -2377,14 +2387,18 @@ func (s *sdkLibrarySdkMemberType) CreateVariantPropertiesStruct() android.SdkMem
 	return &sdkLibrarySdkMemberProperties{}
 }
 
+var javaSdkLibrarySdkMemberType = &sdkLibrarySdkMemberType{
+	android.SdkMemberTypeBase{
+		PropertyName: "java_sdk_libs",
+		SupportsSdk:  true,
+	},
+}
+
 type sdkLibrarySdkMemberProperties struct {
 	android.SdkMemberPropertiesBase
 
 	// Scope to per scope properties.
 	Scopes map[*apiScope]scopeProperties
-
-	// Additional libraries that the exported stubs libraries depend upon.
-	Libs []string
 
 	// The Java stubs source files.
 	Stub_srcs []string
@@ -2437,7 +2451,6 @@ func (s *sdkLibrarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMembe
 		}
 	}
 
-	s.Libs = sdk.properties.Libs
 	s.Naming_scheme = sdk.commonSdkLibraryProperties.Naming_scheme
 	s.Shared_library = proptools.BoolPtr(sdk.sharedLibrary())
 	s.Compile_dex = sdk.dexProperties.Compile_dex
@@ -2501,9 +2514,5 @@ func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberCo
 			dests = append(dests, dest)
 		}
 		propertySet.AddProperty("doctag_files", dests)
-	}
-
-	if len(s.Libs) > 0 {
-		propertySet.AddPropertyWithTag("libs", s.Libs, ctx.SnapshotBuilder().SdkMemberReferencePropertyTag(false))
 	}
 }

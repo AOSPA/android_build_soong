@@ -54,14 +54,14 @@ type sdk struct {
 	// list properties, e.g. java_libs.
 	dynamicMemberTypeListProperties interface{}
 
-	// Information about the OsType specific member variants associated with this variant.
+	// Information about the OsType specific member variants depended upon by this variant.
 	//
 	// Set by OsType specific variants in the collectMembers() method and used by the
 	// CommonOS variant when building the snapshot. That work is all done on separate
 	// calls to the sdk.GenerateAndroidBuildActions method which is guaranteed to be
 	// called for the OsType specific variants before the CommonOS variant (because
 	// the latter depends on the former).
-	memberRefs []sdkMemberRef
+	memberVariantDeps []sdkMemberVariantDep
 
 	// The multilib variants that are used by this sdk variant.
 	multilibUsages multilibUsage
@@ -101,6 +101,9 @@ type sdkMemberListProperty struct {
 	// getter for the list of member names
 	getter func(properties interface{}) []string
 
+	// setter for the list of member names
+	setter func(properties interface{}, list []string)
+
 	// the type of member referenced in the list
 	memberType android.SdkMemberType
 
@@ -127,6 +130,8 @@ type dynamicSdkMemberTypes struct {
 
 	// Information about each of the member type specific list properties.
 	memberListProperties []*sdkMemberListProperty
+
+	memberTypeToProperty map[android.SdkMemberType]*sdkMemberListProperty
 }
 
 func (d *dynamicSdkMemberTypes) createMemberListProperties() interface{} {
@@ -160,26 +165,31 @@ func getDynamicSdkMemberTypes(registry *android.SdkMemberTypesRegistry) *dynamic
 func createDynamicSdkMemberTypes(sdkMemberTypes []android.SdkMemberType) *dynamicSdkMemberTypes {
 
 	var listProperties []*sdkMemberListProperty
+	memberTypeToProperty := map[android.SdkMemberType]*sdkMemberListProperty{}
 	var fields []reflect.StructField
 
 	// Iterate over the member types creating StructField and sdkMemberListProperty objects.
-	for f, memberType := range sdkMemberTypes {
+	nextFieldIndex := 0
+	for _, memberType := range sdkMemberTypes {
+
 		p := memberType.SdkPropertyName()
 
-		// Create a dynamic exported field for the member type's property.
-		fields = append(fields, reflect.StructField{
-			Name: proptools.FieldNameForProperty(p),
-			Type: reflect.TypeOf([]string{}),
-			Tag:  `android:"arch_variant"`,
-		})
+		var getter func(properties interface{}) []string
+		var setter func(properties interface{}, list []string)
+		if memberType.RequiresBpProperty() {
+			// Create a dynamic exported field for the member type's property.
+			fields = append(fields, reflect.StructField{
+				Name: proptools.FieldNameForProperty(p),
+				Type: reflect.TypeOf([]string{}),
+				Tag:  `android:"arch_variant"`,
+			})
 
-		// Copy the field index for use in the getter func as using the loop variable directly will
-		// cause all funcs to use the last value.
-		fieldIndex := f
+			// Copy the field index for use in the getter func as using the loop variable directly will
+			// cause all funcs to use the last value.
+			fieldIndex := nextFieldIndex
+			nextFieldIndex += 1
 
-		// Create an sdkMemberListProperty for the member type.
-		memberListProperty := &sdkMemberListProperty{
-			getter: func(properties interface{}) []string {
+			getter = func(properties interface{}) []string {
 				// The properties is expected to be of the following form (where
 				// <Module_types> is the name of an SdkMemberType.SdkPropertyName().
 				//     properties *struct {<Module_types> []string, ....}
@@ -189,13 +199,31 @@ func createDynamicSdkMemberTypes(sdkMemberTypes []android.SdkMemberType) *dynami
 				//
 				list := reflect.ValueOf(properties).Elem().Field(fieldIndex).Interface().([]string)
 				return list
-			},
+			}
 
-			memberType: memberType,
-
-			dependencyTag: android.DependencyTagForSdkMemberType(memberType),
+			setter = func(properties interface{}, list []string) {
+				// The properties is expected to be of the following form (where
+				// <Module_types> is the name of an SdkMemberType.SdkPropertyName().
+				//     properties *struct {<Module_types> []string, ....}
+				//
+				// Although it accesses the field by index the following reflection code is equivalent to:
+				//    *properties.<Module_types> = list
+				//
+				reflect.ValueOf(properties).Elem().Field(fieldIndex).Set(reflect.ValueOf(list))
+			}
 		}
 
+		// Create an sdkMemberListProperty for the member type.
+		memberListProperty := &sdkMemberListProperty{
+			getter:     getter,
+			setter:     setter,
+			memberType: memberType,
+
+			// Dependencies added directly from member properties are always exported.
+			dependencyTag: android.DependencyTagForSdkMemberType(memberType, true),
+		}
+
+		memberTypeToProperty[memberType] = memberListProperty
 		listProperties = append(listProperties, memberListProperty)
 	}
 
@@ -204,6 +232,7 @@ func createDynamicSdkMemberTypes(sdkMemberTypes []android.SdkMemberType) *dynami
 
 	return &dynamicSdkMemberTypes{
 		memberListProperties: listProperties,
+		memberTypeToProperty: memberTypeToProperty,
 		propertiesStructType: propertiesStructType,
 	}
 }
@@ -255,20 +284,8 @@ func (s *sdk) memberListProperties() []*sdkMemberListProperty {
 	return s.dynamicSdkMemberTypes.memberListProperties
 }
 
-func (s *sdk) getExportedMembers() map[string]struct{} {
-	// Collect all the exported members.
-	exportedMembers := make(map[string]struct{})
-
-	for _, memberListProperty := range s.memberListProperties() {
-		names := memberListProperty.getter(s.dynamicMemberTypeListProperties)
-
-		// Every member specified explicitly in the properties is exported by the sdk.
-		for _, name := range names {
-			exportedMembers[name] = struct{}{}
-		}
-	}
-
-	return exportedMembers
+func (s *sdk) memberListProperty(memberType android.SdkMemberType) *sdkMemberListProperty {
+	return s.dynamicSdkMemberTypes.memberTypeToProperty[memberType]
 }
 
 func (s *sdk) snapshot() bool {
@@ -299,8 +316,8 @@ func (s *sdk) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 		// Generate the snapshot from the member info.
 		p := s.buildSnapshot(ctx, sdkVariants)
-		s.snapshotFile = android.OptionalPathForPath(p)
-		ctx.InstallFile(android.PathForMainlineSdksInstall(ctx), s.Name()+"-current.zip", p)
+		zip := ctx.InstallFile(android.PathForMainlineSdksInstall(ctx), p.Base(), p)
+		s.snapshotFile = android.OptionalPathForPath(zip)
 	}
 }
 
@@ -394,6 +411,9 @@ func memberMutator(mctx android.BottomUpMutatorContext) {
 		// Add dependencies from enabled and non CommonOS variants to the sdk member variants.
 		if s.Enabled() && !s.IsCommonOSVariant() {
 			for _, memberListProperty := range s.memberListProperties() {
+				if memberListProperty.getter == nil {
+					continue
+				}
 				names := memberListProperty.getter(s.dynamicMemberTypeListProperties)
 				if len(names) > 0 {
 					tag := memberListProperty.dependencyTag
@@ -436,7 +456,7 @@ func memberDepsMutator(mctx android.TopDownMutatorContext) {
 // built with libfoo.mysdk.11 and libfoo.mysdk.12, respectively depending on which sdk they are
 // using.
 func memberInterVersionMutator(mctx android.BottomUpMutatorContext) {
-	if m, ok := mctx.Module().(android.SdkAware); ok && m.IsInAnySdk() {
+	if m, ok := mctx.Module().(android.SdkAware); ok && m.IsInAnySdk() && m.IsVersioned() {
 		if !m.ContainingSdk().Unversioned() {
 			memberName := m.MemberName()
 			tag := sdkMemberVersionedDepTag{member: memberName, version: m.ContainingSdk().Version}
@@ -475,7 +495,7 @@ func sdkDepsMutator(mctx android.TopDownMutatorContext) {
 // Step 5: if libfoo.mysdk.11 is in the context where version 11 of mysdk is requested, the
 // versioned module is used instead of the un-versioned (in-development) module libfoo
 func sdkDepsReplaceMutator(mctx android.BottomUpMutatorContext) {
-	if versionedSdkMember, ok := mctx.Module().(android.SdkAware); ok && versionedSdkMember.IsInAnySdk() {
+	if versionedSdkMember, ok := mctx.Module().(android.SdkAware); ok && versionedSdkMember.IsInAnySdk() && versionedSdkMember.IsVersioned() {
 		if sdk := versionedSdkMember.ContainingSdk(); !sdk.Unversioned() {
 			// Only replace dependencies to <sdkmember> with <sdkmember@required-version>
 			// if the depending module requires it. e.g.
@@ -491,7 +511,7 @@ func sdkDepsReplaceMutator(mctx android.BottomUpMutatorContext) {
 			// TODO(b/183204176): Remove this after fixing.
 			defer func() {
 				if r := recover(); r != nil {
-					mctx.ModuleErrorf("%s", r)
+					mctx.ModuleErrorf("sdkDepsReplaceMutator %s", r)
 				}
 			}()
 

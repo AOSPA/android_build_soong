@@ -15,6 +15,7 @@
 package apex
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -93,6 +94,8 @@ func TestBootclasspathFragments(t *testing.T) {
 		bootclasspath_fragment {
 			name: "art-bootclasspath-fragment",
 			image_name: "art",
+			// Must match the "com.android.art:" entries passed to FixtureConfigureBootJars above.
+			contents: ["baz", "quuz"],
 			apex_available: [
 				"com.android.art",
 			],
@@ -143,13 +146,13 @@ func checkBootclasspathFragment(t *testing.T, result *android.TestResult, module
 
 	bootclasspathFragment := result.ModuleForTests(moduleName, "android_common").Module().(*java.BootclasspathFragmentModule)
 
-	bootImageInfo := result.ModuleProvider(bootclasspathFragment, java.BootImageInfoProvider).(java.BootImageInfo)
-	modules := bootImageInfo.Modules()
+	bootclasspathFragmentInfo := result.ModuleProvider(bootclasspathFragment, java.BootclasspathFragmentApexContentInfoProvider).(java.BootclasspathFragmentApexContentInfo)
+	modules := bootclasspathFragmentInfo.Modules()
 	android.AssertStringEquals(t, "invalid modules for "+moduleName, expectedConfiguredModules, modules.String())
 
 	// Get a list of all the paths in the boot image sorted by arch type.
 	allPaths := []string{}
-	bootImageFilesByArchType := bootImageInfo.AndroidBootImageFilesByArchType()
+	bootImageFilesByArchType := bootclasspathFragmentInfo.AndroidBootImageFilesByArchType()
 	for _, archType := range android.ArchTypeList() {
 		if paths, ok := bootImageFilesByArchType[archType]; ok {
 			for _, path := range paths {
@@ -162,13 +165,11 @@ func checkBootclasspathFragment(t *testing.T, result *android.TestResult, module
 }
 
 func TestBootclasspathFragmentInArtApex(t *testing.T) {
-	result := android.GroupFixturePreparers(
+	commonPreparer := android.GroupFixturePreparers(
 		prepareForTestWithBootclasspathFragment,
 		prepareForTestWithArtApex,
 
-		// Configure some libraries in the art bootclasspath_fragment.
-		java.FixtureConfigureBootJars("com.android.art:foo", "com.android.art:bar"),
-	).RunTestWithBp(t, `
+		android.FixtureWithRootAndroidBp(`
 		apex {
 			name: "com.android.art",
 			key: "com.android.art.key",
@@ -208,14 +209,6 @@ func TestBootclasspathFragmentInArtApex(t *testing.T) {
 			],
 		}
 
-		bootclasspath_fragment {
-			name: "mybootclasspathfragment",
-			image_name: "art",
-			apex_available: [
-				"com.android.art",
-			],
-		}
-
 		java_import {
 			name: "foo",
 			jars: ["foo.jar"],
@@ -231,39 +224,142 @@ func TestBootclasspathFragmentInArtApex(t *testing.T) {
 				"com.android.art",
 			],
 		}
+	`),
+	)
 
-		// Make sure that a preferred prebuilt doesn't affect the apex.
-		prebuilt_bootclasspath_fragment {
-			name: "mybootclasspathfragment",
-			image_name: "art",
-			prefer: true,
-			apex_available: [
-				"com.android.art",
-			],
+	contentsInsert := func(contents []string) string {
+		insert := ""
+		if contents != nil {
+			insert = fmt.Sprintf(`contents: ["%s"],`, strings.Join(contents, `", "`))
 		}
-	`)
+		return insert
+	}
 
-	ensureExactContents(t, result.TestContext, "com.android.art", "android_common_com.android.art_image", []string{
-		"javalib/arm/boot.art",
-		"javalib/arm/boot.oat",
-		"javalib/arm/boot.vdex",
-		"javalib/arm/boot-bar.art",
-		"javalib/arm/boot-bar.oat",
-		"javalib/arm/boot-bar.vdex",
-		"javalib/arm64/boot.art",
-		"javalib/arm64/boot.oat",
-		"javalib/arm64/boot.vdex",
-		"javalib/arm64/boot-bar.art",
-		"javalib/arm64/boot-bar.oat",
-		"javalib/arm64/boot-bar.vdex",
-		"javalib/bar.jar",
-		"javalib/foo.jar",
+	addSource := func(contents ...string) android.FixturePreparer {
+		text := fmt.Sprintf(`
+			bootclasspath_fragment {
+				name: "mybootclasspathfragment",
+				image_name: "art",
+				%s
+				apex_available: [
+					"com.android.art",
+				],
+			}
+		`, contentsInsert(contents))
+
+		return android.FixtureAddTextFile("art/build/boot/Android.bp", text)
+	}
+
+	addPrebuilt := func(prefer bool, contents ...string) android.FixturePreparer {
+		text := fmt.Sprintf(`
+			prebuilt_bootclasspath_fragment {
+				name: "mybootclasspathfragment",
+				image_name: "art",
+				%s
+				prefer: %t,
+				apex_available: [
+					"com.android.art",
+				],
+			}
+		`, contentsInsert(contents), prefer)
+		return android.FixtureAddTextFile("prebuilts/module_sdk/art/Android.bp", text)
+	}
+
+	t.Run("boot image files", func(t *testing.T) {
+		result := android.GroupFixturePreparers(
+			commonPreparer,
+
+			// Configure some libraries in the art bootclasspath_fragment that match the source
+			// bootclasspath_fragment's contents property.
+			java.FixtureConfigureBootJars("com.android.art:foo", "com.android.art:bar"),
+			addSource("foo", "bar"),
+
+			// Make sure that a preferred prebuilt with consistent contents doesn't affect the apex.
+			addPrebuilt(true, "foo", "bar"),
+		).RunTest(t)
+
+		ensureExactContents(t, result.TestContext, "com.android.art", "android_common_com.android.art_image", []string{
+			"etc/classpaths/mybootclasspathfragment.pb",
+			"javalib/arm/boot.art",
+			"javalib/arm/boot.oat",
+			"javalib/arm/boot.vdex",
+			"javalib/arm/boot-bar.art",
+			"javalib/arm/boot-bar.oat",
+			"javalib/arm/boot-bar.vdex",
+			"javalib/arm64/boot.art",
+			"javalib/arm64/boot.oat",
+			"javalib/arm64/boot.vdex",
+			"javalib/arm64/boot-bar.art",
+			"javalib/arm64/boot-bar.oat",
+			"javalib/arm64/boot-bar.vdex",
+			"javalib/bar.jar",
+			"javalib/foo.jar",
+		})
+
+		java.CheckModuleDependencies(t, result.TestContext, "com.android.art", "android_common_com.android.art_image", []string{
+			`bar`,
+			`com.android.art.key`,
+			`mybootclasspathfragment`,
+		})
 	})
 
-	java.CheckModuleDependencies(t, result.TestContext, "com.android.art", "android_common_com.android.art_image", []string{
-		`bar`,
-		`com.android.art.key`,
-		`mybootclasspathfragment`,
+	t.Run("source with inconsistency between config and contents", func(t *testing.T) {
+		android.GroupFixturePreparers(
+			commonPreparer,
+
+			// Create an inconsistency between the ArtApexJars configuration and the art source
+			// bootclasspath_fragment module's contents property.
+			java.FixtureConfigureBootJars("com.android.art:foo"),
+			addSource("foo", "bar"),
+		).
+			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`\QArtApexJars configuration specifies []string{"foo"}, contents property specifies []string{"foo", "bar"}\E`)).
+			RunTest(t)
+	})
+
+	t.Run("prebuilt with inconsistency between config and contents", func(t *testing.T) {
+		android.GroupFixturePreparers(
+			commonPreparer,
+
+			// Create an inconsistency between the ArtApexJars configuration and the art
+			// prebuilt_bootclasspath_fragment module's contents property.
+			java.FixtureConfigureBootJars("com.android.art:foo"),
+			addPrebuilt(false, "foo", "bar"),
+		).
+			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`\QArtApexJars configuration specifies []string{"foo"}, contents property specifies []string{"foo", "bar"}\E`)).
+			RunTest(t)
+	})
+
+	t.Run("preferred prebuilt with inconsistency between config and contents", func(t *testing.T) {
+		android.GroupFixturePreparers(
+			commonPreparer,
+
+			// Create an inconsistency between the ArtApexJars configuration and the art
+			// prebuilt_bootclasspath_fragment module's contents property.
+			java.FixtureConfigureBootJars("com.android.art:foo"),
+			addPrebuilt(true, "foo", "bar"),
+
+			// Source contents property is consistent with the config.
+			addSource("foo"),
+		).
+			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`\QArtApexJars configuration specifies []string{"foo"}, contents property specifies []string{"foo", "bar"}\E`)).
+			RunTest(t)
+	})
+
+	t.Run("source preferred and prebuilt with inconsistency between config and contents", func(t *testing.T) {
+		android.GroupFixturePreparers(
+			commonPreparer,
+
+			// Create an inconsistency between the ArtApexJars configuration and the art
+			// prebuilt_bootclasspath_fragment module's contents property.
+			java.FixtureConfigureBootJars("com.android.art:foo"),
+			addPrebuilt(false, "foo", "bar"),
+
+			// Source contents property is consistent with the config.
+			addSource("foo"),
+
+			// This should pass because while the prebuilt is inconsistent with the configuration it is
+			// not actually used.
+		).RunTest(t)
 	})
 }
 
@@ -312,6 +408,8 @@ func TestBootclasspathFragmentInPrebuiltArtApex(t *testing.T) {
 		prebuilt_bootclasspath_fragment {
 			name: "mybootclasspathfragment",
 			image_name: "art",
+			// Must match the "com.android.art:" entries passed to FixtureConfigureBootJars above.
+			contents: ["foo", "bar"],
 			apex_available: [
 				"com.android.art",
 			],
@@ -384,6 +482,7 @@ func TestBootclasspathFragmentContentsNoName(t *testing.T) {
 	ensureExactContents(t, result.TestContext, "myapex", "android_common_myapex_image", []string{
 		// This does not include art, oat or vdex files as they are only included for the art boot
 		// image.
+		"etc/classpaths/mybootclasspathfragment.pb",
 		"javalib/bar.jar",
 		"javalib/foo.jar",
 	})

@@ -502,12 +502,6 @@ func (c *stubDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 	})
 }
 
-func (c *llndkStubDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
-	// Don't write anything for an llndk_library module, the vendor variant of the cc_library
-	// module will write the Android.mk entries.
-	entries.Disabled = true
-}
-
 func (c *vndkPrebuiltLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.Class = "SHARED_LIBRARIES"
 
@@ -601,20 +595,6 @@ func (c *snapshotObjectLinker) AndroidMkEntries(ctx AndroidMkContext, entries *a
 
 func (c *ndkPrebuiltStlLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.Class = "SHARED_LIBRARIES"
-}
-
-func (c *vendorPublicLibraryStubDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
-	entries.Class = "SHARED_LIBRARIES"
-	entries.SubName = vendorPublicLibrarySuffix
-
-	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
-		c.libraryDecorator.androidMkWriteExportedFlags(entries)
-		_, _, ext := android.SplitFileExt(entries.OutputFile.Path().Base())
-
-		entries.SetString("LOCAL_BUILT_MODULE_STEM", "$(LOCAL_MODULE)"+ext)
-		entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
-		entries.SetBool("LOCAL_NO_NOTICE_FILE", true)
-	})
 }
 
 func (p *prebuiltLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {

@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/pathtools"
 )
 
@@ -106,6 +107,7 @@ type ModuleInstallPathContext interface {
 	InstallInSanitizerDir() bool
 	InstallInRamdisk() bool
 	InstallInVendorRamdisk() bool
+	InstallInDebugRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallBypassMake() bool
@@ -448,6 +450,12 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 		return outputFiles, nil
 	} else if tag != "" {
 		return nil, fmt.Errorf("path dependency %q is not an output file producing module", path)
+	} else if goBinary, ok := module.(bootstrap.GoBinaryTool); ok {
+		if rel, err := filepath.Rel(PathForOutput(ctx).String(), goBinary.InstallPath()); err == nil {
+			return Paths{PathForOutput(ctx, rel).WithoutRel()}, nil
+		} else {
+			return nil, fmt.Errorf("cannot find output path for %q: %w", goBinary.InstallPath(), err)
+		}
 	} else if srcProducer, ok := module.(SourceFileProducer); ok {
 		return srcProducer.Srcs(), nil
 	} else {
@@ -1689,6 +1697,8 @@ func modulePartition(ctx ModuleInstallPathContext, os OsType) string {
 			if !ctx.InstallInRoot() {
 				partition += "/system"
 			}
+		} else if ctx.InstallInDebugRamdisk() {
+			partition = "debug_ramdisk"
 		} else if ctx.InstallInRecovery() {
 			if ctx.InstallInRoot() {
 				partition = "recovery/root"
@@ -1859,6 +1869,7 @@ type testModuleInstallPathContext struct {
 	inSanitizerDir  bool
 	inRamdisk       bool
 	inVendorRamdisk bool
+	inDebugRamdisk  bool
 	inRecovery      bool
 	inRoot          bool
 	forceOS         *OsType
@@ -1889,6 +1900,10 @@ func (m testModuleInstallPathContext) InstallInRamdisk() bool {
 
 func (m testModuleInstallPathContext) InstallInVendorRamdisk() bool {
 	return m.inVendorRamdisk
+}
+
+func (m testModuleInstallPathContext) InstallInDebugRamdisk() bool {
+	return m.inDebugRamdisk
 }
 
 func (m testModuleInstallPathContext) InstallInRecovery() bool {

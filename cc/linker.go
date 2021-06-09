@@ -322,7 +322,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 
 	if ctx.toolchain().Bionic() {
 		// libclang_rt.builtins has to be last on the command line
-		if !Bool(linker.Properties.No_libcrt) {
+		if !Bool(linker.Properties.No_libcrt) && !ctx.header() {
 			deps.LateStaticLibs = append(deps.LateStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
 		}
 
@@ -421,9 +421,13 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 		if !BoolDefault(linker.Properties.Pack_relocations, true) {
 			flags.Global.LdFlags = append(flags.Global.LdFlags, "-Wl,--pack-dyn-relocs=none")
 		} else if ctx.Device() {
-			// The SHT_RELR relocations is only supported by API level >= 28.
-			// Do not turn this on if older version NDK is used.
-			if !ctx.useSdk() || CheckSdkVersionAtLeast(ctx, 28) {
+			// SHT_RELR relocations are only supported at API level >= 30.
+			// ANDROID_RELR relocations were supported at API level >= 28.
+			// Relocation packer was supported at API level >= 23.
+			// Do the best we can...
+			if !ctx.useSdk() || CheckSdkVersionAtLeast(ctx, 30) {
+				flags.Global.LdFlags = append(flags.Global.LdFlags, "-Wl,--pack-dyn-relocs=android+relr")
+			} else if CheckSdkVersionAtLeast(ctx, 28) {
 				flags.Global.LdFlags = append(flags.Global.LdFlags,
 					"-Wl,--pack-dyn-relocs=android+relr",
 					"-Wl,--use-android-relr-tags")
