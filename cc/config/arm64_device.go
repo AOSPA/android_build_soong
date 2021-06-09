@@ -52,32 +52,51 @@ var (
 	arm64ClangCpuVariantCflags = map[string][]string{
 		"cortex-a53": []string{
 			"-mcpu=cortex-a53",
+			"-Xclang -target-feature -Xclang +use-aa",
+			"-Xclang -target-feature -Xclang +zcz-fp",
 		},
 		"cortex-a55": []string{
 			"-mcpu=cortex-a55",
+			"-Xclang -target-feature -Xclang +use-aa",
+			"-Xclang -target-feature -Xclang +use-postra-scheduler",
+			"-Xclang -target-feature -Xclang +zcz-fp",
 		},
 		"cortex-a75": []string{
 			// Use the cortex-a55 since it is similar to the little
 			// core (cortex-a55) and is sensitive to ordering.
 			"-mcpu=cortex-a55",
+			"-Xclang -target-feature -Xclang +use-aa",
+			"-Xclang -target-feature -Xclang +use-postra-scheduler",
+			"-Xclang -target-feature -Xclang +zcz-fp",
 		},
 		"cortex-a76": []string{
 			// Use the cortex-a55 since it is similar to the little
 			// core (cortex-a55) and is sensitive to ordering.
 			"-mcpu=cortex-a55",
+			"-Xclang -target-feature -Xclang +use-postra-scheduler",
+			"-Xclang -target-feature -Xclang +use-aa",
+			"-Xclang -target-feature -Xclang +zcz-fp",
 		},
 		"kryo": []string{
 			"-mcpu=kryo",
+			"-Xclang -target-feature -Xclang +use-aa",
+			"-Xclang -target-feature -Xclang +zcz-fp",
 		},
 		"kryo385": []string{
 			// Use cortex-a53 because kryo385 is not supported in GCC/clang.
 			"-mcpu=cortex-a53",
+			"-Xclang -target-feature -Xclang +use-aa",
+			"-Xclang -target-feature -Xclang +zcz-fp",
 		},
 		"exynos-m1": []string{
 			"-mcpu=exynos-m1",
+			"-Xclang -target-feature -Xclang +use-aa",
+			"-Xclang -target-feature -Xclang +zcz-fp",
 		},
 		"exynos-m2": []string{
 			"-mcpu=exynos-m2",
+			"-Xclang -target-feature -Xclang +use-aa",
+			"-Xclang -target-feature -Xclang +zcz-fp",
 		},
 	}
 )
