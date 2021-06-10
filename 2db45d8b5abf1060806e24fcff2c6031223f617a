@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "803efc6c_c1587778",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000468
+      },
+      "writtenOn": "2021-06-10T17:17:16Z",
+      "side": 1,
+      "message": "Update Commit title cause you didn\u0027t remove Denver. Also update Commit message, the second para redirects me to the exynos removal commit sti now (not related).\n\nthanks.",
+      "revId": "2db45d8b5abf1060806e24fcff2c6031223f617a",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
