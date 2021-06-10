@@ -32,10 +32,10 @@ var (
 			"-march=armv8-a",
 		},
 		"armv8-2a": []string{
-			"-march=armv8.2a",
+			"-march=armv8.2a+use-aa,+zcz-fp,+use-postra-scheduler",
 		},
 		"armv8-2a-dotprod": []string{
-			"-march=armv8.2-a+dotprod",
+			"-march=armv8.2-a+dotprod+use-aa,+zcz-fp,+use-postra-scheduler",
 		},
 	}
 
