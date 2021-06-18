@@ -196,25 +196,18 @@ func (b *platformBootclasspathModule) GenerateAndroidBuildActions(ctx android.Mo
 		return
 	}
 
-	b.generateBootImageBuildActions(ctx, updatableModules)
+	b.generateBootImageBuildActions(ctx, nonUpdatableModules, updatableModules)
 }
 
 // Generate classpaths.proto config
 func (b *platformBootclasspathModule) generateClasspathProtoBuildActions(ctx android.ModuleContext) {
 	// ART and platform boot jars must have a corresponding entry in DEX2OATBOOTCLASSPATH
 	classpathJars := configuredJarListToClasspathJars(ctx, b.ClasspathFragmentToConfiguredJarList(ctx), BOOTCLASSPATH, DEX2OATBOOTCLASSPATH)
-
-	// TODO(satayev): remove updatable boot jars once each apex has its own fragment
-	global := dexpreopt.GetGlobalConfig(ctx)
-	classpathJars = append(classpathJars, configuredJarListToClasspathJars(ctx, global.UpdatableBootJars, BOOTCLASSPATH)...)
-
 	b.classpathFragmentBase().generateClasspathProtoBuildActions(ctx, classpathJars)
 }
 
 func (b *platformBootclasspathModule) ClasspathFragmentToConfiguredJarList(ctx android.ModuleContext) android.ConfiguredJarList {
-	global := dexpreopt.GetGlobalConfig(ctx)
-	// TODO(satayev): split ART apex jars into their own classpathFragment
-	return global.BootJars
+	return b.getImageConfig(ctx).modules
 }
 
 // checkNonUpdatableModules ensures that the non-updatable modules supplied are not part of an
@@ -225,7 +218,7 @@ func (b *platformBootclasspathModule) checkNonUpdatableModules(ctx android.Modul
 		fromUpdatableApex := apexInfo.Updatable
 		if fromUpdatableApex {
 			// error: this jar is part of an updatable apex
-			ctx.ModuleErrorf("module %q from updatable apexes %q is not allowed in the framework boot image", ctx.OtherModuleName(m), apexInfo.InApexes)
+			ctx.ModuleErrorf("module %q from updatable apexes %q is not allowed in the framework boot image", ctx.OtherModuleName(m), apexInfo.InApexVariants)
 		} else {
 			// ok: this jar is part of the platform or a non-updatable apex
 		}
@@ -242,8 +235,15 @@ func (b *platformBootclasspathModule) checkUpdatableModules(ctx android.ModuleCo
 		} else {
 			name := ctx.OtherModuleName(m)
 			if apexInfo.IsForPlatform() {
-				// error: this jar is part of the platform
-				ctx.ModuleErrorf("module %q from platform is not allowed in the updatable boot jars list", name)
+				// If AlwaysUsePrebuiltSdks() returns true then it is possible that the updatable list will
+				// include platform variants of a prebuilt module due to workarounds elsewhere. In that case
+				// do not treat this as an error.
+				// TODO(b/179354495): Always treat this as an error when migration to bootclasspath_fragment
+				//  modules is complete.
+				if !ctx.Config().AlwaysUsePrebuiltSdks() {
+					// error: this jar is part of the platform
+					ctx.ModuleErrorf("module %q from platform is not allowed in the updatable boot jars list", name)
+				}
 			} else {
 				// TODO(b/177892522): Treat this as an error.
 				// Cannot do that at the moment because framework-wifi and framework-tethering are in the
@@ -255,17 +255,6 @@ func (b *platformBootclasspathModule) checkUpdatableModules(ctx android.ModuleCo
 
 func (b *platformBootclasspathModule) getImageConfig(ctx android.EarlyModuleContext) *bootImageConfig {
 	return defaultBootImageConfig(ctx)
-}
-
-// hiddenAPISupportingModule encapsulates the information provided by any module that contributes to
-// the hidden API processing.
-type hiddenAPISupportingModule struct {
-	module android.Module
-
-	bootDexJar  android.Path
-	flagsCSV    android.Path
-	indexCSV    android.Path
-	metadataCSV android.Path
 }
 
 // generateHiddenAPIBuildActions generates all the hidden API related build rules.
@@ -290,133 +279,82 @@ func (b *platformBootclasspathModule) generateHiddenAPIBuildActions(ctx android.
 		return
 	}
 
-	// nilPathHandler will check the supplied path and if it is nil then it will either immediately
-	// report an error, or it will defer the error reporting until it is actually used, depending
-	// whether missing dependencies are allowed.
-	var nilPathHandler func(path android.Path, name string, module android.Module) android.Path
-	if ctx.Config().AllowMissingDependencies() {
-		nilPathHandler = func(path android.Path, name string, module android.Module) android.Path {
-			if path == nil {
-				outputPath := android.PathForModuleOut(ctx, "missing", module.Name(), name)
-				path = outputPath
+	monolithicInfo := b.createAndProvideMonolithicHiddenAPIInfo(ctx, fragments)
 
-				// Create an error rule that pretends to create the output file but will actually fail if it
-				// is run.
-				ctx.Build(pctx, android.BuildParams{
-					Rule:   android.ErrorRule,
-					Output: outputPath,
-					Args: map[string]string{
-						"error": fmt.Sprintf("missing hidden API file: %s for %s", name, module),
-					},
-				})
-			}
-			return path
-		}
-	} else {
-		nilPathHandler = func(path android.Path, name string, module android.Module) android.Path {
-			if path == nil {
-				ctx.ModuleErrorf("module %s does not provide a %s file", module, name)
-			}
-			return path
-		}
-	}
+	// Create the input to pass to ruleToGenerateHiddenAPIStubFlagsFile
+	input := newHiddenAPIFlagInput()
 
-	hiddenAPISupportingModules := []hiddenAPISupportingModule{}
-	for _, module := range modules {
-		if h, ok := module.(hiddenAPIIntf); ok {
-			hiddenAPISupportingModule := hiddenAPISupportingModule{
-				module:      module,
-				bootDexJar:  nilPathHandler(h.bootDexJar(), "bootDexJar", module),
-				flagsCSV:    nilPathHandler(h.flagsCSV(), "flagsCSV", module),
-				indexCSV:    nilPathHandler(h.indexCSV(), "indexCSV", module),
-				metadataCSV: nilPathHandler(h.metadataCSV(), "metadataCSV", module),
-			}
+	// Gather stub library information from the dependencies on modules provided by
+	// hiddenAPIComputeMonolithicStubLibModules.
+	input.gatherStubLibInfo(ctx, nil)
 
-			// If any errors were reported when trying to populate the hiddenAPISupportingModule struct
-			// then don't add it to the list.
-			if ctx.Failed() {
-				continue
-			}
+	// Use the flag files from this module and all the fragments.
+	input.FlagFilesByCategory = monolithicInfo.FlagsFilesByCategory
 
-			hiddenAPISupportingModules = append(hiddenAPISupportingModules, hiddenAPISupportingModule)
-		} else if _, ok := module.(*DexImport); ok {
-			// Ignore this for the purposes of hidden API processing
-		} else {
-			ctx.ModuleErrorf("module %s of type %s does not support hidden API processing", module, ctx.OtherModuleType(module))
-		}
-	}
+	hiddenAPIModules := gatherHiddenAPIModuleFromContents(ctx, modules)
 
-	moduleSpecificFlagsPaths := android.Paths{}
-	for _, module := range hiddenAPISupportingModules {
-		moduleSpecificFlagsPaths = append(moduleSpecificFlagsPaths, module.flagsCSV)
-	}
+	// Generate the monolithic stub-flags.csv file.
+	bootDexJars := extractBootDexJarsFromHiddenAPIModules(ctx, hiddenAPIModules)
+	stubFlags := hiddenAPISingletonPaths(ctx).stubFlags
+	rule := ruleToGenerateHiddenAPIStubFlagsFile(ctx, stubFlags, bootDexJars, input)
+	rule.Build("platform-bootclasspath-monolithic-hiddenapi-stub-flags", "monolithic hidden API stub flags")
 
-	flagFileInfo := b.properties.Hidden_api.hiddenAPIFlagFileInfo(ctx)
-	for _, fragment := range fragments {
-		if ctx.OtherModuleHasProvider(fragment, hiddenAPIFlagFileInfoProvider) {
-			info := ctx.OtherModuleProvider(fragment, hiddenAPIFlagFileInfoProvider).(hiddenAPIFlagFileInfo)
-			flagFileInfo.append(info)
-		}
-	}
+	// Extract the classes jars from the contents.
+	classesJars := extractClassJarsFromHiddenAPIModules(ctx, hiddenAPIModules)
+
+	// Generate the annotation-flags.csv file from all the module annotations.
+	annotationFlags := android.PathForModuleOut(ctx, "hiddenapi-monolithic", "annotation-flags.csv")
+	buildRuleToGenerateAnnotationFlags(ctx, "monolithic hiddenapi flags", classesJars, stubFlags, annotationFlags)
+
+	// Generate the monotlithic hiddenapi-flags.csv file.
+	allFlags := hiddenAPISingletonPaths(ctx).flags
+	buildRuleToGenerateHiddenApiFlags(ctx, "hiddenAPIFlagsFile", "hiddenapi flags", allFlags, stubFlags, annotationFlags, monolithicInfo.FlagsFilesByCategory, monolithicInfo.AllFlagsPaths, android.OptionalPath{})
+
+	// Generate an intermediate monolithic hiddenapi-metadata.csv file directly from the annotations
+	// in the source code.
+	intermediateMetadataCSV := android.PathForModuleOut(ctx, "hiddenapi-monolithic", "intermediate-metadata.csv")
+	buildRuleToGenerateMetadata(ctx, "monolithic hidden API metadata", classesJars, stubFlags, intermediateMetadataCSV)
+
+	// Reformat the intermediate file to add | quotes just in case that is important for the tools
+	// that consume the metadata file.
+	// TODO(b/179354495): Investigate whether it is possible to remove this reformatting step.
+	metadataCSV := hiddenAPISingletonPaths(ctx).metadata
+	b.buildRuleMergeCSV(ctx, "reformat monolithic hidden API metadata", android.Paths{intermediateMetadataCSV}, metadataCSV)
+
+	// Generate the monolithic hiddenapi-index.csv file directly from the CSV files in the classes
+	// jars.
+	indexCSV := hiddenAPISingletonPaths(ctx).index
+	buildRuleToGenerateIndex(ctx, "monolithic hidden API index", classesJars, indexCSV)
+}
+
+// createAndProvideMonolithicHiddenAPIInfo creates a MonolithicHiddenAPIInfo and provides it for
+// testing.
+func (b *platformBootclasspathModule) createAndProvideMonolithicHiddenAPIInfo(ctx android.ModuleContext, fragments []android.Module) MonolithicHiddenAPIInfo {
+	// Create a temporary input structure in which to collate information provided directly by this
+	// module, either through properties or direct dependencies.
+	temporaryInput := newHiddenAPIFlagInput()
+
+	// Create paths to the flag files specified in the properties.
+	temporaryInput.extractFlagFilesFromProperties(ctx, &b.properties.Hidden_api)
+
+	// Create the monolithic info, by starting with the flag files specified on this and then merging
+	// in information from all the fragment dependencies of this.
+	monolithicInfo := newMonolithicHiddenAPIInfo(ctx, temporaryInput.FlagFilesByCategory, fragments)
 
 	// Store the information for testing.
-	ctx.SetProvider(hiddenAPIFlagFileInfoProvider, flagFileInfo)
-
-	outputPath := hiddenAPISingletonPaths(ctx).flags
-	baseFlagsPath := hiddenAPISingletonPaths(ctx).stubFlags
-	ruleToGenerateHiddenApiFlags(ctx, outputPath, baseFlagsPath, moduleSpecificFlagsPaths, flagFileInfo)
-
-	b.generateHiddenAPIStubFlagsRules(ctx, hiddenAPISupportingModules)
-	b.generateHiddenAPIIndexRules(ctx, hiddenAPISupportingModules)
-	b.generatedHiddenAPIMetadataRules(ctx, hiddenAPISupportingModules)
+	ctx.SetProvider(monolithicHiddenAPIInfoProvider, monolithicInfo)
+	return monolithicInfo
 }
 
-func (b *platformBootclasspathModule) generateHiddenAPIStubFlagsRules(ctx android.ModuleContext, modules []hiddenAPISupportingModule) {
-	bootDexJars := android.Paths{}
-	for _, module := range modules {
-		bootDexJars = append(bootDexJars, module.bootDexJar)
-	}
-
-	sdkKindToStubPaths := hiddenAPIGatherStubLibDexJarPaths(ctx)
-
-	outputPath := hiddenAPISingletonPaths(ctx).stubFlags
-	rule := ruleToGenerateHiddenAPIStubFlagsFile(ctx, outputPath, bootDexJars, sdkKindToStubPaths)
-	rule.Build("platform-bootclasspath-monolithic-hiddenapi-stub-flags", "monolithic hidden API stub flags")
-}
-
-func (b *platformBootclasspathModule) generateHiddenAPIIndexRules(ctx android.ModuleContext, modules []hiddenAPISupportingModule) {
-	indexes := android.Paths{}
-	for _, module := range modules {
-		indexes = append(indexes, module.indexCSV)
-	}
-
+func (b *platformBootclasspathModule) buildRuleMergeCSV(ctx android.ModuleContext, desc string, inputPaths android.Paths, outputPath android.WritablePath) {
 	rule := android.NewRuleBuilder(pctx, ctx)
-	rule.Command().
-		BuiltTool("merge_csv").
-		Flag("--key_field signature").
-		FlagWithArg("--header=", "signature,file,startline,startcol,endline,endcol,properties").
-		FlagWithOutput("--output=", hiddenAPISingletonPaths(ctx).index).
-		Inputs(indexes)
-	rule.Build("platform-bootclasspath-monolithic-hiddenapi-index", "monolithic hidden API index")
-}
-
-func (b *platformBootclasspathModule) generatedHiddenAPIMetadataRules(ctx android.ModuleContext, modules []hiddenAPISupportingModule) {
-	metadataCSVFiles := android.Paths{}
-	for _, module := range modules {
-		metadataCSVFiles = append(metadataCSVFiles, module.metadataCSV)
-	}
-
-	rule := android.NewRuleBuilder(pctx, ctx)
-
-	outputPath := hiddenAPISingletonPaths(ctx).metadata
-
 	rule.Command().
 		BuiltTool("merge_csv").
 		Flag("--key_field signature").
 		FlagWithOutput("--output=", outputPath).
-		Inputs(metadataCSVFiles)
+		Inputs(inputPaths)
 
-	rule.Build("platform-bootclasspath-monolithic-hiddenapi-metadata", "monolithic hidden API metadata")
+	rule.Build(desc, desc)
 }
 
 // generateHiddenApiMakeVars generates make variables needed by hidden API related make rules, e.g.
@@ -430,7 +368,7 @@ func (b *platformBootclasspathModule) generateHiddenApiMakeVars(ctx android.Make
 }
 
 // generateBootImageBuildActions generates ninja rules related to the boot image creation.
-func (b *platformBootclasspathModule) generateBootImageBuildActions(ctx android.ModuleContext, updatableModules []android.Module) {
+func (b *platformBootclasspathModule) generateBootImageBuildActions(ctx android.ModuleContext, nonUpdatableModules, updatableModules []android.Module) {
 	// Force the GlobalSoongConfig to be created and cached for use by the dex_bootjars
 	// GenerateSingletonBuildActions method as it cannot create it for itself.
 	dexpreopt.GetGlobalSoongConfig(ctx)
@@ -450,6 +388,17 @@ func (b *platformBootclasspathModule) generateBootImageBuildActions(ctx android.
 
 	// Generate the updatable bootclasspath packages rule.
 	generateUpdatableBcpPackagesRule(ctx, imageConfig, updatableModules)
+
+	// Copy non-updatable module dex jars to their predefined locations.
+	copyBootJarsToPredefinedLocations(ctx, nonUpdatableModules, imageConfig.modules, imageConfig.dexPaths)
+
+	// Copy updatable module dex jars to their predefined locations.
+	config := GetUpdatableBootConfig(ctx)
+	copyBootJarsToPredefinedLocations(ctx, updatableModules, config.modules, config.dexPaths)
+
+	// Build a profile for the image config and then use that to build the boot image.
+	profile := bootImageProfileRule(ctx, imageConfig)
+	buildBootImage(ctx, imageConfig, profile)
 
 	dumpOatRules(ctx, imageConfig)
 }
