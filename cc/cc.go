@@ -733,12 +733,6 @@ var (
 	llndkStubDepTag       = dependencyTag{name: "llndk stub"}
 )
 
-type copyDirectlyInAnyApexDependencyTag dependencyTag
-
-func (copyDirectlyInAnyApexDependencyTag) CopyDirectlyInAnyApex() {}
-
-var _ android.CopyDirectlyInAnyApexTag = copyDirectlyInAnyApexDependencyTag{}
-
 func IsSharedDepTag(depTag blueprint.DependencyTag) bool {
 	ccLibDepTag, ok := depTag.(libraryDependencyTag)
 	return ok && ccLibDepTag.shared()
@@ -2851,7 +2845,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 						// Add the dependency to the APEX(es) providing the library so that
 						// m <module> can trigger building the APEXes as well.
 						depApexInfo := ctx.OtherModuleProvider(dep, android.ApexInfoProvider).(android.ApexInfo)
-						for _, an := range depApexInfo.InApexes {
+						for _, an := range depApexInfo.InApexVariants {
 							c.Properties.ApexesProvidingSharedLibs = append(
 								c.Properties.ApexesProvidingSharedLibs, an)
 						}
@@ -3248,6 +3242,9 @@ func (c *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 				return false
 			}
 		}
+		if cc.IsLlndk() {
+			return false
+		}
 		if isLibDepTag && c.static() && libDepTag.shared() {
 			// shared_lib dependency from a static lib is considered as crossing
 			// the APEX boundary because the dependency doesn't actually is
@@ -3312,6 +3309,12 @@ func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 		return fmt.Errorf("newer SDK(%v)", ver)
 	}
 	return nil
+}
+
+// Implements android.ApexModule
+func (c *Module) AlwaysRequiresPlatformApexVariant() bool {
+	// stub libraries and native bridge libraries are always available to platform
+	return c.IsStubs() || c.Target().NativeBridge == android.NativeBridgeEnabled
 }
 
 //
