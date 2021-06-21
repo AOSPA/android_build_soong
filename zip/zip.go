@@ -656,9 +656,11 @@ func (z *ZipWriter) addFile(dest, src string, method uint16, emulateJar, srcJar 
 			UncompressedSize64: uint64(fileSize),
 		}
 
+		mode := os.FileMode(0644)
 		if executable {
-			header.SetMode(0700)
+			mode = 0755
 		}
+		header.SetMode(mode)
 
 		err = createParentDirs(dest, src)
 		if err != nil {
@@ -953,7 +955,7 @@ func (z *ZipWriter) writeDirectory(dir string, src string, emulateJar bool) erro
 				dirHeader = &zip.FileHeader{
 					Name: cleanDir + "/",
 				}
-				dirHeader.SetMode(0700 | os.ModeDir)
+				dirHeader.SetMode(0755 | os.ModeDir)
 			}
 
 			dirHeader.SetModTime(z.time)

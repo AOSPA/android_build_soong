@@ -522,8 +522,7 @@ type libraryDecorator struct {
 	*baseInstaller
 
 	collectedSnapshotHeaders android.Paths
-        isTechPackageLibrary      bool
-        generateTechPackageLsdump bool
+        isQiifaLibrary      bool
 }
 
 type staticLibraryBazelHandler struct {
@@ -800,18 +799,15 @@ func (library *libraryDecorator) compilerFlags(ctx ModuleContext, flags Flags, d
 	return flags
 }
 
-func loadTechPackageDetails(library *libraryDecorator,ctx ModuleContext){
-        for i := 0; i < len(config.TechPackageLibsList.EnabledLibs); i++ {
-           if(config.TechPackageLibsList.EnabledLibs[i] == library.getLibName(ctx)){
-                library.generateTechPackageLsdump = true
-                library.isTechPackageLibrary = true
-           }
-        }
-        for i := 0; i < len(config.TechPackageLibsList.DisabledLibs); i++ {
-           if(config.TechPackageLibsList.DisabledLibs[i] == library.getLibName(ctx)){
-                library.isTechPackageLibrary = true
-           }
-        }
+func loadQiifaLibraryMetadata(library *libraryDecorator,ctx android.BaseModuleContext){
+	m := ctx.Module().(*Module)
+	libName := m.BaseModuleName()
+	for i := 0; i < len(config.QiifaAbiLibraryList); i++ {
+		if(config.QiifaAbiLibraryList[i] == libName ){
+			library.isQiifaLibrary = true
+			break
+		}
+	}
 }
 
 func (library *libraryDecorator) headerAbiCheckerEnabled() bool {
@@ -823,7 +819,6 @@ func (library *libraryDecorator) headerAbiCheckerExplicitlyDisabled() bool {
 }
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
-        loadTechPackageDetails(library, ctx)
 	if ctx.IsLlndk() {
 		// This is the vendor variant of an LLNDK library, build the LLNDK stubs.
 		vndkVer := ctx.Module().(*Module).VndkVersion()
@@ -928,6 +923,8 @@ type libraryInterface interface {
 	androidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Writer)
 
 	availableFor(string) bool
+        isLibraryQiifaEnabled() bool
+        loadQiifaMetadata(ctx android.BaseModuleContext)
 }
 
 type versionedInterface interface {
@@ -1434,7 +1431,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		addLsdumpPath(classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
 
 		refAbiDumpFile := getRefAbiDumpFile(ctx, vndkVersion, fileName)
-		if refAbiDumpFile != nil && !library.isTechPackageLibrary {
+		if refAbiDumpFile != nil && !library.isQiifaLibrary {
 			library.sAbiDiff = sourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
 				refAbiDumpFile, fileName, exportedHeaderFlags,
 				Bool(library.Properties.Header_abi_checker.Check_all_apis),
@@ -1625,6 +1622,14 @@ func (library *libraryDecorator) reuseObjs() Objects {
 
 func (library *libraryDecorator) toc() android.OptionalPath {
 	return library.tocFile
+}
+
+func (library *libraryDecorator) isLibraryQiifaEnabled() bool {
+    return library.isQiifaLibrary
+}
+
+func (library *libraryDecorator) loadQiifaMetadata(ctx android.BaseModuleContext) {
+	loadQiifaLibraryMetadata(library,ctx)
 }
 
 func (library *libraryDecorator) installSymlinkToRuntimeApex(ctx ModuleContext, file android.Path) {
