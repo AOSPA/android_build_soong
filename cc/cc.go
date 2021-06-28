@@ -303,10 +303,6 @@ type BaseProperties struct {
 	Logtags []string
 
 	// Make this module available when building for ramdisk.
-	// On device without a dedicated recovery partition, the module is only
-	// available after switching root into
-	// /first_stage_ramdisk. To expose the module before switching root, install
-	// the recovery variant instead.
 	Ramdisk_available *bool
 
 	// Make this module available when building for vendor ramdisk.
@@ -363,6 +359,13 @@ type BaseProperties struct {
 	// allows a partner to exclude a module normally thought of as a
 	// framework module from the recovery snapshot.
 	Exclude_from_recovery_snapshot *bool
+
+	// Normally Soong uses the directory structure to decide which modules
+	// should be included (framework) or excluded (non-framework) from the
+	// different snapshots (vendor, recovery, etc.), but this property
+	// allows a partner to exclude a module normally thought of as a
+	// framework module from the ramdisk snapshot.
+	Exclude_from_ramdisk_snapshot *bool
 
 	// List of APEXes that this module has private access to for testing purpose. The module
 	// can depend on libraries that are not exported by the APEXes and use private symbols
@@ -1286,6 +1289,10 @@ func (c *Module) ExcludeFromRecoverySnapshot() bool {
 	return Bool(c.Properties.Exclude_from_recovery_snapshot)
 }
 
+func (c *Module) ExcludeFromRamdiskSnapshot() bool {
+	return Bool(c.Properties.Exclude_from_ramdisk_snapshot)
+}
+
 func isBionic(name string) bool {
 	switch name {
 	case "libc", "libm", "libdl", "libdl_android", "linker", "linkerconfig":
@@ -1793,7 +1800,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		// glob exported headers for snapshot, if BOARD_VNDK_VERSION is current or
-		// RECOVERY_SNAPSHOT_VERSION is current.
+		// RECOVERY_SNAPSHOT_VERSION is current or RAMDISK_SNAPSHOT_VERSION is current.
 		if i, ok := c.linker.(snapshotLibraryInterface); ok {
 			if ShouldCollectHeadersForSnapshot(ctx, c, apexInfo) {
 				i.collectHeadersForSnapshot(ctx)
@@ -2037,6 +2044,8 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 				snapshotModule = ctx.AddVariationDependencies(nil, nil, "vendor_snapshot")
 			} else if recoverySnapshotVersion := actx.DeviceConfig().RecoverySnapshotVersion(); recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" && c.InRecovery() {
 				snapshotModule = ctx.AddVariationDependencies(nil, nil, "recovery_snapshot")
+			} else if ramdiskSnapshotVersion := actx.DeviceConfig().RamdiskSnapshotVersion(); ramdiskSnapshotVersion != "current" && ramdiskSnapshotVersion != "" && c.InRamdisk() {
+				snapshotModule = ctx.AddVariationDependencies(nil, nil, "ramdisk_snapshot")
 			}
 			if len(snapshotModule) > 0 {
 				snapshot := ctx.OtherModuleProvider(snapshotModule[0], SnapshotInfoProvider).(SnapshotInfo)
@@ -2084,6 +2093,8 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 				// strip #version suffix out
 				name, _ := StubsLibNameAndVersion(entry)
 				if c.InRecovery() {
+					nonvariantLibs = append(nonvariantLibs, rewriteSnapshotLib(entry, getSnapshot().SharedLibs))
+				} else if c.InRamdisk() {
 					nonvariantLibs = append(nonvariantLibs, rewriteSnapshotLib(entry, getSnapshot().SharedLibs))
 				} else if ctx.useSdk() && inList(name, *getNDKKnownLibs(ctx.Config())) {
 					variantLibs = append(variantLibs, name+ndkLibrarySuffix)

@@ -67,6 +67,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			src: "",
 		}
 
@@ -76,6 +77,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			native_bridge_supported: true,
 			src: "",
 		}
@@ -86,6 +88,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			native_bridge_supported: true,
 			src: "",
 		}
@@ -96,6 +99,7 @@ func commonDefaultModules() string {
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			system_shared_libs: [],
 			stl: "none",
 			srcs: [""],
@@ -111,6 +115,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			native_bridge_supported: true,
 			src: "",
 		}
@@ -122,6 +127,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			native_bridge_supported: true,
 			src: "",
 		}
@@ -133,6 +139,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			native_bridge_supported: true,
 			src: "",
 		}
@@ -142,6 +149,7 @@ func commonDefaultModules() string {
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			src: "",
 		}
 
@@ -150,6 +158,7 @@ func commonDefaultModules() string {
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			src: "",
 		}
 
@@ -158,6 +167,7 @@ func commonDefaultModules() string {
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			src: "",
 		}
 
@@ -167,6 +177,7 @@ func commonDefaultModules() string {
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			src: "",
 		}
 
@@ -175,6 +186,7 @@ func commonDefaultModules() string {
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			src: "",
 		}
 
@@ -184,6 +196,7 @@ func commonDefaultModules() string {
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			system_shared_libs: [],
 			srcs: [""],
 		}
@@ -196,6 +209,7 @@ func commonDefaultModules() string {
 			stl: "none",
 			system_shared_libs: [],
 			recovery_available: true,
+			ramdisk_available: true,
 			stubs: {
 				versions: ["27", "28", "29"],
 			},
@@ -211,6 +225,7 @@ func commonDefaultModules() string {
 			stl: "none",
 			system_shared_libs: [],
 			recovery_available: true,
+			ramdisk_available: true,
 			stubs: {
 				versions: ["27", "28", "29"],
 			},
@@ -230,6 +245,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			native_coverage: false,
 			system_shared_libs: [],
 			stl: "none",
@@ -241,6 +257,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			native_coverage: false,
 			system_shared_libs: [],
 			stl: "none",
@@ -275,6 +292,7 @@ func commonDefaultModules() string {
 			stl: "none",
 			system_shared_libs: [],
 			recovery_available: true,
+			ramdisk_available: true,
 			stubs: {
 				versions: ["27", "28", "29"],
 			},
@@ -292,6 +310,7 @@ func commonDefaultModules() string {
 			nocrt: true,
 			system_shared_libs: [],
 			recovery_available: true,
+			ramdisk_available: true,
 			llndk: {
 				symbol_file: "libft2.map.txt",
 				private: true,
@@ -307,6 +326,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			host_supported: true,
 			min_sdk_version: "29",
 			apex_available: [
@@ -323,6 +343,7 @@ func commonDefaultModules() string {
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			host_supported: true,
 			min_sdk_version: "29",
 			vndk: {
@@ -345,6 +366,7 @@ func commonDefaultModules() string {
 			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
+			ramdisk_available: true,
 			min_sdk_version: "29",
 			apex_available: [
 				"//apex_available:platform",
@@ -356,6 +378,7 @@ func commonDefaultModules() string {
 			name: "crt_defaults",
 			defaults: ["linux_bionic_supported"],
 			recovery_available: true,
+			ramdisk_available: true,
 			vendor_available: true,
 			vendor_ramdisk_available: true,
 			product_available: true,
@@ -479,6 +502,7 @@ func withLinuxBionic() string {
 					name: "linker",
 					defaults: ["linux_bionic_supported"],
 					recovery_available: true,
+					ramdisk_available: true,
 					stl: "none",
 					nocrt: true,
 					static_executable: true,
@@ -627,6 +651,7 @@ var PrepareForTestWithCcIncludeVndk = android.GroupFixturePreparers(
 	android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
 		vendorSnapshotImageSingleton.init(ctx)
 		recoverySnapshotImageSingleton.init(ctx)
+		ramdiskSnapshotImageSingleton.init(ctx)
 		ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 	}),
 )
@@ -676,6 +701,7 @@ func CreateTestContext(config android.Config) *android.TestContext {
 
 	vendorSnapshotImageSingleton.init(ctx)
 	recoverySnapshotImageSingleton.init(ctx)
+	ramdiskSnapshotImageSingleton.init(ctx)
 	ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 	RegisterVndkLibraryTxtTypes(ctx)
 

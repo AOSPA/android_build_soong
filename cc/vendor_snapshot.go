@@ -13,8 +13,8 @@
 // limitations under the License.
 package cc
 
-// This file contains singletons to capture vendor and recovery snapshot. They consist of prebuilt
-// modules under AOSP so older vendor and recovery can be built with a newer system in a single
+// This file contains singletons to capture vendor, ramdisk and recovery snapshot. They consist of prebuilt
+// modules under AOSP so older vendor, ramdisk and recovery can be built with a newer system in a single
 // source tree.
 
 import (
@@ -53,6 +53,15 @@ var recoverySnapshotSingleton = snapshotSingleton{
 	false, /* fake */
 }
 
+var ramdiskSnapshotSingleton = snapshotSingleton{
+	"ramdisk",
+	"SOONG_RAMDISK_SNAPSHOT_ZIP",
+	android.OptionalPath{},
+	false,
+	ramdiskSnapshotImageSingleton,
+	false, /* fake */
+}
+
 func VendorSnapshotSingleton() android.Singleton {
 	return &vendorSnapshotSingleton
 }
@@ -63,6 +72,10 @@ func VendorFakeSnapshotSingleton() android.Singleton {
 
 func RecoverySnapshotSingleton() android.Singleton {
 	return &recoverySnapshotSingleton
+}
+
+func RamdiskSnapshotSingleton() android.Singleton {
+	return &ramdiskSnapshotSingleton
 }
 
 type snapshotSingleton struct {
@@ -104,6 +117,13 @@ func isRecoveryProprietaryPath(dir string, deviceConfig android.DeviceConfig) bo
 	return RecoverySnapshotSingleton().(*snapshotSingleton).image.isProprietaryPath(dir, deviceConfig)
 }
 
+// Determine if a dir under source tree is an SoC-owned proprietary directory based
+// on ramdisk snapshot configuration
+// Examples: device/, vendor/
+func isRamdiskProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool {
+	return RamdiskSnapshotSingleton().(*snapshotSingleton).image.isProprietaryPath(dir, deviceConfig)
+}
+
 func isVendorProprietaryModule(ctx android.BaseModuleContext) bool {
 	// Any module in a vendor proprietary path is a vendor proprietary
 	// module.
@@ -139,6 +159,28 @@ func isRecoveryProprietaryModule(ctx android.BaseModuleContext) bool {
 
 	if c, ok := ctx.Module().(LinkableInterface); ok {
 		if c.ExcludeFromRecoverySnapshot() {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isRamdiskProprietaryModule(ctx android.BaseModuleContext) bool {
+
+	// Any module in a ramdisk proprietary path is a ramdisk proprietary
+	// module.
+	if isRamdiskProprietaryPath(ctx.ModuleDir(), ctx.DeviceConfig()) {
+		return true
+	}
+
+	// However if the module is not in a ramdisk proprietary path, it may
+	// still be a ramdisk proprietary module. This happens for cc modules
+	// that are excluded from the ramdisk snapshot, and it means that the
+	// ramdisk has assumed control of the framework-provided module.
+
+	if c, ok := ctx.Module().(*Module); ok {
+		if c.ExcludeFromRamdiskSnapshot() {
 			return true
 		}
 	}

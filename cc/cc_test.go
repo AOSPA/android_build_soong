@@ -141,6 +141,7 @@ const (
 	vendorVariant   = "android_vendor.29_arm64_armv8-a_shared"
 	productVariant  = "android_product.29_arm64_armv8-a_shared"
 	recoveryVariant = "android_recovery_arm64_armv8-a_shared"
+	ramdiskVariant  = "android_ramdisk_arm64_armv8-a_shared"
 )
 
 // Test that the PrepareForTestWithCcDefaultModules provides all the files that it uses by
@@ -3184,6 +3185,41 @@ func TestRecovery(t *testing.T) {
 	recoveryModule := ctx.ModuleForTests("libHalInRecovery", recoveryVariant).Module().(*Module)
 	if !recoveryModule.Platform() {
 		t.Errorf("recovery variant of libHalInRecovery must not specific to device, soc, or product")
+	}
+}
+
+func TestRamdisk(t *testing.T) {
+	ctx := testCc(t, `
+		cc_library_shared {
+			name: "libramdisk",
+			ramdisk: true,
+		}
+		cc_library_shared {
+			name: "libramdisk32",
+			ramdisk: true,
+			compile_multilib:"32",
+		}
+		cc_library_shared {
+			name: "libHalInRamdisk",
+			ramdisk_available: true,
+			vendor: true,
+		}
+	`)
+
+	variants := ctx.ModuleVariantsForTests("libramdisk")
+	const arm64 = "android_ramdisk_arm64_armv8-a_shared"
+	if len(variants) != 1 || !android.InList(arm64, variants) {
+		t.Errorf("variants of libramdisk must be \"%s\" only, but was %#v", arm64, variants)
+	}
+
+	variants = ctx.ModuleVariantsForTests("libramdisk32")
+	if android.InList(arm64, variants) {
+		t.Errorf("multilib was set to 32 for libramdisk32, but its variants has %s.", arm64)
+	}
+
+	ramdiskModule := ctx.ModuleForTests("libHalInRamdisk", ramdiskVariant).Module().(*Module)
+	if !ramdiskModule.Platform() {
+		t.Errorf("ramdisk variant of libHalInRamdisk must not specific to device, soc, or product")
 	}
 }
 
