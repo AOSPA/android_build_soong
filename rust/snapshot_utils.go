@@ -48,6 +48,11 @@ func (mod *Module) SnapshotSharedLibs() []string {
 	return []string{}
 }
 
+func (mod *Module) SnapshotStaticLibs() []string {
+        // TODO Rust does not yet support snapshotting
+        return []string{}
+}
+
 func (mod *Module) Symlinks() []string {
 	// TODO update this to return the list of symlinks when Rust supports defining symlinks
 	return nil
