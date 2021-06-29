@@ -184,7 +184,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Wr
 		imagesDeps = append(imagesDeps, variant.imagesDeps)
 	}
 	// The image locations for all Android variants are identical.
-	hostImageLocations, deviceImageLocations := bootImage.getAnyAndroidVariant().imageLocations()
+	hostImageLocations := bootImage.getAnyAndroidVariant().imageLocations()
 
 	var profileClassListing android.OptionalPath
 	var profileBootListing android.OptionalPath
@@ -224,10 +224,9 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Wr
 		ProvidesUsesLibrary:            providesUsesLib,
 		ClassLoaderContexts:            d.classLoaderContexts,
 
-		Archs:                           archs,
-		DexPreoptImagesDeps:             imagesDeps,
-		DexPreoptImageLocationsOnHost:   hostImageLocations,
-		DexPreoptImageLocationsOnDevice: deviceImageLocations,
+		Archs:                         archs,
+		DexPreoptImagesDeps:           imagesDeps,
+		DexPreoptImageLocationsOnHost: hostImageLocations,
 
 		PreoptBootClassPathDexFiles:     dexFiles.Paths(),
 		PreoptBootClassPathDexLocations: dexLocations,

@@ -18,7 +18,6 @@ package java
 
 import (
 	"fmt"
-	"github.com/google/blueprint"
 	"strings"
 
 	"android/soong/android"
@@ -105,7 +104,7 @@ func configuredJarListToClasspathJars(ctx android.ModuleContext, configuredJars 
 }
 
 func (c *ClasspathFragmentBase) generateClasspathProtoBuildActions(ctx android.ModuleContext, jars []classpathJar) {
-	outputFilename := strings.ToLower(c.classpathType.String()) + ".pb"
+	outputFilename := ctx.ModuleName() + ".pb"
 	c.outputFilepath = android.PathForModuleOut(ctx, outputFilename).OutputPath
 	c.installDirPath = android.PathForModuleInstall(ctx, "etc", "classpaths")
 
@@ -121,12 +120,6 @@ func (c *ClasspathFragmentBase) generateClasspathProtoBuildActions(ctx android.M
 		FlagWithOutput("--output=", c.outputFilepath)
 
 	rule.Build("classpath_fragment", "Compiling "+c.outputFilepath.String())
-
-	classpathProtoInfo := ClasspathFragmentProtoContentInfo{
-		ClasspathFragmentProtoInstallDir: c.installDirPath,
-		ClasspathFragmentProtoOutput:     c.outputFilepath,
-	}
-	ctx.SetProvider(ClasspathFragmentProtoContentInfoProvider, classpathProtoInfo)
 }
 
 func writeClasspathsJson(ctx android.ModuleContext, output android.WritablePath, jars []classpathJar) {
@@ -136,7 +129,7 @@ func writeClasspathsJson(ctx android.ModuleContext, output android.WritablePath,
 	for idx, jar := range jars {
 		fmt.Fprintf(&content, "{\n")
 
-		fmt.Fprintf(&content, "\"path\": \"%s\",\n", jar.path)
+		fmt.Fprintf(&content, "\"relativePath\": \"%s\",\n", jar.path)
 		fmt.Fprintf(&content, "\"classpath\": \"%s\"\n", jar.classpath)
 
 		if idx < len(jars)-1 {
@@ -163,24 +156,4 @@ func (c *ClasspathFragmentBase) androidMkEntries() []android.AndroidMkEntries {
 			},
 		},
 	}}
-}
-
-var ClasspathFragmentProtoContentInfoProvider = blueprint.NewProvider(ClasspathFragmentProtoContentInfo{})
-
-type ClasspathFragmentProtoContentInfo struct {
-	// ClasspathFragmentProtoOutput is an output path for the generated classpaths.proto config of this module.
-	//
-	// The file should be copied to a relevant place on device, see ClasspathFragmentProtoInstallDir
-	// for more details.
-	ClasspathFragmentProtoOutput android.OutputPath
-
-	// ClasspathFragmentProtoInstallDir contains information about on device location for the generated classpaths.proto file.
-	//
-	// The path encodes expected sub-location within partitions, i.e. etc/classpaths/<proto-file>,
-	// for ClasspathFragmentProtoOutput. To get sub-location, instead of the full output / make path
-	// use android.InstallPath#Rel().
-	//
-	// This is only relevant for APEX modules as they perform their own installation; while regular
-	// system files are installed via ClasspathFragmentBase#androidMkEntries().
-	ClasspathFragmentProtoInstallDir android.InstallPath
 }

@@ -4392,16 +4392,11 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 }
 
 func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
-	preparer := android.GroupFixturePreparers(
-		java.FixtureConfigureBootJars("myapex:libfoo", "myapex:libbar"),
-		// Make sure that the frameworks/base/Android.bp file exists as otherwise hidden API encoding
-		// is disabled.
-		android.FixtureAddTextFile("frameworks/base/Android.bp", ""),
-	)
+	preparer := java.FixtureConfigureBootJars("myapex:libfoo", "myapex:libbar")
 
 	checkBootDexJarPath := func(t *testing.T, ctx *android.TestContext, stem string, bootDexJarPath string) {
 		t.Helper()
-		s := ctx.ModuleForTests("platform-bootclasspath", "android_common")
+		s := ctx.SingletonForTests("dex_bootjars")
 		foundLibfooJar := false
 		base := stem + ".jar"
 		for _, output := range s.AllOutputs() {
@@ -4419,7 +4414,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 	checkHiddenAPIIndexInputs := func(t *testing.T, ctx *android.TestContext, expectedInputs string) {
 		t.Helper()
 		platformBootclasspath := ctx.ModuleForTests("platform-bootclasspath", "android_common")
-		indexRule := platformBootclasspath.Rule("monolithic_hidden_API_index")
+		indexRule := platformBootclasspath.Rule("platform-bootclasspath-monolithic-hiddenapi-index")
 		java.CheckHiddenAPIRuleInputs(t, expectedInputs, indexRule)
 	}
 
@@ -4457,10 +4452,10 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/myapex.deapexer/android_common/deapexer/javalib/libfoo.jar")
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
-		// Verify the correct module jars contribute to the hiddenapi index file.
+		// Make sure that the dex file from the prebuilt_apex contributes to the hiddenapi index file.
 		checkHiddenAPIIndexInputs(t, ctx, `
-.intermediates/libbar.stubs/android_common/combined/libbar.stubs.jar
-.intermediates/libfoo/android_common_myapex/combined/libfoo.jar
+.intermediates/libbar/android_common_myapex/hiddenapi/index.csv
+.intermediates/libfoo/android_common_myapex/hiddenapi/index.csv
 `)
 	})
 
@@ -4491,10 +4486,10 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/myapex.deapexer/android_common/deapexer/javalib/libfoo.jar")
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
-		// Verify the correct module jars contribute to the hiddenapi index file.
+		// Make sure that the dex file from the apex_set contributes to the hiddenapi index file.
 		checkHiddenAPIIndexInputs(t, ctx, `
-.intermediates/libbar.stubs/android_common/combined/libbar.stubs.jar
-.intermediates/libfoo/android_common_myapex/combined/libfoo.jar
+.intermediates/libbar/android_common_myapex/hiddenapi/index.csv
+.intermediates/libfoo/android_common_myapex/hiddenapi/index.csv
 `)
 	})
 
@@ -4546,7 +4541,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		// prebuilt_apex module always depends on the prebuilt, and so it doesn't
 		// find the dex boot jar in it. We either need to disable the source libfoo
 		// or make the prebuilt libfoo preferred.
-		testDexpreoptWithApexes(t, bp, "module libfoo does not provide a dex boot jar", preparer)
+		testDexpreoptWithApexes(t, bp, "failed to find a dex jar path for module 'libfoo'", preparer)
 	})
 
 	t.Run("prebuilt library preferred with source", func(t *testing.T) {
@@ -4598,10 +4593,10 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/myapex.deapexer/android_common/deapexer/javalib/libfoo.jar")
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
-		// Verify the correct module jars contribute to the hiddenapi index file.
+		// Make sure that the dex file from the prebuilt_apex contributes to the hiddenapi index file.
 		checkHiddenAPIIndexInputs(t, ctx, `
-.intermediates/prebuilt_libbar.stubs/android_common/combined/libbar.stubs.jar
-.intermediates/prebuilt_libfoo/android_common_myapex/combined/libfoo.jar
+.intermediates/prebuilt_libbar/android_common_myapex/hiddenapi/index.csv
+.intermediates/prebuilt_libfoo/android_common_myapex/hiddenapi/index.csv
 `)
 	})
 
@@ -4665,10 +4660,10 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/libfoo/android_common_apex10000/hiddenapi/libfoo.jar")
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/libbar/android_common_myapex/hiddenapi/libbar.jar")
 
-		// Verify the correct module jars contribute to the hiddenapi index file.
+		// Make sure that the dex file from the prebuilt_apex contributes to the hiddenapi index file.
 		checkHiddenAPIIndexInputs(t, ctx, `
-.intermediates/libbar/android_common_myapex/javac/libbar.jar
-.intermediates/libfoo/android_common_apex10000/javac/libfoo.jar
+.intermediates/libbar/android_common_myapex/hiddenapi/index.csv
+.intermediates/libfoo/android_common_apex10000/hiddenapi/index.csv
 `)
 	})
 
@@ -4734,10 +4729,10 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/myapex.deapexer/android_common/deapexer/javalib/libfoo.jar")
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
-		// Verify the correct module jars contribute to the hiddenapi index file.
+		// Make sure that the dex file from the prebuilt_apex contributes to the hiddenapi index file.
 		checkHiddenAPIIndexInputs(t, ctx, `
-.intermediates/prebuilt_libbar.stubs/android_common/combined/libbar.stubs.jar
-.intermediates/prebuilt_libfoo/android_common_myapex/combined/libfoo.jar
+.intermediates/prebuilt_libbar/android_common_myapex/hiddenapi/index.csv
+.intermediates/prebuilt_libfoo/android_common_myapex/hiddenapi/index.csv
 `)
 	})
 }
@@ -7436,80 +7431,6 @@ func TestPrebuiltStubLibDep(t *testing.T) {
 				})
 			}
 		})
-	}
-}
-
-func TestApexJavaCoverage(t *testing.T) {
-	bp := `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			java_libs: ["mylib"],
-			bootclasspath_fragments: ["mybootclasspathfragment"],
-			systemserverclasspath_fragments: ["mysystemserverclasspathfragment"],
-			updatable: false,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		java_library {
-			name: "mylib",
-			srcs: ["mylib.java"],
-			apex_available: ["myapex"],
-			compile_dex: true,
-		}
-
-		bootclasspath_fragment {
-			name: "mybootclasspathfragment",
-			contents: ["mybootclasspathlib"],
-			apex_available: ["myapex"],
-		}
-
-		java_library {
-			name: "mybootclasspathlib",
-			srcs: ["mybootclasspathlib.java"],
-			apex_available: ["myapex"],
-			compile_dex: true,
-		}
-
-		systemserverclasspath_fragment {
-			name: "mysystemserverclasspathfragment",
-			contents: ["mysystemserverclasspathlib"],
-			apex_available: ["myapex"],
-		}
-
-		java_library {
-			name: "mysystemserverclasspathlib",
-			srcs: ["mysystemserverclasspathlib.java"],
-			apex_available: ["myapex"],
-			compile_dex: true,
-		}
-	`
-
-	result := android.GroupFixturePreparers(
-		PrepareForTestWithApexBuildComponents,
-		prepareForTestWithMyapex,
-		java.PrepareForTestWithJavaDefaultModules,
-		android.PrepareForTestWithAndroidBuildComponents,
-		android.FixtureWithRootAndroidBp(bp),
-		android.FixtureMergeEnv(map[string]string{
-			"EMMA_INSTRUMENT": "true",
-		}),
-	).RunTest(t)
-
-	// Make sure jacoco ran on both mylib and mybootclasspathlib
-	if result.ModuleForTests("mylib", "android_common_apex10000").MaybeRule("jacoco").Rule == nil {
-		t.Errorf("Failed to find jacoco rule for mylib")
-	}
-	if result.ModuleForTests("mybootclasspathlib", "android_common_apex10000").MaybeRule("jacoco").Rule == nil {
-		t.Errorf("Failed to find jacoco rule for mybootclasspathlib")
-	}
-	if result.ModuleForTests("mysystemserverclasspathlib", "android_common_apex10000").MaybeRule("jacoco").Rule == nil {
-		t.Errorf("Failed to find jacoco rule for mysystemserverclasspathlib")
 	}
 }
 

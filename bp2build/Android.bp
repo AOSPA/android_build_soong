@@ -20,7 +20,6 @@ bootstrap_go_package {
         "soong-android",
         "soong-bazel",
         "soong-cc",
-        "soong-cc-config",
         "soong-genrule",
         "soong-python",
         "soong-sh",

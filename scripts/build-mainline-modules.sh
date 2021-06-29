@@ -68,9 +68,6 @@ lib_dir() {
 # Make sure this build builds from source, regardless of the default.
 export SOONG_CONFIG_art_module_source_build=true
 
-# This script does not intend to handle compressed APEX
-export OVERRIDE_PRODUCT_COMPRESSED_APEX=false
-
 OUT_DIR=$(source build/envsetup.sh > /dev/null; TARGET_PRODUCT= get_build_var OUT_DIR)
 DIST_DIR=$(source build/envsetup.sh > /dev/null; TARGET_PRODUCT= get_build_var DIST_DIR)
 
@@ -93,17 +90,11 @@ for product in "${PRODUCTS[@]}"; do
   done
 done
 
-# We use force building LLVM components flag (even though we actually don't
-# compile them) because we don't have bionic host prebuilts
-# for them.
-export FORCE_BUILD_LLVM_COMPONENTS=true
-
 # Create multi-archs SDKs in a different out directory. The multi-arch script
 # uses Soong in --skip-make mode which cannot use the same directory as normal
 # mode with make.
 export OUT_DIR=${OUT_DIR}/aml
-echo_and_run build/soong/scripts/build-aml-prebuilts.sh \
-  TARGET_PRODUCT=mainline_sdk ${MODULES_SDK_AND_EXPORTS[@]}
+echo_and_run build/soong/scripts/build-aml-prebuilts.sh ${MODULES_SDK_AND_EXPORTS[@]}
 
 rm -rf ${DIST_DIR}/mainline-sdks
 echo_and_run cp -R ${OUT_DIR}/soong/mainline-sdks ${DIST_DIR}

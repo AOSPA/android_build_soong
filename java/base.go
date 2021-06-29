@@ -229,6 +229,12 @@ type DeviceProperties struct {
 	// otherwise provides defaults libraries to add to the bootclasspath.
 	System_modules *string
 
+	// The name of the module as used in build configuration.
+	//
+	// Allows a library to separate its actual name from the name used in
+	// build configuration, e.g.ctx.Config().BootJars().
+	ConfigurationName *string `blueprint:"mutated"`
+
 	// set the name of the output
 	Stem *string
 
@@ -1171,14 +1177,8 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		j.properties.Instrument = true
 	}
 
-	// enforce syntax check to jacoco filters for any build (http://b/183622051)
-	specs := j.jacocoModuleToZipCommand(ctx)
-	if ctx.Failed() {
-		return
-	}
-
 	if j.shouldInstrument(ctx) {
-		outputFile = j.instrument(ctx, flags, outputFile, jarName, specs)
+		outputFile = j.instrument(ctx, flags, outputFile, jarName)
 	}
 
 	// merge implementation jar with resources if necessary
@@ -1217,6 +1217,10 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 				return
 			}
 
+			// Hidden API CSV generation and dex encoding
+			dexOutputFile = j.hiddenAPIExtractAndEncode(ctx, dexOutputFile, j.implementationJarFile,
+				proptools.Bool(j.dexProperties.Uncompress_dex))
+
 			// merge dex jar with resources if necessary
 			if j.resourceJar != nil {
 				jars := android.Paths{dexOutputFile, j.resourceJar}
@@ -1231,12 +1235,6 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 					dexOutputFile = combinedJar
 				}
 			}
-
-			// Initialize the hiddenapi structure.
-			j.initHiddenAPI(ctx, dexOutputFile, j.implementationJarFile, j.dexProperties.Uncompress_dex)
-
-			// Encode hidden API flags in dex file, if needed.
-			dexOutputFile = j.hiddenAPIEncodeDex(ctx, dexOutputFile)
 
 			j.dexJarFile = dexOutputFile
 
@@ -1392,7 +1390,9 @@ func (j *Module) compileJavaHeader(ctx android.ModuleContext, srcFiles, srcJars 
 }
 
 func (j *Module) instrument(ctx android.ModuleContext, flags javaBuilderFlags,
-	classesJar android.Path, jarName string, specs string) android.OutputPath {
+	classesJar android.Path, jarName string) android.OutputPath {
+
+	specs := j.jacocoModuleToZipCommand(ctx)
 
 	jacocoReportClassesFile := android.PathForModuleOut(ctx, "jacoco-report-classes", jarName)
 	instrumentedJar := android.PathForModuleOut(ctx, "jacoco", jarName).OutputPath
@@ -1493,6 +1493,15 @@ func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 
 func (j *Module) Stem() string {
 	return proptools.StringDefault(j.deviceProperties.Stem, j.Name())
+}
+
+// ConfigurationName returns the name of the module as used in build configuration.
+//
+// This is usually the same as BaseModuleName() except for the <x>.impl libraries created by
+// java_sdk_library in which case this is the BaseModuleName() without the ".impl" suffix,
+// i.e. just <x>.
+func (j *Module) ConfigurationName() string {
+	return proptools.StringDefault(j.deviceProperties.ConfigurationName, j.BaseModuleName())
 }
 
 func (j *Module) JacocoReportClassesFile() android.Path {
@@ -1778,9 +1787,3 @@ type ProvidesUsesLib interface {
 func (j *Module) ProvidesUsesLib() *string {
 	return j.usesLibraryProperties.Provides_uses_lib
 }
-
-type ModuleWithStem interface {
-	Stem() string
-}
-
-var _ ModuleWithStem = (*Module)(nil)

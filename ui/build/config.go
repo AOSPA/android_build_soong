@@ -48,7 +48,6 @@ type configImpl struct {
 	dist           bool
 	skipConfig     bool
 	skipKati       bool
-	skipKatiNinja  bool
 	skipNinja      bool
 	skipSoongTests bool
 
@@ -73,9 +72,6 @@ type configImpl struct {
 	// During Bazel execution, Bazel cannot write outside OUT_DIR.
 	// So if DIST_DIR is set to an external dir (outside of OUT_DIR), we need to rig it temporarily and then migrate files at the end of the build.
 	riggedDistDirForBazel string
-
-	// Set by multiproduct_kati
-	emptyNinjaFile bool
 }
 
 const srcDirFileCheck = "build/soong/root.bp"
@@ -207,6 +203,9 @@ func NewConfig(ctx Context, args ...string) Config {
 		"ANDROID_DEV_SCRIPTS",
 		"ANDROID_EMULATOR_PREBUILTS",
 		"ANDROID_PRE_BUILD_PATHS",
+
+		// Only set in multiproduct_kati after config generation
+		"EMPTY_NINJA_FILE",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -566,7 +565,8 @@ func getTargetsFromDirs(ctx Context, relDir string, dirs []string, targetNamePre
 func (c *configImpl) parseArgs(ctx Context, args []string) {
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
-		if arg == "showcommands" {
+		if arg == "--make-mode" {
+		} else if arg == "showcommands" {
 			c.verbose = true
 		} else if arg == "--skip-ninja" {
 			c.skipNinja = true
@@ -574,11 +574,7 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.skipConfig = true
 			c.skipKati = true
 		} else if arg == "--skip-kati" {
-			// TODO: remove --skip-kati once module builds have been migrated to --song-only
 			c.skipKati = true
-		} else if arg == "--soong-only" {
-			c.skipKati = true
-			c.skipKatiNinja = true
 		} else if arg == "--skip-soong-tests" {
 			c.skipSoongTests = true
 		} else if len(arg) > 0 && arg[0] == '-' {
@@ -794,16 +790,8 @@ func (c *configImpl) SkipKati() bool {
 	return c.skipKati
 }
 
-func (c *configImpl) SkipKatiNinja() bool {
-	return c.skipKatiNinja
-}
-
 func (c *configImpl) SkipNinja() bool {
 	return c.skipNinja
-}
-
-func (c *configImpl) SetSkipNinja(v bool) {
-	c.skipNinja = v
 }
 
 func (c *configImpl) SkipConfig() bool {
@@ -1200,12 +1188,4 @@ func (c *configImpl) LogsDir() string {
 // where the bazel profiles are located.
 func (c *configImpl) BazelMetricsDir() string {
 	return filepath.Join(c.LogsDir(), "bazel_metrics")
-}
-
-func (c *configImpl) SetEmptyNinjaFile(v bool) {
-	c.emptyNinjaFile = v
-}
-
-func (c *configImpl) EmptyNinjaFile() bool {
-	return c.emptyNinjaFile
 }

@@ -198,7 +198,7 @@ func sabiDepsMutator(mctx android.TopDownMutatorContext) {
 			// Mark all of its static library dependencies.
 			mctx.VisitDirectDeps(func(child android.Module) {
 				depTag := mctx.OtherModuleDependencyTag(child)
-				if IsStaticDepTag(depTag) || depTag == reuseObjTag {
+				if libDepTag, ok := depTag.(libraryDependencyTag); ok && libDepTag.static() {
 					if c, ok := child.(*Module); ok && c.sabi != nil {
 						// Mark this module so that .sdump for this static library can be generated.
 						c.sabi.Properties.ShouldCreateSourceAbiDump = true

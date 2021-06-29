@@ -96,8 +96,7 @@ func (cov *coverage) flags(ctx ModuleContext, flags Flags, deps PathDeps) (Flags
 			// flags that the module may use.
 			flags.Local.CFlags = append(flags.Local.CFlags, "-Wno-frame-larger-than=", "-O0")
 		} else if clangCoverage {
-			flags.Local.CommonFlags = append(flags.Local.CommonFlags, profileInstrFlag,
-				"-fcoverage-mapping", "-Wno-pass-failed", "-D__ANDROID_CLANG_COVERAGE__")
+			flags.Local.CommonFlags = append(flags.Local.CommonFlags, profileInstrFlag, "-fcoverage-mapping", "-Wno-pass-failed")
 		}
 	}
 

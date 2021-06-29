@@ -433,7 +433,7 @@ func buildProduct(mpctx *mpContext, product string) {
 	config := build.NewConfig(ctx, args...)
 	config.Environment().Set("OUT_DIR", outDir)
 	if !*keepArtifacts {
-		config.SetEmptyNinjaFile(true)
+		config.Environment().Set("EMPTY_NINJA_FILE", "true")
 	}
 	build.FindSources(ctx, config, mpctx.Finder)
 	config.Lunch(ctx, product, *buildVariant)
@@ -460,21 +460,19 @@ func buildProduct(mpctx *mpContext, product string) {
 		}
 	}()
 
-	config.SetSkipNinja(true)
-
-	buildWhat := build.RunProductConfig
+	buildWhat := build.BuildProductConfig
 	if !*onlyConfig {
-		buildWhat |= build.RunSoong
+		buildWhat |= build.BuildSoong
 		if !*onlySoong {
-			buildWhat |= build.RunKati
+			buildWhat |= build.BuildKati
 		}
 	}
 
 	before := time.Now()
-	build.Build(ctx, config)
+	build.Build(ctx, config, buildWhat)
 
 	// Save std_full.log if Kati re-read the makefiles
-	if buildWhat&build.RunKati != 0 {
+	if buildWhat&build.BuildKati != 0 {
 		if after, err := os.Stat(config.KatiBuildNinjaFile()); err == nil && after.ModTime().After(before) {
 			err := copyFile(stdLog, filepath.Join(filepath.Dir(stdLog), "std_full.log"))
 			if err != nil {

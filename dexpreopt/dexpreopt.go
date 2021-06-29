@@ -499,16 +499,11 @@ func odexOnSystemOther(module *ModuleConfig, global *GlobalConfig) bool {
 
 // PathToLocation converts .../system/framework/arm64/boot.art to .../system/framework/boot.art
 func PathToLocation(path android.Path, arch android.ArchType) string {
-	return PathStringToLocation(path.String(), arch)
-}
-
-// PathStringToLocation converts .../system/framework/arm64/boot.art to .../system/framework/boot.art
-func PathStringToLocation(path string, arch android.ArchType) string {
-	pathArch := filepath.Base(filepath.Dir(path))
+	pathArch := filepath.Base(filepath.Dir(path.String()))
 	if pathArch != arch.String() {
 		panic(fmt.Errorf("last directory in %q must be %q", path, arch.String()))
 	}
-	return filepath.Join(filepath.Dir(filepath.Dir(path)), filepath.Base(path))
+	return filepath.Join(filepath.Dir(filepath.Dir(path.String())), filepath.Base(path.String()))
 }
 
 func makefileMatch(pattern, s string) bool {

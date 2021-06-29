@@ -2,7 +2,6 @@ package bp2build
 
 import (
 	"android/soong/android"
-	"android/soong/cc/config"
 	"fmt"
 	"reflect"
 	"sort"
@@ -15,15 +14,6 @@ type BazelFile struct {
 	Dir      string
 	Basename string
 	Contents string
-}
-
-func CreateSoongInjectionFiles() []BazelFile {
-	var files []BazelFile
-
-	files = append(files, newFile("cc_toolchain", "BUILD", "")) // Creates a //cc_toolchain package.
-	files = append(files, newFile("cc_toolchain", "constants.bzl", config.BazelCcToolchainVars()))
-
-	return files
 }
 
 func CreateBazelFiles(

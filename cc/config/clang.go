@@ -98,7 +98,7 @@ var ClangTidyDisableChecks = []string{
 }
 
 func init() {
-	staticVariableExportedToBazel("ClangExtraCflags", []string{
+	pctx.StaticVariable("ClangExtraCflags", strings.Join([]string{
 		"-D__compiler_offsetof=__builtin_offsetof",
 
 		// Emit address-significance table which allows linker to perform safe ICF. Clang does
@@ -151,9 +151,9 @@ func init() {
 		// This macro allows the bionic versioning.h to indirectly determine whether the
 		// option -Wunguarded-availability is on or not.
 		"-D__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__",
-	})
+	}, " "))
 
-	staticVariableExportedToBazel("ClangExtraCppflags", []string{
+	pctx.StaticVariable("ClangExtraCppflags", strings.Join([]string{
 		// -Wimplicit-fallthrough is not enabled by -Wall.
 		"-Wimplicit-fallthrough",
 
@@ -162,11 +162,13 @@ func init() {
 
 		// libc++'s math.h has an #include_next outside of system_headers.
 		"-Wno-gnu-include-next",
-	})
+	}, " "))
 
-	staticVariableExportedToBazel("ClangExtraTargetCflags", []string{"-nostdlibinc"})
+	pctx.StaticVariable("ClangExtraTargetCflags", strings.Join([]string{
+		"-nostdlibinc",
+	}, " "))
 
-	staticVariableExportedToBazel("ClangExtraNoOverrideCflags", []string{
+	pctx.StaticVariable("ClangExtraNoOverrideCflags", strings.Join([]string{
 		"-Werror=address-of-temporary",
 		// Bug: http://b/29823425 Disable -Wnull-dereference until the
 		// new cases detected by this warning in Clang r271374 are
@@ -201,11 +203,11 @@ func init() {
 		"-Wno-non-c-typedef-for-linkage", // http://b/161304145
 		// New warnings to be fixed after clang-r407598
 		"-Wno-string-concatenation", // http://b/175068488
-	})
+	}, " "))
 
 	// Extra cflags for external third-party projects to disable warnings that
 	// are infeasible to fix in all the external projects and their upstream repos.
-	staticVariableExportedToBazel("ClangExtraExternalCflags", []string{
+	pctx.StaticVariable("ClangExtraExternalCflags", strings.Join([]string{
 		"-Wno-enum-compare",
 		"-Wno-enum-compare-switch",
 
@@ -226,7 +228,7 @@ func init() {
 
 		// http://b/165945989
 		"-Wno-psabi",
-	})
+	}, " "))
 }
 
 func ClangFilterUnknownCflags(cflags []string) []string {

@@ -59,10 +59,12 @@ type command struct {
 	run func(ctx build.Context, config build.Config, args []string, logsDir string)
 }
 
+const makeModeFlagName = "--make-mode"
+
 // list of supported commands (flags) supported by soong ui
 var commands []command = []command{
 	{
-		flag:        "--make-mode",
+		flag:        makeModeFlagName,
 		description: "build the modules by the target name (i.e. soong_docs)",
 		config: func(ctx build.Context, args ...string) build.Config {
 			return build.NewConfig(ctx, args...)
@@ -504,7 +506,15 @@ func runMake(ctx build.Context, config build.Config, _ []string, logsDir string)
 		ctx.Fatal("done")
 	}
 
-	build.Build(ctx, config)
+	toBuild := build.BuildAll
+	if config.UseBazel() {
+		toBuild = build.BuildAllWithBazel
+	}
+
+	if config.Checkbuild() {
+		toBuild |= build.RunBuildTests
+	}
+	build.Build(ctx, config, toBuild)
 }
 
 // getCommand finds the appropriate command based on args[1] flag. args[0]

@@ -18,6 +18,7 @@ import (
 	"android/soong/android"
 	"android/soong/cc/config"
 	"fmt"
+	"strconv"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -389,17 +390,17 @@ func (linker *baseLinker) useClangLld(ctx ModuleContext) bool {
 }
 
 // Check whether the SDK version is not older than the specific one
-func CheckSdkVersionAtLeast(ctx ModuleContext, SdkVersion android.ApiLevel) bool {
-	if ctx.minSdkVersion() == "current" {
+func CheckSdkVersionAtLeast(ctx ModuleContext, SdkVersion int) bool {
+	if ctx.sdkVersion() == "current" {
 		return true
 	}
-	parsedSdkVersion, err := nativeApiLevelFromUser(ctx, ctx.minSdkVersion())
+	parsedSdkVersion, err := strconv.Atoi(ctx.sdkVersion())
 	if err != nil {
-		ctx.PropertyErrorf("min_sdk_version",
-			"Invalid min_sdk_version value (must be int or current): %q",
-			ctx.minSdkVersion())
+		ctx.PropertyErrorf("sdk_version",
+			"Invalid sdk_version value (must be int or current): %q",
+			ctx.sdkVersion())
 	}
-	if parsedSdkVersion.LessThan(SdkVersion) {
+	if parsedSdkVersion < SdkVersion {
 		return false
 	}
 	return true
@@ -424,13 +425,13 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 			// ANDROID_RELR relocations were supported at API level >= 28.
 			// Relocation packer was supported at API level >= 23.
 			// Do the best we can...
-			if (!ctx.useSdk() && ctx.minSdkVersion() == "") || CheckSdkVersionAtLeast(ctx, android.FirstShtRelrVersion) {
+			if !ctx.useSdk() || CheckSdkVersionAtLeast(ctx, 30) {
 				flags.Global.LdFlags = append(flags.Global.LdFlags, "-Wl,--pack-dyn-relocs=android+relr")
-			} else if CheckSdkVersionAtLeast(ctx, android.FirstAndroidRelrVersion) {
+			} else if CheckSdkVersionAtLeast(ctx, 28) {
 				flags.Global.LdFlags = append(flags.Global.LdFlags,
 					"-Wl,--pack-dyn-relocs=android+relr",
 					"-Wl,--use-android-relr-tags")
-			} else if CheckSdkVersionAtLeast(ctx, android.FirstPackedRelocationsVersion) {
+			} else if CheckSdkVersionAtLeast(ctx, 23) {
 				flags.Global.LdFlags = append(flags.Global.LdFlags, "-Wl,--pack-dyn-relocs=android")
 			}
 		}

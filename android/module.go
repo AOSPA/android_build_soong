@@ -1507,7 +1507,7 @@ func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*installPathsDepSe
 	var installDeps []*installPathsDepSet
 	var packagingSpecs []*packagingSpecsDepSet
 	ctx.VisitDirectDeps(func(dep Module) {
-		if IsInstallDepNeeded(ctx.OtherModuleDependencyTag(dep)) && !dep.IsHideFromMake() {
+		if IsInstallDepNeeded(ctx.OtherModuleDependencyTag(dep)) {
 			installDeps = append(installDeps, dep.base().installFilesDepSet)
 			packagingSpecs = append(packagingSpecs, dep.base().packagingSpecsDepSet)
 		}
@@ -1816,8 +1816,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if m.Enabled() {
 		// ensure all direct android.Module deps are enabled
 		ctx.VisitDirectDepsBlueprint(func(bm blueprint.Module) {
-			if m, ok := bm.(Module); ok {
-				ctx.validateAndroidModule(bm, ctx.OtherModuleDependencyTag(m), ctx.baseModuleContext.strictVisitDeps)
+			if _, ok := bm.(Module); ok {
+				ctx.validateAndroidModule(bm, ctx.baseModuleContext.strictVisitDeps)
 			}
 		})
 
@@ -2244,12 +2244,7 @@ func (b *baseModuleContext) AddMissingDependencies(deps []string) {
 	}
 }
 
-type AllowDisabledModuleDependency interface {
-	blueprint.DependencyTag
-	AllowDisabledModuleDependency(target Module) bool
-}
-
-func (b *baseModuleContext) validateAndroidModule(module blueprint.Module, tag blueprint.DependencyTag, strict bool) Module {
+func (b *baseModuleContext) validateAndroidModule(module blueprint.Module, strict bool) Module {
 	aModule, _ := module.(Module)
 
 	if !strict {
@@ -2262,12 +2257,10 @@ func (b *baseModuleContext) validateAndroidModule(module blueprint.Module, tag b
 	}
 
 	if !aModule.Enabled() {
-		if t, ok := tag.(AllowDisabledModuleDependency); !ok || !t.AllowDisabledModuleDependency(aModule) {
-			if b.Config().AllowMissingDependencies() {
-				b.AddMissingDependencies([]string{b.OtherModuleName(aModule)})
-			} else {
-				b.ModuleErrorf("depends on disabled module %q", b.OtherModuleName(aModule))
-			}
+		if b.Config().AllowMissingDependencies() {
+			b.AddMissingDependencies([]string{b.OtherModuleName(aModule)})
+		} else {
+			b.ModuleErrorf("depends on disabled module %q", b.OtherModuleName(aModule))
 		}
 		return nil
 	}
@@ -2360,7 +2353,7 @@ func (b *baseModuleContext) VisitDirectDepsBlueprint(visit func(blueprint.Module
 
 func (b *baseModuleContext) VisitDirectDeps(visit func(Module)) {
 	b.bp.VisitDirectDeps(func(module blueprint.Module) {
-		if aModule := b.validateAndroidModule(module, b.bp.OtherModuleDependencyTag(module), b.strictVisitDeps); aModule != nil {
+		if aModule := b.validateAndroidModule(module, b.strictVisitDeps); aModule != nil {
 			visit(aModule)
 		}
 	})
@@ -2368,7 +2361,7 @@ func (b *baseModuleContext) VisitDirectDeps(visit func(Module)) {
 
 func (b *baseModuleContext) VisitDirectDepsWithTag(tag blueprint.DependencyTag, visit func(Module)) {
 	b.bp.VisitDirectDeps(func(module blueprint.Module) {
-		if aModule := b.validateAndroidModule(module, b.bp.OtherModuleDependencyTag(module), b.strictVisitDeps); aModule != nil {
+		if aModule := b.validateAndroidModule(module, b.strictVisitDeps); aModule != nil {
 			if b.bp.OtherModuleDependencyTag(aModule) == tag {
 				visit(aModule)
 			}
@@ -2380,7 +2373,7 @@ func (b *baseModuleContext) VisitDirectDepsIf(pred func(Module) bool, visit func
 	b.bp.VisitDirectDepsIf(
 		// pred
 		func(module blueprint.Module) bool {
-			if aModule := b.validateAndroidModule(module, b.bp.OtherModuleDependencyTag(module), b.strictVisitDeps); aModule != nil {
+			if aModule := b.validateAndroidModule(module, b.strictVisitDeps); aModule != nil {
 				return pred(aModule)
 			} else {
 				return false
@@ -2394,7 +2387,7 @@ func (b *baseModuleContext) VisitDirectDepsIf(pred func(Module) bool, visit func
 
 func (b *baseModuleContext) VisitDepsDepthFirst(visit func(Module)) {
 	b.bp.VisitDepsDepthFirst(func(module blueprint.Module) {
-		if aModule := b.validateAndroidModule(module, b.bp.OtherModuleDependencyTag(module), b.strictVisitDeps); aModule != nil {
+		if aModule := b.validateAndroidModule(module, b.strictVisitDeps); aModule != nil {
 			visit(aModule)
 		}
 	})
@@ -2404,7 +2397,7 @@ func (b *baseModuleContext) VisitDepsDepthFirstIf(pred func(Module) bool, visit 
 	b.bp.VisitDepsDepthFirstIf(
 		// pred
 		func(module blueprint.Module) bool {
-			if aModule := b.validateAndroidModule(module, b.bp.OtherModuleDependencyTag(module), b.strictVisitDeps); aModule != nil {
+			if aModule := b.validateAndroidModule(module, b.strictVisitDeps); aModule != nil {
 				return pred(aModule)
 			} else {
 				return false

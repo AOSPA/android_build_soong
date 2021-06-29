@@ -1,7 +1,0 @@
-{
-  "imports": [
-    {
-      "path": "packages/modules/SdkExtensions"
-    }
-  ]
-}

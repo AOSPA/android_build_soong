@@ -15,6 +15,7 @@
 package java
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -243,18 +244,12 @@ type bootImageConfig struct {
 	// Subdirectory where the image files are installed.
 	installDirOnHost string
 
-	// Subdirectory where the image files on device are installed.
-	installDirOnDevice string
-
 	// A list of (location, jar) pairs for the Java modules in this image.
 	modules android.ConfiguredJarList
 
 	// File paths to jars.
 	dexPaths     android.WritablePaths // for this image
 	dexPathsDeps android.WritablePaths // for the dependency images and in this image
-
-	// Map from module name (without prebuilt_ prefix) to the predefined build path.
-	dexPathsByModule map[string]android.WritablePath
 
 	// File path to a zip archive with all image files (or nil, if not needed).
 	zip android.WritablePath
@@ -278,23 +273,11 @@ type bootImageVariant struct {
 	dexLocationsDeps []string // for the dependency images and in this image
 
 	// Paths to image files.
-	imagePathOnHost   android.OutputPath // first image file path on host
-	imagePathOnDevice string             // first image file path on device
+	imagePathOnHost android.OutputPath  // first image file
+	imagesDeps      android.OutputPaths // all files
 
-	// All the files that constitute this image variant, i.e. .art, .oat and .vdex files.
-	imagesDeps android.OutputPaths
-
-	// The path to the primary image variant's imagePathOnHost field, where primary image variant
-	// means the image variant that this extends.
-	//
-	// This is only set for a variant of an image that extends another image.
+	// Only for extensions, paths to the primary boot images.
 	primaryImages android.OutputPath
-
-	// The paths to the primary image variant's imagesDeps field, where primary image variant
-	// means the image variant that this extends.
-	//
-	// This is only set for a variant of an image that extends another image.
-	primaryImagesDeps android.Paths
 
 	// Rules which should be used in make to install the outputs.
 	installs           android.RuleBuilderInstalls
@@ -378,12 +361,11 @@ func (image bootImageConfig) moduleFiles(ctx android.PathContext, dir android.Ou
 // The location is passed as an argument to the ART tools like dex2oat instead of the real path.
 // ART tools will then reconstruct the architecture-specific real path.
 //
-func (image *bootImageVariant) imageLocations() (imageLocationsOnHost []string, imageLocationsOnDevice []string) {
+func (image *bootImageVariant) imageLocations() (imageLocations []string) {
 	if image.extends != nil {
-		imageLocationsOnHost, imageLocationsOnDevice = image.extends.getVariant(image.target).imageLocations()
+		imageLocations = image.extends.getVariant(image.target).imageLocations()
 	}
-	return append(imageLocationsOnHost, dexpreopt.PathToLocation(image.imagePathOnHost, image.target.Arch.ArchType)),
-		append(imageLocationsOnDevice, dexpreopt.PathStringToLocation(image.imagePathOnDevice, image.target.Arch.ArchType))
+	return append(imageLocations, dexpreopt.PathToLocation(image.imagePathOnHost, image.target.Arch.ArchType))
 }
 
 func dexpreoptBootJarsFactory() android.SingletonModule {
@@ -445,10 +427,17 @@ func (d *dexpreoptBootJars) GenerateSingletonBuildActions(ctx android.SingletonC
 		return
 	}
 
+	// Generate the profile rule from the default boot image.
 	defaultImageConfig := defaultBootImageConfig(ctx)
-	d.defaultBootImage = defaultImageConfig
-	artBootImageConfig := artBootImageConfig(ctx)
-	d.otherImages = []*bootImageConfig{artBootImageConfig}
+	profile := bootImageProfileRule(ctx, defaultImageConfig)
+
+	// Create the default boot image.
+	d.defaultBootImage = buildBootImage(ctx, defaultImageConfig, profile)
+
+	// Create boot image for the ART apex (build artifacts are accessed via the global boot image config).
+	d.otherImages = append(d.otherImages, buildBootImage(ctx, artBootImageConfig(ctx), profile))
+
+	copyUpdatableBootJars(ctx)
 }
 
 // shouldBuildBootImages determines whether boot images should be built.
@@ -463,34 +452,121 @@ func shouldBuildBootImages(config android.Config, global *dexpreopt.GlobalConfig
 	return true
 }
 
-// copyBootJarsToPredefinedLocations generates commands that will copy boot jars to predefined
-// paths in the global config.
-func copyBootJarsToPredefinedLocations(ctx android.ModuleContext, srcBootDexJarsByModule bootDexJarByModule, dstBootJarsByModule map[string]android.WritablePath) {
-	// Create the super set of module names.
-	names := []string{}
-	names = append(names, android.SortedStringKeys(srcBootDexJarsByModule)...)
-	names = append(names, android.SortedStringKeys(dstBootJarsByModule)...)
-	names = android.SortedUniqueStrings(names)
-	for _, name := range names {
-		src := srcBootDexJarsByModule[name]
-		dst := dstBootJarsByModule[name]
+// A copy of isModuleInConfiguredList created to work with singleton context.
+//
+// TODO(b/177892522): Remove this.
+func isModuleInConfiguredListForSingleton(ctx android.SingletonContext, module android.Module, configuredBootJars android.ConfiguredJarList) bool {
+	name := ctx.ModuleName(module)
 
-		if src == nil {
-			ctx.ModuleErrorf("module %s does not provide a dex boot jar", name)
-		} else if dst == nil {
-			ctx.ModuleErrorf("module %s is not part of the boot configuration", name)
+	// Strip a prebuilt_ prefix so that this can match a prebuilt module that has not been renamed.
+	name = android.RemoveOptionalPrebuiltPrefix(name)
+
+	// Ignore any module that is not listed in the boot image configuration.
+	index := configuredBootJars.IndexOfJar(name)
+	if index == -1 {
+		return false
+	}
+
+	// It is an error if the module is not an ApexModule.
+	if _, ok := module.(android.ApexModule); !ok {
+		ctx.Errorf("%s is configured in boot jars but does not support being added to an apex", ctx.ModuleName(module))
+		return false
+	}
+
+	apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+
+	// Now match the apex part of the boot image configuration.
+	requiredApex := configuredBootJars.Apex(index)
+	if requiredApex == "platform" || requiredApex == "system_ext" {
+		if len(apexInfo.InApexes) != 0 {
+			// A platform variant is required but this is for an apex so ignore it.
+			return false
+		}
+	} else if !apexInfo.InApexByBaseName(requiredApex) {
+		// An apex variant for a specific apex is required but this is the wrong apex.
+		return false
+	}
+
+	return true
+}
+
+// findBootJarModules finds the boot jar module variants specified in the bootjars parameter.
+//
+// It returns a list of modules such that the module at index i corresponds to the configured jar
+// at index i.
+func findBootJarModules(ctx android.SingletonContext, bootjars android.ConfiguredJarList) []android.Module {
+	modules := make([]android.Module, bootjars.Len())
+
+	// This logic is tested in the apex package to avoid import cycle apex <-> java.
+	ctx.VisitAllModules(func(module android.Module) {
+		if !isActiveModule(module) || !isModuleInConfiguredListForSingleton(ctx, module, bootjars) {
+			return
+		}
+
+		name := android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName(module))
+		index := bootjars.IndexOfJar(name)
+		if existing := modules[index]; existing != nil {
+			ctx.Errorf("Multiple boot jar modules found for %s:%s - %q and %q",
+				bootjars.Apex(index), bootjars.Jar(index), existing, module)
+			return
+		}
+		modules[index] = module
+	})
+	return modules
+}
+
+// copyBootJarsToPredefinedLocations generates commands that will copy boot jars to
+// predefined paths in the global config.
+func copyBootJarsToPredefinedLocations(ctx android.SingletonContext, bootModules []android.Module, bootjars android.ConfiguredJarList, jarPathsPredefined android.WritablePaths) {
+	jarPaths := make(android.Paths, bootjars.Len())
+	for i, module := range bootModules {
+		if module != nil {
+			bootDexJar := module.(interface{ DexJarBuildPath() android.Path }).DexJarBuildPath()
+			jarPaths[i] = bootDexJar
+		}
+	}
+
+	// The paths to bootclasspath DEX files need to be known at module GenerateAndroidBuildAction
+	// time, before the boot images are built (these paths are used in dexpreopt rule generation for
+	// Java libraries and apps). Generate rules that copy bootclasspath DEX jars to the predefined
+	// paths.
+	for i := range jarPaths {
+		input := jarPaths[i]
+		output := jarPathsPredefined[i]
+		module := bootjars.Jar(i)
+		if input == nil {
+			if ctx.Config().AllowMissingDependencies() {
+				apex := bootjars.Apex(i)
+
+				// Create an error rule that pretends to create the output file but will actually fail if it
+				// is run.
+				ctx.Build(pctx, android.BuildParams{
+					Rule:   android.ErrorRule,
+					Output: output,
+					Args: map[string]string{
+						"error": fmt.Sprintf("missing dependencies: dex jar for %s:%s", module, apex),
+					},
+				})
+			} else {
+				ctx.Errorf("failed to find a dex jar path for module '%s'"+
+					", note that some jars may be filtered out by module constraints", module)
+			}
+
 		} else {
 			ctx.Build(pctx, android.BuildParams{
 				Rule:   android.Cp,
-				Input:  src,
-				Output: dst,
+				Input:  input,
+				Output: output,
 			})
 		}
 	}
 }
 
 // buildBootImage takes a bootImageConfig, creates rules to build it, and returns the image.
-func buildBootImage(ctx android.ModuleContext, image *bootImageConfig, profile android.WritablePath) {
+func buildBootImage(ctx android.SingletonContext, image *bootImageConfig, profile android.WritablePath) *bootImageConfig {
+	bootModules := findBootJarModules(ctx, image.modules)
+	copyBootJarsToPredefinedLocations(ctx, bootModules, image.modules, image.dexPaths)
+
 	var zipFiles android.Paths
 	for _, variant := range image.variants {
 		files := buildBootImageVariant(ctx, variant, profile)
@@ -509,10 +585,19 @@ func buildBootImage(ctx android.ModuleContext, image *bootImageConfig, profile a
 
 		rule.Build("zip_"+image.name, "zip "+image.name+" image")
 	}
+
+	return image
+}
+
+// Generate commands that will copy updatable boot jars to predefined paths in the global config.
+func copyUpdatableBootJars(ctx android.SingletonContext) {
+	config := GetUpdatableBootConfig(ctx)
+	bootModules := findBootJarModules(ctx, config.modules)
+	copyBootJarsToPredefinedLocations(ctx, bootModules, config.modules, config.dexPaths)
 }
 
 // Generate boot image build rules for a specific target.
-func buildBootImageVariant(ctx android.ModuleContext, image *bootImageVariant, profile android.Path) android.WritablePaths {
+func buildBootImageVariant(ctx android.SingletonContext, image *bootImageVariant, profile android.Path) android.WritablePaths {
 
 	globalSoong := dexpreopt.GetCachedGlobalSoongConfig(ctx)
 	global := dexpreopt.GetGlobalConfig(ctx)
@@ -575,15 +660,7 @@ func buildBootImageVariant(ctx android.ModuleContext, image *bootImageVariant, p
 		cmd.
 			Flag("--runtime-arg").FlagWithInputList("-Xbootclasspath:", image.dexPathsDeps.Paths(), ":").
 			Flag("--runtime-arg").FlagWithList("-Xbootclasspath-locations:", image.dexLocationsDeps, ":").
-			// Add the path to the first file in the boot image with the arch specific directory removed,
-			// dex2oat will reconstruct the path to the actual file when it needs it. As the actual path
-			// to the file cannot be passed to the command make sure to add the actual path as an Implicit
-			// dependency to ensure that it is built before the command runs.
-			FlagWithArg("--boot-image=", dexpreopt.PathToLocation(artImage, arch)).Implicit(artImage).
-			// Similarly, the dex2oat tool will automatically find the paths to other files in the base
-			// boot image so make sure to add them as implicit dependencies to ensure that they are built
-			// before this command is run.
-			Implicits(image.primaryImagesDeps)
+			FlagWithArg("--boot-image=", dexpreopt.PathToLocation(artImage, arch)).Implicit(artImage)
 	} else {
 		// It is a primary image, so it needs a base address.
 		cmd.FlagWithArg("--base=", ctx.Config().LibartImgDeviceBaseAddress())
@@ -670,7 +747,7 @@ const failureMessage = `ERROR: Dex2oat failed to compile a boot image.
 It is likely that the boot classpath is inconsistent.
 Rebuild with ART_BOOT_IMAGE_EXTRA_ARGS="--runtime-arg -verbose:verifier" to see verification errors.`
 
-func bootImageProfileRule(ctx android.ModuleContext, image *bootImageConfig) android.WritablePath {
+func bootImageProfileRule(ctx android.SingletonContext, image *bootImageConfig) android.WritablePath {
 	globalSoong := dexpreopt.GetCachedGlobalSoongConfig(ctx)
 	global := dexpreopt.GetGlobalConfig(ctx)
 
@@ -761,7 +838,7 @@ func generateUpdatableBcpPackagesRule(ctx android.ModuleContext, image *bootImag
 			if len(pp) > 0 {
 				updatablePackages = append(updatablePackages, pp...)
 			} else {
-				ctx.OtherModuleErrorf(module, "Missing permitted_packages")
+				ctx.ModuleErrorf("Missing permitted_packages")
 			}
 		}
 	}
@@ -796,12 +873,12 @@ func dumpOatRules(ctx android.ModuleContext, image *bootImageConfig) {
 		// Create a rule to call oatdump.
 		output := android.PathForOutput(ctx, "boot."+suffix+".oatdump.txt")
 		rule := android.NewRuleBuilder(pctx, ctx)
-		imageLocationsOnHost, _ := image.imageLocations()
 		rule.Command().
-			BuiltTool("oatdump").
+			// TODO: for now, use the debug version for better error reporting
+			BuiltTool("oatdumpd").
 			FlagWithInputList("--runtime-arg -Xbootclasspath:", image.dexPathsDeps.Paths(), ":").
 			FlagWithList("--runtime-arg -Xbootclasspath-locations:", image.dexLocationsDeps, ":").
-			FlagWithArg("--image=", strings.Join(imageLocationsOnHost, ":")).Implicits(image.imagesDeps.Paths()).
+			FlagWithArg("--image=", strings.Join(image.imageLocations(), ":")).Implicits(image.imagesDeps.Paths()).
 			FlagWithOutput("--output=", output).
 			FlagWithArg("--instruction-set=", arch.String())
 		rule.Build("dump-oat-boot-"+suffix, "dump oat boot "+arch.String())
@@ -871,8 +948,8 @@ func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
 				ctx.Strict("DEXPREOPT_IMAGE_BUILT_INSTALLED_"+sfx, variant.installs.String())
 				ctx.Strict("DEXPREOPT_IMAGE_UNSTRIPPED_BUILT_INSTALLED_"+sfx, variant.unstrippedInstalls.String())
 			}
-			imageLocationsOnHost, _ := current.getAnyAndroidVariant().imageLocations()
-			ctx.Strict("DEXPREOPT_IMAGE_LOCATIONS_"+current.name, strings.Join(imageLocationsOnHost, ":"))
+			imageLocations := current.getAnyAndroidVariant().imageLocations()
+			ctx.Strict("DEXPREOPT_IMAGE_LOCATIONS_"+current.name, strings.Join(imageLocations, ":"))
 			ctx.Strict("DEXPREOPT_IMAGE_ZIP_"+current.name, current.zip.String())
 		}
 		ctx.Strict("DEXPREOPT_IMAGE_NAMES", strings.Join(imageNames, " "))

@@ -361,7 +361,10 @@ func (l *linter) lint(ctx android.ModuleContext) {
 			Labels:          map[string]string{"type": "tool", "name": "lint"},
 			ExecStrategy:    lintRBEExecStrategy(ctx),
 			ToolchainInputs: []string{config.JavaCmd(ctx).String()},
-			Platform:        map[string]string{remoteexec.PoolKey: pool},
+			EnvironmentVariables: []string{
+				"LANG",
+			},
+			Platform: map[string]string{remoteexec.PoolKey: pool},
 		})
 	}
 

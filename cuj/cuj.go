@@ -115,7 +115,7 @@ func (t *Test) Run(logsDir string) {
 	defer f.Shutdown()
 	build.FindSources(buildCtx, config, f)
 
-	build.Build(buildCtx, config)
+	build.Build(buildCtx, config, build.BuildAll)
 
 	t.results.metrics = met
 }

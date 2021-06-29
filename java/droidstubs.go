@@ -51,6 +51,7 @@ type Droidstubs struct {
 	lastReleasedApiXmlFile  android.WritablePath
 	privateApiFile          android.WritablePath
 	removedApiFile          android.WritablePath
+	removedDexApiFile       android.WritablePath
 	nullabilityWarningsFile android.WritablePath
 
 	checkCurrentApiTimestamp      android.WritablePath
@@ -77,6 +78,9 @@ type DroidstubsProperties struct {
 
 	// the generated removed API filename by Metalava, defaults to <module>_removed.txt
 	Removed_api_filename *string
+
+	// the generated removed Dex API filename by Metalava.
+	Removed_dex_api_filename *string
 
 	Check_api struct {
 		Last_released ApiToCheck
@@ -270,6 +274,11 @@ func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuil
 		d.removedApiFilePath = android.PathForModuleSrc(ctx, sourceRemovedApiFile)
 	}
 
+	if String(d.properties.Removed_dex_api_filename) != "" {
+		d.removedDexApiFile = android.PathForModuleOut(ctx, "metalava", String(d.properties.Removed_dex_api_filename))
+		cmd.FlagWithOutput("--removed-dex-api ", d.removedDexApiFile)
+	}
+
 	if Bool(d.properties.Write_sdk_values) {
 		d.metadataDir = android.PathForModuleOut(ctx, "metalava", "metadata")
 		cmd.FlagWithArg("--sdk-values ", d.metadataDir.String())
@@ -392,7 +401,8 @@ func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *a
 }
 
 func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersion javaVersion, srcs android.Paths,
-	srcJarList android.Path, bootclasspath, classpath classpath, homeDir android.WritablePath) *android.RuleBuilderCommand {
+	srcJarList android.Path, bootclasspath, classpath classpath, sourcepaths android.Paths,
+	homeDir android.WritablePath) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -427,6 +437,12 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 
 	if len(classpath) > 0 {
 		cmd.FlagWithInputList("-classpath ", classpath.Paths(), ":")
+	}
+
+	if len(sourcepaths) > 0 {
+		cmd.FlagWithList("-sourcepath ", sourcepaths.Strings(), ":")
+	} else {
+		cmd.FlagWithArg("-sourcepath ", `""`)
 	}
 
 	cmd.Flag("--no-banner").
@@ -472,7 +488,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	homeDir := android.PathForModuleOut(ctx, "metalava", "home")
 	cmd := metalavaCmd(ctx, rule, javaVersion, d.Javadoc.srcFiles, srcJarList,
-		deps.bootClasspath, deps.classpath, homeDir)
+		deps.bootClasspath, deps.classpath, d.Javadoc.sourcepaths, homeDir)
 	cmd.Implicits(d.Javadoc.implicits)
 
 	d.stubsFlags(ctx, cmd, stubsDir)
