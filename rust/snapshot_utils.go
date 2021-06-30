@@ -28,6 +28,11 @@ func (mod *Module) ExcludeFromRecoverySnapshot() bool {
 	return false
 }
 
+func (mod *Module) ExcludeFromRamdiskSnapshot() bool {
+	// TODO Rust does not yet support snapshotting
+	return false
+}
+
 func (mod *Module) IsSnapshotLibrary() bool {
 	// TODO Rust does not yet support snapshotting
 	return false

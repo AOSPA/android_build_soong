@@ -18,7 +18,6 @@ import (
 	"android/soong/android"
 	"android/soong/cc/config"
 	"fmt"
-	"strconv"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -146,7 +145,11 @@ type BaseLinkerProperties struct {
 			Exclude_header_libs []string
 		}
 		Ramdisk struct {
-			// list of static libs that only should be used to build the recovery
+			// list of shared libs that only should be used to build the ramdisk
+			// variant of the C/C++ module.
+			Shared_libs []string
+
+			// list of static libs that only should be used to build the ramdisk
 			// variant of the C/C++ module.
 			Static_libs []string
 
@@ -157,10 +160,14 @@ type BaseLinkerProperties struct {
 			// list of static libs that should not be used to build
 			// the ramdisk variant of the C/C++ module.
 			Exclude_static_libs []string
+
+			// list of header libs that should not be used to build the ramdisk variant
+			// of the C/C++ module.
+			Exclude_header_libs []string
 		}
 		Vendor_ramdisk struct {
 			// list of shared libs that should not be used to build
-			// the recovery variant of the C/C++ module.
+			// the vendor ramdisk variant of the C/C++ module.
 			Exclude_shared_libs []string
 
 			// list of static libs that should not be used to build
@@ -300,10 +307,13 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	}
 
 	if ctx.inRamdisk() {
+		deps.SharedLibs = append(deps.SharedLibs, linker.Properties.Target.Ramdisk.Shared_libs...)
 		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Ramdisk.Exclude_shared_libs)
 		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, linker.Properties.Target.Ramdisk.Exclude_shared_libs)
 		deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Target.Ramdisk.Static_libs...)
 		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Ramdisk.Exclude_static_libs)
+		deps.HeaderLibs = removeListFromList(deps.HeaderLibs, linker.Properties.Target.Ramdisk.Exclude_header_libs)
+		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Ramdisk.Exclude_static_libs)
 		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Ramdisk.Exclude_static_libs)
 		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Ramdisk.Exclude_static_libs)
 	}
@@ -390,17 +400,17 @@ func (linker *baseLinker) useClangLld(ctx ModuleContext) bool {
 }
 
 // Check whether the SDK version is not older than the specific one
-func CheckSdkVersionAtLeast(ctx ModuleContext, SdkVersion int) bool {
-	if ctx.sdkVersion() == "current" {
+func CheckSdkVersionAtLeast(ctx ModuleContext, SdkVersion android.ApiLevel) bool {
+	if ctx.minSdkVersion() == "current" {
 		return true
 	}
-	parsedSdkVersion, err := strconv.Atoi(ctx.sdkVersion())
+	parsedSdkVersion, err := nativeApiLevelFromUser(ctx, ctx.minSdkVersion())
 	if err != nil {
-		ctx.PropertyErrorf("sdk_version",
-			"Invalid sdk_version value (must be int or current): %q",
-			ctx.sdkVersion())
+		ctx.PropertyErrorf("min_sdk_version",
+			"Invalid min_sdk_version value (must be int or current): %q",
+			ctx.minSdkVersion())
 	}
-	if parsedSdkVersion < SdkVersion {
+	if parsedSdkVersion.LessThan(SdkVersion) {
 		return false
 	}
 	return true
@@ -425,13 +435,13 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 			// ANDROID_RELR relocations were supported at API level >= 28.
 			// Relocation packer was supported at API level >= 23.
 			// Do the best we can...
-			if !ctx.useSdk() || CheckSdkVersionAtLeast(ctx, 30) {
+			if (!ctx.useSdk() && ctx.minSdkVersion() == "") || CheckSdkVersionAtLeast(ctx, android.FirstShtRelrVersion) {
 				flags.Global.LdFlags = append(flags.Global.LdFlags, "-Wl,--pack-dyn-relocs=android+relr")
-			} else if CheckSdkVersionAtLeast(ctx, 28) {
+			} else if CheckSdkVersionAtLeast(ctx, android.FirstAndroidRelrVersion) {
 				flags.Global.LdFlags = append(flags.Global.LdFlags,
 					"-Wl,--pack-dyn-relocs=android+relr",
 					"-Wl,--use-android-relr-tags")
-			} else if CheckSdkVersionAtLeast(ctx, 23) {
+			} else if CheckSdkVersionAtLeast(ctx, android.FirstPackedRelocationsVersion) {
 				flags.Global.LdFlags = append(flags.Global.LdFlags, "-Wl,--pack-dyn-relocs=android")
 			}
 		}

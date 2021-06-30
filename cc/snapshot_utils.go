@@ -102,14 +102,16 @@ func (s *snapshotMap) get(name string, arch android.ArchType) (snapshot string, 
 // If it's true, collectHeadersForSnapshot will be called in GenerateAndroidBuildActions.
 func ShouldCollectHeadersForSnapshot(ctx android.ModuleContext, m LinkableInterface, apexInfo android.ApexInfo) bool {
 	if ctx.DeviceConfig().VndkVersion() != "current" &&
-		ctx.DeviceConfig().RecoverySnapshotVersion() != "current" {
+		ctx.DeviceConfig().RecoverySnapshotVersion() != "current" &&
+		ctx.DeviceConfig().RamdiskSnapshotVersion() != "current" {
 		return false
 	}
 	if _, ok := isVndkSnapshotAware(ctx.DeviceConfig(), m, apexInfo); ok {
 		return ctx.Config().VndkSnapshotBuildArtifacts()
 	}
 
-	for _, image := range []snapshotImage{vendorSnapshotImageSingleton, recoverySnapshotImageSingleton} {
+	for _, image := range []snapshotImage{vendorSnapshotImageSingleton, recoverySnapshotImageSingleton,
+		ramdiskSnapshotImageSingleton} {
 		if isSnapshotAware(ctx.DeviceConfig(), m, image.isProprietaryPath(ctx.ModuleDir(), ctx.DeviceConfig()), apexInfo, image) {
 			return true
 		}

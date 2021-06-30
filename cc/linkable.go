@@ -85,6 +85,9 @@ type Snapshottable interface {
 	// ExcludeFromRecoverySnapshot returns true if this module should be otherwise excluded from the recovery snapshot.
 	ExcludeFromRecoverySnapshot() bool
 
+	// ExcludeFromRamdiskSnapshot returns true if this module should be otherwise excluded from the ramdisk snapshot.
+	ExcludeFromRamdiskSnapshot() bool
+
 	// SnapshotLibrary returns true if this module is a snapshot library.
 	IsSnapshotLibrary() bool
 
