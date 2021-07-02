@@ -243,6 +243,10 @@ func (mod *Module) Binary() bool {
 	return false
 }
 
+func (mod *Module) StaticExecutable() bool {
+	return false
+}
+
 func (mod *Module) Object() bool {
 	// Rust has no modules which produce only object files.
 	return false
