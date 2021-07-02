@@ -127,6 +127,7 @@ type LinkableInterface interface {
 	IsPrebuilt() bool
 	Toc() android.OptionalPath
 
+	Device() bool
 	Host() bool
 
 	InRamdisk() bool
