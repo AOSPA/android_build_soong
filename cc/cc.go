@@ -2034,9 +2034,9 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	var snapshotInfo *SnapshotInfo
 	getSnapshot := func() SnapshotInfo {
-		// Only modules with BOARD_VNDK_VERSION uses snapshot.  Others use the zero value of
+		// Only device modules with BOARD_VNDK_VERSION uses snapshot.  Others use the zero value of
 		// SnapshotInfo, which provides no mappings.
-		if snapshotInfo == nil {
+		if snapshotInfo == nil && c.Device() {
 			// Only retrieve the snapshot on demand in order to avoid circular dependencies
 			// between the modules in the snapshot and the snapshot itself.
 			var snapshotModule []blueprint.Module
@@ -2047,16 +2047,16 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 			} else if ramdiskSnapshotVersion := actx.DeviceConfig().RamdiskSnapshotVersion(); ramdiskSnapshotVersion != "current" && ramdiskSnapshotVersion != "" && c.InRamdisk() {
 				snapshotModule = ctx.AddVariationDependencies(nil, nil, "ramdisk_snapshot")
 			}
-			if len(snapshotModule) > 0 {
+			if len(snapshotModule) > 0 && snapshotModule[0] != nil {
 				snapshot := ctx.OtherModuleProvider(snapshotModule[0], SnapshotInfoProvider).(SnapshotInfo)
 				snapshotInfo = &snapshot
 				// republish the snapshot for use in later mutators on this module
 				ctx.SetProvider(SnapshotInfoProvider, snapshot)
-			} else {
-				snapshotInfo = &SnapshotInfo{}
 			}
 		}
-
+		if snapshotInfo == nil {
+			snapshotInfo = &SnapshotInfo{}
+		}
 		return *snapshotInfo
 	}
 
