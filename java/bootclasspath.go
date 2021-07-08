@@ -29,7 +29,7 @@ func init() {
 
 func registerBootclasspathBuildComponents(ctx android.RegistrationContext) {
 	ctx.FinalDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("bootclasspath_deps", bootclasspathDepsMutator)
+		ctx.BottomUp("bootclasspath_deps", bootclasspathDepsMutator).Parallel()
 	})
 }
 
@@ -95,6 +95,15 @@ func addDependencyOntoApexModulePair(ctx android.BottomUpMutatorContext, apex st
 	if ctx.OtherModuleDependencyVariantExists(variations, prebuiltName) {
 		ctx.AddVariationDependencies(variations, tag, prebuiltName)
 		addedDep = true
+	} else if ctx.Config().AlwaysUsePrebuiltSdks() && len(variations) > 0 {
+		// TODO(b/179354495): Remove this code path once the Android build has been fully migrated to
+		//  use bootclasspath_fragment properly.
+		// Some prebuilt java_sdk_library modules do not yet have an APEX variations so try and add a
+		// dependency on the non-APEX variant.
+		if ctx.OtherModuleDependencyVariantExists(nil, prebuiltName) {
+			ctx.AddVariationDependencies(nil, tag, prebuiltName)
+			addedDep = true
+		}
 	}
 
 	// If no appropriate variant existing for this, so no dependency could be added, then it is an
@@ -226,12 +235,3 @@ func (p BootclasspathAPIProperties) sdkKindToStubLibs() map[android.SdkKind][]st
 	m[android.SdkCorePlatform] = p.Core_platform_api.Stub_libs
 	return m
 }
-
-// bootclasspathApiInfo contains paths resolved from BootclasspathAPIProperties
-type bootclasspathApiInfo struct {
-	// stubJarsByKind maps from the android.SdkKind to the paths containing dex stub jars for each
-	// kind.
-	stubJarsByKind map[android.SdkKind]android.Paths
-}
-
-var bootclasspathApiInfoProvider = blueprint.NewProvider(bootclasspathApiInfo{})
