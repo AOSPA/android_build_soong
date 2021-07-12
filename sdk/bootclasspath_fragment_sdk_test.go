@@ -40,6 +40,7 @@ func fixtureAddPlatformBootclasspathForBootclasspathFragment(apex, fragment stri
 			}
 		`, apex, fragment)),
 		android.FixtureAddFile("frameworks/base/config/boot-profile.txt", nil),
+		android.FixtureAddFile("build/soong/scripts/check_boot_jars/package_allowed_list.txt", nil),
 	)
 }
 
@@ -173,9 +174,29 @@ sdk_snapshot {
 .intermediates/mybootlib/android_common/javac/mybootlib.jar -> java/mybootlib.jar
 `),
 		snapshotTestPreparer(checkSnapshotWithoutSource, preparerForSnapshot),
+
+		// Check the behavior of the snapshot without the source.
+		snapshotTestChecker(checkSnapshotWithoutSource, func(t *testing.T, result *android.TestResult) {
+			// Make sure that the boot jars package check rule includes the dex jar retrieved from the prebuilt apex.
+			checkBootJarsPackageCheckRule(t, result, "out/soong/.intermediates/prebuilts/apex/com.android.art.deapexer/android_common/deapexer/javalib/mybootlib.jar")
+		}),
+
 		snapshotTestPreparer(checkSnapshotWithSourcePreferred, preparerForSnapshot),
 		snapshotTestPreparer(checkSnapshotPreferredWithSource, preparerForSnapshot),
 	)
+
+	// Make sure that the boot jars package check rule includes the dex jar created from the source.
+	checkBootJarsPackageCheckRule(t, result, "out/soong/.intermediates/mybootlib/android_common_apex10000/aligned/mybootlib.jar")
+}
+
+// checkBootJarsPackageCheckRule checks that the supplied module is an input to the boot jars
+// package check rule.
+func checkBootJarsPackageCheckRule(t *testing.T, result *android.TestResult, expectedModule string) {
+	platformBcp := result.ModuleForTests("platform-bootclasspath", "android_common")
+	bootJarsCheckRule := platformBcp.Rule("boot_jars_package_check")
+	command := bootJarsCheckRule.RuleParams.Command
+	expectedCommandArgs := " out/soong/host/linux-x86/bin/dexdump build/soong/scripts/check_boot_jars/package_allowed_list.txt " + expectedModule + " &&"
+	android.AssertStringDoesContain(t, "boot jars package check", command, expectedCommandArgs)
 }
 
 func TestSnapshotWithBootClasspathFragment_Contents(t *testing.T) {
@@ -463,6 +484,28 @@ sdk_snapshot {
 .intermediates/mycoreplatform.stubs.source/android_common/metalava/mycoreplatform.stubs.source_removed.txt -> sdk_library/public/mycoreplatform-removed.txt
 `),
 		snapshotTestPreparer(checkSnapshotWithoutSource, preparerForSnapshot),
+		snapshotTestChecker(checkSnapshotWithoutSource, func(t *testing.T, result *android.TestResult) {
+			module := result.ModuleForTests("platform-bootclasspath", "android_common")
+			var rule android.TestingBuildParams
+			rule = module.Output("out/soong/hiddenapi/hiddenapi-flags.csv")
+			java.CheckHiddenAPIRuleInputs(t, "monolithic flags", `
+				out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/annotation-flags-from-classes.csv
+        out/soong/hiddenapi/hiddenapi-stub-flags.txt
+        snapshot/hiddenapi/annotation-flags.csv
+			`, rule)
+
+			rule = module.Output("out/soong/hiddenapi/hiddenapi-unsupported.csv")
+			java.CheckHiddenAPIRuleInputs(t, "monolithic metadata", `
+				out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/metadata-from-classes.csv
+        snapshot/hiddenapi/metadata.csv
+			`, rule)
+
+			rule = module.Output("out/soong/hiddenapi/hiddenapi-index.csv")
+			java.CheckHiddenAPIRuleInputs(t, "monolithic index", `
+				out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
+        snapshot/hiddenapi/index.csv
+			`, rule)
+		}),
 		snapshotTestPreparer(checkSnapshotWithSourcePreferred, preparerForSnapshot),
 		snapshotTestPreparer(checkSnapshotPreferredWithSource, preparerForSnapshot),
 	)
