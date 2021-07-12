@@ -133,6 +133,13 @@ prebuilt_bootclasspath_fragment {
     apex_available: ["com.android.art"],
     image_name: "art",
     contents: ["mybootlib"],
+    hidden_api: {
+        stub_flags: "hiddenapi/stub-flags.csv",
+        annotation_flags: "hiddenapi/annotation-flags.csv",
+        metadata: "hiddenapi/metadata.csv",
+        index: "hiddenapi/index.csv",
+        all_flags: "hiddenapi/all-flags.csv",
+    },
 }
 
 java_import {
@@ -153,6 +160,13 @@ prebuilt_bootclasspath_fragment {
     apex_available: ["com.android.art"],
     image_name: "art",
     contents: ["mysdk_mybootlib@current"],
+    hidden_api: {
+        stub_flags: "hiddenapi/stub-flags.csv",
+        annotation_flags: "hiddenapi/annotation-flags.csv",
+        metadata: "hiddenapi/metadata.csv",
+        index: "hiddenapi/index.csv",
+        all_flags: "hiddenapi/all-flags.csv",
+    },
 }
 
 java_import {
@@ -171,8 +185,13 @@ sdk_snapshot {
 }
 `),
 		checkAllCopyRules(`
+.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/stub-flags.csv -> hiddenapi/stub-flags.csv
+.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/annotation-flags.csv -> hiddenapi/annotation-flags.csv
+.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/metadata.csv -> hiddenapi/metadata.csv
+.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/index.csv -> hiddenapi/index.csv
+.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/all-flags.csv -> hiddenapi/all-flags.csv
 .intermediates/mybootlib/android_common/javac/mybootlib.jar -> java/mybootlib.jar
-`),
+		`),
 		snapshotTestPreparer(checkSnapshotWithoutSource, preparerForSnapshot),
 
 		// Check the behavior of the snapshot without the source.
@@ -273,7 +292,7 @@ func TestSnapshotWithBootClasspathFragment_Contents(t *testing.T) {
 				name: "myothersdklibrary",
 				apex_available: ["myapex"],
 				srcs: ["Test.java"],
-				shared_library: false,
+				compile_dex: true,
 				public: {enabled: true},
 				min_sdk_version: "2",
 				permitted_packages: ["myothersdklibrary"],
@@ -283,7 +302,7 @@ func TestSnapshotWithBootClasspathFragment_Contents(t *testing.T) {
 				name: "mycoreplatform",
 				apex_available: ["myapex"],
 				srcs: ["Test.java"],
-				shared_library: false,
+				compile_dex: true,
 				public: {enabled: true},
 				min_sdk_version: "2",
 			}
@@ -334,7 +353,8 @@ java_sdk_library_import {
     prefer: false,
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
-    shared_library: false,
+    shared_library: true,
+    compile_dex: true,
     public: {
         jars: ["sdk_library/public/myothersdklibrary-stubs.jar"],
         stub_srcs: ["sdk_library/public/myothersdklibrary_stub_sources"],
@@ -364,7 +384,8 @@ java_sdk_library_import {
     prefer: false,
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
-    shared_library: false,
+    shared_library: true,
+    compile_dex: true,
     public: {
         jars: ["sdk_library/public/mycoreplatform-stubs.jar"],
         stub_srcs: ["sdk_library/public/mycoreplatform_stub_sources"],
@@ -414,7 +435,8 @@ java_sdk_library_import {
     sdk_member_name: "myothersdklibrary",
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
-    shared_library: false,
+    shared_library: true,
+    compile_dex: true,
     public: {
         jars: ["sdk_library/public/myothersdklibrary-stubs.jar"],
         stub_srcs: ["sdk_library/public/myothersdklibrary_stub_sources"],
@@ -444,7 +466,8 @@ java_sdk_library_import {
     sdk_member_name: "mycoreplatform",
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
-    shared_library: false,
+    shared_library: true,
+    compile_dex: true,
     public: {
         jars: ["sdk_library/public/mycoreplatform-stubs.jar"],
         stub_srcs: ["sdk_library/public/mycoreplatform_stub_sources"],
