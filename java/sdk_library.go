@@ -675,13 +675,25 @@ func (c *commonToSdkLibraryAndImport) initCommonAfterDefaultsApplied(ctx android
 		return false
 	}
 
+	namePtr := proptools.StringPtr(c.module.BaseModuleName())
+	c.sdkLibraryComponentProperties.SdkLibraryName = namePtr
+
 	// Only track this sdk library if this can be used as a shared library.
 	if c.sharedLibrary() {
 		// Use the name specified in the module definition as the owner.
-		c.sdkLibraryComponentProperties.SdkLibraryToImplicitlyTrack = proptools.StringPtr(c.module.BaseModuleName())
+		c.sdkLibraryComponentProperties.SdkLibraryToImplicitlyTrack = namePtr
 	}
 
 	return true
+}
+
+// uniqueApexVariations provides common implementation of the ApexModule.UniqueApexVariations
+// method.
+func (c *commonToSdkLibraryAndImport) uniqueApexVariations() bool {
+	// A java_sdk_library that is a shared library produces an XML file that makes the shared library
+	// usable from an AndroidManifest.xml's <uses-library> entry. That XML file contains the name of
+	// the APEX and so it needs a unique variation per APEX.
+	return c.sharedLibrary()
 }
 
 func (c *commonToSdkLibraryAndImport) generateCommonBuildActions(ctx android.ModuleContext) {
@@ -913,15 +925,19 @@ func (c *commonToSdkLibraryAndImport) SdkRemovedTxtFile(ctx android.BaseModuleCo
 
 func (c *commonToSdkLibraryAndImport) sdkComponentPropertiesForChildLibrary() interface{} {
 	componentProps := &struct {
+		SdkLibraryName              *string
 		SdkLibraryToImplicitlyTrack *string
 	}{}
+
+	namePtr := proptools.StringPtr(c.module.BaseModuleName())
+	componentProps.SdkLibraryName = namePtr
 
 	if c.sharedLibrary() {
 		// Mark the stubs library as being components of this java_sdk_library so that
 		// any app that includes code which depends (directly or indirectly) on the stubs
 		// library will have the appropriate <uses-library> invocation inserted into its
 		// manifest if necessary.
-		componentProps.SdkLibraryToImplicitlyTrack = proptools.StringPtr(c.module.BaseModuleName())
+		componentProps.SdkLibraryToImplicitlyTrack = namePtr
 	}
 
 	return componentProps
@@ -940,6 +956,8 @@ func (c *commonToSdkLibraryAndImport) stubLibrariesCompiledForDex() bool {
 
 // Properties related to the use of a module as an component of a java_sdk_library.
 type SdkLibraryComponentProperties struct {
+	// The name of the java_sdk_library/_import module.
+	SdkLibraryName *string `blueprint:"mutated"`
 
 	// The name of the java_sdk_library/_import to add to a <uses-library> entry
 	// in the AndroidManifest.xml of any Android app that includes code that references
@@ -958,6 +976,11 @@ func (e *EmbeddableSdkLibraryComponent) initSdkLibraryComponent(module android.M
 }
 
 // to satisfy SdkLibraryComponentDependency
+func (e *EmbeddableSdkLibraryComponent) SdkLibraryName() *string {
+	return e.sdkLibraryComponentProperties.SdkLibraryName
+}
+
+// to satisfy SdkLibraryComponentDependency
 func (e *EmbeddableSdkLibraryComponent) OptionalImplicitSdkLibrary() *string {
 	return e.sdkLibraryComponentProperties.SdkLibraryToImplicitlyTrack
 }
@@ -972,6 +995,9 @@ func (e *EmbeddableSdkLibraryComponent) OptionalSdkLibraryImplementation() *stri
 // (including the java_sdk_library) itself.
 type SdkLibraryComponentDependency interface {
 	UsesLibraryDependency
+
+	// SdkLibraryName returns the name of the java_sdk_library/_import module.
+	SdkLibraryName() *string
 
 	// The optional name of the sdk library that should be implicitly added to the
 	// AndroidManifest of an app that contains code which references the sdk library.
@@ -1528,12 +1554,18 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	mctx.CreateModule(DroidstubsFactory, &props)
 }
 
+// Implements android.ApexModule
 func (module *SdkLibrary) DepIsInSameApex(mctx android.BaseModuleContext, dep android.Module) bool {
 	depTag := mctx.OtherModuleDependencyTag(dep)
 	if depTag == xmlPermissionsFileTag {
 		return true
 	}
 	return module.Library.DepIsInSameApex(mctx, dep)
+}
+
+// Implements android.ApexModule
+func (module *SdkLibrary) UniqueApexVariations() bool {
+	return module.uniqueApexVariations()
 }
 
 // Creates the xml file that publicizes the runtime library
@@ -2088,6 +2120,11 @@ func (module *SdkLibraryImport) ShouldSupportSdkVersion(ctx android.BaseModuleCo
 	sdkVersion android.ApiLevel) error {
 	// we don't check prebuilt modules for sdk_version
 	return nil
+}
+
+// Implements android.ApexModule
+func (module *SdkLibraryImport) UniqueApexVariations() bool {
+	return module.uniqueApexVariations()
 }
 
 func (module *SdkLibraryImport) OutputFiles(tag string) (android.Paths, error) {
