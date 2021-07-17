@@ -3670,13 +3670,13 @@ func TestApexName(t *testing.T) {
 		}
 	`)
 
-	module := ctx.ModuleForTests("myapex", "android_common_myapex_image")
+	module := ctx.ModuleForTests("myapex", "android_common_com.android.myapex_image")
 	apexManifestRule := module.Rule("apexManifestRule")
 	ensureContains(t, apexManifestRule.Args["opt"], "-v name com.android.myapex")
 	apexRule := module.Rule("apexRule")
 	ensureContains(t, apexRule.Args["opt_flags"], "--do_not_check_keyname")
 
-	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().(*apexBundle)
+	apexBundle := module.Module().(*apexBundle)
 	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
 	name := apexBundle.BaseModuleName()
 	prefix := "TARGET_"
@@ -4219,6 +4219,59 @@ func TestPrebuiltOverrides(t *testing.T) {
 	}
 }
 
+func TestPrebuiltApexName(t *testing.T) {
+	testApex(t, `
+		prebuilt_apex {
+			name: "com.company.android.myapex",
+			apex_name: "com.android.myapex",
+			src: "company-myapex-arm.apex",
+		}
+	`).ModuleForTests("com.company.android.myapex", "android_common_com.android.myapex")
+
+	testApex(t, `
+		apex_set {
+			name: "com.company.android.myapex",
+			apex_name: "com.android.myapex",
+			set: "company-myapex.apks",
+		}
+	`).ModuleForTests("com.company.android.myapex", "android_common_com.android.myapex")
+}
+
+func TestPrebuiltApexNameWithPlatformBootclasspath(t *testing.T) {
+	_ = android.GroupFixturePreparers(
+		java.PrepareForTestWithJavaDefaultModules,
+		PrepareForTestWithApexBuildComponents,
+		android.FixtureWithRootAndroidBp(`
+			platform_bootclasspath {
+				name: "platform-bootclasspath",
+				fragments: [
+					{
+						apex: "com.android.art",
+						module: "art-bootclasspath-fragment",
+					},
+				],
+			}
+
+			prebuilt_apex {
+				name: "com.company.android.art",
+				apex_name: "com.android.art",
+				src: "com.company.android.art-arm.apex",
+				exported_bootclasspath_fragments: ["art-bootclasspath-fragment"],
+			}
+
+			prebuilt_bootclasspath_fragment {
+				name: "art-bootclasspath-fragment",
+				contents: ["core-oj"],
+			}
+
+			java_import {
+				name: "core-oj",
+				jars: ["prebuilt.jar"],
+			}
+		`),
+	).RunTest(t)
+}
+
 // These tests verify that the prebuilt_apex/deapexer to java_import wiring allows for the
 // propagation of paths to dex implementation jars from the former to the latter.
 func TestPrebuiltExportDexImplementationJars(t *testing.T) {
@@ -4229,16 +4282,26 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 		p := ctx.ModuleForTests(name, "android_common_myapex").Module().(java.UsesLibraryDependency)
 		dexJarBuildPath := p.DexJarBuildPath()
 		stem := android.RemoveOptionalPrebuiltPrefix(name)
-		if expected, actual := ".intermediates/myapex.deapexer/android_common/deapexer/javalib/"+stem+".jar", android.NormalizePathForTesting(dexJarBuildPath); actual != expected {
-			t.Errorf("Incorrect DexJarBuildPath value '%s', expected '%s'", actual, expected)
-		}
+		android.AssertStringEquals(t, "DexJarBuildPath should be apex-related path.",
+			".intermediates/myapex.deapexer/android_common/deapexer/javalib/"+stem+".jar",
+			android.NormalizePathForTesting(dexJarBuildPath))
+	}
+
+	checkDexJarInstallPath := func(t *testing.T, ctx *android.TestContext, name string) {
+		// Make sure the import has been given the correct path to the dex jar.
+		p := ctx.ModuleForTests(name, "android_common_myapex").Module().(java.UsesLibraryDependency)
+		dexJarBuildPath := p.DexJarInstallPath()
+		stem := android.RemoveOptionalPrebuiltPrefix(name)
+		android.AssertStringEquals(t, "DexJarInstallPath should be apex-related path.",
+			"target/product/test_device/apex/myapex/javalib/"+stem+".jar",
+			android.NormalizePathForTesting(dexJarBuildPath))
 	}
 
 	ensureNoSourceVariant := func(t *testing.T, ctx *android.TestContext, name string) {
 		// Make sure that an apex variant is not created for the source module.
-		if expected, actual := []string{"android_common"}, ctx.ModuleVariantsForTests(name); !reflect.DeepEqual(expected, actual) {
-			t.Errorf("invalid set of variants for %q: expected %q, found %q", "libfoo", expected, actual)
-		}
+		android.AssertArrayString(t, "Check if there is no source variant",
+			[]string{"android_common"},
+			ctx.ModuleVariantsForTests(name))
 	}
 
 	t.Run("prebuilt only", func(t *testing.T) {
@@ -4287,8 +4350,10 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 		}
 
 		checkDexJarBuildPath(t, ctx, "libfoo")
+		checkDexJarInstallPath(t, ctx, "libfoo")
 
 		checkDexJarBuildPath(t, ctx, "libbar")
+		checkDexJarInstallPath(t, ctx, "libbar")
 	})
 
 	t.Run("prebuilt with source preferred", func(t *testing.T) {
@@ -4334,9 +4399,11 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 		ctx := testDexpreoptWithApexes(t, bp, "", transform)
 
 		checkDexJarBuildPath(t, ctx, "prebuilt_libfoo")
+		checkDexJarInstallPath(t, ctx, "prebuilt_libfoo")
 		ensureNoSourceVariant(t, ctx, "libfoo")
 
 		checkDexJarBuildPath(t, ctx, "prebuilt_libbar")
+		checkDexJarInstallPath(t, ctx, "prebuilt_libbar")
 		ensureNoSourceVariant(t, ctx, "libbar")
 	})
 
@@ -4384,9 +4451,11 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 		ctx := testDexpreoptWithApexes(t, bp, "", transform)
 
 		checkDexJarBuildPath(t, ctx, "prebuilt_libfoo")
+		checkDexJarInstallPath(t, ctx, "prebuilt_libfoo")
 		ensureNoSourceVariant(t, ctx, "libfoo")
 
 		checkDexJarBuildPath(t, ctx, "prebuilt_libbar")
+		checkDexJarInstallPath(t, ctx, "prebuilt_libbar")
 		ensureNoSourceVariant(t, ctx, "libbar")
 	})
 }
