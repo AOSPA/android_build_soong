@@ -792,6 +792,12 @@ func (c *config) UnbundledBuildApps() bool {
 	return Bool(c.productVariables.Unbundled_build_apps)
 }
 
+// Returns true if building image that aren't bundled with the platform.
+// UnbundledBuild() is always true when this is true.
+func (c *config) UnbundledBuildImage() bool {
+	return Bool(c.productVariables.Unbundled_build_image)
+}
+
 // Returns true if building modules against prebuilt SDKs.
 func (c *config) AlwaysUsePrebuiltSdks() bool {
 	return Bool(c.productVariables.Always_use_prebuilt_sdks)
@@ -1061,6 +1067,10 @@ func (c *deviceConfig) VndkVersion() string {
 
 func (c *deviceConfig) RecoverySnapshotVersion() string {
 	return String(c.config.productVariables.RecoverySnapshotVersion)
+}
+
+func (c *deviceConfig) RamdiskSnapshotVersion() string {
+	return String(c.config.productVariables.RamdiskSnapshotVersion)
 }
 
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
@@ -1400,6 +1410,10 @@ func (c *deviceConfig) BoardUsesRecoveryAsBoot() bool {
 	return Bool(c.config.productVariables.BoardUsesRecoveryAsBoot)
 }
 
+func (c *deviceConfig) BoardUsesRamdiskAsBoot() bool {
+	return Bool(c.config.productVariables.BoardUsesRamdiskAsBoot)
+}
+
 func (c *deviceConfig) BoardKernelBinaries() []string {
 	return c.config.productVariables.BoardKernelBinaries
 }
@@ -1410,6 +1424,10 @@ func (c *deviceConfig) BoardKernelModuleInterfaceVersions() []string {
 
 func (c *deviceConfig) BoardMoveRecoveryResourcesToVendorBoot() bool {
 	return Bool(c.config.productVariables.BoardMoveRecoveryResourcesToVendorBoot)
+}
+
+func (c *deviceConfig) BoardMoveRamdiskResourcesToVendorBoot() bool {
+	return Bool(c.config.productVariables.BoardMoveRamdiskResourcesToVendorBoot)
 }
 
 func (c *deviceConfig) PlatformSepolicyVersion() string {
@@ -1441,6 +1459,14 @@ func (c *deviceConfig) DirectedRecoverySnapshot() bool {
 
 func (c *deviceConfig) RecoverySnapshotModules() map[string]bool {
 	return c.config.productVariables.RecoverySnapshotModules
+}
+
+func (c *deviceConfig) DirectedRamdiskSnapshot() bool {
+	return c.config.productVariables.DirectedRamdiskSnapshot
+}
+
+func (c *deviceConfig) RamdiskSnapshotModules() map[string]bool {
+	return c.config.productVariables.RamdiskSnapshotModules
 }
 
 func createDirsMap(previous map[string]bool, dirs []string) (map[string]bool, error) {
@@ -1497,6 +1523,21 @@ func (c *deviceConfig) RecoverySnapshotDirsIncludedMap() map[string]bool {
 	excludedMap := c.RecoverySnapshotDirsExcludedMap()
 	return c.createDirsMapOnce(recoverySnapshotDirsIncludedKey, excludedMap,
 		c.config.productVariables.RecoverySnapshotDirsIncluded)
+}
+
+var ramdiskSnapshotDirsExcludedKey = NewOnceKey("RamdiskSnapshotDirsExcludedMap")
+
+func (c *deviceConfig) RamdiskSnapshotDirsExcludedMap() map[string]bool {
+	return c.createDirsMapOnce(ramdiskSnapshotDirsExcludedKey, nil,
+		c.config.productVariables.RamdiskSnapshotDirsExcluded)
+}
+
+var ramdiskSnapshotDirsIncludedKey = NewOnceKey("RamdiskSnapshotDirsIncludedMap")
+
+func (c *deviceConfig) RamdiskSnapshotDirsIncludedMap() map[string]bool {
+	excludedMap := c.RamdiskSnapshotDirsExcludedMap()
+	return c.createDirsMapOnce(ramdiskSnapshotDirsIncludedKey, excludedMap,
+		c.config.productVariables.RamdiskSnapshotDirsIncluded)
 }
 
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {

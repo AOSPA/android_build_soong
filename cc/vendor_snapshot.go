@@ -13,8 +13,8 @@
 // limitations under the License.
 package cc
 
-// This file contains singletons to capture vendor and recovery snapshot. They consist of prebuilt
-// modules under AOSP so older vendor and recovery can be built with a newer system in a single
+// This file contains singletons to capture vendor, ramdisk and recovery snapshot. They consist of prebuilt
+// modules under AOSP so older vendor, ramdisk and recovery can be built with a newer system in a single
 // source tree.
 
 import (
@@ -53,6 +53,15 @@ var recoverySnapshotSingleton = snapshotSingleton{
 	false, /* fake */
 }
 
+var ramdiskSnapshotSingleton = snapshotSingleton{
+	"ramdisk",
+	"SOONG_RAMDISK_SNAPSHOT_ZIP",
+	android.OptionalPath{},
+	false,
+	ramdiskSnapshotImageSingleton,
+	false, /* fake */
+}
+
 func VendorSnapshotSingleton() android.Singleton {
 	return &vendorSnapshotSingleton
 }
@@ -63,6 +72,10 @@ func VendorFakeSnapshotSingleton() android.Singleton {
 
 func RecoverySnapshotSingleton() android.Singleton {
 	return &recoverySnapshotSingleton
+}
+
+func RamdiskSnapshotSingleton() android.Singleton {
+	return &ramdiskSnapshotSingleton
 }
 
 type snapshotSingleton struct {
@@ -104,6 +117,13 @@ func isRecoveryProprietaryPath(dir string, deviceConfig android.DeviceConfig) bo
 	return RecoverySnapshotSingleton().(*snapshotSingleton).image.isProprietaryPath(dir, deviceConfig)
 }
 
+// Determine if a dir under source tree is an SoC-owned proprietary directory based
+// on ramdisk snapshot configuration
+// Examples: device/, vendor/
+func isRamdiskProprietaryPath(dir string, deviceConfig android.DeviceConfig) bool {
+	return RamdiskSnapshotSingleton().(*snapshotSingleton).image.isProprietaryPath(dir, deviceConfig)
+}
+
 func isVendorProprietaryModule(ctx android.BaseModuleContext) bool {
 	// Any module in a vendor proprietary path is a vendor proprietary
 	// module.
@@ -139,6 +159,28 @@ func isRecoveryProprietaryModule(ctx android.BaseModuleContext) bool {
 
 	if c, ok := ctx.Module().(LinkableInterface); ok {
 		if c.ExcludeFromRecoverySnapshot() {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isRamdiskProprietaryModule(ctx android.BaseModuleContext) bool {
+
+	// Any module in a ramdisk proprietary path is a ramdisk proprietary
+	// module.
+	if isRamdiskProprietaryPath(ctx.ModuleDir(), ctx.DeviceConfig()) {
+		return true
+	}
+
+	// However if the module is not in a ramdisk proprietary path, it may
+	// still be a ramdisk proprietary module. This happens for cc modules
+	// that are excluded from the ramdisk snapshot, and it means that the
+	// ramdisk has assumed control of the framework-provided module.
+
+	if c, ok := ctx.Module().(*Module); ok {
+		if c.ExcludeFromRamdiskSnapshot() {
 			return true
 		}
 	}
@@ -242,10 +284,12 @@ type snapshotJsonFlags struct {
 	SanitizeUbsanDep   bool     `json:",omitempty"`
 
 	// binary flags
-	Symlinks []string `json:",omitempty"`
+	Symlinks         []string `json:",omitempty"`
+	StaticExecutable bool     `json:",omitempty"`
 
 	// dependencies
 	SharedLibs  []string `json:",omitempty"`
+	StaticLibs  []string `json:",omitempty"`
 	RuntimeLibs []string `json:",omitempty"`
 	Required    []string `json:",omitempty"`
 
@@ -381,6 +425,8 @@ func (c *snapshotSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 			if m.Shared() {
 				prop.SharedLibs = m.SnapshotSharedLibs()
 			}
+			// static libs dependencies are required to collect the NOTICE files.
+			prop.StaticLibs = m.SnapshotStaticLibs()
 			if sanitizable, ok := m.(PlatformSanitizeable); ok {
 				if sanitizable.Static() && sanitizable.SanitizePropDefined() {
 					prop.SanitizeMinimalDep = sanitizable.MinimalRuntimeDep() || sanitizable.MinimalRuntimeNeeded()
@@ -424,8 +470,10 @@ func (c *snapshotSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 		} else if m.Binary() {
 			// binary flags
 			prop.Symlinks = m.Symlinks()
+			prop.StaticExecutable = m.StaticExecutable()
 			prop.SharedLibs = m.SnapshotSharedLibs()
-
+			// static libs dependencies are required to collect the NOTICE files.
+			prop.StaticLibs = m.SnapshotStaticLibs()
 			// install bin
 			binPath := m.OutputFile().Path()
 			snapshotBinOut := filepath.Join(snapshotArchDir, targetArch, "binary", binPath.Base())
@@ -493,13 +541,13 @@ func (c *snapshotSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 			headers = append(headers, m.SnapshotHeaders()...)
 		}
 
-		if len(m.NoticeFiles()) > 0 {
+		if len(m.EffectiveLicenseFiles()) > 0 {
 			noticeName := ctx.ModuleName(m) + ".txt"
 			noticeOut := filepath.Join(noticeDir, noticeName)
 			// skip already copied notice file
 			if !installedNotices[noticeOut] {
 				installedNotices[noticeOut] = true
-				snapshotOutputs = append(snapshotOutputs, combineNoticesRule(ctx, m.NoticeFiles(), noticeOut))
+				snapshotOutputs = append(snapshotOutputs, combineNoticesRule(ctx, m.EffectiveLicenseFiles(), noticeOut))
 			}
 		}
 	})

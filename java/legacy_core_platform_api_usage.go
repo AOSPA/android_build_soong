@@ -125,7 +125,6 @@ var legacyCorePlatformApiModules = []string{
 	"NetworkStackNextTests",
 	"NetworkStackTests",
 	"NetworkStackTestsLib",
-	"NQNfcNci",			// TODO(b/168259330) what is a better way to deal with this
 	"online-gcm-ref-docs",
 	"online-gts-docs",
 	"PerformanceMode",

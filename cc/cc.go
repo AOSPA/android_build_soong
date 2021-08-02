@@ -303,10 +303,6 @@ type BaseProperties struct {
 	Logtags []string
 
 	// Make this module available when building for ramdisk.
-	// On device without a dedicated recovery partition, the module is only
-	// available after switching root into
-	// /first_stage_ramdisk. To expose the module before switching root, install
-	// the recovery variant instead.
 	Ramdisk_available *bool
 
 	// Make this module available when building for vendor ramdisk.
@@ -336,6 +332,7 @@ type BaseProperties struct {
 
 	// Used by vendor snapshot to record dependencies from snapshot modules.
 	SnapshotSharedLibs  []string `blueprint:"mutated"`
+	SnapshotStaticLibs  []string `blueprint:"mutated"`
 	SnapshotRuntimeLibs []string `blueprint:"mutated"`
 
 	Installable *bool
@@ -363,6 +360,13 @@ type BaseProperties struct {
 	// allows a partner to exclude a module normally thought of as a
 	// framework module from the recovery snapshot.
 	Exclude_from_recovery_snapshot *bool
+
+	// Normally Soong uses the directory structure to decide which modules
+	// should be included (framework) or excluded (non-framework) from the
+	// different snapshots (vendor, recovery, etc.), but this property
+	// allows a partner to exclude a module normally thought of as a
+	// framework module from the ramdisk snapshot.
+	Exclude_from_ramdisk_snapshot *bool
 
 	// List of APEXes that this module has private access to for testing purpose. The module
 	// can depend on libraries that are not exported by the APEXes and use private symbols
@@ -1286,6 +1290,10 @@ func (c *Module) ExcludeFromRecoverySnapshot() bool {
 	return Bool(c.Properties.Exclude_from_recovery_snapshot)
 }
 
+func (c *Module) ExcludeFromRamdiskSnapshot() bool {
+	return Bool(c.Properties.Exclude_from_ramdisk_snapshot)
+}
+
 func isBionic(name string) bool {
 	switch name {
 	case "libc", "libm", "libdl", "libdl_android", "linker", "linkerconfig":
@@ -1793,7 +1801,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		// glob exported headers for snapshot, if BOARD_VNDK_VERSION is current or
-		// RECOVERY_SNAPSHOT_VERSION is current.
+		// RECOVERY_SNAPSHOT_VERSION is current or RAMDISK_SNAPSHOT_VERSION is current.
 		if i, ok := c.linker.(snapshotLibraryInterface); ok {
 			if ShouldCollectHeadersForSnapshot(ctx, c, apexInfo) {
 				i.collectHeadersForSnapshot(ctx)
@@ -2027,9 +2035,9 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	var snapshotInfo *SnapshotInfo
 	getSnapshot := func() SnapshotInfo {
-		// Only modules with BOARD_VNDK_VERSION uses snapshot.  Others use the zero value of
+		// Only device modules with BOARD_VNDK_VERSION uses snapshot.  Others use the zero value of
 		// SnapshotInfo, which provides no mappings.
-		if snapshotInfo == nil {
+		if snapshotInfo == nil && c.Device() {
 			// Only retrieve the snapshot on demand in order to avoid circular dependencies
 			// between the modules in the snapshot and the snapshot itself.
 			var snapshotModule []blueprint.Module
@@ -2037,17 +2045,19 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 				snapshotModule = ctx.AddVariationDependencies(nil, nil, "vendor_snapshot")
 			} else if recoverySnapshotVersion := actx.DeviceConfig().RecoverySnapshotVersion(); recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" && c.InRecovery() {
 				snapshotModule = ctx.AddVariationDependencies(nil, nil, "recovery_snapshot")
+			} else if ramdiskSnapshotVersion := actx.DeviceConfig().RamdiskSnapshotVersion(); ramdiskSnapshotVersion != "current" && ramdiskSnapshotVersion != "" && c.InRamdisk() {
+				snapshotModule = ctx.AddVariationDependencies(nil, nil, "ramdisk_snapshot")
 			}
-			if len(snapshotModule) > 0 {
+			if len(snapshotModule) > 0 && snapshotModule[0] != nil {
 				snapshot := ctx.OtherModuleProvider(snapshotModule[0], SnapshotInfoProvider).(SnapshotInfo)
 				snapshotInfo = &snapshot
 				// republish the snapshot for use in later mutators on this module
 				ctx.SetProvider(SnapshotInfoProvider, snapshot)
-			} else {
-				snapshotInfo = &SnapshotInfo{}
 			}
 		}
-
+		if snapshotInfo == nil {
+			snapshotInfo = &SnapshotInfo{}
+		}
 		return *snapshotInfo
 	}
 
@@ -2084,6 +2094,8 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 				// strip #version suffix out
 				name, _ := StubsLibNameAndVersion(entry)
 				if c.InRecovery() {
+					nonvariantLibs = append(nonvariantLibs, rewriteSnapshotLib(entry, getSnapshot().SharedLibs))
+				} else if c.InRamdisk() {
 					nonvariantLibs = append(nonvariantLibs, rewriteSnapshotLib(entry, getSnapshot().SharedLibs))
 				} else if ctx.useSdk() && inList(name, *getNDKKnownLibs(ctx.Config())) {
 					variantLibs = append(variantLibs, name+ndkLibrarySuffix)
@@ -2870,6 +2882,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					c.Properties.AndroidMkStaticLibs = append(
 						c.Properties.AndroidMkStaticLibs, makeLibName)
 				}
+				// Record BaseLibName for snapshots.
+				c.Properties.SnapshotStaticLibs = append(c.Properties.SnapshotStaticLibs, baseLibName(depName))
 			}
 		} else if !c.IsStubs() {
 			// Stubs lib doesn't link to the runtime lib, object, crt, etc. dependencies.
@@ -3095,6 +3109,13 @@ func (c *Module) Binary() bool {
 		binary() bool
 	}); ok {
 		return b.binary()
+	}
+	return false
+}
+
+func (c *Module) StaticExecutable() bool {
+	if b, ok := c.linker.(*binaryDecorator); ok {
+		return b.static()
 	}
 	return false
 }
@@ -3375,6 +3396,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&android.ProtoProperties{},
 		// RustBindgenProperties is included here so that cc_defaults can be used for rust_bindgen modules.
 		&RustBindgenClangProperties{},
+		&prebuiltLinkerProperties{},
 	)
 
 	// Bazel module must be initialized _before_ Defaults to be included in cc_defaults module.

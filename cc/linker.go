@@ -122,7 +122,7 @@ type BaseLinkerProperties struct {
 
 			// version script for vendor or product variant
 			Version_script *string `android:"arch_variant"`
-		}
+		} `android:"arch_variant"`
 		Recovery struct {
 			// list of shared libs that only should be used to build the recovery
 			// variant of the C/C++ module.
@@ -145,7 +145,11 @@ type BaseLinkerProperties struct {
 			Exclude_header_libs []string
 		}
 		Ramdisk struct {
-			// list of static libs that only should be used to build the recovery
+			// list of shared libs that only should be used to build the ramdisk
+			// variant of the C/C++ module.
+			Shared_libs []string
+
+			// list of static libs that only should be used to build the ramdisk
 			// variant of the C/C++ module.
 			Static_libs []string
 
@@ -156,10 +160,14 @@ type BaseLinkerProperties struct {
 			// list of static libs that should not be used to build
 			// the ramdisk variant of the C/C++ module.
 			Exclude_static_libs []string
+
+			// list of header libs that should not be used to build the ramdisk variant
+			// of the C/C++ module.
+			Exclude_header_libs []string
 		}
 		Vendor_ramdisk struct {
 			// list of shared libs that should not be used to build
-			// the recovery variant of the C/C++ module.
+			// the vendor ramdisk variant of the C/C++ module.
 			Exclude_shared_libs []string
 
 			// list of static libs that should not be used to build
@@ -182,7 +190,7 @@ type BaseLinkerProperties struct {
 			// variant of the C/C++ module.
 			Exclude_static_libs []string
 		}
-	}
+	} `android:"arch_variant"`
 
 	// make android::build:GetBuildNumber() available containing the build ID.
 	Use_version_lib *bool `android:"arch_variant"`
@@ -299,10 +307,13 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	}
 
 	if ctx.inRamdisk() {
+		deps.SharedLibs = append(deps.SharedLibs, linker.Properties.Target.Ramdisk.Shared_libs...)
 		deps.SharedLibs = removeListFromList(deps.SharedLibs, linker.Properties.Target.Ramdisk.Exclude_shared_libs)
 		deps.ReexportSharedLibHeaders = removeListFromList(deps.ReexportSharedLibHeaders, linker.Properties.Target.Ramdisk.Exclude_shared_libs)
 		deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Target.Ramdisk.Static_libs...)
 		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Ramdisk.Exclude_static_libs)
+		deps.HeaderLibs = removeListFromList(deps.HeaderLibs, linker.Properties.Target.Ramdisk.Exclude_header_libs)
+		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Ramdisk.Exclude_static_libs)
 		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Ramdisk.Exclude_static_libs)
 		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Ramdisk.Exclude_static_libs)
 	}

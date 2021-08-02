@@ -643,7 +643,7 @@ func LibraryFactory() android.Module {
 
 	module.addHostAndDeviceProperties()
 
-	module.initModuleAndImport(&module.ModuleBase)
+	module.initModuleAndImport(module)
 
 	android.InitApexModule(module)
 	android.InitSdkAwareModule(module)
@@ -1166,7 +1166,8 @@ type Import struct {
 	properties ImportProperties
 
 	// output file containing classes.dex and resources
-	dexJarFile android.Path
+	dexJarFile        android.Path
+	dexJarInstallFile android.Path
 
 	combinedClasspathFile android.Path
 	classLoaderContexts   dexpreopt.ClassLoaderContextMap
@@ -1309,8 +1310,9 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 			// Get the path of the dex implementation jar from the `deapexer` module.
 			di := ctx.OtherModuleProvider(deapexerModule, android.DeapexerProvider).(android.DeapexerInfo)
-			if dexOutputPath := di.PrebuiltExportPath(j.BaseModuleName(), ".dexjar"); dexOutputPath != nil {
+			if dexOutputPath := di.PrebuiltExportPath(apexRootRelativePathToJavaLib(j.BaseModuleName())); dexOutputPath != nil {
 				j.dexJarFile = dexOutputPath
+				j.dexJarInstallFile = android.PathForModuleInPartitionInstall(ctx, "apex", ai.ApexVariationName, apexRootRelativePathToJavaLib(j.BaseModuleName()))
 
 				// Initialize the hiddenapi structure.
 				j.initHiddenAPI(ctx, dexOutputPath, outputFile, nil)
@@ -1351,6 +1353,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			dexOutputFile = j.hiddenAPIEncodeDex(ctx, dexOutputFile)
 
 			j.dexJarFile = dexOutputFile
+			j.dexJarInstallFile = android.PathForModuleInstall(ctx, "framework", jarName)
 		}
 	}
 
@@ -1392,7 +1395,7 @@ func (j *Import) DexJarBuildPath() android.Path {
 }
 
 func (j *Import) DexJarInstallPath() android.Path {
-	return nil
+	return j.dexJarInstallFile
 }
 
 func (j *Import) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
@@ -1424,6 +1427,29 @@ func (j *Import) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 		return fmt.Errorf("newer SDK(%v)", ver)
 	}
 	return nil
+}
+
+// requiredFilesFromPrebuiltApexForImport returns information about the files that a java_import or
+// java_sdk_library_import with the specified base module name requires to be exported from a
+// prebuilt_apex/apex_set.
+func requiredFilesFromPrebuiltApexForImport(name string) []string {
+	// Add the dex implementation jar to the set of exported files.
+	return []string{
+		apexRootRelativePathToJavaLib(name),
+	}
+}
+
+// apexRootRelativePathToJavaLib returns the path, relative to the root of the apex's contents, for
+// the java library with the specified name.
+func apexRootRelativePathToJavaLib(name string) string {
+	return filepath.Join("javalib", name+".jar")
+}
+
+var _ android.RequiredFilesFromPrebuiltApex = (*Import)(nil)
+
+func (j *Import) RequiredFilesFromPrebuiltApex(_ android.BaseModuleContext) []string {
+	name := j.BaseModuleName()
+	return requiredFilesFromPrebuiltApexForImport(name)
 }
 
 // Add compile time check for interface implementation
@@ -1473,7 +1499,7 @@ func ImportFactory() android.Module {
 		&module.dexer.dexProperties,
 	)
 
-	module.initModuleAndImport(&module.ModuleBase)
+	module.initModuleAndImport(module)
 
 	module.dexProperties.Optimize.EnabledByDefault = false
 

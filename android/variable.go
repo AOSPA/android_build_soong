@@ -209,6 +209,7 @@ type productVariables struct {
 	DeviceSystemSdkVersions               []string `json:",omitempty"`
 
 	RecoverySnapshotVersion *string `json:",omitempty"`
+	RamdiskSnapshotVersion *string `json:",omitempty"`
 
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
@@ -255,6 +256,7 @@ type productVariables struct {
 	Allow_missing_dependencies       *bool `json:",omitempty"`
 	Unbundled_build                  *bool `json:",omitempty"`
 	Unbundled_build_apps             *bool `json:",omitempty"`
+	Unbundled_build_image            *bool `json:",omitempty"`
 	Unbundled_build_sdks_from_source *bool `json:",omitempty"`
 	Always_use_prebuilt_sdks         *bool `json:",omitempty"`
 	Skip_boot_jars_check             *bool `json:",omitempty"`
@@ -353,10 +355,15 @@ type productVariables struct {
 	DirectedRecoverySnapshot bool            `json:",omitempty"`
 	RecoverySnapshotModules  map[string]bool `json:",omitempty"`
 
+	DirectedRamdiskSnapshot bool            `json:",omitempty"`
+	RamdiskSnapshotModules  map[string]bool `json:",omitempty"`
+
 	VendorSnapshotDirsIncluded   []string `json:",omitempty"`
 	VendorSnapshotDirsExcluded   []string `json:",omitempty"`
 	RecoverySnapshotDirsExcluded []string `json:",omitempty"`
 	RecoverySnapshotDirsIncluded []string `json:",omitempty"`
+	RamdiskSnapshotDirsExcluded []string `json:",omitempty"`
+	RamdiskSnapshotDirsIncluded []string `json:",omitempty"`
 
 	BoardVendorSepolicyDirs      []string `json:",omitempty"`
 	BoardOdmSepolicyDirs         []string `json:",omitempty"`
@@ -409,11 +416,13 @@ type productVariables struct {
 	InstallExtraFlattenedApexes *bool `json:",omitempty"`
 
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
+	BoardUsesRamdiskAsBoot *bool `json:",omitempty"`
 
 	BoardKernelBinaries                []string `json:",omitempty"`
 	BoardKernelModuleInterfaceVersions []string `json:",omitempty"`
 
 	BoardMoveRecoveryResourcesToVendorBoot *bool `json:",omitempty"`
+	BoardMoveRamdiskResourcesToVendorBoot *bool `json:",omitempty"`
 
 	PrebuiltHiddenApiDir *string `json:",omitempty"`
 

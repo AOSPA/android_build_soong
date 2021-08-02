@@ -166,8 +166,7 @@ type apexBundleProperties struct {
 	Ignore_system_library_special_case *bool
 
 	// Whenever apex_payload.img of the APEX should include dm-verity hashtree.
-	// Default value is false.
-	// TODO(b/190621617): change default value to true.
+	// Default value is true.
 	Generate_hashtree *bool
 
 	// Whenever apex_payload.img of the APEX should not be dm-verity signed. Should be only
@@ -177,6 +176,12 @@ type apexBundleProperties struct {
 	// Whenever apex should be compressed, regardless of product flag used. Should be only
 	// used in tests.
 	Test_only_force_compression *bool
+
+	// Canonical name of this APEX bundle. Used to determine the path to the
+	// activated APEX on device (i.e. /apex/<apexVariationName>), and used for the
+	// apex mutator variations. For override_apex modules, this is the name of the
+	// overridden base module.
+	ApexVariationName string `blueprint:"mutated"`
 
 	IsCoverageVariant bool `blueprint:"mutated"`
 
@@ -809,6 +814,10 @@ var ApexBundleInfoProvider = blueprint.NewMutatorProvider(ApexBundleInfo{}, "ape
 
 var _ ApexInfoMutator = (*apexBundle)(nil)
 
+func (a *apexBundle) ApexVariationName() string {
+	return a.properties.ApexVariationName
+}
+
 // ApexInfoMutator is responsible for collecting modules that need to have apex variants. They are
 // identified by doing a graph walk starting from an apexBundle. Basically, all the (direct and
 // indirect) dependencies are collected. But a few types of modules that shouldn't be included in
@@ -897,15 +906,15 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	// This is the main part of this mutator. Mark the collected dependencies that they need to
 	// be built for this apexBundle.
 
-	// Note that there are many different names.
-	// ApexVariationName: this is the name of the apex variation
+	apexVariationName := proptools.StringDefault(a.properties.Apex_name, mctx.ModuleName()) // could be com.android.foo
+	a.properties.ApexVariationName = apexVariationName
 	apexInfo := android.ApexInfo{
-		ApexVariationName: mctx.ModuleName(), // could be com.android.foo
+		ApexVariationName: apexVariationName,
 		MinSdkVersion:     minSdkVersion,
 		RequiredSdks:      a.RequiredSdks(),
 		Updatable:         a.Updatable(),
-		InApexVariants:    []string{mctx.ModuleName()}, // could be com.android.foo
-		InApexModules:     []string{a.Name()},          // could be com.mycompany.android.foo
+		InApexVariants:    []string{apexVariationName},
+		InApexModules:     []string{a.Name()}, // could be com.mycompany.android.foo
 		ApexContents:      []*android.ApexContents{apexContents},
 	}
 	mctx.WalkDeps(func(child, parent android.Module) bool {
@@ -918,6 +927,10 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 }
 
 type ApexInfoMutator interface {
+	// ApexVariationName returns the name of the APEX variation to use in the apex
+	// mutator etc. It is the same name as ApexInfo.ApexVariationName.
+	ApexVariationName() string
+
 	// ApexInfoMutator implementations must call BuildForApex(ApexInfo) on any modules that are
 	// depended upon by an apex and which require an apex specific variant.
 	ApexInfoMutator(android.TopDownMutatorContext)
@@ -1043,9 +1056,8 @@ func apexMutator(mctx android.BottomUpMutatorContext) {
 	}
 
 	// apexBundle itself is mutated so that it and its dependencies have the same apex variant.
-	// TODO(jiyong): document the reason why the VNDK APEX is an exception here.
-	if a, ok := mctx.Module().(*apexBundle); ok && !a.vndkApex {
-		apexBundleName := mctx.ModuleName()
+	if ai, ok := mctx.Module().(ApexInfoMutator); ok && apexModuleTypeRequiresVariant(ai) {
+		apexBundleName := ai.ApexVariationName()
 		mctx.CreateVariations(apexBundleName)
 		if strings.HasPrefix(apexBundleName, "com.android.art") {
 			// Create an alias from the platform variant. This is done to make
@@ -1063,12 +1075,30 @@ func apexMutator(mctx android.BottomUpMutatorContext) {
 			mctx.ModuleErrorf("base property is not set")
 			return
 		}
+		// Workaround the issue reported in b/191269918 by using the unprefixed module name of this
+		// module as the default variation to use if dependencies of this module do not have the correct
+		// apex variant name. This name matches the name used to create the variations of modules for
+		// which apexModuleTypeRequiresVariant return true.
+		// TODO(b/191269918): Remove this workaround.
+		unprefixedModuleName := android.RemoveOptionalPrebuiltPrefix(mctx.ModuleName())
+		mctx.SetDefaultDependencyVariation(&unprefixedModuleName)
 		mctx.CreateVariations(apexBundleName)
 		if strings.HasPrefix(apexBundleName, "com.android.art") {
 			// TODO(b/183882457): See note for CreateAliasVariation above.
 			mctx.CreateAliasVariation("", apexBundleName)
 		}
 	}
+}
+
+// apexModuleTypeRequiresVariant determines whether the module supplied requires an apex specific
+// variant.
+func apexModuleTypeRequiresVariant(module ApexInfoMutator) bool {
+	if a, ok := module.(*apexBundle); ok {
+		// TODO(jiyong): document the reason why the VNDK APEX is an exception here.
+		return !a.vndkApex
+	}
+
+	return true
 }
 
 // See android.UpdateDirectlyInAnyApex
@@ -1271,7 +1301,7 @@ func (a *apexBundle) installable() bool {
 
 // See the generate_hashtree property
 func (a *apexBundle) shouldGenerateHashtree() bool {
-	return proptools.BoolDefault(a.properties.Generate_hashtree, false)
+	return proptools.BoolDefault(a.properties.Generate_hashtree, true)
 }
 
 // See the test_only_unsigned_payload property

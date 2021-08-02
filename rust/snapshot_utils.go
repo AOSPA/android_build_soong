@@ -28,6 +28,11 @@ func (mod *Module) ExcludeFromRecoverySnapshot() bool {
 	return false
 }
 
+func (mod *Module) ExcludeFromRamdiskSnapshot() bool {
+	// TODO Rust does not yet support snapshotting
+	return false
+}
+
 func (mod *Module) IsSnapshotLibrary() bool {
 	// TODO Rust does not yet support snapshotting
 	return false
@@ -41,6 +46,11 @@ func (mod *Module) SnapshotRuntimeLibs() []string {
 func (mod *Module) SnapshotSharedLibs() []string {
 	// TODO Rust does not yet support snapshotting
 	return []string{}
+}
+
+func (mod *Module) SnapshotStaticLibs() []string {
+        // TODO Rust does not yet support snapshotting
+        return []string{}
 }
 
 func (mod *Module) Symlinks() []string {

@@ -85,14 +85,23 @@ type Snapshottable interface {
 	// ExcludeFromRecoverySnapshot returns true if this module should be otherwise excluded from the recovery snapshot.
 	ExcludeFromRecoverySnapshot() bool
 
+	// ExcludeFromRamdiskSnapshot returns true if this module should be otherwise excluded from the ramdisk snapshot.
+	ExcludeFromRamdiskSnapshot() bool
+
 	// SnapshotLibrary returns true if this module is a snapshot library.
 	IsSnapshotLibrary() bool
+
+	// EffectiveLicenseFiles returns the list of License files for this module.
+	EffectiveLicenseFiles() android.Paths
 
 	// SnapshotRuntimeLibs returns a list of libraries needed by this module at runtime but which aren't build dependencies.
 	SnapshotRuntimeLibs() []string
 
 	// SnapshotSharedLibs returns the list of shared library dependencies for this module.
 	SnapshotSharedLibs() []string
+
+	// SnapshotStaticLibs returns the list of static library dependencies for this module.
+	SnapshotStaticLibs() []string
 
 	// IsSnapshotPrebuilt returns true if this module is a snapshot prebuilt.
 	IsSnapshotPrebuilt() bool
@@ -124,6 +133,7 @@ type LinkableInterface interface {
 	IsPrebuilt() bool
 	Toc() android.OptionalPath
 
+	Device() bool
 	Host() bool
 
 	InRamdisk() bool
@@ -222,6 +232,9 @@ type LinkableInterface interface {
 
 	// Header returns true if this is a library headers module.
 	Header() bool
+
+	// StaticExecutable returns true if this is a binary module with "static_executable: true".
+	StaticExecutable() bool
 
 	// EverInstallable returns true if the module is ever installable
 	EverInstallable() bool

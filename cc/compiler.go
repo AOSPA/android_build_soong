@@ -180,6 +180,23 @@ type BaseCompilerProperties struct {
 			// build the recovery variant of the C/C++ module.
 			Exclude_generated_sources []string
 		}
+		Ramdisk struct {
+			// list of source files that should only be used in the
+			// ramdisk variant of the C/C++ module.
+			Srcs []string `android:"path"`
+
+			// list of source files that should not be used to
+			// build the ramdisk variant of the C/C++ module.
+			Exclude_srcs []string `android:"path"`
+
+			// List of additional cflags that should be used to build the ramdisk
+			// variant of the C/C++ module.
+			Cflags []string
+
+			// list of generated sources that should not be used to
+			// build the ramdisk variant of the C/C++ module.
+			Exclude_generated_sources []string
+		}
 		Vendor_ramdisk struct {
 			// list of source files that should not be used to
 			// build the vendor ramdisk variant of the C/C++ module.
@@ -309,6 +326,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	CheckBadCompilerFlags(ctx, "vendor.cflags", compiler.Properties.Target.Vendor.Cflags)
 	CheckBadCompilerFlags(ctx, "product.cflags", compiler.Properties.Target.Product.Cflags)
 	CheckBadCompilerFlags(ctx, "recovery.cflags", compiler.Properties.Target.Recovery.Cflags)
+	CheckBadCompilerFlags(ctx, "ramdisk.cflags", compiler.Properties.Target.Ramdisk.Cflags)
 	CheckBadCompilerFlags(ctx, "vendor_ramdisk.cflags", compiler.Properties.Target.Vendor_ramdisk.Cflags)
 
 	esc := proptools.NinjaAndShellEscapeList
@@ -369,6 +387,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	if ctx.inRecovery() {
 		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_RECOVERY__")
+	}
+
+	if ctx.inRamdisk() {
+		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_RAMDISK__")
 	}
 
 	if ctx.apexVariationName() != "" {
@@ -497,6 +519,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	if ctx.inRecovery() {
 		flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Target.Recovery.Cflags)...)
+	}
+
+	if ctx.inRamdisk() {
+		flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Target.Ramdisk.Cflags)...)
 	}
 
 	if ctx.inVendorRamdisk() {

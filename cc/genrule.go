@@ -67,9 +67,6 @@ func (g *GenruleExtraProperties) CoreVariantNeeded(ctx android.BaseModuleContext
 	return !(ctx.SocSpecific() || ctx.DeviceSpecific())
 }
 
-func (g *GenruleExtraProperties) RamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
-	return Bool(g.Ramdisk_available)
-}
 
 func (g *GenruleExtraProperties) VendorRamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
 	return Bool(g.Vendor_ramdisk_available)
@@ -88,6 +85,18 @@ func (g *GenruleExtraProperties) RecoveryVariantNeeded(ctx android.BaseModuleCon
 		return false
 	} else {
 		return Bool(g.Recovery_available)
+	}
+}
+
+func (g *GenruleExtraProperties) RamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
+	// If the build is using a snapshot, the ramdisk variant under AOSP directories
+	// is not needed.
+	ramdiskSnapshotVersion := ctx.DeviceConfig().RamdiskSnapshotVersion()
+	if ramdiskSnapshotVersion != "current" && ramdiskSnapshotVersion != "" &&
+		!isRamdiskProprietaryModule(ctx) {
+		return false
+	} else {
+		return Bool(g.Ramdisk_available)
 	}
 }
 

@@ -430,6 +430,9 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 	recoverySnapshotVersion := mctx.DeviceConfig().RecoverySnapshotVersion()
 	usingRecoverySnapshot := recoverySnapshotVersion != "current" &&
 		recoverySnapshotVersion != ""
+	ramdiskSnapshotVersion := mctx.DeviceConfig().RamdiskSnapshotVersion()
+	usingRamdiskSnapshot := ramdiskSnapshotVersion != "current" &&
+		ramdiskSnapshotVersion != ""
 	needVndkVersionVendorVariantForLlndk := false
 	if boardVndkVersion != "" {
 		boardVndkApiLevel, err := android.ApiLevelFromUser(mctx, boardVndkVersion)
@@ -484,6 +487,8 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		// PRODUCT_EXTRA_VNDK_VERSIONS.
 		if m.InstallInRecovery() {
 			recoveryVariantNeeded = true
+		} else if m.InstallInRamdisk() {
+			ramdiskVariantNeeded = true
 		} else {
 			vendorVariants = append(vendorVariants, m.SnapshotVersion(mctx))
 		}
@@ -586,6 +591,13 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		recoveryVariantNeeded = false
 	}
 
+	if !m.KernelHeadersDecorator() &&
+		!m.IsSnapshotPrebuilt() &&
+		usingRamdiskSnapshot &&
+		!isRamdiskProprietaryModule(mctx) {
+		ramdiskVariantNeeded = false
+	}
+
 	for _, variant := range android.FirstUniqueStrings(vendorVariants) {
 		m.AppendExtraVariant(VendorVariationPrefix + variant)
 	}
@@ -671,6 +683,19 @@ func squashRecoverySrcs(m *Module) {
 	}
 }
 
+func squashRamdiskSrcs(m *Module) {
+	if lib, ok := m.compiler.(*libraryDecorator); ok {
+		lib.baseCompiler.Properties.Srcs = append(lib.baseCompiler.Properties.Srcs,
+			lib.baseCompiler.Properties.Target.Ramdisk.Srcs...)
+
+		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs,
+			lib.baseCompiler.Properties.Target.Ramdisk.Exclude_srcs...)
+
+		lib.baseCompiler.Properties.Exclude_generated_sources = append(lib.baseCompiler.Properties.Exclude_generated_sources,
+			lib.baseCompiler.Properties.Target.Ramdisk.Exclude_generated_sources...)
+	}
+}
+
 func squashVendorRamdiskSrcs(m *Module) {
 	if lib, ok := m.compiler.(*libraryDecorator); ok {
 		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs, lib.baseCompiler.Properties.Target.Vendor_ramdisk.Exclude_srcs...)
@@ -681,6 +706,7 @@ func (c *Module) SetImageVariation(ctx android.BaseModuleContext, variant string
 	m := module.(*Module)
 	if variant == android.RamdiskVariation {
 		m.MakeAsPlatform()
+		squashRamdiskSrcs(m)
 	} else if variant == android.VendorRamdiskVariation {
 		m.MakeAsPlatform()
 		squashVendorRamdiskSrcs(m)
