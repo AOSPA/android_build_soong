@@ -288,7 +288,7 @@ func runSoong(ctx Context, config Config) {
 		ninjaEnv.Set("TOP", os.Getenv("TOP"))
 
 		qcEnvVars := []string{
-			"TARGET_PRODUCT",
+			"TARGET_BOARD_PLATFORM",
 			"SDCLANG_AE_CONFIG",
 			"SDCLANG_CONFIG",
 			"SDCLANG_SA_ENABLED",
