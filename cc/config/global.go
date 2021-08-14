@@ -330,7 +330,7 @@ func setSdclangVars() {
 	sdclangAEFlag := ""
 	sdclangFlags := ""
 
-	product := os.Getenv("TARGET_PRODUCT")
+	product := os.Getenv("TARGET_BOARD_PLATFORM")
 	aeConfigPath := os.Getenv("SDCLANG_AE_CONFIG")
 	sdclangConfigPath := os.Getenv("SDCLANG_CONFIG")
 	sdclangSA := os.Getenv("SDCLANG_SA_ENABLED")
