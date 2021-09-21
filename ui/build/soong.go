@@ -20,18 +20,18 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"android/soong/shared"
-	"github.com/google/blueprint/deptools"
-
+	"android/soong/ui/metrics"
 	soong_metrics_proto "android/soong/ui/metrics/metrics_proto"
+	"android/soong/ui/status"
+
+	"android/soong/shared"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
-
-	"github.com/golang/protobuf/proto"
+	"github.com/google/blueprint/deptools"
 	"github.com/google/blueprint/microfactory"
 
-	"android/soong/ui/metrics"
-	"android/soong/ui/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -99,6 +99,21 @@ func environmentArgs(config Config, suffix string) []string {
 		"--used_env", shared.JoinPath(config.SoongOutDir(), usedEnvFile+suffix),
 	}
 }
+
+func writeEmptyGlobFile(ctx Context, path string) {
+	err := os.MkdirAll(filepath.Dir(path), 0777)
+	if err != nil {
+		ctx.Fatalf("Failed to create parent directories of empty ninja glob file '%s': %s", path, err)
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		err = ioutil.WriteFile(path, nil, 0666)
+		if err != nil {
+			ctx.Fatalf("Failed to create empty ninja glob file '%s': %s", path, err)
+		}
+	}
+}
+
 func bootstrapBlueprint(ctx Context, config Config, integratedBp2Build bool) {
 	ctx.BeginTrace(metrics.RunSoong, "blueprint bootstrap")
 	defer ctx.EndTrace()
@@ -106,8 +121,10 @@ func bootstrapBlueprint(ctx Context, config Config, integratedBp2Build bool) {
 	var args bootstrap.Args
 
 	mainNinjaFile := shared.JoinPath(config.SoongOutDir(), "build.ninja")
-	globFile := shared.JoinPath(config.SoongOutDir(), ".bootstrap/soong-build-globs.ninja")
 	bootstrapGlobFile := shared.JoinPath(config.SoongOutDir(), ".bootstrap/build-globs.ninja")
+	// .bootstrap/build.ninja "includes" .bootstrap/build-globs.ninja for incremental builds
+	// generate an empty glob before running any rule in .bootstrap/build.ninja
+	writeEmptyGlobFile(ctx, bootstrapGlobFile)
 	bootstrapDepFile := shared.JoinPath(config.SoongOutDir(), ".bootstrap/build.ninja.d")
 
 	args.RunGoTests = !config.skipSoongTests
@@ -117,7 +134,10 @@ func bootstrapBlueprint(ctx Context, config Config, integratedBp2Build bool) {
 	args.TopFile = "Android.bp"
 	args.ModuleListFile = filepath.Join(config.FileListDir(), "Android.bp.list")
 	args.OutFile = shared.JoinPath(config.SoongOutDir(), ".bootstrap/build.ninja")
-	args.GlobFile = globFile
+	// The primary builder (aka soong_build) will use bootstrapGlobFile as the globFile to generate build.ninja(.d)
+	// Building soong_build does not require a glob file
+	// Using "" instead of "<soong_build_glob>.ninja" will ensure that an unused glob file is not written to out/soong/.bootstrap during StagePrimary
+	args.GlobFile = ""
 	args.GeneratingPrimaryBuilder = true
 	args.EmptyNinjaFile = config.EmptyNinjaFile()
 
@@ -156,9 +176,9 @@ func bootstrapBlueprint(ctx Context, config Config, integratedBp2Build bool) {
 			Outputs: []string{bp2BuildMarkerFile},
 			Args:    bp2buildArgs,
 		}
-		args.PrimaryBuilderInvocations = []bootstrap.PrimaryBuilderInvocation{
-			bp2buildInvocation,
-			mainSoongBuildInvocation,
+		args.PrimaryBuilderInvocations = []bootstrap.PrimaryBuilderInvocation{bp2buildInvocation}
+		if config.bazelBuildMode() == mixedBuild {
+			args.PrimaryBuilderInvocations = append(args.PrimaryBuilderInvocations, mainSoongBuildInvocation)
 		}
 	} else {
 		args.PrimaryBuilderInvocations = []bootstrap.PrimaryBuilderInvocation{mainSoongBuildInvocation}
@@ -245,20 +265,8 @@ func runSoong(ctx Context, config Config) {
 		}
 	}()
 
-	var cfg microfactory.Config
-	cfg.Map("github.com/google/blueprint", "build/blueprint")
-
-	cfg.TrimPath = absPath(ctx, ".")
-
-	func() {
-		ctx.BeginTrace(metrics.RunSoong, "bpglob")
-		defer ctx.EndTrace()
-
-		bpglob := filepath.Join(config.SoongOutDir(), ".minibootstrap/bpglob")
-		if _, err := microfactory.Build(&cfg, bpglob, "github.com/google/blueprint/bootstrap/bpglob"); err != nil {
-			ctx.Fatalln("Failed to build bpglob:", err)
-		}
-	}()
+	runMicrofactory(ctx, config, ".minibootstrap/bpglob", "github.com/google/blueprint/bootstrap/bpglob",
+		map[string]string{"github.com/google/blueprint": "build/blueprint"})
 
 	ninja := func(name, file string) {
 		ctx.BeginTrace(metrics.RunSoong, name)
@@ -323,9 +331,29 @@ func runSoong(ctx Context, config Config) {
 	}
 }
 
+func runMicrofactory(ctx Context, config Config, relExePath string, pkg string, mapping map[string]string) {
+	name := filepath.Base(relExePath)
+	ctx.BeginTrace(metrics.RunSoong, name)
+	defer ctx.EndTrace()
+	cfg := microfactory.Config{TrimPath: absPath(ctx, ".")}
+	for pkgPrefix, pathPrefix := range mapping {
+		cfg.Map(pkgPrefix, pathPrefix)
+	}
+
+	exePath := filepath.Join(config.SoongOutDir(), relExePath)
+	dir := filepath.Dir(exePath)
+	if err := os.MkdirAll(dir, 0777); err != nil {
+		ctx.Fatalf("cannot create %s: %s", dir, err)
+	}
+	if _, err := microfactory.Build(&cfg, exePath, pkg); err != nil {
+		ctx.Fatalf("failed to build %s: %s", name, err)
+	}
+}
+
 func shouldCollectBuildSoongMetrics(config Config) bool {
-	// Do not collect metrics protobuf if the soong_build binary ran as the bp2build converter.
-	return config.bazelBuildMode() != generateBuildFiles
+	// Do not collect metrics protobuf if the soong_build binary ran as the
+	// bp2build converter or the JSON graph dump.
+	return config.bazelBuildMode() != generateBuildFiles && config.bazelBuildMode() != generateJsonModuleGraph
 }
 
 func loadSoongBuildMetrics(ctx Context, config Config) *soong_metrics_proto.SoongBuildMetrics {

@@ -239,6 +239,12 @@ type SnapshotBuilder interface {
 	// to the zip
 	CopyToSnapshot(src Path, dest string)
 
+	// Return the path to an empty file.
+	//
+	// This can be used by sdk member types that need to create an empty file in the snapshot, simply
+	// pass the value returned from this to the CopyToSnapshot() method.
+	EmptyFile() Path
+
 	// Unzip the supplied zip into the snapshot relative directory destDir.
 	UnzipToSnapshot(zipPath Path, destDir string)
 
@@ -341,6 +347,22 @@ type BpModule interface {
 	// Name returns the name of the module or "" if no name has been specified.
 	Name() string
 }
+
+// BpPrintable is a marker interface that must be implemented by any struct that is added as a
+// property value.
+type BpPrintable interface {
+	bpPrintable()
+}
+
+// BpPrintableBase must be embedded within any struct that is added as a
+// property value.
+type BpPrintableBase struct {
+}
+
+func (b BpPrintableBase) bpPrintable() {
+}
+
+var _ BpPrintable = BpPrintableBase{}
 
 // An individual member of the SDK, includes all of the variants that the SDK
 // requires.

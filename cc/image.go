@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"android/soong/android"
+	"android/soong/snapshot"
 )
 
 var _ android.ImageInterface = (*Module)(nil)
@@ -341,11 +342,11 @@ func (m *Module) RecoveryAvailable() bool {
 }
 
 func (m *Module) ExtraVariants() []string {
-	return m.Properties.ExtraVariants
+	return m.Properties.ExtraVersionedImageVariations
 }
 
 func (m *Module) AppendExtraVariant(extraVariant string) {
-	m.Properties.ExtraVariants = append(m.Properties.ExtraVariants, extraVariant)
+	m.Properties.ExtraVersionedImageVariations = append(m.Properties.ExtraVersionedImageVariations, extraVariant)
 }
 
 func (m *Module) SetRamdiskVariantNeeded(b bool) {
@@ -365,8 +366,8 @@ func (m *Module) SetCoreVariantNeeded(b bool) {
 }
 
 func (m *Module) SnapshotVersion(mctx android.BaseModuleContext) string {
-	if snapshot, ok := m.linker.(snapshotInterface); ok {
-		return snapshot.version()
+	if snapshot, ok := m.linker.(SnapshotInterface); ok {
+		return snapshot.Version()
 	} else {
 		mctx.ModuleErrorf("version is unknown for snapshot prebuilt")
 		// Should we be panicking here instead?
@@ -501,7 +502,7 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		// BOARD_VNDK_VERSION. The other modules are regarded as AOSP, or
 		// PLATFORM_VNDK_VERSION.
 		if m.HasVendorVariant() {
-			if isVendorProprietaryModule(mctx) {
+			if snapshot.IsVendorProprietaryModule(mctx) {
 				vendorVariants = append(vendorVariants, boardVndkVersion)
 			} else {
 				vendorVariants = append(vendorVariants, platformVndkVersion)
@@ -530,7 +531,7 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 				platformVndkVersion,
 				boardVndkVersion,
 			)
-		} else if isVendorProprietaryModule(mctx) {
+		} else if snapshot.IsVendorProprietaryModule(mctx) {
 			vendorVariants = append(vendorVariants, boardVndkVersion)
 		} else {
 			vendorVariants = append(vendorVariants, platformVndkVersion)
@@ -587,14 +588,14 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 	if !m.KernelHeadersDecorator() &&
 		!m.IsSnapshotPrebuilt() &&
 		usingRecoverySnapshot &&
-		!isRecoveryProprietaryModule(mctx) {
+		!snapshot.IsRecoveryProprietaryModule(mctx) {
 		recoveryVariantNeeded = false
 	}
 
 	if !m.KernelHeadersDecorator() &&
 		!m.IsSnapshotPrebuilt() &&
 		usingRamdiskSnapshot &&
-		!isRamdiskProprietaryModule(mctx) {
+		!snapshot.IsRamdiskProprietaryModule(mctx) {
 		ramdiskVariantNeeded = false
 	}
 
@@ -641,7 +642,7 @@ func (c *Module) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
 }
 
 func (c *Module) ExtraImageVariations(ctx android.BaseModuleContext) []string {
-	return c.Properties.ExtraVariants
+	return c.Properties.ExtraVersionedImageVariations
 }
 
 func squashVendorSrcs(m *Module) {

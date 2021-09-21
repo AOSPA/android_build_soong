@@ -18,14 +18,26 @@ import (
 	"android/soong/android"
 )
 
+// snapshotLibraryInterface is an interface for libraries captured to VNDK / vendor snapshots.
+type snapshotLibraryInterface interface {
+	libraryInterface
+
+	// collectHeadersForSnapshot is called in GenerateAndroidBuildActions for snapshot aware
+	// modules (See isSnapshotAware below).
+	// This function should gather all headers needed for snapshot.
+	collectHeadersForSnapshot(ctx android.ModuleContext, deps PathDeps)
+
+	// snapshotHeaders should return collected headers by collectHeadersForSnapshot.
+	// Calling snapshotHeaders before collectHeadersForSnapshot is an error.
+	snapshotHeaders() android.Paths
+}
+
 func (mod *Module) ExcludeFromVendorSnapshot() bool {
-	// TODO Rust does not yet support snapshotting
-	return false
+	return Bool(mod.Properties.Exclude_from_vendor_snapshot)
 }
 
 func (mod *Module) ExcludeFromRecoverySnapshot() bool {
-	// TODO Rust does not yet support snapshotting
-	return false
+	return Bool(mod.Properties.Exclude_from_recovery_snapshot)
 }
 
 func (mod *Module) ExcludeFromRamdiskSnapshot() bool {
@@ -34,7 +46,10 @@ func (mod *Module) ExcludeFromRamdiskSnapshot() bool {
 }
 
 func (mod *Module) IsSnapshotLibrary() bool {
-	// TODO Rust does not yet support snapshotting
+	if lib, ok := mod.compiler.(libraryInterface); ok {
+		// Rust-native dylibs are not snapshot supported yet. Only snapshot the rlib-std variants of rlibs.
+		return lib.shared() || lib.static() || (lib.rlib() && lib.rlibStd())
+	}
 	return false
 }
 
@@ -44,13 +59,11 @@ func (mod *Module) SnapshotRuntimeLibs() []string {
 }
 
 func (mod *Module) SnapshotSharedLibs() []string {
-	// TODO Rust does not yet support snapshotting
-	return []string{}
+	return mod.Properties.SnapshotSharedLibs
 }
 
 func (mod *Module) SnapshotStaticLibs() []string {
-        // TODO Rust does not yet support snapshotting
-        return []string{}
+	return mod.Properties.SnapshotStaticLibs
 }
 
 func (mod *Module) Symlinks() []string {
@@ -59,6 +72,8 @@ func (mod *Module) Symlinks() []string {
 }
 
 func (m *Module) SnapshotHeaders() android.Paths {
-	// TODO Rust does not yet support snapshotting
+	if l, ok := m.compiler.(snapshotLibraryInterface); ok {
+		return l.snapshotHeaders()
+	}
 	return android.Paths{}
 }

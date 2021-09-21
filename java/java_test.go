@@ -441,7 +441,7 @@ func TestBinary(t *testing.T) {
 		}
 	`)
 
-	buildOS := android.BuildOs.String()
+	buildOS := ctx.Config().BuildOS.String()
 
 	bar := ctx.ModuleForTests("bar", buildOS+"_common")
 	barJar := bar.Output("bar.jar").Output.String()
@@ -478,7 +478,7 @@ func TestTest(t *testing.T) {
 		}
 	`)
 
-	buildOS := android.BuildOs.String()
+	buildOS := ctx.Config().BuildOS.String()
 
 	foo := ctx.ModuleForTests("foo", buildOS+"_common").Module().(*TestHost)
 
@@ -523,7 +523,7 @@ func TestHostBinaryNoJavaDebugInfoOverride(t *testing.T) {
 	}
 
 	// check that -g is not overridden for host modules
-	buildOS := android.BuildOs.String()
+	buildOS := result.Config.BuildOS.String()
 	hostBinary := result.ModuleForTests("host_binary", buildOS+"_common")
 	hostJavaFlags := hostBinary.Module().VariablesForTests()["javacFlags"]
 	if strings.Contains(hostJavaFlags, "-g:source,lines") {
@@ -1371,7 +1371,7 @@ func TestDataNativeBinaries(t *testing.T) {
 		}
 	`)
 
-	buildOS := android.BuildOs.String()
+	buildOS := ctx.Config().BuildOS.String()
 
 	test := ctx.ModuleForTests("foo", buildOS+"_common").Module().(*TestHost)
 	entries := android.AndroidMkEntriesForTest(t, ctx, test)[0]
@@ -1387,8 +1387,100 @@ func TestDefaultInstallable(t *testing.T) {
 		}
 	`)
 
-	buildOS := android.BuildOs.String()
+	buildOS := ctx.Config().BuildOS.String()
 	module := ctx.ModuleForTests("foo", buildOS+"_common").Module().(*TestHost)
 	assertDeepEquals(t, "Default installable value should be true.", proptools.BoolPtr(true),
 		module.properties.Installable)
+}
+
+func TestErrorproneEnabled(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			errorprone: {
+				enabled: true,
+			},
+		}
+	`)
+
+	javac := ctx.ModuleForTests("foo", "android_common").Description("javac")
+
+	// Test that the errorprone plugins are passed to javac
+	expectedSubstring := "-Xplugin:ErrorProne"
+	if !strings.Contains(javac.Args["javacFlags"], expectedSubstring) {
+		t.Errorf("expected javacFlags to contain %q, got %q", expectedSubstring, javac.Args["javacFlags"])
+	}
+
+	// Modules with errorprone { enabled: true } will include errorprone checks
+	// in the main javac build rule. Only when RUN_ERROR_PRONE is true will
+	// the explicit errorprone build rule be created.
+	errorprone := ctx.ModuleForTests("foo", "android_common").MaybeDescription("errorprone")
+	if errorprone.RuleParams.Description != "" {
+		t.Errorf("expected errorprone build rule to not exist, but it did")
+	}
+}
+
+func TestErrorproneDisabled(t *testing.T) {
+	bp := `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			errorprone: {
+				enabled: false,
+			},
+		}
+	`
+	ctx := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		android.FixtureMergeEnv(map[string]string{
+			"RUN_ERROR_PRONE": "true",
+		}),
+	).RunTestWithBp(t, bp)
+
+	javac := ctx.ModuleForTests("foo", "android_common").Description("javac")
+
+	// Test that the errorprone plugins are not passed to javac, like they would
+	// be if enabled was true.
+	expectedSubstring := "-Xplugin:ErrorProne"
+	if strings.Contains(javac.Args["javacFlags"], expectedSubstring) {
+		t.Errorf("expected javacFlags to not contain %q, got %q", expectedSubstring, javac.Args["javacFlags"])
+	}
+
+	// Check that no errorprone build rule is created, like there would be
+	// if enabled was unset and RUN_ERROR_PRONE was true.
+	errorprone := ctx.ModuleForTests("foo", "android_common").MaybeDescription("errorprone")
+	if errorprone.RuleParams.Description != "" {
+		t.Errorf("expected errorprone build rule to not exist, but it did")
+	}
+}
+
+func TestErrorproneEnabledOnlyByEnvironmentVariable(t *testing.T) {
+	bp := `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+		}
+	`
+	ctx := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		android.FixtureMergeEnv(map[string]string{
+			"RUN_ERROR_PRONE": "true",
+		}),
+	).RunTestWithBp(t, bp)
+
+	javac := ctx.ModuleForTests("foo", "android_common").Description("javac")
+	errorprone := ctx.ModuleForTests("foo", "android_common").Description("errorprone")
+
+	// Check that the errorprone plugins are not passed to javac, because they
+	// will instead be passed to the separate errorprone compilation
+	expectedSubstring := "-Xplugin:ErrorProne"
+	if strings.Contains(javac.Args["javacFlags"], expectedSubstring) {
+		t.Errorf("expected javacFlags to not contain %q, got %q", expectedSubstring, javac.Args["javacFlags"])
+	}
+
+	// Check that the errorprone plugin is enabled
+	if !strings.Contains(errorprone.Args["javacFlags"], expectedSubstring) {
+		t.Errorf("expected errorprone to contain %q, got %q", expectedSubstring, javac.Args["javacFlags"])
+	}
 }

@@ -101,6 +101,9 @@ type variableProperties struct {
 				Keep_symbols                 *bool
 				Keep_symbols_and_debug_frame *bool
 			}
+			Static_libs       []string
+			Whole_static_libs []string
+			Shared_libs       []string
 		}
 
 		// eng is true for -eng builds, and can be used to turn on additionaly heavyweight debugging
@@ -230,6 +233,7 @@ type productVariables struct {
 
 	HostArch          *string `json:",omitempty"`
 	HostSecondaryArch *string `json:",omitempty"`
+	HostMusl          *bool   `json:",omitempty"`
 
 	CrossHost              *string `json:",omitempty"`
 	CrossHostArch          *string `json:",omitempty"`
@@ -285,8 +289,8 @@ type productVariables struct {
 	UncompressPrivAppDex             *bool    `json:",omitempty"`
 	ModulesLoadedByPrivilegedModules []string `json:",omitempty"`
 
-	BootJars          ConfiguredJarList `json:",omitempty"`
-	UpdatableBootJars ConfiguredJarList `json:",omitempty"`
+	BootJars     ConfiguredJarList `json:",omitempty"`
+	ApexBootJars ConfiguredJarList `json:",omitempty"`
 
 	IntegerOverflowExcludePaths []string `json:",omitempty"`
 	IntegerOverflowIncludePaths []string `json:",omitempty"`
@@ -323,7 +327,7 @@ type productVariables struct {
 	NativeCoverageExcludePaths []string `json:",omitempty"`
 
 	// Set by NewConfig
-	Native_coverage *bool
+	Native_coverage *bool `json:",omitempty"`
 
 	SanitizeHost       []string `json:",omitempty"`
 	SanitizeDevice     []string `json:",omitempty"`
@@ -335,8 +339,6 @@ type productVariables struct {
 	BtConfigIncludeDir *string `json:",omitempty"`
 
 	Override_rs_driver *string `json:",omitempty"`
-
-	Fuchsia *bool `json:",omitempty"`
 
 	DeviceKernelHeaders []string `json:",omitempty"`
 
@@ -486,8 +488,8 @@ func (v *productVariables) SetDefaultConfig() {
 		Malloc_pattern_fill_contents: boolPtr(false),
 		Safestack:                    boolPtr(false),
 
-		BootJars:          ConfiguredJarList{apexes: []string{}, jars: []string{}},
-		UpdatableBootJars: ConfiguredJarList{apexes: []string{}, jars: []string{}},
+		BootJars:     ConfiguredJarList{apexes: []string{}, jars: []string{}},
+		ApexBootJars: ConfiguredJarList{apexes: []string{}, jars: []string{}},
 	}
 
 	if runtime.GOOS == "linux" {
@@ -506,16 +508,17 @@ type ProductConfigContext interface {
 // with the appropriate ProductConfigVariable.
 type ProductConfigProperty struct {
 	ProductConfigVariable string
+	FullConfig            string
 	Property              interface{}
 }
 
 // ProductConfigProperties is a map of property name to a slice of ProductConfigProperty such that
 // all it all product variable-specific versions of a property are easily accessed together
-type ProductConfigProperties map[string][]ProductConfigProperty
+type ProductConfigProperties map[string]map[string]ProductConfigProperty
 
 // ProductVariableProperties returns a ProductConfigProperties containing only the properties which
 // have been set for the module in the given context.
-func ProductVariableProperties(ctx ProductConfigContext) ProductConfigProperties {
+func ProductVariableProperties(ctx BaseMutatorContext) ProductConfigProperties {
 	module := ctx.Module()
 	moduleBase := module.base()
 
@@ -525,7 +528,24 @@ func ProductVariableProperties(ctx ProductConfigContext) ProductConfigProperties
 		return productConfigProperties
 	}
 
-	variableValues := reflect.ValueOf(moduleBase.variableProperties).Elem().FieldByName("Product_variables")
+	productVariableValues(moduleBase.variableProperties, "", &productConfigProperties)
+
+	for _, configToProps := range moduleBase.GetArchVariantProperties(ctx, moduleBase.variableProperties) {
+		for config, props := range configToProps {
+			// GetArchVariantProperties is creating an instance of the requested type
+			// and productVariablesValues expects an interface, so no need to cast
+			productVariableValues(props, config, &productConfigProperties)
+		}
+	}
+
+	return productConfigProperties
+}
+
+func productVariableValues(variableProps interface{}, suffix string, productConfigProperties *ProductConfigProperties) {
+	if suffix != "" {
+		suffix = "-" + suffix
+	}
+	variableValues := reflect.ValueOf(variableProps).Elem().FieldByName("Product_variables")
 	for i := 0; i < variableValues.NumField(); i++ {
 		variableValue := variableValues.Field(i)
 		// Check if any properties were set for the module
@@ -543,15 +563,17 @@ func ProductVariableProperties(ctx ProductConfigContext) ProductConfigProperties
 
 			// e.g. Asflags, Cflags, Enabled, etc.
 			propertyName := variableValue.Type().Field(j).Name
-			productConfigProperties[propertyName] = append(productConfigProperties[propertyName],
-				ProductConfigProperty{
-					ProductConfigVariable: productVariableName,
-					Property:              property.Interface(),
-				})
+			if (*productConfigProperties)[propertyName] == nil {
+				(*productConfigProperties)[propertyName] = make(map[string]ProductConfigProperty)
+			}
+			config := productVariableName + suffix
+			(*productConfigProperties)[propertyName][config] = ProductConfigProperty{
+				ProductConfigVariable: productVariableName,
+				FullConfig:            config,
+				Property:              property.Interface(),
+			}
 		}
 	}
-
-	return productConfigProperties
 }
 
 func VariableMutator(mctx BottomUpMutatorContext) {

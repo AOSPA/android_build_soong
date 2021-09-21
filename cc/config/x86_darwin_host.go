@@ -26,8 +26,6 @@ import (
 
 var (
 	darwinCflags = []string{
-		"-fdiagnostics-color",
-
 		"-fPIC",
 		"-funwind-tables",
 
@@ -41,6 +39,9 @@ var (
 		"-DMACOSX_DEPLOYMENT_TARGET=${macMinVersion}",
 
 		"-m64",
+
+		"-integrated-as",
+		"-fstack-protector-strong",
 	}
 
 	darwinLdflags = []string{
@@ -48,26 +49,16 @@ var (
 		"-Wl,-syslibroot,${macSdkRoot}",
 		"-mmacosx-version-min=${macMinVersion}",
 		"-m64",
+		"-mlinker-version=305",
 	}
 
-	darwinClangCflags = append(ClangFilterUnknownCflags(darwinCflags), []string{
-		"-integrated-as",
-		"-fstack-protector-strong",
-	}...)
-
-	darwinClangLdflags = ClangFilterUnknownCflags(darwinLdflags)
-
-	darwinClangLldflags = ClangFilterUnknownLldflags(darwinClangLdflags)
-
 	darwinSupportedSdkVersions = []string{
-		"10.10",
-		"10.11",
-		"10.12",
 		"10.13",
 		"10.14",
 		"10.15",
 		"11.0",
 		"11.1",
+		"11.3",
 	}
 
 	darwinAvailableLibraries = append(
@@ -96,7 +87,7 @@ func init() {
 	pctx.VariableFunc("macSdkRoot", func(ctx android.PackageVarContext) string {
 		return getMacTools(ctx).sdkRoot
 	})
-	pctx.StaticVariable("macMinVersion", "10.10")
+	pctx.StaticVariable("macMinVersion", "10.13")
 	pctx.VariableFunc("MacArPath", func(ctx android.PackageVarContext) string {
 		return getMacTools(ctx).arPath
 	})
@@ -115,9 +106,9 @@ func init() {
 
 	pctx.StaticVariable("DarwinGccTriple", "i686-apple-darwin11")
 
-	pctx.StaticVariable("DarwinClangCflags", strings.Join(darwinClangCflags, " "))
-	pctx.StaticVariable("DarwinClangLdflags", strings.Join(darwinClangLdflags, " "))
-	pctx.StaticVariable("DarwinClangLldflags", strings.Join(darwinClangLldflags, " "))
+	pctx.StaticVariable("DarwinCflags", strings.Join(darwinCflags, " "))
+	pctx.StaticVariable("DarwinLdflags", strings.Join(darwinLdflags, " "))
+	pctx.StaticVariable("DarwinLldflags", strings.Join(darwinLdflags, " "))
 
 	pctx.StaticVariable("DarwinYasmFlags", "-f macho -m amd64")
 }
@@ -213,20 +204,20 @@ func (t *toolchainDarwin) ClangTriple() string {
 	return "x86_64-apple-darwin"
 }
 
-func (t *toolchainDarwin) ClangCflags() string {
-	return "${config.DarwinClangCflags}"
+func (t *toolchainDarwin) Cflags() string {
+	return "${config.DarwinCflags}"
 }
 
-func (t *toolchainDarwin) ClangCppflags() string {
+func (t *toolchainDarwin) Cppflags() string {
 	return ""
 }
 
-func (t *toolchainDarwin) ClangLdflags() string {
-	return "${config.DarwinClangLdflags}"
+func (t *toolchainDarwin) Ldflags() string {
+	return "${config.DarwinLdflags}"
 }
 
-func (t *toolchainDarwin) ClangLldflags() string {
-	return "${config.DarwinClangLldflags}"
+func (t *toolchainDarwin) Lldflags() string {
+	return "${config.DarwinLldflags}"
 }
 
 func (t *toolchainDarwin) YasmFlags() string {
@@ -239,10 +230,6 @@ func (t *toolchainDarwin) ShlibSuffix() string {
 
 func (t *toolchainDarwin) AvailableLibraries() []string {
 	return darwinAvailableLibraries
-}
-
-func (t *toolchainDarwin) Bionic() bool {
-	return false
 }
 
 func (t *toolchainDarwin) ToolPath() string {

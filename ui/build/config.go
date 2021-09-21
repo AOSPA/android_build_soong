@@ -25,7 +25,7 @@ import (
 
 	"android/soong/shared"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 
 	smpb "android/soong/ui/metrics/metrics_proto"
 )
@@ -49,6 +49,7 @@ type configImpl struct {
 	skipConfig     bool
 	skipKati       bool
 	skipKatiNinja  bool
+	skipSoong      bool
 	skipNinja      bool
 	skipSoongTests bool
 
@@ -58,6 +59,7 @@ type configImpl struct {
 	katiSuffix      string
 	targetDevice    string
 	targetDeviceDir string
+	sandboxConfig   *SandboxConfig
 
 	// Autodetected
 	totalRAM uint64
@@ -107,6 +109,9 @@ const (
 	// Only generate build files (in a subdirectory of the out directory) and exit.
 	generateBuildFiles
 
+	// Only generate the Soong json module graph for use with jq, and exit.
+	generateJsonModuleGraph
+
 	// Generate synthetic build files and incorporate these files into a build which
 	// partially uses Bazel. Build metadata may come from Android.bp or BUILD files.
 	mixedBuild
@@ -124,7 +129,8 @@ func checkTopDir(ctx Context) {
 
 func NewConfig(ctx Context, args ...string) Config {
 	ret := &configImpl{
-		environ: OsEnvironment(),
+		environ:       OsEnvironment(),
+		sandboxConfig: &SandboxConfig{},
 	}
 
 	// Default matching ninja
@@ -154,6 +160,10 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.distDir = filepath.Clean(distDir)
 	} else {
 		ret.distDir = filepath.Join(ret.OutDir(), "dist")
+	}
+
+	if srcDirIsWritable, ok := ret.environ.Get("BUILD_BROKEN_SRC_DIR_IS_WRITABLE"); ok {
+		ret.sandboxConfig.SetSrcDirIsRO(srcDirIsWritable == "false")
 	}
 
 	ret.environ.Unset(
@@ -336,18 +346,23 @@ func storeConfigMetrics(ctx Context, config Config) {
 		return
 	}
 
-	b := &smpb.BuildConfig{
-		ForceUseGoma: proto.Bool(config.ForceUseGoma()),
-		UseGoma:      proto.Bool(config.UseGoma()),
-		UseRbe:       proto.Bool(config.UseRBE()),
-	}
-	ctx.Metrics.BuildConfig(b)
+	ctx.Metrics.BuildConfig(buildConfig(config))
 
 	s := &smpb.SystemResourceInfo{
 		TotalPhysicalMemory: proto.Uint64(config.TotalRAM()),
 		AvailableCpus:       proto.Int32(int32(runtime.NumCPU())),
 	}
 	ctx.Metrics.SystemResourceInfo(s)
+}
+
+func buildConfig(config Config) *smpb.BuildConfig {
+	return &smpb.BuildConfig{
+		ForceUseGoma:    proto.Bool(config.ForceUseGoma()),
+		UseGoma:         proto.Bool(config.UseGoma()),
+		UseRbe:          proto.Bool(config.UseRBE()),
+		BazelAsNinja:    proto.Bool(config.UseBazel()),
+		BazelMixedBuild: proto.Bool(config.bazelBuildMode() == mixedBuild),
+	}
 }
 
 // getConfigArgs processes the command arguments based on the build action and creates a set of new
@@ -568,9 +583,14 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 		arg := strings.TrimSpace(args[i])
 		if arg == "showcommands" {
 			c.verbose = true
+		} else if arg == "--empty-ninja-file" {
+			c.emptyNinjaFile = true
 		} else if arg == "--skip-ninja" {
 			c.skipNinja = true
 		} else if arg == "--skip-make" {
+			// TODO(ccross): deprecate this, it has confusing behaviors.  It doesn't run kati,
+			//   but it does run a Kati ninja file if the .kati_enabled marker file was created
+			//   by a previous build.
 			c.skipConfig = true
 			c.skipKati = true
 		} else if arg == "--skip-kati" {
@@ -579,6 +599,12 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 		} else if arg == "--soong-only" {
 			c.skipKati = true
 			c.skipKatiNinja = true
+		} else if arg == "--config-only" {
+			c.skipKati = true
+			c.skipKatiNinja = true
+			c.skipSoong = true
+		} else if arg == "--skip-config" {
+			c.skipConfig = true
 		} else if arg == "--skip-soong-tests" {
 			c.skipSoongTests = true
 		} else if len(arg) > 0 && arg[0] == '-' {
@@ -671,54 +697,6 @@ func (c *configImpl) configureLocale(ctx Context) {
 	}
 }
 
-// Lunch configures the environment for a specific product similarly to the
-// `lunch` bash function.
-func (c *configImpl) Lunch(ctx Context, product, variant string) {
-	if variant != "eng" && variant != "userdebug" && variant != "user" {
-		ctx.Fatalf("Invalid variant %q. Must be one of 'user', 'userdebug' or 'eng'", variant)
-	}
-
-	c.environ.Set("TARGET_PRODUCT", product)
-	c.environ.Set("TARGET_BUILD_VARIANT", variant)
-	c.environ.Set("TARGET_BUILD_TYPE", "release")
-	c.environ.Unset("TARGET_BUILD_APPS")
-	c.environ.Unset("TARGET_BUILD_UNBUNDLED")
-}
-
-// Tapas configures the environment to build one or more unbundled apps,
-// similarly to the `tapas` bash function.
-func (c *configImpl) Tapas(ctx Context, apps []string, arch, variant string) {
-	if len(apps) == 0 {
-		apps = []string{"all"}
-	}
-	if variant == "" {
-		variant = "eng"
-	}
-
-	if variant != "eng" && variant != "userdebug" && variant != "user" {
-		ctx.Fatalf("Invalid variant %q. Must be one of 'user', 'userdebug' or 'eng'", variant)
-	}
-
-	var product string
-	switch arch {
-	case "arm", "":
-		product = "aosp_arm"
-	case "arm64":
-		product = "aosm_arm64"
-	case "x86":
-		product = "aosp_x86"
-	case "x86_64":
-		product = "aosp_x86_64"
-	default:
-		ctx.Fatalf("Invalid architecture: %q", arch)
-	}
-
-	c.environ.Set("TARGET_PRODUCT", product)
-	c.environ.Set("TARGET_BUILD_VARIANT", variant)
-	c.environ.Set("TARGET_BUILD_TYPE", "release")
-	c.environ.Set("TARGET_BUILD_APPS", strings.Join(apps, " "))
-}
-
 func (c *configImpl) Environment() *Environment {
 	return c.environ
 }
@@ -796,6 +774,10 @@ func (c *configImpl) SkipKati() bool {
 
 func (c *configImpl) SkipKatiNinja() bool {
 	return c.skipKatiNinja
+}
+
+func (c *configImpl) SkipSoong() bool {
+	return c.skipSoong
 }
 
 func (c *configImpl) SkipNinja() bool {
@@ -929,6 +911,8 @@ func (c *configImpl) bazelBuildMode() bazelBuildMode {
 		return mixedBuild
 	} else if c.Environment().IsEnvTrue("GENERATE_BAZEL_FILES") {
 		return generateBuildFiles
+	} else if v, ok := c.Environment().Get("SOONG_DUMP_JSON_MODULE_GRAPH"); ok && v != "" {
+		return generateJsonModuleGraph
 	} else {
 		return noBazel
 	}

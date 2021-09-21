@@ -14,6 +14,7 @@ bootstrap_go_package {
         "soong-cc-config",
         "soong-etc",
         "soong-genrule",
+        "soong-snapshot",
         "soong-tradefed",
     ],
     srcs: [
@@ -58,6 +59,7 @@ bootstrap_go_package {
         "binary.go",
         "binary_sdk_member.go",
         "fuzz.go",
+        "fuzz_common.go",
         "library.go",
         "library_headers.go",
         "library_sdk_member.go",
@@ -65,9 +67,10 @@ bootstrap_go_package {
         "test.go",
         "toolchain_library.go",
 
-        "ndk_prebuilt.go",
+        "ndk_abi.go",
         "ndk_headers.go",
         "ndk_library.go",
+        "ndk_prebuilt.go",
         "ndk_sysroot.go",
 
         "llndk_library.go",

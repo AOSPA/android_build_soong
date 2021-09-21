@@ -47,12 +47,12 @@ type objectLinker struct {
 }
 
 type objectBazelHandler struct {
-	bazelHandler
+	android.BazelHandler
 
 	module *Module
 }
 
-func (handler *objectBazelHandler) generateBazelBuildActions(ctx android.ModuleContext, label string) bool {
+func (handler *objectBazelHandler) GenerateBazelBuildActions(ctx android.ModuleContext, label string) bool {
 	bazelCtx := ctx.Config().BazelContext
 	objPaths, ok := bazelCtx.GetOutputFiles(label, ctx.Arch().ArchType)
 	if ok {
@@ -67,8 +67,18 @@ func (handler *objectBazelHandler) generateBazelBuildActions(ctx android.ModuleC
 }
 
 type ObjectLinkerProperties struct {
+	// list of static library modules that should only provide headers for this module.
+	Static_libs []string `android:"arch_variant,variant_prepend"`
+
+	// list of shared library modules should only provide headers for this module.
+	Shared_libs []string `android:"arch_variant"`
+
 	// list of modules that should only provide headers for this module.
 	Header_libs []string `android:"arch_variant,variant_prepend"`
+
+	// list of default libraries that will provide headers for this module.  If unset, generally
+	// defaults to libc, libm, and libdl.  Set to [] to prevent using headers from the defaults.
+	System_shared_libs []string `android:"arch_variant"`
 
 	// names of other cc_object modules to link into this module using partial linking
 	Objs []string `android:"arch_variant"`
@@ -84,8 +94,8 @@ type ObjectLinkerProperties struct {
 	Crt *bool
 }
 
-func newObject() *Module {
-	module := newBaseModule(android.HostAndDeviceSupported, android.MultilibBoth)
+func newObject(hod android.HostOrDeviceSupported) *Module {
+	module := newBaseModule(hod, android.MultilibBoth)
 	module.sanitize = &sanitize{}
 	module.stl = &stl{}
 	return module
@@ -95,7 +105,7 @@ func newObject() *Module {
 // necessary, but sometimes used to generate .s files from .c files to use as
 // input to a cc_genrule module.
 func ObjectFactory() android.Module {
-	module := newObject()
+	module := newObject(android.HostAndDeviceSupported)
 	module.linker = &objectLinker{
 		baseLinker: NewBaseLinker(module.sanitize),
 	}
@@ -113,10 +123,11 @@ func ObjectFactory() android.Module {
 // For bp2build conversion.
 type bazelObjectAttributes struct {
 	Srcs    bazel.LabelListAttribute
+	Srcs_as bazel.LabelListAttribute
 	Hdrs    bazel.LabelListAttribute
 	Deps    bazel.LabelListAttribute
 	Copts   bazel.StringListAttribute
-	Asflags []string
+	Asflags bazel.StringListAttribute
 }
 
 type bazelObject struct {
@@ -157,8 +168,6 @@ func ObjectBp2Build(ctx android.TopDownMutatorContext) {
 
 	// Set arch-specific configurable attributes
 	compilerAttrs := bp2BuildParseCompilerProps(ctx, m)
-	var asFlags []string
-
 	var deps bazel.LabelListAttribute
 	for _, props := range m.linker.linkerProps() {
 		if objectLinkerProps, ok := props.(*ObjectLinkerProperties); ok {
@@ -167,25 +176,20 @@ func ObjectBp2Build(ctx android.TopDownMutatorContext) {
 		}
 	}
 
-	productVariableProps := android.ProductVariableProperties(ctx)
-	if props, exists := productVariableProps["Asflags"]; exists {
-		// TODO(b/183595873): consider deduplicating handling of product variable properties
-		for _, prop := range props {
-			flags, ok := prop.Property.([]string)
-			if !ok {
-				ctx.ModuleErrorf("Could not convert product variable asflag property")
-				return
-			}
-			// TODO(b/183595873) handle other product variable usages -- as selects?
-			if newFlags, subbed := bazel.TryVariableSubstitutions(flags, prop.ProductConfigVariable); subbed {
-				asFlags = append(asFlags, newFlags...)
-			}
-		}
+	// Don't split cc_object srcs across languages. Doing so would add complexity,
+	// and this isn't typically done for cc_object.
+	srcs := compilerAttrs.srcs
+	srcs.Append(compilerAttrs.cSrcs)
+
+	asFlags := compilerAttrs.asFlags
+	if compilerAttrs.asSrcs.IsEmpty() {
+		// Skip asflags for BUILD file simplicity if there are no assembly sources.
+		asFlags = bazel.MakeStringListAttribute(nil)
 	}
-	// TODO(b/183595872) warn/error if we're not handling product variables
 
 	attrs := &bazelObjectAttributes{
-		Srcs:    compilerAttrs.srcs,
+		Srcs:    srcs,
+		Srcs_as: compilerAttrs.asSrcs,
 		Deps:    deps,
 		Copts:   compilerAttrs.copts,
 		Asflags: asFlags,
@@ -211,12 +215,23 @@ func (*objectLinker) linkerInit(ctx BaseModuleContext) {}
 
 func (object *objectLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.HeaderLibs = append(deps.HeaderLibs, object.Properties.Header_libs...)
+	deps.SharedLibs = append(deps.SharedLibs, object.Properties.Shared_libs...)
+	deps.StaticLibs = append(deps.StaticLibs, object.Properties.Static_libs...)
 	deps.ObjFiles = append(deps.ObjFiles, object.Properties.Objs...)
+
+	deps.SystemSharedLibs = object.Properties.System_shared_libs
+	if deps.SystemSharedLibs == nil {
+		// Provide a default set of shared libraries if system_shared_libs is unspecified.
+		// Note: If an empty list [] is specified, it implies that the module declines the
+		// default shared libraries.
+		deps.SystemSharedLibs = append(deps.SystemSharedLibs, ctx.toolchain().DefaultSharedLibraries()...)
+	}
+	deps.LateSharedLibs = append(deps.LateSharedLibs, deps.SystemSharedLibs...)
 	return deps
 }
 
 func (object *objectLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
-	flags.Global.LdFlags = append(flags.Global.LdFlags, ctx.toolchain().ToolchainClangLdflags())
+	flags.Global.LdFlags = append(flags.Global.LdFlags, ctx.toolchain().ToolchainLdflags())
 
 	if lds := android.OptionalPathForModuleSrc(ctx, object.Properties.Linker_script); lds.Valid() {
 		flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,-T,"+lds.String())
@@ -258,6 +273,20 @@ func (object *objectLinker) link(ctx ModuleContext,
 
 	ctx.CheckbuildFile(outputFile)
 	return outputFile
+}
+
+func (object *objectLinker) linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps {
+	specifiedDeps.sharedLibs = append(specifiedDeps.sharedLibs, object.Properties.Shared_libs...)
+
+	// Must distinguish nil and [] in system_shared_libs - ensure that [] in
+	// either input list doesn't come out as nil.
+	if specifiedDeps.systemSharedLibs == nil {
+		specifiedDeps.systemSharedLibs = object.Properties.System_shared_libs
+	} else {
+		specifiedDeps.systemSharedLibs = append(specifiedDeps.systemSharedLibs, object.Properties.System_shared_libs...)
+	}
+
+	return specifiedDeps
 }
 
 func (object *objectLinker) unstrippedOutputFilePath() android.Path {

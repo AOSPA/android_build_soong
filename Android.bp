@@ -92,7 +92,7 @@ cc_genrule {
 }
 
 cc_genrule {
-    name: "host_bionic_linker_flags",
+    name: "host_bionic_linker_script",
     host_supported: true,
     device_supported: false,
     target: {
@@ -107,12 +107,22 @@ cc_genrule {
         },
     },
     tools: ["extract_linker"],
-    cmd: "$(location) -f $(out) $(in)",
+    cmd: "$(location) -T $(out) $(in)",
     srcs: [":linker"],
-    out: ["linker.flags"],
+    out: ["linker.script"],
 }
 
 // Instantiate the dex_bootjars singleton module.
 dex_bootjars {
     name: "dex_bootjars",
+}
+
+// Pseudo-test that's run on checkbuilds to ensure that get_clang_version can
+// parse cc/config/global.go.
+genrule {
+    name: "get_clang_version_test",
+    cmd: "$(location get_clang_version) > $(out)",
+    tools: ["get_clang_version"],
+    srcs: ["cc/config/global.go"],
+    out: ["clang-prebuilts-version.txt"],
 }

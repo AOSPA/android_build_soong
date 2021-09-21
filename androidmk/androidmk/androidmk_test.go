@@ -794,7 +794,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_DATA_APPS)
 include $(BUILD_CTS_SUPPORT_PACKAGE)
 `,
 		expected: `
-android_test {
+android_test_helper_app {
     name: "FooTest",
     defaults: ["cts_support_defaults"],
     test_suites: ["cts"],
@@ -1460,6 +1460,22 @@ android_app {
     name: "foo",
     enforce_uses_libs: false,
     enforce_uses_libs: true,
+}
+`,
+	},
+	{
+		desc: "LOCAL_CERTIFICATE_LINEAGE",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_TAGS := tests
+LOCAL_CERTIFICATE_LINEAGE := lineage
+include $(BUILD_PACKAGE)
+`,
+		expected: `
+android_test {
+    name: "foo",
+    lineage: "lineage",
 }
 `,
 	},

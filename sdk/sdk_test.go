@@ -15,19 +15,21 @@
 package sdk
 
 import (
-	"android/soong/android"
 	"log"
 	"os"
+	"runtime"
 	"testing"
+
+	"android/soong/android"
 
 	"github.com/google/blueprint/proptools"
 )
 
 // Needed in an _test.go file in this package to ensure tests run correctly, particularly in IDE.
 func TestMain(m *testing.M) {
-	if android.BuildOs != android.Linux {
+	if runtime.GOOS != "linux" {
 		// b/145598135 - Generating host snapshots for anything other than linux is not supported.
-		log.Printf("Skipping as sdk snapshot generation is only supported on %s not %s", android.Linux, android.BuildOs)
+		log.Printf("Skipping as sdk snapshot generation is only supported on linux not %s", runtime.GOOS)
 		os.Exit(0)
 	}
 
@@ -551,6 +553,49 @@ java_import {
 java_import {
     name: "myjavalib",
     prefer: true,
+    visibility: ["//visibility:public"],
+    apex_available: ["//apex_available:platform"],
+    jars: ["java/myjavalib.jar"],
+}
+
+sdk_snapshot {
+    name: "mysdk@current",
+    visibility: ["//visibility:public"],
+    java_header_libs: ["mysdk_myjavalib@current"],
+}
+			`),
+		)
+	})
+
+	t.Run("SOONG_SDK_SNAPSHOT_USE_SOURCE_CONFIG_VAR=module:build_from_source", func(t *testing.T) {
+		result := android.GroupFixturePreparers(
+			preparer,
+			android.FixtureMergeEnv(map[string]string{
+				"SOONG_SDK_SNAPSHOT_USE_SOURCE_CONFIG_VAR": "module:build_from_source",
+			}),
+		).RunTest(t)
+
+		checkZipFile(t, result, "out/soong/.intermediates/mysdk/common_os/mysdk-current.zip")
+
+		CheckSnapshot(t, result, "mysdk", "",
+			checkAndroidBpContents(`
+// This is auto-generated. DO NOT EDIT.
+
+java_import {
+    name: "mysdk_myjavalib@current",
+    sdk_member_name: "myjavalib",
+    visibility: ["//visibility:public"],
+    apex_available: ["//apex_available:platform"],
+    jars: ["java/myjavalib.jar"],
+}
+
+java_import {
+    name: "myjavalib",
+    prefer: false,
+    use_source_config_var: {
+        config_namespace: "module",
+        var_name: "build_from_source",
+    },
     visibility: ["//visibility:public"],
     apex_available: ["//apex_available:platform"],
     jars: ["java/myjavalib.jar"],

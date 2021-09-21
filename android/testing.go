@@ -110,6 +110,11 @@ var PrepareForTestWithLicenseDefaultModules = GroupFixturePreparers(
 	FixtureAddFile("build/soong/licenses/LICENSE", nil),
 )
 
+var PrepareForTestWithNamespace = FixtureRegisterWithContext(func(ctx RegistrationContext) {
+	registerNamespaceBuildComponents(ctx)
+	ctx.PreArchMutators(RegisterNamespaceMutator)
+})
+
 // Test fixture preparer that will register most java build components.
 //
 // Singletons and mutators should only be added here if they are needed for a majority of java
@@ -166,9 +171,9 @@ func NewTestArchContext(config Config) *TestContext {
 
 type TestContext struct {
 	*Context
-	preArch, preDeps, postDeps, finalDeps           []RegisterMutatorFunc
-	bp2buildPreArch, bp2buildDeps, bp2buildMutators []RegisterMutatorFunc
-	NameResolver                                    *NameResolver
+	preArch, preDeps, postDeps, finalDeps []RegisterMutatorFunc
+	bp2buildPreArch, bp2buildMutators     []RegisterMutatorFunc
+	NameResolver                          *NameResolver
 
 	// The list of pre-singletons and singletons registered for the test.
 	preSingletons, singletons sortableComponents
@@ -217,12 +222,6 @@ func (ctx *TestContext) RegisterBp2BuildMutator(moduleType string, m func(TopDow
 // into Bazel BUILD targets that should run prior to deps and conversion.
 func (ctx *TestContext) PreArchBp2BuildMutators(f RegisterMutatorFunc) {
 	ctx.bp2buildPreArch = append(ctx.bp2buildPreArch, f)
-}
-
-// DepsBp2BuildMutators adds mutators to be register for converting Android Blueprint modules into
-// Bazel BUILD targets that should run prior to conversion to resolve dependencies.
-func (ctx *TestContext) DepsBp2BuildMutators(f RegisterMutatorFunc) {
-	ctx.bp2buildDeps = append(ctx.bp2buildDeps, f)
 }
 
 // registeredComponentOrder defines the order in which a sortableComponent type is registered at
@@ -459,7 +458,7 @@ func (ctx *TestContext) Register() {
 
 // RegisterForBazelConversion prepares a test context for bp2build conversion.
 func (ctx *TestContext) RegisterForBazelConversion() {
-	RegisterMutatorsForBazelConversion(ctx.Context, ctx.bp2buildPreArch, ctx.bp2buildDeps, ctx.bp2buildMutators)
+	RegisterMutatorsForBazelConversion(ctx.Context, ctx.bp2buildPreArch, ctx.bp2buildMutators)
 }
 
 func (ctx *TestContext) ParseFileList(rootDir string, filePaths []string) (deps []string, errs []error) {

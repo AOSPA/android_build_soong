@@ -61,13 +61,6 @@ func (tidy *tidyFeature) props() []interface{} {
 	return []interface{}{&tidy.Properties}
 }
 
-func (tidy *tidyFeature) begin(ctx BaseModuleContext) {
-}
-
-func (tidy *tidyFeature) deps(ctx DepsContext, deps Deps) Deps {
-	return deps
-}
-
 func (tidy *tidyFeature) flags(ctx ModuleContext, flags Flags) Flags {
 	CheckBadTidyFlags(ctx, "tidy_flags", tidy.Properties.Tidy_flags)
 	CheckBadTidyChecks(ctx, "tidy_checks", tidy.Properties.Tidy_checks)
@@ -153,6 +146,8 @@ func (tidy *tidyFeature) flags(ctx ModuleContext, flags Flags) Flags {
 	tidyChecks = tidyChecks + ",-bugprone-signed-char-misuse"
 	// http://b/155034972
 	tidyChecks = tidyChecks + ",-bugprone-branch-clone"
+	// http://b/193716442
+	tidyChecks = tidyChecks + ",-bugprone-implicit-widening-of-multiplication-result"
 	flags.TidyFlags = append(flags.TidyFlags, tidyChecks)
 
 	if ctx.Config().IsEnvTrue("WITH_TIDY") {
