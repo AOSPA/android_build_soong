@@ -73,31 +73,39 @@ type actionGraphContainer struct {
 // BuildStatement contains information to register a build statement corresponding (one to one)
 // with a Bazel action from Bazel's action graph.
 type BuildStatement struct {
-	Command     string
-	Depfile     *string
-	OutputPaths []string
-	InputPaths  []string
-	Env         []KeyValuePair
-	Mnemonic    string
+	Command      string
+	Depfile      *string
+	OutputPaths  []string
+	InputPaths   []string
+	SymlinkPaths []string
+	Env          []KeyValuePair
+	Mnemonic     string
 }
 
-// AqueryBuildStatements returns an array of BuildStatements which should be registered (and output
-// to a ninja file) to correspond one-to-one with the given action graph json proto (from a bazel
-// aquery invocation).
-func AqueryBuildStatements(aqueryJsonProto []byte) ([]BuildStatement, error) {
-	buildStatements := []BuildStatement{}
+// A helper type for aquery processing which facilitates retrieval of path IDs from their
+// less readable Bazel structures (depset and path fragment).
+type aqueryArtifactHandler struct {
+	// Maps middleman artifact Id to input artifact depset ID.
+	// Middleman artifacts are treated as "substitute" artifacts for mixed builds. For example,
+	// if we find a middleman action which has outputs [foo, bar], and output [baz_middleman], then,
+	// for each other action which has input [baz_middleman], we add [foo, bar] to the inputs for
+	// that action instead.
+	middlemanIdToDepsetIds map[int][]int
+	// Maps depset Id to depset struct.
+	depsetIdToDepset map[int]depSetOfFiles
+	// depsetIdToArtifactIdsCache is a memoization of depset flattening, because flattening
+	// may be an expensive operation.
+	depsetIdToArtifactIdsCache map[int][]int
+	// Maps artifact Id to fully expanded path.
+	artifactIdToPath map[int]string
+}
 
-	var aqueryResult actionGraphContainer
-	err := json.Unmarshal(aqueryJsonProto, &aqueryResult)
-
-	if err != nil {
-		return nil, err
-	}
-
+func newAqueryHandler(aqueryResult actionGraphContainer) (*aqueryArtifactHandler, error) {
 	pathFragments := map[int]pathFragment{}
 	for _, pathFragment := range aqueryResult.PathFragments {
 		pathFragments[pathFragment.Id] = pathFragment
 	}
+
 	artifactIdToPath := map[int]string{}
 	for _, artifact := range aqueryResult.Artifacts {
 		artifactPath, err := expandPathFragment(artifact.PathFragmentId, pathFragments)
@@ -112,21 +120,86 @@ func AqueryBuildStatements(aqueryJsonProto []byte) ([]BuildStatement, error) {
 		depsetIdToDepset[depset.Id] = depset
 	}
 
-	// depsetIdToArtifactIdsCache is a memoization of depset flattening, because flattening
-	// may be an expensive operation.
-	depsetIdToArtifactIdsCache := map[int][]int{}
-
 	// Do a pass through all actions to identify which artifacts are middleman artifacts.
-	// These will be omitted from the inputs of other actions.
-	// TODO(b/180945500): Handle middleman actions; without proper handling, depending on generated
-	// headers may cause build failures.
-	middlemanArtifactIds := map[int]bool{}
+	middlemanIdToDepsetIds := map[int][]int{}
 	for _, actionEntry := range aqueryResult.Actions {
 		if actionEntry.Mnemonic == "Middleman" {
 			for _, outputId := range actionEntry.OutputIds {
-				middlemanArtifactIds[outputId] = true
+				middlemanIdToDepsetIds[outputId] = actionEntry.InputDepSetIds
 			}
 		}
+	}
+	return &aqueryArtifactHandler{
+		middlemanIdToDepsetIds:     middlemanIdToDepsetIds,
+		depsetIdToDepset:           depsetIdToDepset,
+		depsetIdToArtifactIdsCache: map[int][]int{},
+		artifactIdToPath:           artifactIdToPath,
+	}, nil
+}
+
+func (a *aqueryArtifactHandler) getInputPaths(depsetIds []int) ([]string, error) {
+	inputPaths := []string{}
+
+	for _, inputDepSetId := range depsetIds {
+		inputArtifacts, err := a.artifactIdsFromDepsetId(inputDepSetId)
+		if err != nil {
+			return nil, err
+		}
+		for _, inputId := range inputArtifacts {
+			if middlemanInputDepsetIds, isMiddlemanArtifact := a.middlemanIdToDepsetIds[inputId]; isMiddlemanArtifact {
+				// Add all inputs from middleman actions which created middleman artifacts which are
+				// in the inputs for this action.
+				swappedInputPaths, err := a.getInputPaths(middlemanInputDepsetIds)
+				if err != nil {
+					return nil, err
+				}
+				inputPaths = append(inputPaths, swappedInputPaths...)
+			} else {
+				inputPath, exists := a.artifactIdToPath[inputId]
+				if !exists {
+					return nil, fmt.Errorf("undefined input artifactId %d", inputId)
+				}
+				inputPaths = append(inputPaths, inputPath)
+			}
+		}
+	}
+	return inputPaths, nil
+}
+
+func (a *aqueryArtifactHandler) artifactIdsFromDepsetId(depsetId int) ([]int, error) {
+	if result, exists := a.depsetIdToArtifactIdsCache[depsetId]; exists {
+		return result, nil
+	}
+	if depset, exists := a.depsetIdToDepset[depsetId]; exists {
+		result := depset.DirectArtifactIds
+		for _, childId := range depset.TransitiveDepSetIds {
+			childArtifactIds, err := a.artifactIdsFromDepsetId(childId)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, childArtifactIds...)
+		}
+		a.depsetIdToArtifactIdsCache[depsetId] = result
+		return result, nil
+	} else {
+		return nil, fmt.Errorf("undefined input depsetId %d", depsetId)
+	}
+}
+
+// AqueryBuildStatements returns an array of BuildStatements which should be registered (and output
+// to a ninja file) to correspond one-to-one with the given action graph json proto (from a bazel
+// aquery invocation).
+func AqueryBuildStatements(aqueryJsonProto []byte) ([]BuildStatement, error) {
+	buildStatements := []BuildStatement{}
+
+	var aqueryResult actionGraphContainer
+	err := json.Unmarshal(aqueryJsonProto, &aqueryResult)
+	if err != nil {
+		return nil, err
+	}
+	aqueryHandler, err := newAqueryHandler(aqueryResult)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, actionEntry := range aqueryResult.Actions {
@@ -136,7 +209,7 @@ func AqueryBuildStatements(aqueryJsonProto []byte) ([]BuildStatement, error) {
 		outputPaths := []string{}
 		var depfile *string
 		for _, outputId := range actionEntry.OutputIds {
-			outputPath, exists := artifactIdToPath[outputId]
+			outputPath, exists := aqueryHandler.artifactIdToPath[outputId]
 			if !exists {
 				return nil, fmt.Errorf("undefined outputId %d", outputId)
 			}
@@ -151,35 +224,32 @@ func AqueryBuildStatements(aqueryJsonProto []byte) ([]BuildStatement, error) {
 				outputPaths = append(outputPaths, outputPath)
 			}
 		}
-		inputPaths := []string{}
-		for _, inputDepSetId := range actionEntry.InputDepSetIds {
-			inputArtifacts, err :=
-				artifactIdsFromDepsetId(depsetIdToDepset, depsetIdToArtifactIdsCache, inputDepSetId)
-			if err != nil {
-				return nil, err
-			}
-			for _, inputId := range inputArtifacts {
-				if _, isMiddlemanArtifact := middlemanArtifactIds[inputId]; isMiddlemanArtifact {
-					// Omit middleman artifacts.
-					continue
-				}
-				inputPath, exists := artifactIdToPath[inputId]
-				if !exists {
-					return nil, fmt.Errorf("undefined input artifactId %d", inputId)
-				}
-				inputPaths = append(inputPaths, inputPath)
-			}
+		inputPaths, err := aqueryHandler.getInputPaths(actionEntry.InputDepSetIds)
+		if err != nil {
+			return nil, err
 		}
+
 		buildStatement := BuildStatement{
 			Command:     strings.Join(proptools.ShellEscapeList(actionEntry.Arguments), " "),
 			Depfile:     depfile,
 			OutputPaths: outputPaths,
 			InputPaths:  inputPaths,
 			Env:         actionEntry.EnvironmentVariables,
-			Mnemonic:    actionEntry.Mnemonic}
-		if len(actionEntry.Arguments) < 1 {
+			Mnemonic:    actionEntry.Mnemonic,
+		}
+
+		if isSymlinkAction(actionEntry) {
+			if len(inputPaths) != 1 || len(outputPaths) != 1 {
+				return nil, fmt.Errorf("Expect 1 input and 1 output to symlink action, got: input %q, output %q", inputPaths, outputPaths)
+			}
+			out := outputPaths[0]
+			outDir := proptools.ShellEscapeIncludingSpaces(filepath.Dir(out))
+			out = proptools.ShellEscapeIncludingSpaces(out)
+			in := proptools.ShellEscapeIncludingSpaces(inputPaths[0])
+			buildStatement.Command = fmt.Sprintf("mkdir -p %[1]s && rm -f %[2]s && ln -rsf %[3]s %[2]s", outDir, out, in)
+			buildStatement.SymlinkPaths = outputPaths[:]
+		} else if len(actionEntry.Arguments) < 1 {
 			return nil, fmt.Errorf("received action with no command: [%v]", buildStatement)
-			continue
 		}
 		buildStatements = append(buildStatements, buildStatement)
 	}
@@ -187,13 +257,18 @@ func AqueryBuildStatements(aqueryJsonProto []byte) ([]BuildStatement, error) {
 	return buildStatements, nil
 }
 
+func isSymlinkAction(a action) bool {
+	return a.Mnemonic == "Symlink" || a.Mnemonic == "SolibSymlink"
+}
+
 func shouldSkipAction(a action) bool {
-	// TODO(b/180945121): Handle symlink actions.
-	if a.Mnemonic == "Symlink" || a.Mnemonic == "SourceSymlinkManifest" || a.Mnemonic == "SymlinkTree" {
+	// TODO(b/180945121): Handle complex symlink actions.
+	if a.Mnemonic == "SymlinkTree" || a.Mnemonic == "SourceSymlinkManifest" {
 		return true
 	}
-	// TODO(b/180945500): Handle middleman actions; without proper handling, depending on generated
-	// headers may cause build failures.
+	// Middleman actions are not handled like other actions; they are handled separately as a
+	// preparatory step so that their inputs may be relayed to actions depending on middleman
+	// artifacts.
 	if a.Mnemonic == "Middleman" {
 		return true
 	}
@@ -209,28 +284,6 @@ func shouldSkipAction(a action) bool {
 	return false
 }
 
-func artifactIdsFromDepsetId(depsetIdToDepset map[int]depSetOfFiles,
-	depsetIdToArtifactIdsCache map[int][]int, depsetId int) ([]int, error) {
-	if result, exists := depsetIdToArtifactIdsCache[depsetId]; exists {
-		return result, nil
-	}
-	if depset, exists := depsetIdToDepset[depsetId]; exists {
-		result := depset.DirectArtifactIds
-		for _, childId := range depset.TransitiveDepSetIds {
-			childArtifactIds, err :=
-				artifactIdsFromDepsetId(depsetIdToDepset, depsetIdToArtifactIdsCache, childId)
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, childArtifactIds...)
-		}
-		depsetIdToArtifactIdsCache[depsetId] = result
-		return result, nil
-	} else {
-		return nil, fmt.Errorf("undefined input depsetId %d", depsetId)
-	}
-}
-
 func expandPathFragment(id int, pathFragmentsMap map[int]pathFragment) (string, error) {
 	labels := []string{}
 	currId := id
@@ -241,6 +294,9 @@ func expandPathFragment(id int, pathFragmentsMap map[int]pathFragment) (string, 
 			return "", fmt.Errorf("undefined path fragment id %d", currId)
 		}
 		labels = append([]string{currFragment.Label}, labels...)
+		if currId == currFragment.ParentId {
+			return "", fmt.Errorf("Fragment cannot refer to itself as parent %#v", currFragment)
+		}
 		currId = currFragment.ParentId
 	}
 	return filepath.Join(labels...), nil

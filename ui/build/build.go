@@ -28,16 +28,20 @@ import (
 func SetupOutDir(ctx Context, config Config) {
 	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), "Android.mk"))
 	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), "CleanSpec.mk"))
-	if !config.SkipKati() {
-		// Run soong_build with Kati for a hybrid build, e.g. running the
-		// AndroidMk singleton and postinstall commands. Communicate this to
-		// soong_build by writing an empty .soong.kati_enabled marker file in the
-		// soong_build output directory for the soong_build primary builder to
-		// know if the user wants to run Kati after.
-		//
-		// This does not preclude running Kati for *product configuration purposes*.
-		ensureEmptyFileExists(ctx, filepath.Join(config.SoongOutDir(), ".soong.kati_enabled"))
+
+	// Potentially write a marker file for whether kati is enabled. This is used by soong_build to
+	// potentially run the AndroidMk singleton and postinstall commands.
+	// Note that the absence of the  file does not not preclude running Kati for product
+	// configuration purposes.
+	katiEnabledMarker := filepath.Join(config.SoongOutDir(), ".soong.kati_enabled")
+	if config.SkipKatiNinja() {
+		os.Remove(katiEnabledMarker)
+		// Note that we can not remove the file for SkipKati builds yet -- some continuous builds
+		// --skip-make builds rely on kati targets being defined.
+	} else if !config.SkipKati() {
+		ensureEmptyFileExists(ctx, katiEnabledMarker)
 	}
+
 	// The ninja_build file is used by our buildbots to understand that the output
 	// can be parsed as ninja output.
 	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), "ninja_build"))
@@ -234,6 +238,11 @@ func Build(ctx Context, config Config) {
 		ctx.Verboseln("Skipping use of Kati ninja as requested")
 		what = what &^ RunKatiNinja
 	}
+	if config.SkipSoong() {
+		ctx.Verboseln("Skipping use of Soong as requested")
+		what = what &^ RunSoong
+	}
+
 	if config.SkipNinja() {
 		ctx.Verboseln("Skipping Ninja as requested")
 		what = what &^ RunNinja
@@ -272,6 +281,11 @@ func Build(ctx Context, config Config) {
 
 		if config.bazelBuildMode() == generateBuildFiles {
 			// Return early, if we're using Soong as solely the generator of BUILD files.
+			return
+		}
+
+		if config.bazelBuildMode() == generateJsonModuleGraph {
+			// Return early, if we're using Soong as solely the generator of the JSON module graph
 			return
 		}
 	}

@@ -15,9 +15,10 @@
 package cc
 
 import (
-	"android/soong/android"
 	"path/filepath"
 	"strings"
+
+	"android/soong/android"
 )
 
 func init() {
@@ -183,9 +184,8 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 			})
 
 			ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
-				SharedLibrary:           outputFile,
-				UnstrippedSharedLibrary: p.unstrippedOutputFile,
-				Target:                  ctx.Target(),
+				SharedLibrary: outputFile,
+				Target:        ctx.Target(),
 
 				TableOfContents: p.tocFile,
 			})
@@ -322,13 +322,13 @@ type prebuiltObjectLinker struct {
 }
 
 type prebuiltStaticLibraryBazelHandler struct {
-	bazelHandler
+	android.BazelHandler
 
 	module  *Module
 	library *libraryDecorator
 }
 
-func (h *prebuiltStaticLibraryBazelHandler) generateBazelBuildActions(ctx android.ModuleContext, label string) bool {
+func (h *prebuiltStaticLibraryBazelHandler) GenerateBazelBuildActions(ctx android.ModuleContext, label string) bool {
 	bazelCtx := ctx.Config().BazelContext
 	ccInfo, ok, err := bazelCtx.GetCcInfo(label, ctx.Arch().ArchType)
 	if err != nil {
@@ -389,8 +389,8 @@ func (p *prebuiltObjectLinker) object() bool {
 	return true
 }
 
-func newPrebuiltObject() *Module {
-	module := newObject()
+func NewPrebuiltObject(hod android.HostOrDeviceSupported) *Module {
+	module := newObject(hod)
 	prebuilt := &prebuiltObjectLinker{
 		objectLinker: objectLinker{
 			baseLinker: NewBaseLinker(nil),
@@ -404,7 +404,7 @@ func newPrebuiltObject() *Module {
 }
 
 func prebuiltObjectFactory() android.Module {
-	module := newPrebuiltObject()
+	module := NewPrebuiltObject(android.HostAndDeviceSupported)
 	return module.Init()
 }
 

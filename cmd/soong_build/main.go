@@ -174,6 +174,9 @@ func writeJsonModuleGraph(configuration android.Config, ctx *android.Context, pa
 	writeFakeNinjaFile(extraNinjaDeps, configuration.BuildDir())
 }
 
+// doChosenActivity runs Soong for a specific activity, like bp2build, queryview
+// or the actual Soong build for the build.ninja file. Returns the top level
+// output file of the specific activity.
 func doChosenActivity(configuration android.Config, extraNinjaDeps []string) string {
 	bazelConversionRequested := bp2buildMarker != ""
 	mixedModeBuild := configuration.BazelContext.BazelEnabled()
@@ -186,11 +189,7 @@ func doChosenActivity(configuration android.Config, extraNinjaDeps []string) str
 		// Run the alternate pipeline of bp2build mutators and singleton to convert
 		// Blueprint to BUILD files before everything else.
 		runBp2Build(configuration, extraNinjaDeps)
-		if bp2buildMarker != "" {
-			return bp2buildMarker
-		} else {
-			return bootstrap.CmdlineArgs.OutFile
-		}
+		return bp2buildMarker
 	}
 
 	ctx := newContext(configuration, prepareBuildActions)
@@ -326,13 +325,13 @@ func writeFakeNinjaFile(extraNinjaDeps []string, buildDir string) {
 
 	ninjaFileName := "build.ninja"
 	ninjaFile := shared.JoinPath(topDir, buildDir, ninjaFileName)
-	ninjaFileD := shared.JoinPath(topDir, buildDir, ninjaFileName)
+	ninjaFileD := shared.JoinPath(topDir, buildDir, ninjaFileName+".d")
 	// A workaround to create the 'nothing' ninja target so `m nothing` works,
 	// since bp2build runs without Kati, and the 'nothing' target is declared in
 	// a Makefile.
 	ioutil.WriteFile(ninjaFile, []byte("build nothing: phony\n  phony_output = true\n"), 0666)
 	ioutil.WriteFile(ninjaFileD,
-		[]byte(fmt.Sprintf("%s: \\\n %s\n", ninjaFileName, extraNinjaDepsString)),
+		[]byte(fmt.Sprintf("%s: \\\n %s\n", ninjaFile, extraNinjaDepsString)),
 		0666)
 }
 
@@ -355,6 +354,83 @@ func touch(path string) {
 		fmt.Fprintf(os.Stderr, "error touching '%s': %s\n", path, err)
 		os.Exit(1)
 	}
+}
+
+// Find BUILD files in the srcDir which...
+//
+// - are not on the allow list (android/bazel.go#ShouldKeepExistingBuildFileForDir())
+//
+// - won't be overwritten by corresponding bp2build generated files
+//
+// And return their paths so they can be left out of the Bazel workspace dir (i.e. ignored)
+func getPathsToIgnoredBuildFiles(topDir string, generatedRoot string, srcDirBazelFiles []string) []string {
+	paths := make([]string, 0)
+
+	for _, srcDirBazelFileRelativePath := range srcDirBazelFiles {
+		srcDirBazelFileFullPath := shared.JoinPath(topDir, srcDirBazelFileRelativePath)
+		fileInfo, err := os.Stat(srcDirBazelFileFullPath)
+		if err != nil {
+			// Warn about error, but continue trying to check files
+			fmt.Fprintf(os.Stderr, "WARNING: Error accessing path '%s', err: %s\n", srcDirBazelFileFullPath, err)
+			continue
+		}
+		if fileInfo.IsDir() {
+			// Don't ignore entire directories
+			continue
+		}
+		if !(fileInfo.Name() == "BUILD" || fileInfo.Name() == "BUILD.bazel") {
+			// Don't ignore this file - it is not a build file
+			continue
+		}
+		srcDirBazelFileDir := filepath.Dir(srcDirBazelFileRelativePath)
+		if android.ShouldKeepExistingBuildFileForDir(srcDirBazelFileDir) {
+			// Don't ignore this existing build file
+			continue
+		}
+		correspondingBp2BuildFile := shared.JoinPath(topDir, generatedRoot, srcDirBazelFileRelativePath)
+		if _, err := os.Stat(correspondingBp2BuildFile); err == nil {
+			// If bp2build generated an alternate BUILD file, don't exclude this workspace path
+			// BUILD file clash resolution happens later in the symlink forest creation
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "Ignoring existing BUILD file: %s\n", srcDirBazelFileRelativePath)
+		paths = append(paths, srcDirBazelFileRelativePath)
+	}
+
+	return paths
+}
+
+// Returns temporary symlink forest excludes necessary for bazel build //external/... (and bazel build //frameworks/...) to work
+func getTemporaryExcludes() []string {
+	excludes := make([]string, 0)
+
+	// FIXME: 'autotest_lib' is a symlink back to external/autotest, and this causes an infinite symlink expansion error for Bazel
+	excludes = append(excludes, "external/autotest/venv/autotest_lib")
+
+	// FIXME: The external/google-fruit/extras/bazel_root/third_party/fruit dir is poison
+	// It contains several symlinks back to real source dirs, and those source dirs contain BUILD files we want to ignore
+	excludes = append(excludes, "external/google-fruit/extras/bazel_root/third_party/fruit")
+
+	// FIXME: 'frameworks/compile/slang' has a filegroup error due to an escaping issue
+	excludes = append(excludes, "frameworks/compile/slang")
+
+	return excludes
+}
+
+// Read the bazel.list file that the Soong Finder already dumped earlier (hopefully)
+// It contains the locations of BUILD files, BUILD.bazel files, etc. in the source dir
+func getExistingBazelRelatedFiles(topDir string) ([]string, error) {
+	bazelFinderFile := filepath.Join(filepath.Dir(bootstrap.CmdlineArgs.ModuleListFile), "bazel.list")
+	if !filepath.IsAbs(bazelFinderFile) {
+		// Assume this was a relative path under topDir
+		bazelFinderFile = filepath.Join(topDir, bazelFinderFile)
+	}
+	data, err := ioutil.ReadFile(bazelFinderFile)
+	if err != nil {
+		return nil, err
+	}
+	files := strings.Split(strings.TrimSpace(string(data)), "\n")
+	return files, nil
 }
 
 // Run Soong in the bp2build mode. This creates a standalone context that registers
@@ -415,6 +491,17 @@ func runBp2Build(configuration android.Config, extraNinjaDeps []string) {
 		excludes = append(excludes, bootstrap.CmdlineArgs.NinjaBuildDir)
 	}
 
+	existingBazelRelatedFiles, err := getExistingBazelRelatedFiles(topDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error determining existing Bazel-related files: %s\n", err)
+		os.Exit(1)
+	}
+
+	pathsToIgnoredBuildFiles := getPathsToIgnoredBuildFiles(topDir, generatedRoot, existingBazelRelatedFiles)
+	excludes = append(excludes, pathsToIgnoredBuildFiles...)
+
+	excludes = append(excludes, getTemporaryExcludes()...)
+
 	symlinkForestDeps := bp2build.PlantSymlinkForest(
 		topDir, workspaceRoot, generatedRoot, configuration.SrcDir(), excludes)
 
@@ -433,9 +520,14 @@ func runBp2Build(configuration android.Config, extraNinjaDeps []string) {
 		os.Exit(1)
 	}
 
-	if bp2buildMarker != "" {
-		touch(shared.JoinPath(topDir, bp2buildMarker))
-	} else {
-		writeFakeNinjaFile(extraNinjaDeps, codegenContext.Config().BuildDir())
-	}
+	// Create an empty bp2build marker file.
+	touch(shared.JoinPath(topDir, bp2buildMarker))
+
+	// bp2build *always* writes a fake Ninja file containing just the nothing
+	// phony target if it ever re-runs. This allows bp2build to exit early with
+	// GENERATE_BAZEL_FILES=1 m nothing.
+	//
+	// If bp2build is invoked as part of an integrated mixed build, the fake
+	// build.ninja file will be rewritten later into the real file anyway.
+	writeFakeNinjaFile(extraNinjaDeps, codegenContext.Config().BuildDir())
 }

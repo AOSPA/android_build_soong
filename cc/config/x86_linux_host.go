@@ -22,8 +22,6 @@ import (
 
 var (
 	linuxCflags = []string{
-		"-fdiagnostics-color",
-
 		"-Wa,--noexecstack",
 
 		"-fPIC",
@@ -36,6 +34,18 @@ var (
 		//See bug 12708004.
 		"-D__STDC_FORMAT_MACROS",
 		"-D__STDC_CONSTANT_MACROS",
+
+		"--gcc-toolchain=${LinuxGccRoot}",
+		"-fstack-protector-strong",
+	}
+
+	linuxGlibcCflags = []string{
+		"--sysroot ${LinuxGccRoot}/sysroot",
+	}
+
+	linuxMuslCflags = []string{
+		"-D_LIBCPP_HAS_MUSL_LIBC",
+		"-nostdlibinc",
 	}
 
 	linuxLdflags = []string{
@@ -43,12 +53,22 @@ var (
 		"-Wl,-z,relro",
 		"-Wl,-z,now",
 		"-Wl,--no-undefined-version",
+
+		"--gcc-toolchain=${LinuxGccRoot}",
+	}
+
+	linuxGlibcLdflags = []string{
+		"--sysroot ${LinuxGccRoot}/sysroot",
+	}
+
+	linuxMuslLdflags = []string{
+		"-nostdlib",
+		"-lgcc", "-lgcc_eh",
 	}
 
 	// Extended cflags
 	linuxX86Cflags = []string{
 		"-msse3",
-		"-mfpmath=sse",
 		"-m32",
 		"-march=prescott",
 		"-D_FILE_OFFSET_BITS=64",
@@ -61,40 +81,17 @@ var (
 
 	linuxX86Ldflags = []string{
 		"-m32",
+		"-B${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}/32",
+		"-L${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}/32",
+		"-L${LinuxGccRoot}/${LinuxGccTriple}/lib32",
 	}
 
 	linuxX8664Ldflags = []string{
 		"-m64",
-	}
-
-	linuxClangCflags = append(ClangFilterUnknownCflags(linuxCflags), []string{
-		"--gcc-toolchain=${LinuxGccRoot}",
-		"--sysroot ${LinuxGccRoot}/sysroot",
-		"-fstack-protector-strong",
-	}...)
-
-	linuxClangLdflags = append(ClangFilterUnknownCflags(linuxLdflags), []string{
-		"--gcc-toolchain=${LinuxGccRoot}",
-		"--sysroot ${LinuxGccRoot}/sysroot",
-	}...)
-
-	linuxClangLldflags = ClangFilterUnknownLldflags(linuxClangLdflags)
-
-	linuxX86ClangLdflags = append(ClangFilterUnknownCflags(linuxX86Ldflags), []string{
-		"-B${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}/32",
-		"-L${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}/32",
-		"-L${LinuxGccRoot}/${LinuxGccTriple}/lib32",
-	}...)
-
-	linuxX86ClangLldflags = ClangFilterUnknownLldflags(linuxX86ClangLdflags)
-
-	linuxX8664ClangLdflags = append(ClangFilterUnknownCflags(linuxX8664Ldflags), []string{
 		"-B${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}",
 		"-L${LinuxGccRoot}/lib/gcc/${LinuxGccTriple}/${LinuxGccVersion}",
 		"-L${LinuxGccRoot}/${LinuxGccTriple}/lib64",
-	}...)
-
-	linuxX8664ClangLldflags = ClangFilterUnknownLldflags(linuxX8664ClangLdflags)
+	}
 
 	linuxAvailableLibraries = addPrefix([]string{
 		"c",
@@ -109,6 +106,12 @@ var (
 		"util",
 		"supc++",
 	}, "-l")
+
+	muslCrtBeginStaticBinary, muslCrtEndStaticBinary   = []string{"libc_musl_crtbegin_static"}, []string{"crtend_android"}
+	muslCrtBeginSharedBinary, muslCrtEndSharedBinary   = []string{"libc_musl_crtbegin_dynamic", "musl_linker_script"}, []string{"libc_musl_crtend"}
+	muslCrtBeginSharedLibrary, muslCrtEndSharedLibrary = []string{"libc_musl_crtbegin_so"}, []string{"libc_musl_crtend_so"}
+
+	muslDefaultSharedLibraries = []string{"libc_musl"}
 )
 
 const (
@@ -131,21 +134,26 @@ func init() {
 
 	pctx.StaticVariable("LinuxGccTriple", "x86_64-linux")
 
-	pctx.StaticVariable("LinuxClangCflags", strings.Join(linuxClangCflags, " "))
-	pctx.StaticVariable("LinuxClangLdflags", strings.Join(linuxClangLdflags, " "))
-	pctx.StaticVariable("LinuxClangLldflags", strings.Join(linuxClangLldflags, " "))
+	pctx.StaticVariable("LinuxCflags", strings.Join(linuxCflags, " "))
+	pctx.StaticVariable("LinuxLdflags", strings.Join(linuxLdflags, " "))
+	pctx.StaticVariable("LinuxLldflags", strings.Join(linuxLdflags, " "))
 
-	pctx.StaticVariable("LinuxX86ClangCflags",
-		strings.Join(ClangFilterUnknownCflags(linuxX86Cflags), " "))
-	pctx.StaticVariable("LinuxX8664ClangCflags",
-		strings.Join(ClangFilterUnknownCflags(linuxX8664Cflags), " "))
-	pctx.StaticVariable("LinuxX86ClangLdflags", strings.Join(linuxX86ClangLdflags, " "))
-	pctx.StaticVariable("LinuxX86ClangLldflags", strings.Join(linuxX86ClangLldflags, " "))
-	pctx.StaticVariable("LinuxX8664ClangLdflags", strings.Join(linuxX8664ClangLdflags, " "))
-	pctx.StaticVariable("LinuxX8664ClangLldflags", strings.Join(linuxX8664ClangLldflags, " "))
+	pctx.StaticVariable("LinuxX86Cflags", strings.Join(linuxX86Cflags, " "))
+	pctx.StaticVariable("LinuxX8664Cflags", strings.Join(linuxX8664Cflags, " "))
+	pctx.StaticVariable("LinuxX86Ldflags", strings.Join(linuxX86Ldflags, " "))
+	pctx.StaticVariable("LinuxX86Lldflags", strings.Join(linuxX86Ldflags, " "))
+	pctx.StaticVariable("LinuxX8664Ldflags", strings.Join(linuxX8664Ldflags, " "))
+	pctx.StaticVariable("LinuxX8664Lldflags", strings.Join(linuxX8664Ldflags, " "))
 	// Yasm flags
 	pctx.StaticVariable("LinuxX86YasmFlags", "-f elf32 -m x86")
 	pctx.StaticVariable("LinuxX8664YasmFlags", "-f elf64 -m amd64")
+
+	pctx.StaticVariable("LinuxGlibcCflags", strings.Join(linuxGlibcCflags, " "))
+	pctx.StaticVariable("LinuxGlibcLdflags", strings.Join(linuxGlibcLdflags, " "))
+	pctx.StaticVariable("LinuxGlibcLldflags", strings.Join(linuxGlibcLdflags, " "))
+	pctx.StaticVariable("LinuxMuslCflags", strings.Join(linuxMuslCflags, " "))
+	pctx.StaticVariable("LinuxMuslLdflags", strings.Join(linuxMuslLdflags, " "))
+	pctx.StaticVariable("LinuxMuslLldflags", strings.Join(linuxMuslLdflags, " "))
 }
 
 type toolchainLinux struct {
@@ -190,11 +198,11 @@ func (t *toolchainLinuxX86) ClangTriple() string {
 	return "i686-linux-gnu"
 }
 
-func (t *toolchainLinuxX86) ClangCflags() string {
-	return "${config.LinuxClangCflags} ${config.LinuxX86ClangCflags}"
+func (t *toolchainLinuxX86) Cflags() string {
+	return "${config.LinuxCflags} ${config.LinuxX86Cflags}"
 }
 
-func (t *toolchainLinuxX86) ClangCppflags() string {
+func (t *toolchainLinuxX86) Cppflags() string {
 	return ""
 }
 
@@ -202,28 +210,28 @@ func (t *toolchainLinuxX8664) ClangTriple() string {
 	return "x86_64-linux-gnu"
 }
 
-func (t *toolchainLinuxX8664) ClangCflags() string {
-	return "${config.LinuxClangCflags} ${config.LinuxX8664ClangCflags}"
+func (t *toolchainLinuxX8664) Cflags() string {
+	return "${config.LinuxCflags} ${config.LinuxX8664Cflags}"
 }
 
-func (t *toolchainLinuxX8664) ClangCppflags() string {
+func (t *toolchainLinuxX8664) Cppflags() string {
 	return ""
 }
 
-func (t *toolchainLinuxX86) ClangLdflags() string {
-	return "${config.LinuxClangLdflags} ${config.LinuxX86ClangLdflags}"
+func (t *toolchainLinuxX86) Ldflags() string {
+	return "${config.LinuxLdflags} ${config.LinuxX86Ldflags}"
 }
 
-func (t *toolchainLinuxX86) ClangLldflags() string {
-	return "${config.LinuxClangLldflags} ${config.LinuxX86ClangLldflags}"
+func (t *toolchainLinuxX86) Lldflags() string {
+	return "${config.LinuxLldflags} ${config.LinuxX86Lldflags}"
 }
 
-func (t *toolchainLinuxX8664) ClangLdflags() string {
-	return "${config.LinuxClangLdflags} ${config.LinuxX8664ClangLdflags}"
+func (t *toolchainLinuxX8664) Ldflags() string {
+	return "${config.LinuxLdflags} ${config.LinuxX8664Ldflags}"
 }
 
-func (t *toolchainLinuxX8664) ClangLldflags() string {
-	return "${config.LinuxClangLldflags} ${config.LinuxX8664ClangLldflags}"
+func (t *toolchainLinuxX8664) Lldflags() string {
+	return "${config.LinuxLldflags} ${config.LinuxX8664Lldflags}"
 }
 
 func (t *toolchainLinuxX86) YasmFlags() string {
@@ -246,22 +254,146 @@ func (t *toolchainLinux) AvailableLibraries() []string {
 	return linuxAvailableLibraries
 }
 
-func (t *toolchainLinux) Bionic() bool {
-	return false
+// glibc specialization of the linux toolchain
+
+type toolchainGlibc struct {
 }
 
-var toolchainLinuxX86Singleton Toolchain = &toolchainLinuxX86{}
-var toolchainLinuxX8664Singleton Toolchain = &toolchainLinuxX8664{}
+func (toolchainGlibc) Glibc() bool { return true }
 
-func linuxX86ToolchainFactory(arch android.Arch) Toolchain {
-	return toolchainLinuxX86Singleton
+func (toolchainGlibc) Cflags() string {
+	return "${config.LinuxGlibcCflags}"
 }
 
-func linuxX8664ToolchainFactory(arch android.Arch) Toolchain {
-	return toolchainLinuxX8664Singleton
+func (toolchainGlibc) Ldflags() string {
+	return "${config.LinuxGlibcLdflags}"
+}
+
+func (toolchainGlibc) Lldflags() string {
+	return "${config.LinuxGlibcLldflags}"
+}
+
+type toolchainLinuxGlibcX86 struct {
+	toolchainLinuxX86
+	toolchainGlibc
+}
+
+type toolchainLinuxGlibcX8664 struct {
+	toolchainLinuxX8664
+	toolchainGlibc
+}
+
+func (t *toolchainLinuxGlibcX86) Cflags() string {
+	return t.toolchainLinuxX86.Cflags() + " " + t.toolchainGlibc.Cflags()
+}
+
+func (t *toolchainLinuxGlibcX86) Ldflags() string {
+	return t.toolchainLinuxX86.Ldflags() + " " + t.toolchainGlibc.Ldflags()
+}
+
+func (t *toolchainLinuxGlibcX86) Lldflags() string {
+	return t.toolchainLinuxX86.Lldflags() + " " + t.toolchainGlibc.Lldflags()
+}
+
+func (t *toolchainLinuxGlibcX8664) Cflags() string {
+	return t.toolchainLinuxX8664.Cflags() + " " + t.toolchainGlibc.Cflags()
+}
+
+func (t *toolchainLinuxGlibcX8664) Ldflags() string {
+	return t.toolchainLinuxX8664.Ldflags() + " " + t.toolchainGlibc.Ldflags()
+}
+
+func (t *toolchainLinuxGlibcX8664) Lldflags() string {
+	return t.toolchainLinuxX8664.Lldflags() + " " + t.toolchainGlibc.Lldflags()
+}
+
+var toolchainLinuxGlibcX86Singleton Toolchain = &toolchainLinuxGlibcX86{}
+var toolchainLinuxGlibcX8664Singleton Toolchain = &toolchainLinuxGlibcX8664{}
+
+func linuxGlibcX86ToolchainFactory(arch android.Arch) Toolchain {
+	return toolchainLinuxGlibcX86Singleton
+}
+
+func linuxGlibcX8664ToolchainFactory(arch android.Arch) Toolchain {
+	return toolchainLinuxGlibcX8664Singleton
+}
+
+// musl specialization of the linux toolchain
+
+type toolchainMusl struct {
+}
+
+func (toolchainMusl) Musl() bool { return true }
+
+func (toolchainMusl) CrtBeginStaticBinary() []string  { return muslCrtBeginStaticBinary }
+func (toolchainMusl) CrtBeginSharedBinary() []string  { return muslCrtBeginSharedBinary }
+func (toolchainMusl) CrtBeginSharedLibrary() []string { return muslCrtBeginSharedLibrary }
+func (toolchainMusl) CrtEndStaticBinary() []string    { return muslCrtEndStaticBinary }
+func (toolchainMusl) CrtEndSharedBinary() []string    { return muslCrtEndSharedBinary }
+func (toolchainMusl) CrtEndSharedLibrary() []string   { return muslCrtEndSharedLibrary }
+
+func (toolchainMusl) DefaultSharedLibraries() []string { return muslDefaultSharedLibraries }
+
+func (toolchainMusl) Cflags() string {
+	return "${config.LinuxMuslCflags}"
+}
+
+func (toolchainMusl) Ldflags() string {
+	return "${config.LinuxMuslLdflags}"
+}
+
+func (toolchainMusl) Lldflags() string {
+	return "${config.LinuxMuslLldflags}"
+}
+
+type toolchainLinuxMuslX86 struct {
+	toolchainLinuxX86
+	toolchainMusl
+}
+
+type toolchainLinuxMuslX8664 struct {
+	toolchainLinuxX8664
+	toolchainMusl
+}
+
+func (t *toolchainLinuxMuslX86) Cflags() string {
+	return t.toolchainLinuxX86.Cflags() + " " + t.toolchainMusl.Cflags()
+}
+
+func (t *toolchainLinuxMuslX86) Ldflags() string {
+	return t.toolchainLinuxX86.Ldflags() + " " + t.toolchainMusl.Ldflags()
+}
+
+func (t *toolchainLinuxMuslX86) Lldflags() string {
+	return t.toolchainLinuxX86.Lldflags() + " " + t.toolchainMusl.Lldflags()
+}
+
+func (t *toolchainLinuxMuslX8664) Cflags() string {
+	return t.toolchainLinuxX8664.Cflags() + " " + t.toolchainMusl.Cflags()
+}
+
+func (t *toolchainLinuxMuslX8664) Ldflags() string {
+	return t.toolchainLinuxX8664.Ldflags() + " " + t.toolchainMusl.Ldflags()
+}
+
+func (t *toolchainLinuxMuslX8664) Lldflags() string {
+	return t.toolchainLinuxX8664.Lldflags() + " " + t.toolchainMusl.Lldflags()
+}
+
+var toolchainLinuxMuslX86Singleton Toolchain = &toolchainLinuxMuslX86{}
+var toolchainLinuxMuslX8664Singleton Toolchain = &toolchainLinuxMuslX8664{}
+
+func linuxMuslX86ToolchainFactory(arch android.Arch) Toolchain {
+	return toolchainLinuxMuslX86Singleton
+}
+
+func linuxMuslX8664ToolchainFactory(arch android.Arch) Toolchain {
+	return toolchainLinuxMuslX8664Singleton
 }
 
 func init() {
-	registerToolchainFactory(android.Linux, android.X86, linuxX86ToolchainFactory)
-	registerToolchainFactory(android.Linux, android.X86_64, linuxX8664ToolchainFactory)
+	registerToolchainFactory(android.Linux, android.X86, linuxGlibcX86ToolchainFactory)
+	registerToolchainFactory(android.Linux, android.X86_64, linuxGlibcX8664ToolchainFactory)
+	registerToolchainFactory(android.LinuxMusl, android.X86, linuxMuslX86ToolchainFactory)
+	registerToolchainFactory(android.LinuxMusl, android.X86_64, linuxMuslX8664ToolchainFactory)
 }

@@ -1,6 +1,6 @@
-#!/bin/bash -e
+#!/bin/bash -ex
 
-# Copyright 2019 Google Inc. All rights reserved.
+# Copyright 2021 Google Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,15 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Script to generate a symbol ordering file that sorts bss section symbols by
-# their sizes.
-# Inputs:
-#  Environment:
-#   CLANG_BIN: path to the clang bin directory
-#  Arguments:
-#   $1: Input ELF file
-#   $2: Output symbol ordering file
+# Builds the platform rustdocs and copies them to the dist directory to provide
+# online docs for each build.
 
-set -o pipefail
+if [ -z "${OUT_DIR}" ]; then
+    echo Must set OUT_DIR
+    exit 1
+fi
 
-${CLANG_BIN}/llvm-nm --size-sort $1 | awk '{if ($2 == "b" || $2 == "B") print $3}' > $2
+source build/envsetup.sh
+m rustdoc
+
+if [ -n "${DIST_DIR}" ]; then
+    mkdir -p ${DIST_DIR}
+    cp -r ${OUT_DIR}/soong/rustdoc $DIST_DIR/rustdoc
+fi

@@ -68,7 +68,6 @@ func RegisterGenruleBuildComponents(ctx android.RegistrationContext) {
 		ctx.BottomUp("genrule_tool_deps", toolDepsMutator).Parallel()
 	})
 
-	android.DepsBp2BuildMutators(RegisterGenruleBp2BuildDeps)
 	android.RegisterBp2BuildMutator("genrule", GenruleBp2Build)
 }
 
@@ -113,16 +112,17 @@ type hostToolDependencyTag struct {
 	label string
 }
 type generatorProperties struct {
-	// The command to run on one or more input files. Cmd supports substitution of a few variables
+	// The command to run on one or more input files. Cmd supports substitution of a few variables.
 	//
 	// Available variables for substitution:
 	//
-	//  $(location): the path to the first entry in tools or tool_files
-	//  $(location <label>): the path to the tool, tool_file, input or output with name <label>
-	//  $(in): one or more input files
-	//  $(out): a single output file
-	//  $(depfile): a file to which dependencies will be written, if the depfile property is set to true
-	//  $(genDir): the sandbox directory for this tool; contains $(out)
+	//  $(location): the path to the first entry in tools or tool_files.
+	//  $(location <label>): the path to the tool, tool_file, input or output with name <label>. Use $(location) if <label> refers to a rule that outputs exactly one file.
+	//  $(locations <label>): the paths to the tools, tool_files, inputs or outputs with name <label>. Use $(locations) if <label> refers to a rule that outputs two or more files.
+	//  $(in): one or more input files.
+	//  $(out): a single output file.
+	//  $(depfile): a file to which dependencies will be written, if the depfile property is set to true.
+	//  $(genDir): the sandbox directory for this tool; contains $(out).
 	//  $$: a literal $
 	Cmd *string
 
@@ -211,6 +211,22 @@ func (g *Module) GeneratedDeps() android.Paths {
 	return g.outputDeps
 }
 
+func (g *Module) OutputFiles(tag string) (android.Paths, error) {
+	if tag == "" {
+		return append(android.Paths{}, g.outputFiles...), nil
+	}
+	// otherwise, tag should match one of outputs
+	for _, outputFile := range g.outputFiles {
+		if outputFile.Rel() == tag {
+			return android.Paths{outputFile}, nil
+		}
+	}
+	return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+}
+
+var _ android.SourceFileProducer = (*Module)(nil)
+var _ android.OutputFileProducer = (*Module)(nil)
+
 func toolDepsMutator(ctx android.BottomUpMutatorContext) {
 	if g, ok := ctx.Module().(*Module); ok {
 		for _, tool := range g.properties.Tools {
@@ -224,7 +240,7 @@ func toolDepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 // Returns true if information was available from Bazel, false if bazel invocation still needs to occur.
-func (c *Module) generateBazelBuildActions(ctx android.ModuleContext, label string) bool {
+func (c *Module) GenerateBazelBuildActions(ctx android.ModuleContext, label string) bool {
 	bazelCtx := ctx.Config().BazelContext
 	filePaths, ok := bazelCtx.GetOutputFiles(label, ctx.Arch().ArchType)
 	if ok {
@@ -544,7 +560,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	bazelModuleLabel := g.GetBazelLabel(ctx, g)
 	bazelActionsUsed := false
 	if g.MixedBuildsEnabled(ctx) {
-		bazelActionsUsed = g.generateBazelBuildActions(ctx, bazelModuleLabel)
+		bazelActionsUsed = g.GenerateBazelBuildActions(ctx, bazelModuleLabel)
 	}
 	if !bazelActionsUsed {
 		// For <= 6 outputs, just embed those directly in the users. Right now, that covers >90% of

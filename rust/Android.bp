@@ -11,6 +11,7 @@ bootstrap_go_package {
         "soong-bloaty",
         "soong-cc",
         "soong-rust-config",
+        "soong-snapshot",
     ],
     srcs: [
         "androidmk.go",
@@ -32,6 +33,7 @@ bootstrap_go_package {
         "rust.go",
         "sanitize.go",
         "source_provider.go",
+        "snapshot_prebuilt.go",
         "snapshot_utils.go",
         "strip.go",
         "test.go",
@@ -53,6 +55,7 @@ bootstrap_go_package {
         "rust_test.go",
         "source_provider_test.go",
         "test_test.go",
+        "vendor_snapshot_test.go",
     ],
     pluginFor: ["soong_build"],
 }

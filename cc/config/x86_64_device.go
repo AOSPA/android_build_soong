@@ -32,8 +32,6 @@ var (
 		"-Wl,--hash-style=gnu",
 	}
 
-	x86_64Lldflags = ClangFilterUnknownLldflags(x86_64Ldflags)
-
 	x86_64ArchVariantCflags = map[string][]string{
 		"": []string{
 			"-march=x86-64",
@@ -79,6 +77,14 @@ var (
 		"popcnt": []string{"-mpopcnt"},
 		"aes_ni": []string{"-maes"},
 	}
+
+	x86_64DefaultArchVariantFeatures = []string{
+		"ssse3",
+		"sse4",
+		"sse4_1",
+		"sse4_2",
+		"popcnt",
+	}
 )
 
 const (
@@ -86,45 +92,45 @@ const (
 )
 
 func init() {
-	android.RegisterDefaultArchVariantFeatures(android.Android, android.X86_64,
-		"ssse3",
-		"sse4",
-		"sse4_1",
-		"sse4_2",
-		"popcnt")
+	android.RegisterDefaultArchVariantFeatures(android.Android, android.X86_64, x86_64DefaultArchVariantFeatures...)
+	exportedStringListVars.Set("X86_64DefaultArchVariantFeatures", x86_64DefaultArchVariantFeatures)
 
 	pctx.StaticVariable("x86_64GccVersion", x86_64GccVersion)
 
 	pctx.SourcePathVariable("X86_64GccRoot",
 		"prebuilts/gcc/${HostPrebuiltTag}/x86/x86_64-linux-android-${x86_64GccVersion}")
 
-	pctx.StaticVariable("X86_64ToolchainCflags", "-m64")
-	pctx.StaticVariable("X86_64ToolchainLdflags", "-m64")
+	exportStringListStaticVariable("X86_64ToolchainCflags", []string{"-m64"})
+	exportStringListStaticVariable("X86_64ToolchainLdflags", []string{"-m64"})
 
-	pctx.StaticVariable("X86_64Ldflags", strings.Join(x86_64Ldflags, " "))
-	pctx.StaticVariable("X86_64Lldflags", strings.Join(x86_64Lldflags, " "))
+	exportStringListStaticVariable("X86_64Ldflags", x86_64Ldflags)
+	exportStringListStaticVariable("X86_64Lldflags", x86_64Ldflags)
 
 	// Clang cflags
-	pctx.StaticVariable("X86_64ClangCflags", strings.Join(ClangFilterUnknownCflags(x86_64Cflags), " "))
-	pctx.StaticVariable("X86_64ClangLdflags", strings.Join(ClangFilterUnknownCflags(x86_64Ldflags), " "))
-	pctx.StaticVariable("X86_64ClangLldflags", strings.Join(ClangFilterUnknownCflags(x86_64Lldflags), " "))
-	pctx.StaticVariable("X86_64ClangCppflags", strings.Join(ClangFilterUnknownCflags(x86_64Cppflags), " "))
+	exportStringListStaticVariable("X86_64Cflags", x86_64Cflags)
+	exportStringListStaticVariable("X86_64Cppflags", x86_64Cppflags)
 
 	// Yasm flags
-	pctx.StaticVariable("X86_64YasmFlags", "-f elf64 -m amd64")
+	exportStringListStaticVariable("X86_64YasmFlags", []string{
+		"-f elf64",
+		"-m amd64",
+	})
 
 	// Extended cflags
 
+	exportedStringListDictVars.Set("X86_64ArchVariantCflags", x86_64ArchVariantCflags)
+	exportedStringListDictVars.Set("X86_64ArchFeatureCflags", x86_64ArchFeatureCflags)
+
 	// Architecture variant cflags
 	for variant, cflags := range x86_64ArchVariantCflags {
-		pctx.StaticVariable("X86_64"+variant+"VariantClangCflags",
-			strings.Join(ClangFilterUnknownCflags(cflags), " "))
+		pctx.StaticVariable("X86_64"+variant+"VariantCflags", strings.Join(cflags, " "))
 	}
 }
 
 type toolchainX86_64 struct {
+	toolchainBionic
 	toolchain64Bit
-	toolchainClangCflags string
+	toolchainCflags string
 }
 
 func (t *toolchainX86_64) Name() string {
@@ -151,27 +157,27 @@ func (t *toolchainX86_64) ClangTriple() string {
 	return t.GccTriple()
 }
 
-func (t *toolchainX86_64) ToolchainClangLdflags() string {
+func (t *toolchainX86_64) ToolchainLdflags() string {
 	return "${config.X86_64ToolchainLdflags}"
 }
 
-func (t *toolchainX86_64) ToolchainClangCflags() string {
-	return t.toolchainClangCflags
+func (t *toolchainX86_64) ToolchainCflags() string {
+	return t.toolchainCflags
 }
 
-func (t *toolchainX86_64) ClangCflags() string {
-	return "${config.X86_64ClangCflags}"
+func (t *toolchainX86_64) Cflags() string {
+	return "${config.X86_64Cflags}"
 }
 
-func (t *toolchainX86_64) ClangCppflags() string {
-	return "${config.X86_64ClangCppflags}"
+func (t *toolchainX86_64) Cppflags() string {
+	return "${config.X86_64Cppflags}"
 }
 
-func (t *toolchainX86_64) ClangLdflags() string {
+func (t *toolchainX86_64) Ldflags() string {
 	return "${config.X86_64Ldflags}"
 }
 
-func (t *toolchainX86_64) ClangLldflags() string {
+func (t *toolchainX86_64) Lldflags() string {
 	return "${config.X86_64Lldflags}"
 }
 
@@ -184,17 +190,17 @@ func (toolchainX86_64) LibclangRuntimeLibraryArch() string {
 }
 
 func x86_64ToolchainFactory(arch android.Arch) Toolchain {
-	toolchainClangCflags := []string{
+	toolchainCflags := []string{
 		"${config.X86_64ToolchainCflags}",
-		"${config.X86_64" + arch.ArchVariant + "VariantClangCflags}",
+		"${config.X86_64" + arch.ArchVariant + "VariantCflags}",
 	}
 
 	for _, feature := range arch.ArchFeatures {
-		toolchainClangCflags = append(toolchainClangCflags, x86_64ArchFeatureCflags[feature]...)
+		toolchainCflags = append(toolchainCflags, x86_64ArchFeatureCflags[feature]...)
 	}
 
 	return &toolchainX86_64{
-		toolchainClangCflags: strings.Join(toolchainClangCflags, " "),
+		toolchainCflags: strings.Join(toolchainCflags, " "),
 	}
 }
 

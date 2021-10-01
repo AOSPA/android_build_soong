@@ -146,16 +146,20 @@ func (n *ndkSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 
 	baseDepPaths := append(installPaths, combinedLicense)
 
-	// There's a dummy "ndk" rule defined in ndk/Android.mk that depends on
-	// this. `m ndk` will build the sysroots.
 	ctx.Build(pctx, android.BuildParams{
-		Rule:      android.Touch,
-		Output:    getNdkBaseTimestampFile(ctx),
-		Implicits: baseDepPaths,
+		Rule:       android.Touch,
+		Output:     getNdkBaseTimestampFile(ctx),
+		Implicits:  baseDepPaths,
+		Validation: getNdkAbiDiffTimestampFile(ctx),
 	})
 
 	fullDepPaths := append(staticLibInstallPaths, getNdkBaseTimestampFile(ctx))
 
+	// There's a phony "ndk" rule defined in core/main.mk that depends on this.
+	// `m ndk` will build the sysroots for the architectures in the current
+	// lunch target. `build/soong/scripts/build-ndk-prebuilts.sh` will build the
+	// sysroots for all the NDK architectures and package them so they can be
+	// imported into the NDK's build.
 	ctx.Build(pctx, android.BuildParams{
 		Rule:      android.Touch,
 		Output:    getNdkFullTimestampFile(ctx),

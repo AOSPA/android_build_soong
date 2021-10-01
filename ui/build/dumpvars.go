@@ -163,6 +163,7 @@ var BannerVars = []string{
 	"AUX_OS_VARIANT_LIST",
 	"PRODUCT_SOONG_NAMESPACES",
 	"SOONG_SDK_SNAPSHOT_PREFER",
+	"SOONG_SDK_SNAPSHOT_USE_SOURCE_CONFIG_VAR",
 	"SOONG_SDK_SNAPSHOT_VERSION",
 }
 
@@ -225,6 +226,10 @@ func runMakeProductConfig(ctx Context, config Config) {
 		// Extra environment variables to be exported to ninja
 		"BUILD_BROKEN_NINJA_USES_ENV_VARS",
 
+		// Used to restrict write access to source tree
+		"BUILD_BROKEN_SRC_DIR_IS_WRITABLE",
+		"BUILD_BROKEN_SRC_DIR_RW_ALLOWLIST",
+
 		// Not used, but useful to be in the soong.log
 		"BOARD_VNDK_VERSION",
 
@@ -256,6 +261,12 @@ func runMakeProductConfig(ctx Context, config Config) {
 		"BUILD_BROKEN_USES_BUILD_STATIC_LIBRARY",
 	}, exportEnvVars...), BannerVars...)
 
+	// We need Roboleaf converter and runner in the mixed mode
+	runMicrofactory(ctx, config, ".bootstrap/bin/mk2rbc", "android/soong/mk2rbc/cmd",
+		map[string]string{"android/soong": "build/soong"})
+	runMicrofactory(ctx, config, ".bootstrap/bin/rbcrun", "rbcrun/cmd",
+		map[string]string{"go.starlark.net": "external/starlark-go", "rbcrun": "build/make/tools/rbcrun"})
+
 	makeVars, err := dumpMakeVars(ctx, config, config.Arguments(), allVars, true, "")
 	if err != nil {
 		ctx.Fatalln("Error dumping make vars:", err)
@@ -280,6 +291,8 @@ func runMakeProductConfig(ctx Context, config Config) {
 	config.SetNinjaArgs(strings.Fields(makeVars["NINJA_GOALS"]))
 	config.SetTargetDevice(makeVars["TARGET_DEVICE"])
 	config.SetTargetDeviceDir(makeVars["TARGET_DEVICE_DIR"])
+	config.sandboxConfig.SetSrcDirIsRO(makeVars["BUILD_BROKEN_SRC_DIR_IS_WRITABLE"] == "false")
+	config.sandboxConfig.SetSrcDirRWAllowlist(strings.Fields(makeVars["BUILD_BROKEN_SRC_DIR_RW_ALLOWLIST"]))
 
 	config.SetBuildBrokenDupRules(makeVars["BUILD_BROKEN_DUP_RULES"] == "true")
 	config.SetBuildBrokenUsesNetwork(makeVars["BUILD_BROKEN_USES_NETWORK"] == "true")

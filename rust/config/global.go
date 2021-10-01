@@ -24,12 +24,11 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust/config")
 
 var (
-	RustDefaultVersion = "1.51.0"
+	RustDefaultVersion = "1.54.0"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2018"
 	Stdlibs            = []string{
 		"libstd",
-		"libtest",
 	}
 
 	// Mapping between Soong internal arch types and std::env constants.

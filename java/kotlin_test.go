@@ -15,10 +15,11 @@
 package java
 
 import (
-	"android/soong/android"
 	"strconv"
 	"strings"
 	"testing"
+
+	"android/soong/android"
 )
 
 func TestKotlin(t *testing.T) {
@@ -114,7 +115,7 @@ func TestKapt(t *testing.T) {
 	t.Run("", func(t *testing.T) {
 		ctx, _ := testJava(t, bp)
 
-		buildOS := android.BuildOs.String()
+		buildOS := ctx.Config().BuildOS.String()
 
 		kapt := ctx.ModuleForTests("foo", "android_common").Rule("kapt")
 		kotlinc := ctx.ModuleForTests("foo", "android_common").Rule("kotlinc")
@@ -182,10 +183,9 @@ func TestKapt(t *testing.T) {
 			android.FixtureMergeEnv(env),
 		).RunTestWithBp(t, bp)
 
-		buildOS := android.BuildOs.String()
+		buildOS := result.Config.BuildOS.String()
 
 		kapt := result.ModuleForTests("foo", "android_common").Rule("kapt")
-		//kotlinc := ctx.ModuleForTests("foo", "android_common").Rule("kotlinc")
 		javac := result.ModuleForTests("foo", "android_common").Description("javac")
 		errorprone := result.ModuleForTests("foo", "android_common").Description("errorprone")
 

@@ -126,67 +126,60 @@ const (
 )
 
 var (
-	// Do not write BUILD files for these directories
-	// NOTE: this is not recursive
-	bp2buildDoNotWriteBuildFileList = []string{
-		// Don't generate these BUILD files - because external BUILD files already exist
-		"external/boringssl",
-		"external/brotli",
-		"external/dagger2",
-		"external/flatbuffers",
-		"external/gflags",
-		"external/google-fruit",
-		"external/grpc-grpc",
-		"external/grpc-grpc/test/core/util",
-		"external/grpc-grpc/test/cpp/common",
-		"external/grpc-grpc/third_party/address_sorting",
-		"external/nanopb-c",
-		"external/nos/host/generic",
-		"external/nos/host/generic/libnos",
-		"external/nos/host/generic/libnos/generator",
-		"external/nos/host/generic/libnos_datagram",
-		"external/nos/host/generic/libnos_transport",
-		"external/nos/host/generic/nugget/proto",
-		"external/perfetto",
-		"external/protobuf",
-		"external/rust/cxx",
-		"external/rust/cxx/demo",
-		"external/ruy",
-		"external/tensorflow",
-		"external/tensorflow/tensorflow/lite",
-		"external/tensorflow/tensorflow/lite/java",
-		"external/tensorflow/tensorflow/lite/kernels",
-		"external/tflite-support",
-		"external/tinyalsa_new",
-		"external/wycheproof",
-		"external/libyuv",
+	// Keep any existing BUILD files (and do not generate new BUILD files) for these directories
+	// in the synthetic Bazel workspace.
+	bp2buildKeepExistingBuildFile = map[string]bool{
+		// This is actually build/bazel/build.BAZEL symlinked to ./BUILD
+		".":/*recursive = */ false,
+
+		// build/bazel/examples/apex/... BUILD files should be generated, so
+		// build/bazel is not recursive. Instead list each subdirectory under
+		// build/bazel explicitly.
+		"build/bazel":/* recursive = */ false,
+		"build/bazel/examples/android_app":/* recursive = */ true,
+		"build/bazel/examples/java":/* recursive = */ true,
+		"build/bazel/bazel_skylib":/* recursive = */ true,
+		"build/bazel/rules":/* recursive = */ true,
+		"build/bazel/rules_cc":/* recursive = */ true,
+		"build/bazel/tests":/* recursive = */ true,
+		"build/bazel/platforms":/* recursive = */ true,
+		"build/bazel/product_variables":/* recursive = */ true,
+		"build/pesto":/* recursive = */ true,
+
+		// external/bazelbuild-rules_android/... is needed by mixed builds, otherwise mixed builds analysis fails
+		// e.g. ERROR: Analysis of target '@soong_injection//mixed_builds:buildroot' failed
+		"external/bazelbuild-rules_android":/* recursive = */ true,
+		"external/bazel-skylib":/* recursive = */ true,
+
+		"prebuilts/jdk":/* recursive = */ true,
+		"prebuilts/sdk":/* recursive = */ false,
+		"prebuilts/sdk/tools":/* recursive = */ false,
+		"prebuilts/r8":/* recursive = */ false,
+		"packages/apps/Music":/* recursive = */ false,
 	}
 
 	// Configure modules in these directories to enable bp2build_available: true or false by default.
 	bp2buildDefaultConfig = Bp2BuildConfig{
-		"bionic":                Bp2BuildDefaultTrueRecursively,
-		"external/gwp_asan":     Bp2BuildDefaultTrueRecursively,
-		"system/core/libcutils": Bp2BuildDefaultTrueRecursively,
+		"bionic":                            Bp2BuildDefaultTrueRecursively,
+		"build/bazel/examples/apex/minimal": Bp2BuildDefaultTrueRecursively,
+		"external/gwp_asan":                 Bp2BuildDefaultTrueRecursively,
+		"system/core/libcutils":             Bp2BuildDefaultTrueRecursively,
 		"system/core/property_service/libpropertyinfoparser": Bp2BuildDefaultTrueRecursively,
 		"system/libbase":                  Bp2BuildDefaultTrueRecursively,
 		"system/logging/liblog":           Bp2BuildDefaultTrueRecursively,
-		"external/jemalloc_new":           Bp2BuildDefaultTrueRecursively,
-		"external/fmtlib":                 Bp2BuildDefaultTrueRecursively,
+		"system/timezone/apex":            Bp2BuildDefaultTrueRecursively,
+		"system/timezone/output_data":     Bp2BuildDefaultTrueRecursively,
 		"external/arm-optimized-routines": Bp2BuildDefaultTrueRecursively,
+		"external/fmtlib":                 Bp2BuildDefaultTrueRecursively,
+		"external/jemalloc_new":           Bp2BuildDefaultTrueRecursively,
+		"external/libcxxabi":              Bp2BuildDefaultTrueRecursively,
 		"external/scudo":                  Bp2BuildDefaultTrueRecursively,
+		"prebuilts/clang/host/linux-x86":  Bp2BuildDefaultTrueRecursively,
 	}
 
 	// Per-module denylist to always opt modules out of both bp2build and mixed builds.
 	bp2buildModuleDoNotConvertList = []string{
 		// Things that transitively depend on unconverted libc_* modules.
-		"libc_nopthread", // http://b/186821550, cc_library_static, depends on //bionic/libc:libc_bionic_ndk (http://b/186822256)
-		//                                                     also depends on //bionic/libc:libc_tzcode (http://b/186822591)
-		//                                                     also depends on //bionic/libc:libstdc++ (http://b/186822597)
-		"libc_common",        // http://b/186821517, cc_library_static, depends on //bionic/libc:libc_nopthread (http://b/186821550)
-		"libc_common_static", // http://b/186824119, cc_library_static, depends on //bionic/libc:libc_common (http://b/186821517)
-		"libc_common_shared", // http://b/186824118, cc_library_static, depends on //bionic/libc:libc_common (http://b/186821517)
-		"libc_nomalloc",      // http://b/186825031, cc_library_static, depends on //bionic/libc:libc_common (http://b/186821517)
-
 		"libbionic_spawn_benchmark", // http://b/186824595, cc_library_static, depends on //external/google-benchmark (http://b/186822740)
 		//                                                                also depends on //system/logging/liblog:liblog (http://b/186822772)
 
@@ -205,12 +198,8 @@ var (
 		"liblinker_malloc", // http://b/186826466, cc_library_static, depends on //external/zlib:libz (http://b/186823782)
 		//                                                       also depends on //system/libziparchive:libziparchive (http://b/186823656)
 		//                                                       also depends on //system/logging/liblog:liblog (http://b/186822772)
-		"libc_jemalloc_wrapper", // http://b/187012490, cc_library_static, depends on //external/jemalloc_new:libjemalloc5 (http://b/186828626)
-		"libc_ndk",              // http://b/187013218, cc_library_static, depends on //bionic/libm:libm (http://b/183064661)
-		"libc",                  // http://b/183064430, cc_library, depends on //external/jemalloc_new:libjemalloc5 (http://b/186828626)
-		"libc_bionic_ndk",       // http://b/186822256, cc_library_static, fatal error: 'generated_android_ids.h' file not found
-		"libc_malloc_hooks",     // http://b/187016307, cc_library, ld.lld: error: undefined symbol: __malloc_hook
-		"libm",                  // http://b/183064661, cc_library, math.h:25:16: error: unexpected token in argument list
+		"libc_ndk",          // http://b/187013218, cc_library_static, depends on //bionic/libm:libm (http://b/183064661)
+		"libc_malloc_hooks", // http://b/187016307, cc_library, ld.lld: error: undefined symbol: __malloc_hook
 
 		// http://b/186823769: Needs C++ STL support, includes from unconverted standard libraries in //external/libcxx
 		// c++_static
@@ -218,53 +207,46 @@ var (
 		// libcxx
 		"libBionicBenchmarksUtils", // cc_library_static, fatal error: 'map' file not found, from libcxx
 		"fmtlib",                   // cc_library_static, fatal error: 'cassert' file not found, from libcxx
-		"libbase",                  // http://b/186826479, cc_library, fatal error: 'memory' file not found, from libcxx
+		"fmtlib_ndk",               // cc_library_static, fatal error: 'cassert' file not found
+		"liblog",                   // http://b/186822772: cc_library, 'sys/cdefs.h' file not found
+		"libbase",                  // Requires liblog. http://b/186826479, cc_library, fatal error: 'memory' file not found, from libcxx.
+		// Also depends on fmtlib.
 
-		// http://b/186024507: Includes errors because of the system_shared_libs default value.
-		// Missing -isystem bionic/libc/include through the libc/libm/libdl
-		// default dependencies if system_shared_libs is unset.
-		"liblog",                 // http://b/186822772: cc_library, 'sys/cdefs.h' file not found
-		"libjemalloc5_jet",       // cc_library, 'sys/cdefs.h' file not found
-		"libseccomp_policy",      // http://b/186476753: cc_library, 'linux/filter.h' not found
-		"note_memtag_heap_async", // http://b/185127353: cc_library_static, error: feature.h not found
-		"note_memtag_heap_sync",  // http://b/185127353: cc_library_static, error: feature.h not found
+		"libseccomp_policy", // depends on libbase
+
+		"gwp_asan_crash_handler", // cc_library, ld.lld: error: undefined symbol: memset
 
 		// Tests. Handle later.
 		"libbionic_tests_headers_posix", // http://b/186024507, cc_library_static, sched.h, time.h not found
 		"libjemalloc5_integrationtest",
 		"libjemalloc5_stresstestlib",
 		"libjemalloc5_unittest",
+
+		// APEX support
+		"com.android.runtime", // http://b/194746715, apex, depends on 'libc_malloc_debug' and 'libc_malloc_hooks'
 	}
 
 	// Per-module denylist of cc_library modules to only generate the static
 	// variant if their shared variant isn't ready or buildable by Bazel.
 	bp2buildCcLibraryStaticOnlyList = []string{
-		"libstdc++", // http://b/186822597, cc_library, ld.lld: error: undefined symbol: __errno
+		"libstdc++",    // http://b/186822597, cc_library, ld.lld: error: undefined symbol: __errno
+		"libjemalloc5", // http://b/188503688, cc_library, `target: { android: { enabled: false } }` for android targets.
 	}
 
 	// Per-module denylist to opt modules out of mixed builds. Such modules will
 	// still be generated via bp2build.
 	mixedBuildsDisabledList = []string{
-		"libc_netbsd",                      // lberki@, cc_library_static, version script assignment of 'LIBC_PRIVATE' to symbol 'SHA1Final' failed: symbol not defined
-		"libc_openbsd",                     // ruperts@, cc_library_static, OK for bp2build but error: duplicate symbol: strcpy for mixed builds
-		"libsystemproperties",              // cparsons@, cc_library_static, wrong include paths
-		"libpropertyinfoparser",            // cparsons@, cc_library_static, wrong include paths
-		"libarm-optimized-routines-string", // jingwen@, cc_library_static, OK for bp2build but b/186615213 (asflags not handled in  bp2build), version script assignment of 'LIBC' to symbol 'memcmp' failed: symbol not defined (also for memrchr, strnlen)
-		"fmtlib_ndk",                       // http://b/187040371, cc_library_static, OK for bp2build but format-inl.h:11:10: fatal error: 'cassert' file not found for mixed builds
+		"libc++abi",      // http://b/195970501, cc_library_static, duplicate symbols because it propagates libc objects.
+		"libc++demangle", // http://b/195970501, cc_library_static, duplicate symbols because it propagates libc objects.
 	}
 
 	// Used for quicker lookups
-	bp2buildDoNotWriteBuildFile = map[string]bool{}
 	bp2buildModuleDoNotConvert  = map[string]bool{}
 	bp2buildCcLibraryStaticOnly = map[string]bool{}
 	mixedBuildsDisabled         = map[string]bool{}
 )
 
 func init() {
-	for _, moduleName := range bp2buildDoNotWriteBuildFileList {
-		bp2buildDoNotWriteBuildFile[moduleName] = true
-	}
-
 	for _, moduleName := range bp2buildModuleDoNotConvertList {
 		bp2buildModuleDoNotConvert[moduleName] = true
 	}
@@ -282,12 +264,21 @@ func GenerateCcLibraryStaticOnly(ctx BazelConversionPathContext) bool {
 	return bp2buildCcLibraryStaticOnly[ctx.Module().Name()]
 }
 
-func ShouldWriteBuildFileForDir(dir string) bool {
-	if _, ok := bp2buildDoNotWriteBuildFile[dir]; ok {
-		return false
-	} else {
+func ShouldKeepExistingBuildFileForDir(dir string) bool {
+	if _, ok := bp2buildKeepExistingBuildFile[dir]; ok {
+		// Exact dir match
 		return true
 	}
+	// Check if subtree match
+	for prefix, recursive := range bp2buildKeepExistingBuildFile {
+		if recursive {
+			if strings.HasPrefix(dir, prefix+"/") {
+				return true
+			}
+		}
+	}
+	// Default
+	return false
 }
 
 // MixedBuildsEnabled checks that a module is ready to be replaced by a

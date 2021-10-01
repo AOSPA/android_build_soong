@@ -214,15 +214,15 @@ func FixtureConfigureBootJars(bootJars ...string) android.FixturePreparer {
 	)
 }
 
-// FixtureConfigureUpdatableBootJars configures the updatable boot jars in both the
+// FixtureConfigureApexBootJars configures the apex boot jars in both the
 // dexpreopt.GlobalConfig and Config.productVariables structs. As a side effect that enables
 // dexpreopt.
-func FixtureConfigureUpdatableBootJars(bootJars ...string) android.FixturePreparer {
+func FixtureConfigureApexBootJars(bootJars ...string) android.FixturePreparer {
 	return android.GroupFixturePreparers(
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.UpdatableBootJars = android.CreateTestConfiguredJarList(bootJars)
+			variables.ApexBootJars = android.CreateTestConfiguredJarList(bootJars)
 		}),
-		dexpreopt.FixtureSetUpdatableBootJars(bootJars...),
+		dexpreopt.FixtureSetApexBootJars(bootJars...),
 
 		// Add a fake dex2oatd module.
 		dexpreopt.PrepareForTestWithFakeDex2oatd,
@@ -362,6 +362,17 @@ func CheckPlatformBootclasspathModules(t *testing.T, result *android.TestResult,
 	platformBootclasspath := result.Module(name, "android_common").(*platformBootclasspathModule)
 	pairs := ApexNamePairsFromModules(result.TestContext, platformBootclasspath.configuredModules)
 	android.AssertDeepEquals(t, fmt.Sprintf("%s modules", "platform-bootclasspath"), expected, pairs)
+}
+
+func CheckClasspathFragmentProtoContentInfoProvider(t *testing.T, result *android.TestResult, generated bool, contents, outputFilename, installDir string) {
+	t.Helper()
+	p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
+	info := result.ModuleProvider(p, ClasspathFragmentProtoContentInfoProvider).(ClasspathFragmentProtoContentInfo)
+
+	android.AssertBoolEquals(t, "classpath proto generated", generated, info.ClasspathFragmentProtoGenerated)
+	android.AssertStringEquals(t, "classpath proto contents", contents, info.ClasspathFragmentProtoContents.String())
+	android.AssertStringEquals(t, "output filepath", outputFilename, info.ClasspathFragmentProtoOutput.Base())
+	android.AssertPathRelativeToTopEquals(t, "install filepath", installDir, info.ClasspathFragmentProtoInstallDir)
 }
 
 // ApexNamePairsFromModules returns the apex:module pair for the supplied modules.

@@ -718,17 +718,316 @@ func TestTransitiveInputDepsets(t *testing.T) {
 	assertBuildStatements(t, expectedBuildStatements, actualbuildStatements)
 }
 
+func TestMiddlemenAction(t *testing.T) {
+	const inputString = `
+{
+  "artifacts": [{
+    "id": 1,
+    "pathFragmentId": 1
+  }, {
+    "id": 2,
+    "pathFragmentId": 2
+  }, {
+    "id": 3,
+    "pathFragmentId": 3
+  }, {
+    "id": 4,
+    "pathFragmentId": 4
+  }, {
+    "id": 5,
+    "pathFragmentId": 5
+  }, {
+    "id": 6,
+    "pathFragmentId": 6
+  }],
+  "pathFragments": [{
+    "id": 1,
+    "label": "middleinput_one"
+  }, {
+    "id": 2,
+    "label": "middleinput_two"
+  }, {
+    "id": 3,
+    "label": "middleman_artifact"
+  }, {
+    "id": 4,
+    "label": "maininput_one"
+  }, {
+    "id": 5,
+    "label": "maininput_two"
+  }, {
+    "id": 6,
+    "label": "output"
+  }],
+  "depSetOfFiles": [{
+    "id": 1,
+    "directArtifactIds": [1, 2]
+  }, {
+    "id": 2,
+    "directArtifactIds": [3, 4, 5]
+  }],
+  "actions": [{
+    "targetId": 1,
+    "actionKey": "x",
+    "mnemonic": "Middleman",
+    "arguments": ["touch", "foo"],
+    "inputDepSetIds": [1],
+    "outputIds": [3],
+    "primaryOutputId": 3
+  }, {
+    "targetId": 2,
+    "actionKey": "y",
+    "mnemonic": "Main action",
+    "arguments": ["touch", "foo"],
+    "inputDepSetIds": [2],
+    "outputIds": [6],
+    "primaryOutputId": 6
+  }]
+}`
+
+	actual, err := AqueryBuildStatements([]byte(inputString))
+	if err != nil {
+		t.Errorf("Unexpected error %q", err)
+	}
+	if expected := 1; len(actual) != expected {
+		t.Fatalf("Expected %d build statements, got %d", expected, len(actual))
+	}
+
+	bs := actual[0]
+	expectedInputs := []string{"middleinput_one", "middleinput_two", "maininput_one", "maininput_two"}
+	if !reflect.DeepEqual(bs.InputPaths, expectedInputs) {
+		t.Errorf("Expected main action inputs %q, but got %q", expectedInputs, bs.InputPaths)
+	}
+
+	expectedOutputs := []string{"output"}
+	if !reflect.DeepEqual(bs.OutputPaths, expectedOutputs) {
+		t.Errorf("Expected main action outputs %q, but got %q", expectedOutputs, bs.OutputPaths)
+	}
+}
+
+func TestSimpleSymlink(t *testing.T) {
+	const inputString = `
+{
+  "artifacts": [{
+    "id": 1,
+    "pathFragmentId": 3
+  }, {
+    "id": 2,
+    "pathFragmentId": 5
+  }],
+  "actions": [{
+    "targetId": 1,
+    "actionKey": "x",
+    "mnemonic": "Symlink",
+    "inputDepSetIds": [1],
+    "outputIds": [2],
+    "primaryOutputId": 2
+  }],
+  "depSetOfFiles": [{
+    "id": 1,
+    "directArtifactIds": [1]
+  }],
+  "pathFragments": [{
+    "id": 1,
+    "label": "one"
+  }, {
+    "id": 2,
+    "label": "file_subdir",
+    "parentId": 1
+  }, {
+    "id": 3,
+    "label": "file",
+    "parentId": 2
+  }, {
+    "id": 4,
+    "label": "symlink_subdir",
+    "parentId": 1
+  }, {
+    "id": 5,
+    "label": "symlink",
+    "parentId": 4
+  }]
+}`
+
+	actual, err := AqueryBuildStatements([]byte(inputString))
+
+	if err != nil {
+		t.Errorf("Unexpected error %q", err)
+	}
+
+	expectedBuildStatements := []BuildStatement{
+		BuildStatement{
+			Command: "mkdir -p one/symlink_subdir && " +
+				"rm -f one/symlink_subdir/symlink && " +
+				"ln -rsf one/file_subdir/file one/symlink_subdir/symlink",
+			InputPaths:   []string{"one/file_subdir/file"},
+			OutputPaths:  []string{"one/symlink_subdir/symlink"},
+			SymlinkPaths: []string{"one/symlink_subdir/symlink"},
+			Mnemonic:     "Symlink",
+		},
+	}
+	assertBuildStatements(t, actual, expectedBuildStatements)
+}
+
+func TestSymlinkQuotesPaths(t *testing.T) {
+	const inputString = `
+{
+  "artifacts": [{
+    "id": 1,
+    "pathFragmentId": 3
+  }, {
+    "id": 2,
+    "pathFragmentId": 5
+  }],
+  "actions": [{
+    "targetId": 1,
+    "actionKey": "x",
+    "mnemonic": "SolibSymlink",
+    "inputDepSetIds": [1],
+    "outputIds": [2],
+    "primaryOutputId": 2
+  }],
+  "depSetOfFiles": [{
+    "id": 1,
+    "directArtifactIds": [1]
+  }],
+  "pathFragments": [{
+    "id": 1,
+    "label": "one"
+  }, {
+    "id": 2,
+    "label": "file subdir",
+    "parentId": 1
+  }, {
+    "id": 3,
+    "label": "file",
+    "parentId": 2
+  }, {
+    "id": 4,
+    "label": "symlink subdir",
+    "parentId": 1
+  }, {
+    "id": 5,
+    "label": "symlink",
+    "parentId": 4
+  }]
+}`
+
+	actual, err := AqueryBuildStatements([]byte(inputString))
+
+	if err != nil {
+		t.Errorf("Unexpected error %q", err)
+	}
+
+	expectedBuildStatements := []BuildStatement{
+		BuildStatement{
+			Command: "mkdir -p 'one/symlink subdir' && " +
+				"rm -f 'one/symlink subdir/symlink' && " +
+				"ln -rsf 'one/file subdir/file' 'one/symlink subdir/symlink'",
+			InputPaths:   []string{"one/file subdir/file"},
+			OutputPaths:  []string{"one/symlink subdir/symlink"},
+			SymlinkPaths: []string{"one/symlink subdir/symlink"},
+			Mnemonic:     "SolibSymlink",
+		},
+	}
+	assertBuildStatements(t, actual, expectedBuildStatements)
+}
+
+func TestSymlinkMultipleInputs(t *testing.T) {
+	const inputString = `
+{
+  "artifacts": [{
+    "id": 1,
+    "pathFragmentId": 1
+  }, {
+    "id": 2,
+    "pathFragmentId": 2
+  }, {
+    "id": 3,
+    "pathFragmentId": 3
+  }],
+  "actions": [{
+    "targetId": 1,
+    "actionKey": "x",
+    "mnemonic": "Symlink",
+    "inputDepSetIds": [1],
+    "outputIds": [3],
+    "primaryOutputId": 3
+  }],
+  "depSetOfFiles": [{
+    "id": 1,
+    "directArtifactIds": [1,2]
+  }],
+  "pathFragments": [{
+    "id": 1,
+    "label": "file"
+  }, {
+    "id": 2,
+    "label": "other_file"
+  }, {
+    "id": 3,
+    "label": "symlink"
+  }]
+}`
+
+	_, err := AqueryBuildStatements([]byte(inputString))
+	assertError(t, err, `Expect 1 input and 1 output to symlink action, got: input ["file" "other_file"], output ["symlink"]`)
+}
+
+func TestSymlinkMultipleOutputs(t *testing.T) {
+	const inputString = `
+{
+  "artifacts": [{
+    "id": 1,
+    "pathFragmentId": 1
+  }, {
+    "id": 2,
+    "pathFragmentId": 2
+  }, {
+    "id": 3,
+    "pathFragmentId": 3
+  }],
+  "actions": [{
+    "targetId": 1,
+    "actionKey": "x",
+    "mnemonic": "Symlink",
+    "inputDepSetIds": [1],
+    "outputIds": [2,3],
+    "primaryOutputId": 2
+  }],
+  "depSetOfFiles": [{
+    "id": 1,
+    "directArtifactIds": [1]
+  }],
+  "pathFragments": [{
+    "id": 1,
+    "label": "file"
+  }, {
+    "id": 2,
+    "label": "symlink"
+  }, {
+    "id": 3,
+    "label": "other_symlink"
+  }]
+}`
+
+	_, err := AqueryBuildStatements([]byte(inputString))
+	assertError(t, err, `Expect 1 input and 1 output to symlink action, got: input ["file"], output ["symlink" "other_symlink"]`)
+}
+
 func assertError(t *testing.T, err error, expected string) {
+	t.Helper()
 	if err == nil {
 		t.Errorf("expected error '%s', but got no error", expected)
 	} else if err.Error() != expected {
-		t.Errorf("expected error '%s', but got: %s", expected, err.Error())
+		t.Errorf("expected error:\n\t'%s', but got:\n\t'%s'", expected, err.Error())
 	}
 }
 
 // Asserts that the given actual build statements match the given expected build statements.
 // Build statement equivalence is determined using buildStatementEquals.
 func assertBuildStatements(t *testing.T, expected []BuildStatement, actual []BuildStatement) {
+	t.Helper()
 	if len(expected) != len(actual) {
 		t.Errorf("expected %d build statements, but got %d,\n expected: %v,\n actual: %v",
 			len(expected), len(actual), expected, actual)
@@ -763,6 +1062,12 @@ func buildStatementEquals(first BuildStatement, second BuildStatement) bool {
 		return false
 	}
 	if !reflect.DeepEqual(stringSet(first.OutputPaths), stringSet(second.OutputPaths)) {
+		return false
+	}
+	if !reflect.DeepEqual(stringSet(first.SymlinkPaths), stringSet(second.SymlinkPaths)) {
+		return false
+	}
+	if first.Depfile != second.Depfile {
 		return false
 	}
 	return true

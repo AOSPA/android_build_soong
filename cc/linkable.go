@@ -3,6 +3,7 @@ package cc
 import (
 	"android/soong/android"
 	"android/soong/bazel/cquery"
+	"android/soong/snapshot"
 
 	"github.com/google/blueprint"
 )
@@ -13,11 +14,6 @@ type PlatformSanitizeable interface {
 
 	// SanitizePropDefined returns whether the Sanitizer properties struct for this module is defined.
 	SanitizePropDefined() bool
-
-	// IsDependencyRoot returns whether a module is of a type which cannot be a linkage dependency
-	// of another module. For example, cc_binary and rust_binary represent dependency roots as other
-	// modules cannot have linkage dependencies against these types.
-	IsDependencyRoot() bool
 
 	// IsSanitizerEnabled returns whether a sanitizer is enabled.
 	IsSanitizerEnabled(t SanitizerType) bool
@@ -76,17 +72,11 @@ type SantizableDependencyTagChecker func(tag blueprint.DependencyTag) bool
 
 // Snapshottable defines those functions necessary for handling module snapshots.
 type Snapshottable interface {
+	snapshot.VendorSnapshotModuleInterface
+	snapshot.RecoverySnapshotModuleInterface
+
 	// SnapshotHeaders returns a list of header paths provided by this module.
 	SnapshotHeaders() android.Paths
-
-	// ExcludeFromVendorSnapshot returns true if this module should be otherwise excluded from the vendor snapshot.
-	ExcludeFromVendorSnapshot() bool
-
-	// ExcludeFromRecoverySnapshot returns true if this module should be otherwise excluded from the recovery snapshot.
-	ExcludeFromRecoverySnapshot() bool
-
-	// ExcludeFromRamdiskSnapshot returns true if this module should be otherwise excluded from the ramdisk snapshot.
-	ExcludeFromRamdiskSnapshot() bool
 
 	// SnapshotLibrary returns true if this module is a snapshot library.
 	IsSnapshotLibrary() bool
@@ -174,6 +164,9 @@ type LinkableInterface interface {
 	// When PRODUCT_PRODUCT_VNDK_VERSION is set, product variants of "vendor_available: true" or
 	// "product_specific: true" modules are included here.
 	UseVndk() bool
+
+	// Bootstrap tests if this module is allowed to use non-APEX version of libraries.
+	Bootstrap() bool
 
 	// IsVndkSp returns true if this is a VNDK-SP module.
 	IsVndkSp() bool
@@ -318,14 +311,13 @@ func HeaderDepTag() blueprint.DependencyTag {
 
 // SharedLibraryInfo is a provider to propagate information about a shared C++ library.
 type SharedLibraryInfo struct {
-	SharedLibrary           android.Path
-	UnstrippedSharedLibrary android.Path
-	Target                  android.Target
+	SharedLibrary android.Path
+	Target        android.Target
 
-	TableOfContents       android.OptionalPath
-	CoverageSharedLibrary android.OptionalPath
+	TableOfContents android.OptionalPath
 
-	StaticAnalogue *StaticLibraryInfo
+	// should be obtained from static analogue
+	TransitiveStaticLibrariesForOrdering *android.DepSet
 }
 
 var SharedLibraryInfoProvider = blueprint.NewProvider(SharedLibraryInfo{})

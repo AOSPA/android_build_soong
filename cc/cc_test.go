@@ -153,71 +153,6 @@ func TestPrepareForTestWithCcDefaultModules(t *testing.T) {
 	).RunTest(t)
 }
 
-func TestFuchsiaDeps(t *testing.T) {
-	t.Helper()
-
-	bp := `
-		cc_library {
-			name: "libTest",
-			srcs: ["foo.c"],
-			target: {
-				fuchsia: {
-					srcs: ["bar.c"],
-				},
-			},
-		}`
-
-	result := android.GroupFixturePreparers(
-		prepareForCcTest,
-		PrepareForTestOnFuchsia,
-	).RunTestWithBp(t, bp)
-
-	rt := false
-	fb := false
-
-	ld := result.ModuleForTests("libTest", "fuchsia_arm64_shared").Rule("ld")
-	implicits := ld.Implicits
-	for _, lib := range implicits {
-		if strings.Contains(lib.Rel(), "libcompiler_rt") {
-			rt = true
-		}
-
-		if strings.Contains(lib.Rel(), "libbioniccompat") {
-			fb = true
-		}
-	}
-
-	if !rt || !fb {
-		t.Errorf("fuchsia libs must link libcompiler_rt and libbioniccompat")
-	}
-}
-
-func TestFuchsiaTargetDecl(t *testing.T) {
-	t.Helper()
-
-	bp := `
-		cc_library {
-			name: "libTest",
-			srcs: ["foo.c"],
-			target: {
-				fuchsia: {
-					srcs: ["bar.c"],
-				},
-			},
-		}`
-
-	result := android.GroupFixturePreparers(
-		prepareForCcTest,
-		PrepareForTestOnFuchsia,
-	).RunTestWithBp(t, bp)
-	ld := result.ModuleForTests("libTest", "fuchsia_arm64_shared").Rule("ld")
-	var objs []string
-	for _, o := range ld.Inputs {
-		objs = append(objs, o.Base())
-	}
-	android.AssertArrayString(t, "libTest inputs", []string{"foo.o", "bar.o"}, objs)
-}
-
 func TestVendorSrc(t *testing.T) {
 	ctx := testCc(t, `
 		cc_library {
@@ -395,50 +330,6 @@ func checkVndkModule(t *testing.T, ctx *android.TestContext, name, subDir string
 	if actualExtends := mod.getVndkExtendsModuleName(); actualExtends != extends {
 		t.Errorf("%q must extend from %q but get %q", name, extends, actualExtends)
 	}
-}
-
-func checkSnapshotIncludeExclude(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string, include bool, fake bool) {
-	t.Helper()
-	mod := ctx.ModuleForTests(moduleName, variant)
-	outputFiles := mod.OutputFiles(t, "")
-	if len(outputFiles) != 1 {
-		t.Errorf("%q must have single output\n", moduleName)
-		return
-	}
-	snapshotPath := filepath.Join(subDir, snapshotFilename)
-
-	if include {
-		out := singleton.Output(snapshotPath)
-		if fake {
-			if out.Rule == nil {
-				t.Errorf("Missing rule for module %q output file %q", moduleName, outputFiles[0])
-			}
-		} else {
-			if out.Input.String() != outputFiles[0].String() {
-				t.Errorf("The input of snapshot %q must be %q, but %q", moduleName, out.Input.String(), outputFiles[0])
-			}
-		}
-	} else {
-		out := singleton.MaybeOutput(snapshotPath)
-		if out.Rule != nil {
-			t.Errorf("There must be no rule for module %q output file %q", moduleName, outputFiles[0])
-		}
-	}
-}
-
-func checkSnapshot(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string) {
-	t.Helper()
-	checkSnapshotIncludeExclude(t, ctx, singleton, moduleName, snapshotFilename, subDir, variant, true, false)
-}
-
-func checkSnapshotExclude(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string) {
-	t.Helper()
-	checkSnapshotIncludeExclude(t, ctx, singleton, moduleName, snapshotFilename, subDir, variant, false, false)
-}
-
-func checkSnapshotRule(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string) {
-	t.Helper()
-	checkSnapshotIncludeExclude(t, ctx, singleton, moduleName, snapshotFilename, subDir, variant, true, true)
 }
 
 func checkWriteFileOutput(t *testing.T, params android.TestingBuildParams, expected []string) {
@@ -632,21 +523,21 @@ func TestVndk(t *testing.T) {
 
 	snapshotSingleton := ctx.SingletonForTests("vndk-snapshot")
 
-	checkSnapshot(t, ctx, snapshotSingleton, "libvndk", "libvndk.so", vndkCoreLibPath, variant)
-	checkSnapshot(t, ctx, snapshotSingleton, "libvndk", "libvndk.so", vndkCoreLib2ndPath, variant2nd)
-	checkSnapshot(t, ctx, snapshotSingleton, "libvndk_product", "libvndk_product.so", vndkCoreLibPath, variant)
-	checkSnapshot(t, ctx, snapshotSingleton, "libvndk_product", "libvndk_product.so", vndkCoreLib2ndPath, variant2nd)
-	checkSnapshot(t, ctx, snapshotSingleton, "libvndk_sp", "libvndk_sp-x.so", vndkSpLibPath, variant)
-	checkSnapshot(t, ctx, snapshotSingleton, "libvndk_sp", "libvndk_sp-x.so", vndkSpLib2ndPath, variant2nd)
-	checkSnapshot(t, ctx, snapshotSingleton, "libllndk", "libllndk.so", llndkLibPath, variant)
-	checkSnapshot(t, ctx, snapshotSingleton, "libllndk", "libllndk.so", llndkLib2ndPath, variant2nd)
+	CheckSnapshot(t, ctx, snapshotSingleton, "libvndk", "libvndk.so", vndkCoreLibPath, variant)
+	CheckSnapshot(t, ctx, snapshotSingleton, "libvndk", "libvndk.so", vndkCoreLib2ndPath, variant2nd)
+	CheckSnapshot(t, ctx, snapshotSingleton, "libvndk_product", "libvndk_product.so", vndkCoreLibPath, variant)
+	CheckSnapshot(t, ctx, snapshotSingleton, "libvndk_product", "libvndk_product.so", vndkCoreLib2ndPath, variant2nd)
+	CheckSnapshot(t, ctx, snapshotSingleton, "libvndk_sp", "libvndk_sp-x.so", vndkSpLibPath, variant)
+	CheckSnapshot(t, ctx, snapshotSingleton, "libvndk_sp", "libvndk_sp-x.so", vndkSpLib2ndPath, variant2nd)
+	CheckSnapshot(t, ctx, snapshotSingleton, "libllndk", "libllndk.so", llndkLibPath, variant)
+	CheckSnapshot(t, ctx, snapshotSingleton, "libllndk", "libllndk.so", llndkLib2ndPath, variant2nd)
 
 	snapshotConfigsPath := filepath.Join(snapshotVariantPath, "configs")
-	checkSnapshot(t, ctx, snapshotSingleton, "llndk.libraries.txt", "llndk.libraries.txt", snapshotConfigsPath, "")
-	checkSnapshot(t, ctx, snapshotSingleton, "vndkcore.libraries.txt", "vndkcore.libraries.txt", snapshotConfigsPath, "")
-	checkSnapshot(t, ctx, snapshotSingleton, "vndksp.libraries.txt", "vndksp.libraries.txt", snapshotConfigsPath, "")
-	checkSnapshot(t, ctx, snapshotSingleton, "vndkprivate.libraries.txt", "vndkprivate.libraries.txt", snapshotConfigsPath, "")
-	checkSnapshot(t, ctx, snapshotSingleton, "vndkproduct.libraries.txt", "vndkproduct.libraries.txt", snapshotConfigsPath, "")
+	CheckSnapshot(t, ctx, snapshotSingleton, "llndk.libraries.txt", "llndk.libraries.txt", snapshotConfigsPath, "")
+	CheckSnapshot(t, ctx, snapshotSingleton, "vndkcore.libraries.txt", "vndkcore.libraries.txt", snapshotConfigsPath, "")
+	CheckSnapshot(t, ctx, snapshotSingleton, "vndksp.libraries.txt", "vndksp.libraries.txt", snapshotConfigsPath, "")
+	CheckSnapshot(t, ctx, snapshotSingleton, "vndkprivate.libraries.txt", "vndkprivate.libraries.txt", snapshotConfigsPath, "")
+	CheckSnapshot(t, ctx, snapshotSingleton, "vndkproduct.libraries.txt", "vndkproduct.libraries.txt", snapshotConfigsPath, "")
 
 	checkVndkOutput(t, ctx, "vndk/vndk.libraries.txt", []string{
 		"LLNDK: libc.so",
@@ -2644,15 +2535,6 @@ func parseModuleDeps(text string) (modulesInOrder []android.Path, allDeps map[an
 	return modulesInOrder, allDeps
 }
 
-func getOutputPaths(ctx *android.TestContext, variant string, moduleNames []string) (paths android.Paths) {
-	for _, moduleName := range moduleNames {
-		module := ctx.ModuleForTests(moduleName, variant).Module().(*Module)
-		output := module.outputFile.Path().RelativeToTop()
-		paths = append(paths, output)
-	}
-	return paths
-}
-
 func TestStaticLibDepReordering(t *testing.T) {
 	ctx := testCc(t, `
 	cc_library {
@@ -2680,7 +2562,7 @@ func TestStaticLibDepReordering(t *testing.T) {
 	moduleA := ctx.ModuleForTests("a", variant).Module().(*Module)
 	actual := ctx.ModuleProvider(moduleA, StaticLibraryInfoProvider).(StaticLibraryInfo).
 		TransitiveStaticLibrariesForOrdering.ToList().RelativeToTop()
-	expected := getOutputPaths(ctx, variant, []string{"a", "c", "b", "d"})
+	expected := GetOutputPaths(ctx, variant, []string{"a", "c", "b", "d"})
 
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("staticDeps orderings were not propagated correctly"+
@@ -2715,7 +2597,7 @@ func TestStaticLibDepReorderingWithShared(t *testing.T) {
 	moduleA := ctx.ModuleForTests("a", variant).Module().(*Module)
 	actual := ctx.ModuleProvider(moduleA, StaticLibraryInfoProvider).(StaticLibraryInfo).
 		TransitiveStaticLibrariesForOrdering.ToList().RelativeToTop()
-	expected := getOutputPaths(ctx, variant, []string{"a", "c", "b"})
+	expected := GetOutputPaths(ctx, variant, []string{"a", "c", "b"})
 
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("staticDeps orderings did not account for shared libs"+
@@ -2800,12 +2682,8 @@ func TestLlndkLibrary(t *testing.T) {
 		}
 	}
 	expected := []string{
-		"android_vendor.29_arm64_armv8-a_shared_1",
-		"android_vendor.29_arm64_armv8-a_shared_2",
 		"android_vendor.29_arm64_armv8-a_shared_current",
 		"android_vendor.29_arm64_armv8-a_shared",
-		"android_vendor.29_arm_armv7-a-neon_shared_1",
-		"android_vendor.29_arm_armv7-a-neon_shared_2",
 		"android_vendor.29_arm_armv7-a-neon_shared_current",
 		"android_vendor.29_arm_armv7-a-neon_shared",
 	}
@@ -2813,9 +2691,6 @@ func TestLlndkLibrary(t *testing.T) {
 
 	params := result.ModuleForTests("libllndk", "android_vendor.29_arm_armv7-a-neon_shared").Description("generate stub")
 	android.AssertSame(t, "use VNDK version for default stubs", "current", params.Args["apiLevel"])
-
-	params = result.ModuleForTests("libllndk", "android_vendor.29_arm_armv7-a-neon_shared_1").Description("generate stub")
-	android.AssertSame(t, "override apiLevel for versioned stubs", "1", params.Args["apiLevel"])
 
 	checkExportedIncludeDirs := func(module, variant string, expectedDirs ...string) {
 		t.Helper()
@@ -3400,7 +3275,7 @@ func TestStaticDepsOrderWithStubs(t *testing.T) {
 
 	mybin := ctx.ModuleForTests("mybin", "android_arm64_armv8-a").Rule("ld")
 	actual := mybin.Implicits[:2]
-	expected := getOutputPaths(ctx, "android_arm64_armv8-a_static", []string{"libfooB", "libfooC"})
+	expected := GetOutputPaths(ctx, "android_arm64_armv8-a_static", []string{"libfooB", "libfooC"})
 
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("staticDeps orderings were not propagated correctly"+
@@ -3758,305 +3633,6 @@ func TestMinSdkVersionInClangTriple(t *testing.T) {
 	android.AssertStringDoesContain(t, "min sdk version", cFlags, "-target aarch64-linux-android29")
 }
 
-type MemtagNoteType int
-
-const (
-	None MemtagNoteType = iota + 1
-	Sync
-	Async
-)
-
-func (t MemtagNoteType) str() string {
-	switch t {
-	case None:
-		return "none"
-	case Sync:
-		return "sync"
-	case Async:
-		return "async"
-	default:
-		panic("invalid note type")
-	}
-}
-
-func checkHasMemtagNote(t *testing.T, m android.TestingModule, expected MemtagNoteType) {
-	note_async := "note_memtag_heap_async"
-	note_sync := "note_memtag_heap_sync"
-
-	found := None
-	implicits := m.Rule("ld").Implicits
-	for _, lib := range implicits {
-		if strings.Contains(lib.Rel(), note_async) {
-			found = Async
-			break
-		} else if strings.Contains(lib.Rel(), note_sync) {
-			found = Sync
-			break
-		}
-	}
-
-	if found != expected {
-		t.Errorf("Wrong Memtag note in target %q: found %q, expected %q", m.Module().(*Module).Name(), found.str(), expected.str())
-	}
-}
-
-var prepareForTestWithMemtagHeap = android.GroupFixturePreparers(
-	android.FixtureModifyMockFS(func(fs android.MockFS) {
-		templateBp := `
-		cc_test {
-			name: "%[1]s_test",
-			gtest: false,
-		}
-
-		cc_test {
-			name: "%[1]s_test_false",
-			gtest: false,
-			sanitize: { memtag_heap: false },
-		}
-
-		cc_test {
-			name: "%[1]s_test_true",
-			gtest: false,
-			sanitize: { memtag_heap: true },
-		}
-
-		cc_test {
-			name: "%[1]s_test_true_nodiag",
-			gtest: false,
-			sanitize: { memtag_heap: true, diag: { memtag_heap: false }  },
-		}
-
-		cc_test {
-			name: "%[1]s_test_true_diag",
-			gtest: false,
-			sanitize: { memtag_heap: true, diag: { memtag_heap: true }  },
-		}
-
-		cc_binary {
-			name: "%[1]s_binary",
-		}
-
-		cc_binary {
-			name: "%[1]s_binary_false",
-			sanitize: { memtag_heap: false },
-		}
-
-		cc_binary {
-			name: "%[1]s_binary_true",
-			sanitize: { memtag_heap: true },
-		}
-
-		cc_binary {
-			name: "%[1]s_binary_true_nodiag",
-			sanitize: { memtag_heap: true, diag: { memtag_heap: false }  },
-		}
-
-		cc_binary {
-			name: "%[1]s_binary_true_diag",
-			sanitize: { memtag_heap: true, diag: { memtag_heap: true }  },
-		}
-		`
-		subdirDefaultBp := fmt.Sprintf(templateBp, "default")
-		subdirExcludeBp := fmt.Sprintf(templateBp, "exclude")
-		subdirSyncBp := fmt.Sprintf(templateBp, "sync")
-		subdirAsyncBp := fmt.Sprintf(templateBp, "async")
-
-		fs.Merge(android.MockFS{
-			"subdir_default/Android.bp": []byte(subdirDefaultBp),
-			"subdir_exclude/Android.bp": []byte(subdirExcludeBp),
-			"subdir_sync/Android.bp":    []byte(subdirSyncBp),
-			"subdir_async/Android.bp":   []byte(subdirAsyncBp),
-		})
-	}),
-	android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-		variables.MemtagHeapExcludePaths = []string{"subdir_exclude"}
-		// "subdir_exclude" is covered by both include and exclude paths. Exclude wins.
-		variables.MemtagHeapSyncIncludePaths = []string{"subdir_sync", "subdir_exclude"}
-		variables.MemtagHeapAsyncIncludePaths = []string{"subdir_async", "subdir_exclude"}
-	}),
-)
-
-func TestSanitizeMemtagHeap(t *testing.T) {
-	variant := "android_arm64_armv8-a"
-
-	result := android.GroupFixturePreparers(
-		prepareForCcTest,
-		prepareForTestWithMemtagHeap,
-	).RunTest(t)
-	ctx := result.TestContext
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true_diag", variant), Sync)
-}
-
-func TestSanitizeMemtagHeapWithSanitizeDevice(t *testing.T) {
-	variant := "android_arm64_armv8-a"
-
-	result := android.GroupFixturePreparers(
-		prepareForCcTest,
-		prepareForTestWithMemtagHeap,
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.SanitizeDevice = []string{"memtag_heap"}
-		}),
-	).RunTest(t)
-	ctx := result.TestContext
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true_diag", variant), Sync)
-}
-
-func TestSanitizeMemtagHeapWithSanitizeDeviceDiag(t *testing.T) {
-	variant := "android_arm64_armv8-a"
-
-	result := android.GroupFixturePreparers(
-		prepareForCcTest,
-		prepareForTestWithMemtagHeap,
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.SanitizeDevice = []string{"memtag_heap"}
-			variables.SanitizeDeviceDiag = []string{"memtag_heap"}
-		}),
-	).RunTest(t)
-	ctx := result.TestContext
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("default_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("exclude_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("async_binary_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_test_true_diag", variant), Sync)
-
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_false", variant), None)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true", variant), Sync)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true_nodiag", variant), Async)
-	checkHasMemtagNote(t, ctx.ModuleForTests("sync_binary_true_diag", variant), Sync)
-}
-
 func TestIncludeDirsExporting(t *testing.T) {
 
 	// Trim spaces from the beginning, end and immediately after any newline characters. Leaves
@@ -4326,4 +3902,156 @@ func TestIncludeDirsExporting(t *testing.T) {
 			`),
 		)
 	})
+}
+
+func TestIncludeDirectoryOrdering(t *testing.T) {
+	bp := `
+		cc_library {
+			name: "libfoo",
+			srcs: ["foo.c"],
+			local_include_dirs: ["local_include_dirs"],
+			export_include_dirs: ["export_include_dirs"],
+			export_system_include_dirs: ["export_system_include_dirs"],
+			static_libs: ["libstatic1", "libstatic2"],
+			whole_static_libs: ["libwhole1", "libwhole2"],
+			shared_libs: ["libshared1", "libshared2"],
+			header_libs: ["libheader1", "libheader2"],
+			target: {
+				android: {
+					shared_libs: ["libandroid"],
+					local_include_dirs: ["android_local_include_dirs"],
+					export_include_dirs: ["android_export_include_dirs"],
+				},
+				android_arm: {
+					shared_libs: ["libandroid_arm"],
+					local_include_dirs: ["android_arm_local_include_dirs"],
+					export_include_dirs: ["android_arm_export_include_dirs"],
+				},
+				linux: {
+					shared_libs: ["liblinux"],
+					local_include_dirs: ["linux_local_include_dirs"],
+					export_include_dirs: ["linux_export_include_dirs"],
+				},
+			},
+			multilib: {
+				lib32: {
+					shared_libs: ["lib32"],
+					local_include_dirs: ["lib32_local_include_dirs"],
+					export_include_dirs: ["lib32_export_include_dirs"],
+				},
+			},
+			arch: {
+				arm: {
+					shared_libs: ["libarm"],
+					local_include_dirs: ["arm_local_include_dirs"],
+					export_include_dirs: ["arm_export_include_dirs"],
+				},
+			},
+			stl: "libc++",
+			sdk_version: "20",
+		}
+
+		cc_library_headers {
+			name: "libheader1",
+			export_include_dirs: ["libheader1"],
+			sdk_version: "20",
+			stl: "none",
+		}
+
+		cc_library_headers {
+			name: "libheader2",
+			export_include_dirs: ["libheader2"],
+			sdk_version: "20",
+			stl: "none",
+		}
+	`
+
+	libs := []string{
+		"libstatic1",
+		"libstatic2",
+		"libwhole1",
+		"libwhole2",
+		"libshared1",
+		"libshared2",
+		"libandroid",
+		"libandroid_arm",
+		"liblinux",
+		"lib32",
+		"libarm",
+	}
+
+	for _, lib := range libs {
+		bp += fmt.Sprintf(`
+			cc_library {
+				name: "%s",
+				export_include_dirs: ["%s"],
+				sdk_version: "20",
+				stl: "none",
+			}
+		`, lib, lib)
+	}
+
+	ctx := android.GroupFixturePreparers(
+		PrepareForIntegrationTestWithCc,
+		android.FixtureAddTextFile("external/foo/Android.bp", bp),
+	).RunTest(t)
+	// Use the arm variant instead of the arm64 variant so that it gets headers from
+	// ndk_libandroid_support to test LateStaticLibs.
+	cflags := ctx.ModuleForTests("libfoo", "android_arm_armv7-a-neon_sdk_static").Output("obj/external/foo/foo.o").Args["cFlags"]
+
+	var includes []string
+	flags := strings.Split(cflags, " ")
+	for i, flag := range flags {
+		if strings.Contains(flag, "Cflags") {
+			includes = append(includes, flag)
+		} else if strings.HasPrefix(flag, "-I") {
+			includes = append(includes, strings.TrimPrefix(flag, "-I"))
+		} else if flag == "-isystem" {
+			includes = append(includes, flags[i+1])
+		}
+	}
+
+	want := []string{
+		"${config.ArmThumbCflags}",
+		"${config.ArmCflags}",
+		"${config.CommonGlobalCflags}",
+		"${config.DeviceGlobalCflags}",
+		"${config.ExternalCflags}",
+		"${config.ArmToolchainCflags}",
+		"${config.ArmArmv7ANeonCflags}",
+		"${config.ArmGenericCflags}",
+		"external/foo/android_arm_export_include_dirs",
+		"external/foo/lib32_export_include_dirs",
+		"external/foo/arm_export_include_dirs",
+		"external/foo/android_export_include_dirs",
+		"external/foo/linux_export_include_dirs",
+		"external/foo/export_include_dirs",
+		"external/foo/android_arm_local_include_dirs",
+		"external/foo/lib32_local_include_dirs",
+		"external/foo/arm_local_include_dirs",
+		"external/foo/android_local_include_dirs",
+		"external/foo/linux_local_include_dirs",
+		"external/foo/local_include_dirs",
+		"external/foo",
+		"external/foo/libheader1",
+		"external/foo/libheader2",
+		"external/foo/libwhole1",
+		"external/foo/libwhole2",
+		"external/foo/libstatic1",
+		"external/foo/libstatic2",
+		"external/foo/libshared1",
+		"external/foo/libshared2",
+		"external/foo/liblinux",
+		"external/foo/libandroid",
+		"external/foo/libarm",
+		"external/foo/lib32",
+		"external/foo/libandroid_arm",
+		"defaults/cc/common/ndk_libc++_shared",
+		"defaults/cc/common/ndk_libandroid_support",
+		"out/soong/ndk/sysroot/usr/include",
+		"out/soong/ndk/sysroot/usr/include/arm-linux-androideabi",
+		"${config.NoOverrideGlobalCflags}",
+	}
+
+	android.AssertArrayString(t, "includes", want, includes)
 }

@@ -15,6 +15,7 @@
 package dexpreopt
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -285,11 +286,19 @@ func (clcMap ClassLoaderContextMap) addContext(ctx android.ModuleInstallPathCont
 	}
 	subcontexts := nestedClcMap[AnySdkVersion]
 
-	// If the library with this name is already present as one of the unconditional top-level
-	// components, do not re-add it.
+	// Check if the library with this name is already present in unconditional top-level CLC.
 	for _, clc := range clcMap[sdkVer] {
-		if clc.Name == lib {
+		if clc.Name != lib {
+			// Ok, a different library.
+		} else if clc.Host == hostPath && clc.Device == devicePath {
+			// Ok, the same library with the same paths. Don't re-add it, but don't raise an error
+			// either, as the same library may be reachable via different transitional dependencies.
 			return nil
+		} else {
+			// Fail, as someone is trying to add the same library with different paths. This likely
+			// indicates an error somewhere else, like trying to add a stub library.
+			return fmt.Errorf("a <uses-library> named %q is already in class loader context,"+
+				"but the library paths are different:\t\n", lib)
 		}
 	}
 
@@ -361,6 +370,15 @@ func (clcMap ClassLoaderContextMap) UsesLibs() (ulibs []string) {
 		}
 	}
 	return ulibs
+}
+
+func (clcMap ClassLoaderContextMap) Dump() string {
+	jsonCLC := toJsonClassLoaderContext(clcMap)
+	bytes, err := json.MarshalIndent(jsonCLC, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	return string(bytes)
 }
 
 // Now that the full unconditional context is known, reconstruct conditional context.
