@@ -53,7 +53,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	disableError := false
+	if e, ok := os.LookupEnv("TEMPORARY_DISABLE_PATH_RESTRICTIONS"); ok {
+		disableError = e == "1" || e == "y" || e == "yes" || e == "on" || e == "true"
+	}
+
 	exitCode, err := Main(os.Stdout, os.Stderr, interposer, os.Args, mainOpts{
+		disableError: disableError,
+
 		sendLog:       paths.SendLog,
 		config:        paths.GetConfig,
 		lookupParents: lookupParents,
@@ -72,6 +79,8 @@ If a tool isn't in the allowed list, a log will be posted to the unix domain
 socket at <interposer>_log.`)
 
 type mainOpts struct {
+	disableError bool
+
 	sendLog       func(logSocket string, entry *paths.LogEntry, done chan interface{})
 	config        func(name string) paths.PathConfig
 	lookupParents func() []paths.LogProcess
@@ -122,7 +131,7 @@ func Main(stdout, stderr io.Writer, interposer string, args []string, opts mainO
 			}, waitForLog)
 			defer func() { <-waitForLog }()
 		}
-		if config.Error {
+		if config.Error && !opts.disableError {
 			return 1, fmt.Errorf("%q is not allowed to be used. See https://android.googlesource.com/platform/build/+/master/Changes.md#PATH_Tools for more information.", base)
 		}
 	}

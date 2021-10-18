@@ -214,9 +214,7 @@ func SetupPath(ctx Context, config Config) {
 		execs = append(execs, parsePathDir(pathEntry)...)
 	}
 
-	if config.Environment().IsEnvTrue("TEMPORARY_DISABLE_PATH_RESTRICTIONS") {
-		ctx.Fatalln("TEMPORARY_DISABLE_PATH_RESTRICTIONS was a temporary migration method, and is now obsolete.")
-	}
+	allowAllSymlinks := config.Environment().IsEnvTrue("TEMPORARY_DISABLE_PATH_RESTRICTIONS")
 
 	// Create symlinks from the path_interposer binary to all binaries for each
 	// directory in the original $PATH. This ensures that during the build,
@@ -224,7 +222,7 @@ func SetupPath(ctx Context, config Config) {
 	// intercepted by the path_interposer binary, and validated with the
 	// LogEntry listener above at build time.
 	for _, name := range execs {
-		if !paths.GetConfig(name).Symlink {
+		if !paths.GetConfig(name).Symlink && !allowAllSymlinks {
 			// Ignore host tools that shouldn't be symlinked.
 			continue
 		}
