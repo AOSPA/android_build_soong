@@ -29,7 +29,6 @@ import (
 
 func init() {
 	pctx.HostBinToolVariable("ndkStubGenerator", "ndkstubgen")
-	pctx.HostBinToolVariable("ndk_api_coverage_parser", "ndk_api_coverage_parser")
 	pctx.HostBinToolVariable("abidiff", "abidiff")
 	pctx.HostBinToolVariable("abitidy", "abitidy")
 	pctx.HostBinToolVariable("abidw", "abidw")
@@ -43,19 +42,19 @@ var (
 			CommandDeps: []string{"$ndkStubGenerator"},
 		}, "arch", "apiLevel", "apiMap", "flags")
 
-	parseNdkApiRule = pctx.AndroidStaticRule("parseNdkApiRule",
-		blueprint.RuleParams{
-			Command:     "$ndk_api_coverage_parser $in $out --api-map $apiMap",
-			CommandDeps: []string{"$ndk_api_coverage_parser"},
-		}, "apiMap")
-
 	abidw = pctx.AndroidStaticRule("abidw",
 		blueprint.RuleParams{
 			Command: "$abidw --type-id-style hash --no-corpus-path " +
-				"--no-show-locs --no-comp-dir-path -w $symbolList $in | " +
-				"$abitidy --all -o $out",
-			CommandDeps: []string{"$abitidy", "$abidw"},
+				"--no-show-locs --no-comp-dir-path -w $symbolList " +
+				"$in --out-file $out",
+			CommandDeps: []string{"$abidw"},
 		}, "symbolList")
+
+	abitidy = pctx.AndroidStaticRule("abitidy",
+		blueprint.RuleParams{
+			Command:     "$abitidy --all -i $in -o $out",
+			CommandDeps: []string{"$abitidy"},
+		})
 
 	abidiff = pctx.AndroidStaticRule("abidiff",
 		blueprint.RuleParams{
@@ -273,25 +272,7 @@ func parseNativeAbiDefinition(ctx ModuleContext, symbolFile string,
 
 func compileStubLibrary(ctx ModuleContext, flags Flags, src android.Path) Objects {
 	return compileObjs(ctx, flagsToBuilderFlags(flags), "",
-		android.Paths{src}, nil, nil)
-}
-
-func parseSymbolFileForCoverage(ctx ModuleContext, symbolFile string) android.ModuleOutPath {
-	apiLevelsJson := android.GetApiLevelsJson(ctx)
-	symbolFilePath := android.PathForModuleSrc(ctx, symbolFile)
-	outputFileName := strings.Split(symbolFilePath.Base(), ".")[0]
-	parsedApiCoveragePath := android.PathForModuleOut(ctx, outputFileName+".xml")
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        parseNdkApiRule,
-		Description: "parse ndk api symbol file for api coverage: " + symbolFilePath.Rel(),
-		Outputs:     []android.WritablePath{parsedApiCoveragePath},
-		Input:       symbolFilePath,
-		Implicits:   []android.Path{apiLevelsJson},
-		Args: map[string]string{
-			"apiMap": apiLevelsJson.String(),
-		},
-	})
-	return parsedApiCoveragePath
+		android.Paths{src}, nil, nil, nil)
 }
 
 func (this *stubDecorator) findImplementationLibrary(ctx ModuleContext) android.Path {
@@ -338,18 +319,27 @@ func canDiffAbi() bool {
 
 func (this *stubDecorator) dumpAbi(ctx ModuleContext, symbolList android.Path) {
 	implementationLibrary := this.findImplementationLibrary(ctx)
-	this.abiDumpPath = getNdkAbiDumpInstallBase(ctx).Join(ctx,
+	abiRawPath := getNdkAbiDumpInstallBase(ctx).Join(ctx,
 		this.apiLevel.String(), ctx.Arch().ArchType.String(),
-		this.libraryName(ctx), "abi.xml")
+		this.libraryName(ctx), "abi.raw.xml")
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        abidw,
 		Description: fmt.Sprintf("abidw %s", implementationLibrary),
-		Output:      this.abiDumpPath,
 		Input:       implementationLibrary,
+		Output:      abiRawPath,
 		Implicit:    symbolList,
 		Args: map[string]string{
 			"symbolList": symbolList.String(),
 		},
+	})
+	this.abiDumpPath = getNdkAbiDumpInstallBase(ctx).Join(ctx,
+		this.apiLevel.String(), ctx.Arch().ArchType.String(),
+		this.libraryName(ctx), "abi.xml")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        abitidy,
+		Description: fmt.Sprintf("abitidy %s", implementationLibrary),
+		Input:       abiRawPath,
+		Output:      this.abiDumpPath,
 	})
 }
 
@@ -454,7 +444,7 @@ func (c *stubDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) O
 		}
 	}
 	if c.apiLevel.IsCurrent() && ctx.PrimaryArch() {
-		c.parsedCoverageXmlPath = parseSymbolFileForCoverage(ctx, symbolFile)
+		c.parsedCoverageXmlPath = parseSymbolFileForAPICoverage(ctx, symbolFile)
 	}
 	return objs
 }

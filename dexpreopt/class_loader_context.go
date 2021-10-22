@@ -193,6 +193,13 @@ type ClassLoaderContext struct {
 	// The name of the library.
 	Name string
 
+	// If the library is optional or required.
+	Optional bool
+
+	// If the library is implicitly infered by Soong (as opposed to explicitly added via `uses_libs`
+	// or `optional_uses_libs`.
+	Implicit bool
+
 	// On-host build path to the library dex file (used in dex2oat argument --class-loader-context).
 	Host android.Path
 
@@ -255,8 +262,9 @@ const UnknownInstallLibraryPath = "error"
 const AnySdkVersion int = android.FutureApiLevelInt
 
 // Add class loader context for the given library to the map entry for the given SDK version.
-func (clcMap ClassLoaderContextMap) addContext(ctx android.ModuleInstallPathContext, sdkVer int, lib string,
-	hostPath, installPath android.Path, nestedClcMap ClassLoaderContextMap) error {
+func (clcMap ClassLoaderContextMap) addContext(ctx android.ModuleInstallPathContext, sdkVer int,
+	lib string, optional, implicit bool, hostPath, installPath android.Path,
+	nestedClcMap ClassLoaderContextMap) error {
 
 	// For prebuilts, library should have the same name as the source module.
 	lib = android.RemoveOptionalPrebuiltPrefix(lib)
@@ -304,6 +312,8 @@ func (clcMap ClassLoaderContextMap) addContext(ctx android.ModuleInstallPathCont
 
 	clcMap[sdkVer] = append(clcMap[sdkVer], &ClassLoaderContext{
 		Name:        lib,
+		Optional:    optional,
+		Implicit:    implicit,
 		Host:        hostPath,
 		Device:      devicePath,
 		Subcontexts: subcontexts,
@@ -316,9 +326,10 @@ func (clcMap ClassLoaderContextMap) addContext(ctx android.ModuleInstallPathCont
 // about paths). For the subset of libraries that are used in dexpreopt, their build/install paths
 // are validated later before CLC is used (in validateClassLoaderContext).
 func (clcMap ClassLoaderContextMap) AddContext(ctx android.ModuleInstallPathContext, sdkVer int,
-	lib string, hostPath, installPath android.Path, nestedClcMap ClassLoaderContextMap) {
+	lib string, optional, implicit bool, hostPath, installPath android.Path,
+	nestedClcMap ClassLoaderContextMap) {
 
-	err := clcMap.addContext(ctx, sdkVer, lib, hostPath, installPath, nestedClcMap)
+	err := clcMap.addContext(ctx, sdkVer, lib, optional, implicit, hostPath, installPath, nestedClcMap)
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 	}
@@ -361,15 +372,31 @@ func (clcMap ClassLoaderContextMap) AddContextMap(otherClcMap ClassLoaderContext
 // Returns top-level libraries in the CLC (conditional CLC, i.e. compatibility libraries are not
 // included). This is the list of libraries that should be in the <uses-library> tags in the
 // manifest. Some of them may be present in the source manifest, others are added by manifest_fixer.
-func (clcMap ClassLoaderContextMap) UsesLibs() (ulibs []string) {
+// Required and optional libraries are in separate lists.
+func (clcMap ClassLoaderContextMap) usesLibs(implicit bool) (required []string, optional []string) {
 	if clcMap != nil {
 		clcs := clcMap[AnySdkVersion]
-		ulibs = make([]string, 0, len(clcs))
+		required = make([]string, 0, len(clcs))
+		optional = make([]string, 0, len(clcs))
 		for _, clc := range clcs {
-			ulibs = append(ulibs, clc.Name)
+			if implicit && !clc.Implicit {
+				// Skip, this is an explicit library and we need only the implicit ones.
+			} else if clc.Optional {
+				optional = append(optional, clc.Name)
+			} else {
+				required = append(required, clc.Name)
+			}
 		}
 	}
-	return ulibs
+	return required, optional
+}
+
+func (clcMap ClassLoaderContextMap) UsesLibs() ([]string, []string) {
+	return clcMap.usesLibs(false)
+}
+
+func (clcMap ClassLoaderContextMap) ImplicitUsesLibs() ([]string, []string) {
+	return clcMap.usesLibs(true)
 }
 
 func (clcMap ClassLoaderContextMap) Dump() string {
@@ -388,7 +415,8 @@ func (clcMap ClassLoaderContextMap) Dump() string {
 // TODO(b/132357300): remove "android.hidl.manager" and "android.hidl.base" for non-system apps.
 //
 func fixClassLoaderContext(clcMap ClassLoaderContextMap) {
-	usesLibs := clcMap.UsesLibs()
+	required, optional := clcMap.UsesLibs()
+	usesLibs := append(required, optional...)
 
 	for sdkVer, clcs := range clcMap {
 		if sdkVer == AnySdkVersion {
@@ -513,6 +541,8 @@ func computeClassLoaderContextRec(clcs []*ClassLoaderContext) (string, string, a
 // the same as Soong representation except that SDK versions and paths are represented with strings.
 type jsonClassLoaderContext struct {
 	Name        string
+	Optional    bool
+	Implicit    bool
 	Host        string
 	Device      string
 	Subcontexts []*jsonClassLoaderContext
@@ -544,6 +574,8 @@ func fromJsonClassLoaderContextRec(ctx android.PathContext, jClcs []*jsonClassLo
 	for _, clc := range jClcs {
 		clcs = append(clcs, &ClassLoaderContext{
 			Name:        clc.Name,
+			Optional:    clc.Optional,
+			Implicit:    clc.Implicit,
 			Host:        constructPath(ctx, clc.Host),
 			Device:      clc.Device,
 			Subcontexts: fromJsonClassLoaderContextRec(ctx, clc.Subcontexts),
@@ -568,6 +600,8 @@ func toJsonClassLoaderContextRec(clcs []*ClassLoaderContext) []*jsonClassLoaderC
 	for i, clc := range clcs {
 		jClcs[i] = &jsonClassLoaderContext{
 			Name:        clc.Name,
+			Optional:    clc.Optional,
+			Implicit:    clc.Implicit,
 			Host:        clc.Host.String(),
 			Device:      clc.Device,
 			Subcontexts: toJsonClassLoaderContextRec(clc.Subcontexts),

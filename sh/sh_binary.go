@@ -26,6 +26,7 @@ import (
 	"android/soong/android"
 	"android/soong/bazel"
 	"android/soong/cc"
+	"android/soong/snapshot"
 	"android/soong/tradefed"
 )
 
@@ -195,6 +196,9 @@ func (s *ShBinary) SubDir() string {
 	return proptools.String(s.properties.Sub_dir)
 }
 
+func (s *ShBinary) RelativeInstallPath() string {
+	return s.SubDir()
+}
 func (s *ShBinary) Installable() bool {
 	return s.properties.Installable == nil || proptools.Bool(s.properties.Installable)
 }
@@ -527,18 +531,6 @@ type bazelShBinaryAttributes struct {
 	// visibility
 }
 
-type bazelShBinary struct {
-	android.BazelTargetModuleBase
-	bazelShBinaryAttributes
-}
-
-func BazelShBinaryFactory() android.Module {
-	module := &bazelShBinary{}
-	module.AddProperties(&module.bazelShBinaryAttributes)
-	android.InitBazelTargetModule(module)
-	return module
-}
-
 func ShBinaryBp2Build(ctx android.TopDownMutatorContext) {
 	m, ok := ctx.Module().(*ShBinary)
 	if !ok || !m.ConvertWithBp2build(ctx) {
@@ -556,13 +548,9 @@ func ShBinaryBp2Build(ctx android.TopDownMutatorContext) {
 		Rule_class: "sh_binary",
 	}
 
-	ctx.CreateBazelTargetModule(BazelShBinaryFactory, m.Name(), props, attrs)
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: m.Name()}, attrs)
 }
-
-func (m *bazelShBinary) Name() string {
-	return m.BaseModuleName()
-}
-
-func (m *bazelShBinary) GenerateAndroidBuildActions(ctx android.ModuleContext) {}
 
 var Bool = proptools.Bool
+
+var _ snapshot.RelativeInstallPath = (*ShBinary)(nil)

@@ -34,24 +34,6 @@ type bazelFilegroupAttributes struct {
 	Srcs bazel.LabelListAttribute
 }
 
-type bazelFilegroup struct {
-	BazelTargetModuleBase
-	bazelFilegroupAttributes
-}
-
-func BazelFileGroupFactory() Module {
-	module := &bazelFilegroup{}
-	module.AddProperties(&module.bazelFilegroupAttributes)
-	InitBazelTargetModule(module)
-	return module
-}
-
-func (bfg *bazelFilegroup) Name() string {
-	return bfg.BaseModuleName()
-}
-
-func (bfg *bazelFilegroup) GenerateAndroidBuildActions(ctx ModuleContext) {}
-
 func FilegroupBp2Build(ctx TopDownMutatorContext) {
 	fg, ok := ctx.Module().(*fileGroup)
 	if !ok || !fg.ConvertWithBp2build(ctx) {
@@ -60,6 +42,27 @@ func FilegroupBp2Build(ctx TopDownMutatorContext) {
 
 	srcs := bazel.MakeLabelListAttribute(
 		BazelLabelForModuleSrcExcludes(ctx, fg.properties.Srcs, fg.properties.Exclude_srcs))
+
+	// For Bazel compatibility, don't generate the filegroup if there is only 1
+	// source file, and that the source file is named the same as the module
+	// itself. In Bazel, eponymous filegroups like this would be an error.
+	//
+	// Instead, dependents on this single-file filegroup can just depend
+	// on the file target, instead of rule target, directly.
+	//
+	// You may ask: what if a filegroup has multiple files, and one of them
+	// shares the name? The answer: we haven't seen that in the wild, and
+	// should lock Soong itself down to prevent the behavior. For now,
+	// we raise an error if bp2build sees this problem.
+	for _, f := range srcs.Value.Includes {
+		if f.Label == fg.Name() {
+			if len(srcs.Value.Includes) > 1 {
+				ctx.ModuleErrorf("filegroup '%s' cannot contain a file with the same name", fg.Name())
+			}
+			return
+		}
+	}
+
 	attrs := &bazelFilegroupAttributes{
 		Srcs: srcs,
 	}
@@ -69,7 +72,7 @@ func FilegroupBp2Build(ctx TopDownMutatorContext) {
 		Bzl_load_location: "//build/bazel/rules:filegroup.bzl",
 	}
 
-	ctx.CreateBazelTargetModule(BazelFileGroupFactory, fg.Name(), props, attrs)
+	ctx.CreateBazelTargetModule(props, CommonAttributes{Name: fg.Name()}, attrs)
 }
 
 type fileGroupProperties struct {
@@ -115,7 +118,7 @@ func (fg *fileGroup) GenerateBazelBuildActions(ctx ModuleContext) bool {
 	}
 
 	bazelCtx := ctx.Config().BazelContext
-	filePaths, ok := bazelCtx.GetOutputFiles(fg.GetBazelLabel(ctx, fg), ctx.Arch().ArchType)
+	filePaths, ok := bazelCtx.GetOutputFiles(fg.GetBazelLabel(ctx, fg), Common)
 	if !ok {
 		return false
 	}

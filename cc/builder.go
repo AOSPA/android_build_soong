@@ -21,6 +21,7 @@ package cc
 import (
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -198,19 +199,32 @@ var (
 	// Rule for invoking clang-tidy (a clang-based linter).
 	clangTidy, clangTidyRE = pctx.RemoteStaticRules("clangTidy",
 		blueprint.RuleParams{
-			Command:     "rm -f $out && $reTemplate${config.ClangBin}/clang-tidy $tidyFlags $in -- $cFlags && touch $out",
-			CommandDeps: []string{"${config.ClangBin}/clang-tidy"},
+			Depfile: "${out}.d",
+			Deps:    blueprint.DepsGCC,
+			// Pick bash because some machines with old /bin/sh cannot handle arrays.
+			// All $cFlags and $tidyFlags should have single quotes escaped.
+			// Assume no single quotes in other parameters like $in, $out, $ccCmd.
+			Command: "/bin/bash -c 'SRCF=$in; TIDYF=$out; CLANGFLAGS=($cFlags); " +
+				"rm -f $$TIDYF $${TIDYF}.d && " +
+				"${config.CcWrapper}$ccCmd \"$${CLANGFLAGS[@]}\" -E -o /dev/null $$SRCF " +
+				"-MQ $$TIDYF -MD -MF $${TIDYF}.d && " +
+				"$tidyVars $reTemplate${config.ClangBin}/clang-tidy $tidyFlags $$SRCF " +
+				"-- \"$${CLANGFLAGS[@]}\" && touch $$TIDYF'",
+			CommandDeps: []string{"${config.ClangBin}/clang-tidy", "$ccCmd"},
 		},
 		&remoteexec.REParams{
-			Labels:       map[string]string{"type": "lint", "tool": "clang-tidy", "lang": "cpp"},
-			ExecStrategy: "${config.REClangTidyExecStrategy}",
-			Inputs:       []string{"$in"},
-			// OutputFile here is $in for remote-execution since its possible that
-			// clang-tidy modifies the given input file itself and $out refers to the
-			// ".tidy" file generated for ninja-dependency reasons.
-			OutputFiles: []string{"$in"},
-			Platform:    map[string]string{remoteexec.PoolKey: "${config.REClangTidyPool}"},
-		}, []string{"cFlags", "tidyFlags"}, []string{})
+			Labels:               map[string]string{"type": "lint", "tool": "clang-tidy", "lang": "cpp"},
+			ExecStrategy:         "${config.REClangTidyExecStrategy}",
+			Inputs:               []string{"$in"},
+			EnvironmentVariables: []string{"TIDY_TIMEOUT"},
+			// Although clang-tidy has an option to "fix" source files, that feature is hardly useable
+			// under parallel compilation and RBE. So we assume no OutputFiles here.
+			// The clang-tidy fix option is best run locally in single thread.
+			// Copying source file back to local caused two problems:
+			// (1) New timestamps trigger clang and clang-tidy compilations again.
+			// (2) Changing source files caused concurrent clang or clang-tidy jobs to crash.
+			Platform: map[string]string{remoteexec.PoolKey: "${config.REClangTidyPool}"},
+		}, []string{"ccCmd", "cFlags", "tidyFlags", "tidyVars"}, []string{})
 
 	_ = pctx.SourcePathVariable("yasmCmd", "prebuilts/misc/${config.HostPrebuiltTag}/yasm/yasm")
 
@@ -385,9 +399,6 @@ type builderFlags struct {
 
 	systemIncludeFlags string
 
-	// True if static libraries should be grouped (using `-Wl,--start-group` and `-Wl,--end-group`).
-	groupStaticLibs bool
-
 	proto            android.ProtoFlags
 	protoC           bool // If true, compile protos as `.c` files. Otherwise, output as `.cc`.
 	protoOptionsFile bool // If true, output a proto options file.
@@ -437,15 +448,30 @@ func (a Objects) Append(b Objects) Objects {
 	}
 }
 
+func escapeSingleQuotes(s string) string {
+	// Replace single quotes to work when embedded in a single quoted string for bash.
+	// Relying on string concatenation of bash to get A'B from quoted 'A'\''B'.
+	return strings.Replace(s, `'`, `'\''`, -1)
+}
+
 // Generate rules for compiling multiple .c, .cpp, or .S files to individual .o files
-func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles android.Paths,
+func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles, noTidySrcs android.Paths,
 	flags builderFlags, pathDeps android.Paths, cFlagsDeps android.Paths) Objects {
 
 	// Source files are one-to-one with tidy, coverage, or kythe files, if enabled.
 	objFiles := make(android.Paths, len(srcFiles))
 	var tidyFiles android.Paths
+	noTidySrcsMap := make(map[android.Path]bool)
+	var tidyVars string
 	if flags.tidy {
 		tidyFiles = make(android.Paths, 0, len(srcFiles))
+		for _, path := range noTidySrcs {
+			noTidySrcsMap[path] = true
+		}
+		tidyTimeout := ctx.Config().Getenv("TIDY_TIMEOUT")
+		if len(tidyTimeout) > 0 {
+			tidyVars += "TIDY_TIMEOUT=" + tidyTimeout
+		}
 	}
 	var coverageFiles android.Paths
 	if flags.gcovCoverage {
@@ -506,6 +532,32 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 	cppflags += " ${config.NoOverrideGlobalCflags}"
 	toolingCppflags += " ${config.NoOverrideGlobalCflags}"
 
+	// Multiple source files have build rules usually share the same cFlags or tidyFlags.
+	// Define only one version in this module and share it in multiple build rules.
+	// To simplify the code, the shared variables are all named as $flags<nnn>.
+	numSharedFlags := 0
+	flagsMap := make(map[string]string)
+
+	// Share flags only when there are multiple files or tidy rules.
+	var hasMultipleRules = len(srcFiles) > 1 || flags.tidy
+
+	var shareFlags = func(kind string, flags string) string {
+		if !hasMultipleRules || len(flags) < 60 {
+			// Modules have long names and so do the module variables.
+			// It does not save space by replacing a short name with a long one.
+			return flags
+		}
+		mapKey := kind + flags
+		n, ok := flagsMap[mapKey]
+		if !ok {
+			numSharedFlags += 1
+			n = strconv.Itoa(numSharedFlags)
+			flagsMap[mapKey] = n
+			ctx.Variable(pctx, kind+n, flags)
+		}
+		return "$" + kind + n
+	}
+
 	for i, srcFile := range srcFiles {
 		objFile := android.ObjPathWithExt(ctx, subdir, srcFile, "o")
 
@@ -522,7 +574,7 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				Implicits:   cFlagsDeps,
 				OrderOnly:   pathDeps,
 				Args: map[string]string{
-					"asFlags": flags.globalYasmFlags + " " + flags.localYasmFlags,
+					"asFlags": shareFlags("asFlags", flags.globalYasmFlags+" "+flags.localYasmFlags),
 				},
 			})
 			continue
@@ -536,7 +588,7 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				OrderOnly:   pathDeps,
 				Args: map[string]string{
 					"windresCmd": mingwCmd(flags.toolchain, "windres"),
-					"flags":      flags.toolchain.WindresFlags(),
+					"flags":      shareFlags("flags", flags.toolchain.WindresFlags()),
 				},
 			})
 			continue
@@ -610,8 +662,8 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 			Implicits:       cFlagsDeps,
 			OrderOnly:       pathDeps,
 			Args: map[string]string{
-				"cFlags": moduleFlags + extraFlags,
-				"ccCmd":  ccCmd,
+				"cFlags": shareFlags("cFlags", moduleFlags + extraFlags),
+				"ccCmd":  ccCmd, // short and not shared
 			},
 		})
 
@@ -626,13 +678,14 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				Implicits:   cFlagsDeps,
 				OrderOnly:   pathDeps,
 				Args: map[string]string{
-					"cFlags": moduleFlags,
+					"cFlags": shareFlags("cFlags", moduleFlags),
 				},
 			})
 			kytheFiles = append(kytheFiles, kytheFile)
 		}
 
-		if tidy {
+		//  Even with tidy, some src file could be skipped by noTidySrcsMap.
+		if tidy && !noTidySrcsMap[srcFile] {
 			tidyFile := android.ObjPathWithExt(ctx, subdir, srcFile, "tidy")
 			tidyFiles = append(tidyFiles, tidyFile)
 
@@ -641,19 +694,19 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				rule = clangTidyRE
 			}
 
+			ctx.TidyFile(tidyFile)
 			ctx.Build(pctx, android.BuildParams{
 				Rule:        rule,
 				Description: "clang-tidy " + srcFile.Rel(),
 				Output:      tidyFile,
 				Input:       srcFile,
-				// We must depend on objFile, since clang-tidy doesn't
-				// support exporting dependencies.
-				Implicit:  objFile,
-				Implicits: cFlagsDeps,
-				OrderOnly: pathDeps,
+				Implicits:   cFlagsDeps,
+				OrderOnly:   pathDeps,
 				Args: map[string]string{
-					"cFlags":    moduleToolingFlags,
-					"tidyFlags": flags.tidyFlags,
+					"ccCmd":     ccCmd,
+					"cFlags":    shareFlags("cFlags", escapeSingleQuotes(moduleToolingFlags)),
+					"tidyFlags": shareFlags("tidyFlags", escapeSingleQuotes(config.TidyFlagsForSrcFile(srcFile, flags.tidyFlags))),
+					"tidyVars":  tidyVars, // short and not shared
 				},
 			})
 		}
@@ -675,8 +728,8 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 				Implicits:   cFlagsDeps,
 				OrderOnly:   pathDeps,
 				Args: map[string]string{
-					"cFlags":     moduleToolingFlags,
-					"exportDirs": flags.sAbiFlags,
+					"cFlags":     shareFlags("cFlags", moduleToolingFlags),
+					"exportDirs": shareFlags("exportDirs", flags.sAbiFlags),
 				},
 			})
 		}
@@ -769,13 +822,7 @@ func transformObjToDynamicBinary(ctx android.ModuleContext,
 		}
 	}
 
-	if flags.groupStaticLibs && !ctx.Darwin() && len(staticLibs) > 0 {
-		libFlagsList = append(libFlagsList, "-Wl,--start-group")
-	}
 	libFlagsList = append(libFlagsList, staticLibs.Strings()...)
-	if flags.groupStaticLibs && !ctx.Darwin() && len(staticLibs) > 0 {
-		libFlagsList = append(libFlagsList, "-Wl,--end-group")
-	}
 
 	if groupLate && !ctx.Darwin() && len(lateStaticLibs) > 0 {
 		libFlagsList = append(libFlagsList, "-Wl,--start-group")

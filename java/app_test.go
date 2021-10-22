@@ -1737,7 +1737,7 @@ func TestPackageNameOverride(t *testing.T) {
 
 			foo := result.ModuleForTests("foo", "android_common")
 
-			outSoongDir := result.Config.BuildDir()
+			outSoongDir := result.Config.SoongOutDir()
 
 			outputs := foo.AllOutputs()
 			outputMap := make(map[string]bool)
@@ -2285,6 +2285,49 @@ func TestUsesLibraries(t *testing.T) {
 			sdk_version: "current",
 		}
 
+		java_library {
+			name: "runtime-required-x",
+			srcs: ["a.java"],
+			installable: true,
+			sdk_version: "current",
+		}
+
+		java_library {
+			name: "runtime-optional-x",
+			srcs: ["a.java"],
+			installable: true,
+			sdk_version: "current",
+		}
+
+		android_library {
+			name: "static-x",
+			uses_libs: ["runtime-required-x"],
+			optional_uses_libs: ["runtime-optional-x"],
+			sdk_version: "current",
+		}
+
+		java_library {
+			name: "runtime-required-y",
+			srcs: ["a.java"],
+			installable: true,
+			sdk_version: "current",
+		}
+
+		java_library {
+			name: "runtime-optional-y",
+			srcs: ["a.java"],
+			installable: true,
+			sdk_version: "current",
+		}
+
+		java_library {
+			name: "static-y",
+			srcs: ["a.java"],
+			uses_libs: ["runtime-required-y"],
+			optional_uses_libs: ["runtime-optional-y"],
+			sdk_version: "current",
+		}
+
 		// A library that has to use "provides_uses_lib", because:
 		//    - it is not an SDK library
 		//    - its library name is different from its module name
@@ -2307,6 +2350,8 @@ func TestUsesLibraries(t *testing.T) {
 				// statically linked component libraries should not pull their SDK libraries,
 				// so "fred" should not be added to class loader context
 				"fred.stubs",
+				"static-x",
+				"static-y",
 			],
 			uses_libs: [
 				"foo",
@@ -2353,9 +2398,6 @@ func TestUsesLibraries(t *testing.T) {
 	expectManifestFixerArgs := `--extract-native-libs=true ` +
 		`--uses-library qux ` +
 		`--uses-library quuz ` +
-		`--uses-library foo ` + // TODO(b/132357300): "foo" should not be passed to manifest_fixer
-		`--uses-library com.non.sdk.lib ` + // TODO(b/132357300): "com.non.sdk.lib" should not be passed to manifest_fixer
-		`--uses-library bar ` + // TODO(b/132357300): "bar" should not be passed to manifest_fixer
 		`--uses-library runtime-library`
 	android.AssertStringEquals(t, "manifest_fixer args", expectManifestFixerArgs, actualManifestFixerArgs)
 
@@ -2366,8 +2408,12 @@ func TestUsesLibraries(t *testing.T) {
 		`--uses-library qux ` +
 		`--uses-library quuz ` +
 		`--uses-library runtime-library ` +
+		`--uses-library runtime-required-x ` +
+		`--uses-library runtime-required-y ` +
 		`--optional-uses-library bar ` +
-		`--optional-uses-library baz `
+		`--optional-uses-library baz ` +
+		`--optional-uses-library runtime-optional-x ` +
+		`--optional-uses-library runtime-optional-y `
 	android.AssertStringDoesContain(t, "verify cmd args", verifyCmd, verifyArgs)
 
 	// Test that all libraries are verified for an APK (library order matters).
@@ -2387,7 +2433,11 @@ func TestUsesLibraries(t *testing.T) {
 		`PCL[/system/framework/foo.jar]#` +
 		`PCL[/system/framework/non-sdk-lib.jar]#` +
 		`PCL[/system/framework/bar.jar]#` +
-		`PCL[/system/framework/runtime-library.jar]`
+		`PCL[/system/framework/runtime-library.jar]#` +
+		`PCL[/system/framework/runtime-required-x.jar]#` +
+		`PCL[/system/framework/runtime-optional-x.jar]#` +
+		`PCL[/system/framework/runtime-required-y.jar]#` +
+		`PCL[/system/framework/runtime-optional-y.jar] `
 	android.AssertStringDoesContain(t, "dexpreopt app cmd args", cmd, w)
 
 	// Test conditional context for target SDK version 28.

@@ -571,7 +571,7 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 
 	if host {
 		makeOs := amod.Os().String()
-		if amod.Os() == Linux || amod.Os() == LinuxBionic {
+		if amod.Os() == Linux || amod.Os() == LinuxBionic || amod.Os() == LinuxMusl {
 			makeOs = "linux"
 		}
 		a.SetString("LOCAL_MODULE_HOST_OS", makeOs)
@@ -845,7 +845,7 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Mod
 		case "*selinux.selinuxContextsModule": // license properties written
 		case "*sysprop.syspropLibrary": // license properties written
 		default:
-			if ctx.Config().IsEnvTrue("ANDROID_REQUIRE_LICENSES") {
+			if !ctx.Config().IsEnvFalse("ANDROID_REQUIRE_LICENSES") {
 				return fmt.Errorf("custom make rules not allowed for %q (%q) module %q", ctx.ModuleType(mod), reflect.TypeOf(mod), ctx.ModuleName(mod))
 			}
 		}

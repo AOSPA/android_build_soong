@@ -26,18 +26,18 @@ const (
 	// See cc/testing.go for more context
 	soongCcLibraryStaticPreamble = `
 cc_defaults {
-	name: "linux_bionic_supported",
+    name: "linux_bionic_supported",
 }
 
 toolchain_library {
-	name: "libclang_rt.builtins-x86_64-android",
-	defaults: ["linux_bionic_supported"],
-	vendor_available: true,
-	vendor_ramdisk_available: true,
-	product_available: true,
-	recovery_available: true,
-	native_bridge_supported: true,
-	src: "",
+    name: "libclang_rt.builtins-x86_64-android",
+    defaults: ["linux_bionic_supported"],
+    vendor_available: true,
+    vendor_ramdisk_available: true,
+    product_available: true,
+    recovery_available: true,
+    native_bridge_supported: true,
+    src: "",
 }`
 )
 
@@ -112,31 +112,37 @@ func TestCcLibraryStaticSimple(t *testing.T) {
 cc_library_headers {
     name: "header_lib_1",
     export_include_dirs: ["header_lib_1"],
+    bazel_module: { bp2build_available: false },
 }
 
 cc_library_headers {
     name: "header_lib_2",
     export_include_dirs: ["header_lib_2"],
+    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
     name: "static_lib_1",
     srcs: ["static_lib_1.cc"],
+    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
     name: "static_lib_2",
     srcs: ["static_lib_2.cc"],
+    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
     name: "whole_static_lib_1",
     srcs: ["whole_static_lib_1.cc"],
+    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
     name: "whole_static_lib_2",
     srcs: ["whole_static_lib_2.cc"],
+    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -178,19 +184,17 @@ cc_library_static {
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
+    absolute_includes = [
+        "include_dir_1",
+        "include_dir_2",
+    ],
     copts = [
         "-Dflag1",
         "-Dflag2",
-        "-Iinclude_dir_1",
-        "-I$(BINDIR)/include_dir_1",
-        "-Iinclude_dir_2",
-        "-I$(BINDIR)/include_dir_2",
-        "-Ilocal_include_dir_1",
-        "-I$(BINDIR)/local_include_dir_1",
-        "-Ilocal_include_dir_2",
-        "-I$(BINDIR)/local_include_dir_2",
-        "-I.",
-        "-I$(BINDIR)/.",
+    ],
+    export_includes = [
+        "export_include_dir_1",
+        "export_include_dir_2",
     ],
     implementation_deps = [
         ":header_lib_1",
@@ -198,11 +202,11 @@ cc_library_static {
         ":static_lib_1",
         ":static_lib_2",
     ],
-    includes = [
-        "export_include_dir_1",
-        "export_include_dir_2",
+    local_includes = [
+        "local_include_dir_1",
+        "local_include_dir_2",
+        ".",
     ],
-    linkstatic = True,
     srcs = [
         "foo_static1.cc",
         "foo_static2.cc",
@@ -211,38 +215,6 @@ cc_library_static {
         ":whole_static_lib_1",
         ":whole_static_lib_2",
     ],
-)`, `cc_library_static(
-    name = "static_lib_1",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-    srcs = ["static_lib_1.cc"],
-)`, `cc_library_static(
-    name = "static_lib_2",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-    srcs = ["static_lib_2.cc"],
-)`, `cc_library_static(
-    name = "whole_static_lib_1",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-    srcs = ["whole_static_lib_1.cc"],
-)`, `cc_library_static(
-    name = "whole_static_lib_2",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-    srcs = ["whole_static_lib_2.cc"],
 )`},
 	})
 }
@@ -270,21 +242,15 @@ func TestCcLibraryStaticSubpackage(t *testing.T) {
 		blueprint: soongCcLibraryStaticPreamble + `
 cc_library_static {
     name: "foo_static",
-    srcs: [
-    ],
+    srcs: [],
     include_dirs: [
-	"subpackage",
+        "subpackage",
     ],
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-Isubpackage",
-        "-I$(BINDIR)/subpackage",
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
+    absolute_includes = ["subpackage"],
+    local_includes = ["."],
 )`},
 	})
 }
@@ -305,15 +271,11 @@ func TestCcLibraryStaticExportIncludeDir(t *testing.T) {
 cc_library_static {
     name: "foo_static",
     export_include_dirs: ["subpackage"],
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    includes = ["subpackage"],
-    linkstatic = True,
+    export_includes = ["subpackage"],
 )`},
 	})
 }
@@ -334,15 +296,11 @@ func TestCcLibraryStaticExportSystemIncludeDir(t *testing.T) {
 cc_library_static {
     name: "foo_static",
     export_system_include_dirs: ["subpackage"],
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    includes = ["subpackage"],
-    linkstatic = True,
+    export_system_includes = ["subpackage"],
 )`},
 	})
 }
@@ -379,20 +337,16 @@ cc_library_static {
 		blueprint: soongCcLibraryStaticPreamble,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-Isubpackage/subsubpackage",
-        "-I$(BINDIR)/subpackage/subsubpackage",
-        "-Isubpackage2",
-        "-I$(BINDIR)/subpackage2",
-        "-Isubpackage3/subsubpackage",
-        "-I$(BINDIR)/subpackage3/subsubpackage",
-        "-Isubpackage/subsubpackage2",
-        "-I$(BINDIR)/subpackage/subsubpackage2",
-        "-Isubpackage",
-        "-I$(BINDIR)/subpackage",
+    absolute_includes = [
+        "subpackage/subsubpackage",
+        "subpackage2",
+        "subpackage3/subsubpackage",
     ],
-    includes = ["./exported_subsubpackage"],
-    linkstatic = True,
+    export_includes = ["./exported_subsubpackage"],
+    local_includes = [
+        "subsubpackage2",
+        ".",
+    ],
 )`},
 	})
 }
@@ -418,13 +372,8 @@ cc_library_static {
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-Isubpackage",
-        "-I$(BINDIR)/subpackage",
-        "-Isubpackage2",
-        "-I$(BINDIR)/subpackage2",
-    ],
-    linkstatic = True,
+    absolute_includes = ["subpackage"],
+    local_includes = ["subpackage2"],
 )`},
 	})
 }
@@ -452,15 +401,11 @@ cc_library_static {
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-Isubpackage",
-        "-I$(BINDIR)/subpackage",
-        "-Isubpackage2",
-        "-I$(BINDIR)/subpackage2",
-        "-I.",
-        "-I$(BINDIR)/.",
+    absolute_includes = ["subpackage"],
+    local_includes = [
+        "subpackage2",
+        ".",
     ],
-    linkstatic = True,
 )`},
 	})
 }
@@ -473,41 +418,29 @@ func TestCcLibraryStaticArchSpecificStaticLib(t *testing.T) {
 		moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryStaticBp2Build,
 		filesystem:                         map[string]string{},
 		blueprint: soongCcLibraryStaticPreamble + `
-cc_library_static { name: "static_dep" }
-cc_library_static { name: "static_dep2" }
+cc_library_static {
+    name: "static_dep",
+    bazel_module: { bp2build_available: false },
+}
+cc_library_static {
+    name: "static_dep2",
+    bazel_module: { bp2build_available: false },
+}
 cc_library_static {
     name: "foo_static",
     arch: { arm64: { static_libs: ["static_dep"], whole_static_libs: ["static_dep2"] } },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
     implementation_deps = select({
         "//build/bazel/platforms/arch:arm64": [":static_dep"],
         "//conditions:default": [],
     }),
-    linkstatic = True,
     whole_archive_deps = select({
         "//build/bazel/platforms/arch:arm64": [":static_dep2"],
         "//conditions:default": [],
     }),
-)`, `cc_library_static(
-    name = "static_dep",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-)`, `cc_library_static(
-    name = "static_dep2",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
 )`},
 	})
 }
@@ -520,41 +453,29 @@ func TestCcLibraryStaticOsSpecificStaticLib(t *testing.T) {
 		moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryStaticBp2Build,
 		filesystem:                         map[string]string{},
 		blueprint: soongCcLibraryStaticPreamble + `
-cc_library_static { name: "static_dep" }
-cc_library_static { name: "static_dep2" }
+cc_library_static {
+    name: "static_dep",
+    bazel_module: { bp2build_available: false },
+}
+cc_library_static {
+    name: "static_dep2",
+    bazel_module: { bp2build_available: false },
+}
 cc_library_static {
     name: "foo_static",
     target: { android: { static_libs: ["static_dep"], whole_static_libs: ["static_dep2"] } },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
     implementation_deps = select({
         "//build/bazel/platforms/os:android": [":static_dep"],
         "//conditions:default": [],
     }),
-    linkstatic = True,
     whole_archive_deps = select({
         "//build/bazel/platforms/os:android": [":static_dep2"],
         "//conditions:default": [],
     }),
-)`, `cc_library_static(
-    name = "static_dep",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-)`, `cc_library_static(
-    name = "static_dep2",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
 )`},
 	})
 }
@@ -567,23 +488,32 @@ func TestCcLibraryStaticBaseArchOsSpecificStaticLib(t *testing.T) {
 		moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryStaticBp2Build,
 		filesystem:                         map[string]string{},
 		blueprint: soongCcLibraryStaticPreamble + `
-cc_library_static { name: "static_dep" }
-cc_library_static { name: "static_dep2" }
-cc_library_static { name: "static_dep3" }
-cc_library_static { name: "static_dep4" }
+cc_library_static {
+    name: "static_dep",
+    bazel_module: { bp2build_available: false },
+}
+cc_library_static {
+    name: "static_dep2",
+    bazel_module: { bp2build_available: false },
+}
+cc_library_static {
+    name: "static_dep3",
+    bazel_module: { bp2build_available: false },
+}
+cc_library_static {
+    name: "static_dep4",
+    bazel_module: { bp2build_available: false },
+}
 cc_library_static {
     name: "foo_static",
     static_libs: ["static_dep"],
     whole_static_libs: ["static_dep2"],
     target: { android: { static_libs: ["static_dep3"] } },
     arch: { arm64: { static_libs: ["static_dep4"] } },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
     implementation_deps = [":static_dep"] + select({
         "//build/bazel/platforms/arch:arm64": [":static_dep4"],
         "//conditions:default": [],
@@ -591,36 +521,7 @@ cc_library_static {
         "//build/bazel/platforms/os:android": [":static_dep3"],
         "//conditions:default": [],
     }),
-    linkstatic = True,
     whole_archive_deps = [":static_dep2"],
-)`, `cc_library_static(
-    name = "static_dep",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-)`, `cc_library_static(
-    name = "static_dep2",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-)`, `cc_library_static(
-    name = "static_dep3",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
-)`, `cc_library_static(
-    name = "static_dep4",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
 )`},
 	})
 }
@@ -641,14 +542,10 @@ cc_library_static {
     name: "foo_static",
     srcs: ["common.c", "foo-*.c"],
     exclude_srcs: ["foo-excluded.c"],
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = [
         "common.c",
         "foo-a.c",
@@ -671,15 +568,11 @@ func TestCcLibraryStaticOneArchSrcs(t *testing.T) {
 cc_library_static {
     name: "foo_static",
     srcs: ["common.c"],
-    arch: { arm: { srcs: ["foo-arm.c"] } }
+    arch: { arm: { srcs: ["foo-arm.c"] } },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = ["common.c"] + select({
         "//build/bazel/platforms/arch:arm": ["foo-arm.c"],
         "//conditions:default": [],
@@ -708,14 +601,10 @@ cc_library_static {
     arch: {
         arm: { srcs: ["for-arm.c"], exclude_srcs: ["not-for-arm.c"] },
     },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = ["common.c"] + select({
         "//build/bazel/platforms/arch:arm": ["for-arm.c"],
         "//conditions:default": ["not-for-arm.c"],
@@ -746,14 +635,10 @@ cc_library_static {
         arm: { srcs: ["for-arm.c"], exclude_srcs: ["not-for-arm.c"] },
         x86: { srcs: ["for-x86.c"], exclude_srcs: ["not-for-x86.c"] },
     },
+    include_build_directory: false,
 } `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = ["common.c"] + select({
         "//build/bazel/platforms/arch:arm": [
             "for-arm.c",
@@ -799,15 +684,11 @@ cc_library_static {
         arm64: { srcs: ["for-arm64.c"], exclude_srcs: ["not-for-arm64.c"] },
         x86: { srcs: ["for-x86.c"], exclude_srcs: ["not-for-x86.c"] },
         x86_64: { srcs: ["for-x86_64.c"], exclude_srcs: ["not-for-x86_64.c"] },
-	},
+  },
+    include_build_directory: false,
 } `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = ["common.c"] + select({
         "//build/bazel/platforms/arch:arm": [
             "for-arm.c",
@@ -863,14 +744,10 @@ cc_library_static {
     arch: {
         arm: { exclude_srcs: ["foo-no-arm.cc"] },
     },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs = ["common.cc"] + select({
         "//build/bazel/platforms/arch:arm": [],
         "//conditions:default": ["foo-no-arm.cc"],
@@ -900,14 +777,10 @@ cc_library_static {
         arm: { exclude_srcs: ["foo-no-arm.cc"] },
         x86: { srcs: ["x86-only.cc"] },
     },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs = ["common.cc"] + select({
         "//build/bazel/platforms/arch:arm": [],
         "//build/bazel/platforms/arch:x86": [
@@ -928,26 +801,18 @@ func TestCcLibraryStaticMultipleDepSameName(t *testing.T) {
 		moduleTypeUnderTestBp2BuildMutator: cc.CcLibraryStaticBp2Build,
 		filesystem:                         map[string]string{},
 		blueprint: soongCcLibraryStaticPreamble + `
-cc_library_static { name: "static_dep" }
+cc_library_static {
+    name: "static_dep",
+    bazel_module: { bp2build_available: false },
+}
 cc_library_static {
     name: "foo_static",
     static_libs: ["static_dep", "static_dep"],
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
     implementation_deps = [":static_dep"],
-    linkstatic = True,
-)`, `cc_library_static(
-    name = "static_dep",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
 )`},
 	})
 }
@@ -970,14 +835,10 @@ cc_library_static {
     multilib: {
         lib32: { srcs: ["for-lib32.c"], exclude_srcs: ["not-for-lib32.c"] },
     },
+    include_build_directory: false,
 } `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = ["common.c"] + select({
         "//build/bazel/platforms/arch:arm": ["for-lib32.c"],
         "//build/bazel/platforms/arch:x86": ["for-lib32.c"],
@@ -1008,14 +869,10 @@ cc_library_static {
         lib32: { srcs: ["for-lib32.c"], exclude_srcs: ["not-for-lib32.c"] },
         lib64: { srcs: ["for-lib64.c"], exclude_srcs: ["not-for-lib64.c"] },
     },
+    include_build_directory: false,
 } `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static2",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = ["common.c"] + select({
         "//build/bazel/platforms/arch:arm": [
             "for-lib32.c",
@@ -1079,14 +936,10 @@ cc_library_static {
        lib32: { srcs: ["for-lib32.c"], exclude_srcs: ["not-for-lib32.c"] },
        lib64: { srcs: ["for-lib64.c"], exclude_srcs: ["not-for-lib64.c"] },
    },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static3",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = ["common.c"] + select({
         "//build/bazel/platforms/arch:arm": [
             "for-arm.c",
@@ -1146,21 +999,21 @@ func TestCcLibraryStaticArchSrcsExcludeSrcsGeneratedFiles(t *testing.T) {
 			"not-for-everything.cpp": "",
 			"dep/Android.bp": `
 genrule {
-	name: "generated_src_other_pkg",
-	out: ["generated_src_other_pkg.cpp"],
-	cmd: "nothing to see here",
+  name: "generated_src_other_pkg",
+  out: ["generated_src_other_pkg.cpp"],
+  cmd: "nothing to see here",
 }
 
 genrule {
-	name: "generated_hdr_other_pkg",
-	out: ["generated_hdr_other_pkg.cpp"],
-	cmd: "nothing to see here",
+  name: "generated_hdr_other_pkg",
+  out: ["generated_hdr_other_pkg.cpp"],
+  cmd: "nothing to see here",
 }
 
 genrule {
-	name: "generated_hdr_other_pkg_x86",
-	out: ["generated_hdr_other_pkg_x86.cpp"],
-	cmd: "nothing to see here",
+  name: "generated_hdr_other_pkg_x86",
+  out: ["generated_hdr_other_pkg_x86.cpp"],
+  cmd: "nothing to see here",
 }`,
 		},
 		blueprint: soongCcLibraryStaticPreamble + `
@@ -1196,15 +1049,11 @@ cc_library_static {
            generated_headers: ["generated_hdr_other_pkg_x86"],
        },
    },
+    include_build_directory: false,
 }
 `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static3",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs = [
         "//dep:generated_hdr_other_pkg",
         "//dep:generated_src_other_pkg",
@@ -1256,14 +1105,10 @@ cc_library_static {
             srcs: ["linux_bionic_x86_64_src.c"],
         },
     },
+    include_build_directory: false,
 }`,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_c = select({
         "//build/bazel/platforms/os:android": ["android_src.c"],
         "//conditions:default": [],
@@ -1301,13 +1146,11 @@ cc_library_static {
         cflags: ["-Wbinder32bit"],
       },
     },
+    include_build_directory: false,
 } `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ] + select({
+    copts = select({
         "//build/bazel/product_variables:binder32bit": ["-Wbinder32bit"],
         "//conditions:default": [],
     }) + select({
@@ -1317,7 +1160,6 @@ cc_library_static {
         "//build/bazel/product_variables:malloc_zero_contents": ["-Wmalloc_zero_contents"],
         "//conditions:default": [],
     }),
-    linkstatic = True,
     srcs_c = ["common.c"],
 )`},
 	})
@@ -1339,40 +1181,38 @@ cc_library_static {
         cflags: ["-Wmalloc_not_svelte"],
       },
     },
-		arch: {
-				arm64: {
-						product_variables: {
-								malloc_not_svelte: {
-										cflags: ["-Warm64_malloc_not_svelte"],
-								},
-						},
-				},
-		},
-		multilib: {
-				lib32: {
-						product_variables: {
-								malloc_not_svelte: {
-										cflags: ["-Wlib32_malloc_not_svelte"],
-								},
-						},
-				},
-		},
-		target: {
-				android: {
-						product_variables: {
-								malloc_not_svelte: {
-										cflags: ["-Wandroid_malloc_not_svelte"],
-								},
-						},
-				}
-		},
+    arch: {
+        arm64: {
+            product_variables: {
+                malloc_not_svelte: {
+                    cflags: ["-Warm64_malloc_not_svelte"],
+                },
+            },
+        },
+    },
+    multilib: {
+        lib32: {
+            product_variables: {
+                malloc_not_svelte: {
+                    cflags: ["-Wlib32_malloc_not_svelte"],
+                },
+            },
+        },
+    },
+    target: {
+        android: {
+            product_variables: {
+                malloc_not_svelte: {
+                    cflags: ["-Wandroid_malloc_not_svelte"],
+                },
+            },
+        }
+    },
+    include_build_directory: false,
 } `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ] + select({
+    copts = select({
         "//build/bazel/product_variables:malloc_not_svelte": ["-Wmalloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
@@ -1388,7 +1228,6 @@ cc_library_static {
         "//build/bazel/product_variables:malloc_not_svelte-x86": ["-Wlib32_malloc_not_svelte"],
         "//conditions:default": [],
     }),
-    linkstatic = True,
     srcs_c = ["common.c"],
 )`},
 	})
@@ -1410,21 +1249,14 @@ cc_library_static {
           asflags: ["-DPLATFORM_SDK_VERSION=%d"],
       },
     },
+    include_build_directory: false,
 } `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "foo_static",
-    asflags = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ] + select({
+    asflags = select({
         "//build/bazel/product_variables:platform_sdk_version": ["-DPLATFORM_SDK_VERSION=$(Platform_sdk_version)"],
         "//conditions:default": [],
     }),
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     srcs_as = ["common.S"],
 )`},
 	})
@@ -1439,16 +1271,12 @@ func TestStaticLibrary_SystemSharedLibsRootEmpty(t *testing.T) {
 		blueprint: soongCcLibraryStaticPreamble + `
 cc_library_static {
     name: "root_empty",
-	  system_shared_libs: [],
+    system_shared_libs: [],
+    include_build_directory: false,
 }
 `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "root_empty",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     system_dynamic_deps = [],
 )`},
 	})
@@ -1464,21 +1292,17 @@ func TestStaticLibrary_SystemSharedLibsStaticEmpty(t *testing.T) {
 cc_defaults {
     name: "static_empty_defaults",
     static: {
-				system_shared_libs: [],
-		},
+        system_shared_libs: [],
+    },
+    include_build_directory: false,
 }
 cc_library_static {
     name: "static_empty",
-	  defaults: ["static_empty_defaults"],
+    defaults: ["static_empty_defaults"],
 }
 `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "static_empty",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     system_dynamic_deps = [],
 )`},
 	})
@@ -1498,15 +1322,11 @@ cc_library_static {
             system_shared_libs: [],
         },
     },
+    include_build_directory: false,
 }
 `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "target_bionic_empty",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     system_dynamic_deps = [],
 )`},
 	})
@@ -1530,15 +1350,11 @@ cc_library_static {
             system_shared_libs: [],
         },
     },
+    include_build_directory: false,
 }
 `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "target_linux_bionic_empty",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     system_dynamic_deps = [],
 )`},
 	})
@@ -1560,17 +1376,14 @@ cc_library_static {
             system_shared_libs: ["libc"],
         },
     },
+    include_build_directory: false,
 }
 `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "target_bionic",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     system_dynamic_deps = select({
-        "//build/bazel/platforms/os:bionic": [":libc"],
+        "//build/bazel/platforms/os:android": [":libc"],
+        "//build/bazel/platforms/os:linux_bionic": [":libc"],
         "//conditions:default": [],
     }),
 )`},
@@ -1589,21 +1402,17 @@ cc_library{name: "libm"}
 
 cc_library_static {
     name: "target_linux_bionic",
-		system_shared_libs: ["libc"],
+    system_shared_libs: ["libc"],
     target: {
         linux_bionic: {
             system_shared_libs: ["libm"],
         },
     },
+    include_build_directory: false,
 }
 `,
 		expectedBazelTargets: []string{`cc_library_static(
     name = "target_linux_bionic",
-    copts = [
-        "-I.",
-        "-I$(BINDIR)/.",
-    ],
-    linkstatic = True,
     system_dynamic_deps = [":libc"] + select({
         "//build/bazel/platforms/os:linux_bionic": [":libm"],
         "//conditions:default": [],

@@ -13,6 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 blueprint_go_binary {
     name: "mk2rbc",
     srcs: ["cmd/mk2rbc.go"],
@@ -34,6 +38,7 @@ bootstrap_go_package {
         "soong_variables.go",
         "types.go",
         "variable.go",
+        "version_defaults.go",
     ],
     deps: ["androidmk-parser"],
 }

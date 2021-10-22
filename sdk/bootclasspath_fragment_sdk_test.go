@@ -138,8 +138,8 @@ prebuilt_bootclasspath_fragment {
         metadata: "hiddenapi/metadata.csv",
         index: "hiddenapi/index.csv",
         signature_patterns: "hiddenapi/signature-patterns.csv",
-        stub_flags: "hiddenapi/filtered-stub-flags.csv",
-        all_flags: "hiddenapi/filtered-flags.csv",
+        filtered_stub_flags: "hiddenapi/filtered-stub-flags.csv",
+        filtered_flags: "hiddenapi/filtered-flags.csv",
     },
 }
 
@@ -166,8 +166,8 @@ prebuilt_bootclasspath_fragment {
         metadata: "hiddenapi/metadata.csv",
         index: "hiddenapi/index.csv",
         signature_patterns: "hiddenapi/signature-patterns.csv",
-        stub_flags: "hiddenapi/filtered-stub-flags.csv",
-        all_flags: "hiddenapi/filtered-flags.csv",
+        filtered_stub_flags: "hiddenapi/filtered-stub-flags.csv",
+        filtered_flags: "hiddenapi/filtered-flags.csv",
     },
 }
 
@@ -339,8 +339,8 @@ prebuilt_bootclasspath_fragment {
         metadata: "hiddenapi/metadata.csv",
         index: "hiddenapi/index.csv",
         signature_patterns: "hiddenapi/signature-patterns.csv",
-        stub_flags: "hiddenapi/filtered-stub-flags.csv",
-        all_flags: "hiddenapi/filtered-flags.csv",
+        filtered_stub_flags: "hiddenapi/filtered-stub-flags.csv",
+        filtered_flags: "hiddenapi/filtered-flags.csv",
     },
 }
 
@@ -424,8 +424,8 @@ prebuilt_bootclasspath_fragment {
         metadata: "hiddenapi/metadata.csv",
         index: "hiddenapi/index.csv",
         signature_patterns: "hiddenapi/signature-patterns.csv",
-        stub_flags: "hiddenapi/filtered-stub-flags.csv",
-        all_flags: "hiddenapi/filtered-flags.csv",
+        filtered_stub_flags: "hiddenapi/filtered-stub-flags.csv",
+        filtered_flags: "hiddenapi/filtered-flags.csv",
     },
 }
 
@@ -539,12 +539,6 @@ sdk_snapshot {
         snapshot/hiddenapi/index.csv
 			`, rule)
 
-			// Make sure that the permitted packages from the prebuilts end up in the
-			// updatable-bcp-packages.txt file.
-			rule = module.Output("updatable-bcp-packages.txt")
-			expectedContents := `'mybootlib\nmyothersdklibrary\n'`
-			android.AssertStringEquals(t, "updatable-bcp-packages.txt", expectedContents, rule.Args["content"])
-
 			rule = module.Output("out/soong/hiddenapi/hiddenapi-flags.csv.valid")
 			android.AssertStringDoesContain(t, "verify-overlaps", rule.RuleParams.Command, " snapshot/hiddenapi/filtered-flags.csv:snapshot/hiddenapi/signature-patterns.csv ")
 		}),
@@ -655,8 +649,8 @@ prebuilt_bootclasspath_fragment {
         metadata: "hiddenapi/metadata.csv",
         index: "hiddenapi/index.csv",
         signature_patterns: "hiddenapi/signature-patterns.csv",
-        stub_flags: "hiddenapi/filtered-stub-flags.csv",
-        all_flags: "hiddenapi/filtered-flags.csv",
+        filtered_stub_flags: "hiddenapi/filtered-stub-flags.csv",
+        filtered_flags: "hiddenapi/filtered-flags.csv",
     },
 }
 
@@ -858,8 +852,8 @@ prebuilt_bootclasspath_fragment {
         metadata: "hiddenapi/metadata.csv",
         index: "hiddenapi/index.csv",
         signature_patterns: "hiddenapi/signature-patterns.csv",
-        stub_flags: "hiddenapi/filtered-stub-flags.csv",
-        all_flags: "hiddenapi/filtered-flags.csv",
+        filtered_stub_flags: "hiddenapi/filtered-stub-flags.csv",
+        filtered_flags: "hiddenapi/filtered-flags.csv",
     },
 }
 
