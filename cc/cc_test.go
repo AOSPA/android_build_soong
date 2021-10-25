@@ -4095,6 +4095,8 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 					includes = append(includes, strings.TrimPrefix(flag, "-I"))
 				} else if flag == "-isystem" {
 					// skip isystem, include next
+				} else if flag == "${config.SDClangFlags}" {
+					// skip config.SDClangFlags when sdclang is set
 				} else if len(flag) > 0 {
 					includes = append(includes, flag)
 				}
