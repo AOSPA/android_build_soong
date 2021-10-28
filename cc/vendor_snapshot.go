@@ -134,12 +134,9 @@ func isSnapshotAware(cfg android.DeviceConfig, m LinkableInterface, inProprietar
 	return false
 }
 
-// This is to be saved as .json files, which is for development/vendor_snapshot/update.py.
-// These flags become Android.bp snapshot module properties.
+// Extend the snapshot.SnapshotJsonFlags to include cc specific fields.
 type snapshotJsonFlags struct {
-	ModuleName          string `json:",omitempty"`
-	RelativeInstallPath string `json:",omitempty"`
-
+	snapshot.SnapshotJsonFlags
 	// library flags
 	ExportedDirs       []string `json:",omitempty"`
 	ExportedSystemDirs []string `json:",omitempty"`
@@ -156,7 +153,6 @@ type snapshotJsonFlags struct {
 	SharedLibs  []string `json:",omitempty"`
 	StaticLibs  []string `json:",omitempty"`
 	RuntimeLibs []string `json:",omitempty"`
-	Required    []string `json:",omitempty"`
 
 	// extra config files
 	InitRc         []string `json:",omitempty"`

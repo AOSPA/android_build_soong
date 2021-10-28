@@ -246,6 +246,9 @@ var (
 		"-Wno-string-concatenation", // http://b/175068488
 		// New warnings to be fixed after clang-r428724
 		"-Wno-align-mismatch", // http://b/193679946
+		// New warnings to be fixed after clang-r433403
+		"-Wno-error=unused-but-set-variable",  // http://b/197240255
+		"-Wno-error=unused-but-set-parameter", // http://b/197240255
 		//Android T Vendor Compilation
 		"-Wno-reorder-init-list",
 		"-Wno-implicit-fallthrough",
@@ -322,6 +325,9 @@ var (
 
 		// http://b/165945989
 		"-Wno-psabi",
+
+		// http://b/199369603
+		"-Wno-null-pointer-subtraction",
 	}
 
 	IllegalFlags = []string{
@@ -339,8 +345,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r428724"
-	ClangDefaultShortVersion = "13.0.1"
+	ClangDefaultVersion      = "clang-r433403"
+	ClangDefaultShortVersion = "13.0.2"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -438,6 +444,9 @@ func init() {
 	pctx.PrefixedExistentPathsForSourcesVariable("CommonGlobalIncludes", "-I", commonGlobalIncludes)
 
 	setSdclangVars()
+
+	exportStringStaticVariable("CLANG_DEFAULT_VERSION", ClangDefaultVersion)
+	exportStringStaticVariable("CLANG_DEFAULT_SHORT_VERSION", ClangDefaultShortVersion)
 
 	pctx.SourcePathVariable("ClangDefaultBase", ClangDefaultBase)
 	pctx.VariableFunc("ClangBase", func(ctx android.PackageVarContext) string {

@@ -65,7 +65,11 @@ const (
 )
 
 type BaseCompilerProperties struct {
-	// path to the source file that is the main entry point of the program (e.g. main.rs or lib.rs)
+	// path to the source file that is the main entry point of the program (e.g. main.rs or lib.rs).
+	// Only a single source file can be defined. Modules which generate source can be included by prefixing
+	// the module name with ":", for example ":libfoo_bindgen"
+	//
+	// If no source file is defined, a single generated source module can be defined to be used as the main source.
 	Srcs []string `android:"path,arch_variant"`
 
 	// name of the lint set that should be used to validate this module.
@@ -154,6 +158,14 @@ type BaseCompilerProperties struct {
 	// linkage if all dependencies of the root binary module do not link against libstd\
 	// the same way.
 	Prefer_rlib *bool `android:"arch_variant"`
+
+	// Enables emitting certain Cargo environment variables. Only intended to be used for compatibility purposes.
+	// Will set CARGO_CRATE_NAME to the crate_name property's value.
+	// Will set CARGO_BIN_NAME to the output filename value without the extension.
+	Cargo_env_compat *bool
+
+	// If cargo_env_compat is true, sets the CARGO_PKG_VERSION env var to this value.
+	Cargo_pkg_version *string
 }
 
 type baseCompiler struct {
@@ -219,6 +231,7 @@ func (compiler *baseCompiler) cfgsToFlags() []string {
 	for _, cfg := range compiler.Properties.Cfgs {
 		flags = append(flags, "--cfg '"+cfg+"'")
 	}
+
 	return flags
 }
 
@@ -227,6 +240,24 @@ func (compiler *baseCompiler) featuresToFlags() []string {
 	for _, feature := range compiler.Properties.Features {
 		flags = append(flags, "--cfg 'feature=\""+feature+"\"'")
 	}
+
+	return flags
+}
+
+func (compiler *baseCompiler) featureFlags(ctx ModuleContext, flags Flags) Flags {
+	flags.RustFlags = append(flags.RustFlags, compiler.featuresToFlags()...)
+	flags.RustdocFlags = append(flags.RustdocFlags, compiler.featuresToFlags()...)
+
+	return flags
+}
+
+func (compiler *baseCompiler) cfgFlags(ctx ModuleContext, flags Flags) Flags {
+	if ctx.RustModule().UseVndk() {
+		compiler.Properties.Cfgs = append(compiler.Properties.Cfgs, "android_vndk")
+	}
+
+	flags.RustFlags = append(flags.RustFlags, compiler.cfgsToFlags()...)
+	flags.RustdocFlags = append(flags.RustdocFlags, compiler.cfgsToFlags()...)
 	return flags
 }
 
@@ -257,10 +288,6 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 
 	flags.RustFlags = append(flags.RustFlags, lintFlags)
 	flags.RustFlags = append(flags.RustFlags, compiler.Properties.Flags...)
-	flags.RustFlags = append(flags.RustFlags, compiler.cfgsToFlags()...)
-	flags.RustFlags = append(flags.RustFlags, compiler.featuresToFlags()...)
-	flags.RustdocFlags = append(flags.RustdocFlags, compiler.cfgsToFlags()...)
-	flags.RustdocFlags = append(flags.RustdocFlags, compiler.featuresToFlags()...)
 	flags.RustFlags = append(flags.RustFlags, "--edition="+compiler.edition())
 	flags.RustdocFlags = append(flags.RustdocFlags, "--edition="+compiler.edition())
 	flags.LinkFlags = append(flags.LinkFlags, compiler.Properties.Ld_flags...)
@@ -284,10 +311,6 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 		flags.LinkFlags = append(flags.LinkFlags, "-Wl,-rpath,"+rpathPrefix+"../"+rpath)
 	}
 
-	if ctx.RustModule().UseVndk() {
-		flags.RustFlags = append(flags.RustFlags, "--cfg 'android_vndk'")
-	}
-
 	return flags
 }
 
@@ -307,6 +330,14 @@ func (compiler *baseCompiler) initialize(ctx ModuleContext) {
 
 func (compiler *baseCompiler) CargoOutDir() android.OptionalPath {
 	return android.OptionalPathForPath(compiler.cargoOutDir)
+}
+
+func (compiler *baseCompiler) CargoEnvCompat() bool {
+	return Bool(compiler.Properties.Cargo_env_compat)
+}
+
+func (compiler *baseCompiler) CargoPkgVersion() string {
+	return String(compiler.Properties.Cargo_pkg_version)
 }
 
 func (compiler *baseCompiler) strippedOutputFilePath() android.OptionalPath {
@@ -346,7 +377,9 @@ func bionicDeps(ctx DepsContext, deps Deps, static bool) Deps {
 	} else {
 		deps.SharedLibs = append(deps.SharedLibs, bionicLibs...)
 	}
-
+	if ctx.RustModule().StaticExecutable() {
+		deps.StaticLibs = append(deps.StaticLibs, "libunwind")
+	}
 	if libRuntimeBuiltins := config.BuiltinsRuntimeLibrary(ctx.toolchain()); libRuntimeBuiltins != "" {
 		deps.StaticLibs = append(deps.StaticLibs, libRuntimeBuiltins)
 	}
@@ -375,8 +408,15 @@ func (compiler *baseCompiler) installDir(ctx ModuleContext) android.InstallPath 
 	}
 
 	if compiler.location == InstallInData && ctx.RustModule().UseVndk() {
-		dir = filepath.Join(dir, "vendor")
+		if ctx.RustModule().InProduct() {
+			dir = filepath.Join(dir, "product")
+		} else if ctx.RustModule().InVendor() {
+			dir = filepath.Join(dir, "vendor")
+		} else {
+			ctx.ModuleErrorf("Unknown data+VNDK installation kind")
+		}
 	}
+
 	return android.PathForModuleInstall(ctx, dir, compiler.subDir,
 		compiler.relativeInstallPath(), compiler.relative)
 }
@@ -420,12 +460,18 @@ func srcPathFromModuleSrcs(ctx ModuleContext, srcs []string) (android.Path, andr
 			srcIndex = i
 		}
 	}
-	if numSrcs != 1 {
+	if numSrcs > 1 {
 		ctx.PropertyErrorf("srcs", incorrectSourcesError)
 	}
+
+	// If a main source file is not provided we expect only a single SourceProvider module to be defined
+	// within srcs, with the expectation that the first source it provides is the entry point.
 	if srcIndex != 0 {
 		ctx.PropertyErrorf("srcs", "main source file must be the first in srcs")
+	} else if numSrcs > 1 {
+		ctx.PropertyErrorf("srcs", "only a single generated source module can be defined without a main source file.")
 	}
+
 	paths := android.PathsForModuleSrc(ctx, srcs)
 	return paths[srcIndex], paths[1:]
 }

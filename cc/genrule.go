@@ -15,13 +15,15 @@
 package cc
 
 import (
+	"fmt"
+
 	"android/soong/android"
 	"android/soong/genrule"
 	"android/soong/snapshot"
 )
 
 func init() {
-	android.RegisterModuleType("cc_genrule", genRuleFactory)
+	android.RegisterModuleType("cc_genrule", GenRuleFactory)
 }
 
 type GenruleExtraProperties struct {
@@ -36,20 +38,38 @@ type GenruleExtraProperties struct {
 
 // cc_genrule is a genrule that can depend on other cc_* objects.
 // The cmd may be run multiple times, once for each of the different arch/etc
-// variations.
-func genRuleFactory() android.Module {
+// variations.  The following environment variables will be set when the command
+// execute:
+//
+//   CC_ARCH           the name of the architecture the command is being executed for
+//
+//   CC_MULTILIB       "lib32" if the architecture the command is being executed for is 32-bit,
+//                     "lib64" if it is 64-bit.
+//
+//   CC_NATIVE_BRIDGE  the name of the subdirectory that native bridge libraries are stored in if
+//                     the architecture has native bridge enabled, empty if it is disabled.
+func GenRuleFactory() android.Module {
 	module := genrule.NewGenRule()
 
 	extra := &GenruleExtraProperties{}
 	module.Extra = extra
 	module.ImageInterface = extra
+	module.CmdModifier = genruleCmdModifier
 	module.AddProperties(module.Extra)
 
 	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibBoth)
 
 	android.InitApexModule(module)
+	android.InitBazelModule(module)
 
 	return module
+}
+
+func genruleCmdModifier(ctx android.ModuleContext, cmd string) string {
+	target := ctx.Target()
+	arch := target.Arch.ArchType
+	return fmt.Sprintf("CC_ARCH=%s CC_NATIVE_BRIDGE=%s CC_MULTILIB=%s && %s",
+		arch.Name, target.NativeBridgeRelativePath, arch.Multilib, cmd)
 }
 
 var _ android.ImageInterface = (*GenruleExtraProperties)(nil)

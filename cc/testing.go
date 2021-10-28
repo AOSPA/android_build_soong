@@ -33,7 +33,7 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("toolchain_library", ToolchainLibraryFactory)
 	ctx.RegisterModuleType("cc_benchmark", BenchmarkFactory)
 	ctx.RegisterModuleType("cc_object", ObjectFactory)
-	ctx.RegisterModuleType("cc_genrule", genRuleFactory)
+	ctx.RegisterModuleType("cc_genrule", GenRuleFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_shared_stl", NdkPrebuiltSharedStlFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_static_stl", NdkPrebuiltStaticStlFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_object", NdkPrebuiltObjectFactory)
@@ -398,26 +398,42 @@ func commonDefaultModules() string {
 		cc_object {
 			name: "crtbegin_so",
 			defaults: ["crt_defaults"],
+			srcs: ["crtbegin_so.c"],
+			objs: ["crtbrand"],
 		}
 
 		cc_object {
 			name: "crtbegin_dynamic",
 			defaults: ["crt_defaults"],
+			srcs: ["crtbegin.c"],
+			objs: ["crtbrand"],
 		}
 
 		cc_object {
 			name: "crtbegin_static",
 			defaults: ["crt_defaults"],
+			srcs: ["crtbegin.c"],
+			objs: ["crtbrand"],
 		}
 
 		cc_object {
 			name: "crtend_so",
 			defaults: ["crt_defaults"],
+			srcs: ["crtend_so.c"],
+			objs: ["crtbrand"],
 		}
 
 		cc_object {
 			name: "crtend_android",
 			defaults: ["crt_defaults"],
+			srcs: ["crtend.c"],
+			objs: ["crtbrand"],
+		}
+
+		cc_object {
+			name: "crtbrand",
+			defaults: ["crt_defaults"],
+			srcs: ["crtbrand.c"],
 		}
 
 		cc_library {
@@ -609,6 +625,11 @@ var PrepareForTestWithCcDefaultModules = android.GroupFixturePreparers(
 		"defaults/cc/common/libm.map.txt":           nil,
 		"defaults/cc/common/ndk_libandroid_support": nil,
 		"defaults/cc/common/ndk_libc++_shared":      nil,
+		"defaults/cc/common/crtbegin_so.c":          nil,
+		"defaults/cc/common/crtbegin.c":             nil,
+		"defaults/cc/common/crtend_so.c":            nil,
+		"defaults/cc/common/crtend.c":               nil,
+		"defaults/cc/common/crtbrand.c":             nil,
 	}.AddToFixture(),
 
 	// Place the default cc test modules that are common to all platforms in a location that will not

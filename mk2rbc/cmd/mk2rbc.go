@@ -81,6 +81,7 @@ var backupSuffix string
 var tracedVariables []string
 var errorLogger = errorsByType{data: make(map[string]datum)}
 var makefileFinder = &LinuxMakefileFinder{}
+var versionDefaultsMk = filepath.Join("build", "make", "core", "version_defaults.mk")
 
 func main() {
 	flag.Usage = func() {
@@ -153,35 +154,38 @@ func main() {
 	}
 
 	// Convert!
+	files := flag.Args()
+	if *allInSource {
+		productConfigMap := buildProductConfigMap()
+		for _, path := range productConfigMap {
+			files = append(files, path)
+		}
+	}
 	ok := true
+	for _, mkFile := range files {
+		ok = convertOne(mkFile) && ok
+	}
+
 	if *launcher != "" {
-		if len(flag.Args()) != 1 {
+		if len(files) != 1 {
 			quit(fmt.Errorf("a launcher can be generated only for a single product"))
 		}
-		product := flag.Args()[0]
-		productConfigMap := buildProductConfigMap()
-		path, found := productConfigMap[product]
-		if !found {
-			quit(fmt.Errorf("cannot generate configuration launcher for %s, it is not a known product",
-				product))
-		}
-		ok = convertOne(path) && ok
-		err := writeGenerated(*launcher, mk2rbc.Launcher(outputFilePath(path), mk2rbc.MakePath2ModuleName(path)))
+		versionDefaults, err := generateVersionDefaults()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s:%s", path, err)
+			quit(err)
+		}
+		versionDefaultsPath := outputFilePath(versionDefaultsMk)
+		err = writeGenerated(versionDefaultsPath, versionDefaults)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s:%s", files[0], err)
 			ok = false
 		}
 
-	} else {
-		files := flag.Args()
-		if *allInSource {
-			productConfigMap := buildProductConfigMap()
-			for _, path := range productConfigMap {
-				files = append(files, path)
-			}
-		}
-		for _, mkFile := range files {
-			ok = convertOne(mkFile) && ok
+		err = writeGenerated(*launcher, mk2rbc.Launcher(outputFilePath(files[0]), versionDefaultsPath,
+			mk2rbc.MakePath2ModuleName(files[0])))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s:%s", files[0], err)
+			ok = false
 		}
 	}
 
@@ -194,6 +198,15 @@ func main() {
 	}
 }
 
+func generateVersionDefaults() (string, error) {
+	versionSettings, err := mk2rbc.ParseVersionDefaults(filepath.Join(*rootDir, versionDefaultsMk))
+	if err != nil {
+		return "", err
+	}
+	return mk2rbc.VersionDefaults(versionSettings), nil
+
+}
+
 func quit(s interface{}) {
 	fmt.Fprintln(os.Stderr, s)
 	os.Exit(2)
@@ -202,8 +215,7 @@ func quit(s interface{}) {
 func buildProductConfigMap() map[string]string {
 	const androidProductsMk = "AndroidProducts.mk"
 	// Build the list of AndroidProducts.mk files: it's
-	// build/make/target/product/AndroidProducts.mk plus
-	// device/**/AndroidProducts.mk
+	// build/make/target/product/AndroidProducts.mk + device/**/AndroidProducts.mk plus + vendor/**/AndroidProducts.mk
 	targetAndroidProductsFile := filepath.Join(*rootDir, "build", "make", "target", "product", androidProductsMk)
 	if _, err := os.Stat(targetAndroidProductsFile); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %s\n(hint: %s is not a source tree root)\n",
@@ -213,17 +225,19 @@ func buildProductConfigMap() map[string]string {
 	if err := mk2rbc.UpdateProductConfigMap(productConfigMap, targetAndroidProductsFile); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", targetAndroidProductsFile, err)
 	}
-	_ = filepath.Walk(filepath.Join(*rootDir, "device"),
-		func(path string, info os.FileInfo, err error) error {
-			if info.IsDir() || filepath.Base(path) != androidProductsMk {
+	for _, t := range []string{"device", "vendor"} {
+		_ = filepath.WalkDir(filepath.Join(*rootDir, t),
+			func(path string, d os.DirEntry, err error) error {
+				if err != nil || d.IsDir() || filepath.Base(path) != androidProductsMk {
+					return nil
+				}
+				if err2 := mk2rbc.UpdateProductConfigMap(productConfigMap, path); err2 != nil {
+					fmt.Fprintf(os.Stderr, "%s: %s\n", path, err)
+					// Keep going, we want to find all such errors in a single run
+				}
 				return nil
-			}
-			if err2 := mk2rbc.UpdateProductConfigMap(productConfigMap, path); err2 != nil {
-				fmt.Fprintf(os.Stderr, "%s: %s\n", path, err)
-				// Keep going, we want to find all such errors in a single run
-			}
-			return nil
-		})
+			})
+	}
 	return productConfigMap
 }
 

@@ -45,6 +45,7 @@ var (
 
 	linuxMuslCflags = []string{
 		"-D_LIBCPP_HAS_MUSL_LIBC",
+		"-DANDROID_HOST_MUSL",
 		"-nostdlibinc",
 	}
 
@@ -107,7 +108,7 @@ var (
 		"supc++",
 	}, "-l")
 
-	muslCrtBeginStaticBinary, muslCrtEndStaticBinary   = []string{"libc_musl_crtbegin_static"}, []string{"crtend_android"}
+	muslCrtBeginStaticBinary, muslCrtEndStaticBinary   = []string{"libc_musl_crtbegin_static"}, []string{"libc_musl_crtend"}
 	muslCrtBeginSharedBinary, muslCrtEndSharedBinary   = []string{"libc_musl_crtbegin_dynamic", "musl_linker_script"}, []string{"libc_musl_crtend"}
 	muslCrtBeginSharedLibrary, muslCrtEndSharedLibrary = []string{"libc_musl_crtbegin_so"}, []string{"libc_musl_crtend_so"}
 

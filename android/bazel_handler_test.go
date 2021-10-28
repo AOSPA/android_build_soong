@@ -11,7 +11,7 @@ func TestRequestResultsAfterInvokeBazel(t *testing.T) {
 	label := "//foo:bar"
 	arch := Arm64
 	bazelContext, _ := testBazelContext(t, map[bazelCommand]string{
-		bazelCommand{command: "cquery", expression: "kind(rule, deps(@soong_injection//mixed_builds:buildroot))"}: `//foo:bar|arm64>>out/foo/bar.txt`,
+		bazelCommand{command: "cquery", expression: "deps(@soong_injection//mixed_builds:buildroot)"}: `//foo:bar|arm64>>out/foo/bar.txt`,
 	})
 	g, ok := bazelContext.GetOutputFiles(label, arch)
 	if ok {
@@ -101,7 +101,7 @@ func TestInvokeBazelPopulatesBuildStatements(t *testing.T) {
 func testBazelContext(t *testing.T, bazelCommandResults map[bazelCommand]string) (*bazelContext, string) {
 	t.Helper()
 	p := bazelPaths{
-		buildDir:     t.TempDir(),
+		soongOutDir:  t.TempDir(),
 		outputBase:   "outputbase",
 		workspaceDir: "workspace_dir",
 	}
@@ -114,5 +114,5 @@ func testBazelContext(t *testing.T, bazelCommandResults map[bazelCommand]string)
 		bazelRunner: runner,
 		paths:       &p,
 		requests:    map[cqueryKey]bool{},
-	}, p.buildDir
+	}, p.soongOutDir
 }

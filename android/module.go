@@ -15,7 +15,6 @@
 package android
 
 import (
-	"android/soong/bazel"
 	"fmt"
 	"os"
 	"path"
@@ -23,6 +22,8 @@ import (
 	"regexp"
 	"strings"
 	"text/scanner"
+
+	"android/soong/bazel"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -235,8 +236,8 @@ type BaseModuleContext interface {
 
 	// VisitDirectDeps calls visit for each direct dependency.  If there are multiple
 	// direct dependencies on the same module visit will be called multiple times on that module
-	// and OtherModuleDependencyTag will return a different tag for each.  It skips any
-	// dependencies that are not an android.Module.
+	// and OtherModuleDependencyTag will return a different tag for each.  It raises an error if any of the
+	// dependencies are not an android.Module.
 	//
 	// The Module passed to the visit function should not be retained outside of the visit
 	// function, it may be invalidated by future mutators.
@@ -315,6 +316,9 @@ type BaseModuleContext interface {
 	GetPathString(skipFirst bool) string
 
 	AddMissingDependencies(missingDeps []string)
+
+	// AddUnconvertedBp2buildDep stores module name of a direct dependency that was not converted via bp2build
+	AddUnconvertedBp2buildDep(dep string)
 
 	Target() Target
 	TargetPrimary() bool
@@ -405,6 +409,7 @@ type ModuleContext interface {
 	PackageFile(installPath InstallPath, name string, srcPath Path) PackagingSpec
 
 	CheckbuildFile(srcPath Path)
+	TidyFile(srcPath Path)
 
 	InstallInData() bool
 	InstallInTestcases() bool
@@ -464,6 +469,14 @@ type Module interface {
 	Enabled() bool
 	Target() Target
 	MultiTargets() []Target
+
+	// ImageVariation returns the image variation of this module.
+	//
+	// The returned structure has its Mutator field set to "image" and its Variation field set to the
+	// image variation, e.g. recovery, ramdisk, etc.. The Variation field is "" for host modules and
+	// device modules that have no image variation.
+	ImageVariation() blueprint.Variation
+
 	Owner() string
 	InstallInData() bool
 	InstallInTestcases() bool
@@ -491,6 +504,12 @@ type Module interface {
 	AddProperties(props ...interface{})
 	GetProperties() []interface{}
 
+	// IsConvertedByBp2build returns whether this module was converted via bp2build
+	IsConvertedByBp2build() bool
+	// Bp2buildTargets returns the target(s) generated for Bazel via bp2build for this module
+	Bp2buildTargets() []bp2buildInfo
+	GetUnconvertedBp2buildDeps() []string
+
 	BuildParamsForTests() []BuildParams
 	RuleParamsForTests() map[blueprint.Rule]blueprint.RuleParams
 	VariablesForTests() map[string]string
@@ -514,62 +533,6 @@ type Module interface {
 	// TransitivePackagingSpecs returns the PackagingSpecs for this module and any transitive
 	// dependencies with dependency tags for which IsInstallDepNeeded() returns true.
 	TransitivePackagingSpecs() []PackagingSpec
-}
-
-// BazelTargetModule is a lightweight wrapper interface around Module for
-// bp2build conversion purposes.
-//
-// In bp2build's bootstrap.Main execution, Soong runs an alternate pipeline of
-// mutators that creates BazelTargetModules from regular Module objects,
-// performing the mapping from Soong properties to Bazel rule attributes in the
-// process. This process may optionally create additional BazelTargetModules,
-// resulting in a 1:many mapping.
-//
-// bp2build.Codegen is then responsible for visiting all modules in the graph,
-// filtering for BazelTargetModules, and code-generating BUILD targets from
-// them.
-type BazelTargetModule interface {
-	Module
-
-	bazelTargetModuleProperties() *bazel.BazelTargetModuleProperties
-	SetBazelTargetModuleProperties(props bazel.BazelTargetModuleProperties)
-
-	RuleClass() string
-	BzlLoadLocation() string
-}
-
-// InitBazelTargetModule is a wrapper function that decorates BazelTargetModule
-// with property structs containing metadata for bp2build conversion.
-func InitBazelTargetModule(module BazelTargetModule) {
-	module.AddProperties(module.bazelTargetModuleProperties())
-	InitAndroidModule(module)
-}
-
-// BazelTargetModuleBase contains the property structs with metadata for
-// bp2build conversion.
-type BazelTargetModuleBase struct {
-	ModuleBase
-	Properties bazel.BazelTargetModuleProperties
-}
-
-// bazelTargetModuleProperties getter.
-func (btmb *BazelTargetModuleBase) bazelTargetModuleProperties() *bazel.BazelTargetModuleProperties {
-	return &btmb.Properties
-}
-
-// SetBazelTargetModuleProperties setter for BazelTargetModuleProperties
-func (btmb *BazelTargetModuleBase) SetBazelTargetModuleProperties(props bazel.BazelTargetModuleProperties) {
-	btmb.Properties = props
-}
-
-// RuleClass returns the rule class for this Bazel target
-func (b *BazelTargetModuleBase) RuleClass() string {
-	return b.bazelTargetModuleProperties().Rule_class
-}
-
-// BzlLoadLocation returns the rule class for this Bazel target
-func (b *BazelTargetModuleBase) BzlLoadLocation() string {
-	return b.bazelTargetModuleProperties().Bzl_load_location
 }
 
 // Qualified id for a module
@@ -878,6 +841,25 @@ type commonProperties struct {
 	// for example "" for core or "recovery" for recovery.  It will often be set to one of the
 	// constants in image.go, but can also be set to a custom value by individual module types.
 	ImageVariation string `blueprint:"mutated"`
+
+	// Information about _all_ bp2build targets generated by this module. Multiple targets are
+	// supported as Soong handles some things within a single target that we may choose to split into
+	// multiple targets, e.g. renderscript, protos, yacc within a cc module.
+	Bp2buildInfo []bp2buildInfo `blueprint:"mutated"`
+
+	// UnconvertedBp2buildDep stores the module names of direct dependency that were not converted to
+	// Bazel
+	UnconvertedBp2buildDeps []string `blueprint:"mutated"`
+}
+
+// CommonAttributes represents the common Bazel attributes from which properties
+// in `commonProperties` are translated/mapped; such properties are annotated in
+// a list their corresponding attribute. It is embedded within `bp2buildInfo`.
+type CommonAttributes struct {
+	// Soong nameProperties -> Bazel name
+	Name string
+	// Data mapped from: Required
+	Data bazel.LabelListAttribute
 }
 
 type distProperties struct {
@@ -976,10 +958,13 @@ const (
 	// Device is built by default. Host and HostCross are not supported.
 	DeviceSupported = deviceSupported | deviceDefault
 
-	// Device is built by default. Host and HostCross are supported.
+	// By default, _only_ device variant is built. Device variant can be disabled with `device_supported: false`
+	// Host and HostCross are disabled by default and can be enabled with `host_supported: true`
 	HostAndDeviceSupported = hostSupported | hostCrossSupported | deviceSupported | deviceDefault
 
 	// Host, HostCross, and Device are built by default.
+	// Building Device can be disabled with `device_supported: false`
+	// Building Host and HostCross can be disabled with `host_supported: false`
 	HostAndDeviceDefault = hostSupported | hostCrossSupported | hostDefault |
 		deviceSupported | deviceDefault
 
@@ -1097,6 +1082,34 @@ func InitCommonOSAndroidMultiTargetsArchModule(m Module, hod HostOrDeviceSupport
 	m.base().commonProperties.CreateCommonOSVariant = true
 }
 
+func (attrs *CommonAttributes) fillCommonBp2BuildModuleAttrs(ctx *topDownMutatorContext) {
+	// Assert passed-in attributes include Name
+	name := attrs.Name
+	if len(name) == 0 {
+		ctx.ModuleErrorf("CommonAttributes in fillCommonBp2BuildModuleAttrs expects a `.Name`!")
+	}
+
+	mod := ctx.Module().base()
+	props := &mod.commonProperties
+
+	depsToLabelList := func(deps []string) bazel.LabelListAttribute {
+		return bazel.MakeLabelListAttribute(BazelLabelForModuleDeps(ctx, deps))
+	}
+
+	data := &attrs.Data
+
+	required := depsToLabelList(props.Required)
+	archVariantProps := mod.GetArchVariantProperties(ctx, &commonProperties{})
+	for axis, configToProps := range archVariantProps {
+		for config, _props := range configToProps {
+			if archProps, ok := _props.(*commonProperties); ok {
+				required.SetSelectValue(axis, config, depsToLabelList(archProps.Required).Value)
+			}
+		}
+	}
+	data.Append(required)
+}
+
 // A ModuleBase object contains the properties that are common to all Android
 // modules.  It should be included as an anonymous field in every module
 // struct definition.  InitAndroidModule should then be called from the module's
@@ -1177,6 +1190,7 @@ type ModuleBase struct {
 	installFiles         InstallPaths
 	installFilesDepSet   *installPathsDepSet
 	checkbuildFiles      Paths
+	tidyFiles            Paths
 	packagingSpecs       []PackagingSpec
 	packagingSpecsDepSet *packagingSpecsDepSet
 	noticeFiles          Paths
@@ -1189,6 +1203,7 @@ type ModuleBase struct {
 	// Only set on the final variant of each module
 	installTarget    WritablePath
 	checkbuildTarget WritablePath
+	tidyTarget       WritablePath
 	blueprintDir     string
 
 	hooks hooks
@@ -1202,6 +1217,66 @@ type ModuleBase struct {
 
 	initRcPaths         Paths
 	vintfFragmentsPaths Paths
+}
+
+// A struct containing all relevant information about a Bazel target converted via bp2build.
+type bp2buildInfo struct {
+	Dir         string
+	BazelProps  bazel.BazelTargetModuleProperties
+	CommonAttrs CommonAttributes
+	Attrs       interface{}
+}
+
+// TargetName returns the Bazel target name of a bp2build converted target.
+func (b bp2buildInfo) TargetName() string {
+	return b.CommonAttrs.Name
+}
+
+// TargetPackage returns the Bazel package of a bp2build converted target.
+func (b bp2buildInfo) TargetPackage() string {
+	return b.Dir
+}
+
+// BazelRuleClass returns the Bazel rule class of a bp2build converted target.
+func (b bp2buildInfo) BazelRuleClass() string {
+	return b.BazelProps.Rule_class
+}
+
+// BazelRuleLoadLocation returns the location of the  Bazel rule of a bp2build converted target.
+// This may be empty as native Bazel rules do not need to be loaded.
+func (b bp2buildInfo) BazelRuleLoadLocation() string {
+	return b.BazelProps.Bzl_load_location
+}
+
+// BazelAttributes returns the Bazel attributes of a bp2build converted target.
+func (b bp2buildInfo) BazelAttributes() []interface{} {
+	return []interface{}{&b.CommonAttrs, b.Attrs}
+}
+
+func (m *ModuleBase) addBp2buildInfo(info bp2buildInfo) {
+	m.commonProperties.Bp2buildInfo = append(m.commonProperties.Bp2buildInfo, info)
+}
+
+// IsConvertedByBp2build returns whether this module was converted via bp2build.
+func (m *ModuleBase) IsConvertedByBp2build() bool {
+	return len(m.commonProperties.Bp2buildInfo) > 0
+}
+
+// Bp2buildTargets returns the Bazel targets bp2build generated for this module.
+func (m *ModuleBase) Bp2buildTargets() []bp2buildInfo {
+	return m.commonProperties.Bp2buildInfo
+}
+
+// AddUnconvertedBp2buildDep stores module name of a dependency that was not converted to Bazel.
+func (b *baseModuleContext) AddUnconvertedBp2buildDep(dep string) {
+	unconvertedDeps := &b.Module().base().commonProperties.UnconvertedBp2buildDeps
+	*unconvertedDeps = append(*unconvertedDeps, dep)
+}
+
+// GetUnconvertedBp2buildDeps returns the list of module names of this module's direct dependencies that
+// were not converted to Bazel.
+func (m *ModuleBase) GetUnconvertedBp2buildDeps() []string {
+	return m.commonProperties.UnconvertedBp2buildDeps
 }
 
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
@@ -1221,7 +1296,30 @@ func (m *ModuleBase) GetProperties() []interface{} {
 }
 
 func (m *ModuleBase) BuildParamsForTests() []BuildParams {
-	return m.buildParams
+	// Expand the references to module variables like $flags[0-9]*,
+	// so we do not need to change many existing unit tests.
+	// This looks like undoing the shareFlags optimization in cc's
+	// transformSourceToObj, and should only affects unit tests.
+	vars := m.VariablesForTests()
+	buildParams := append([]BuildParams(nil), m.buildParams...)
+	for i, _ := range buildParams {
+		newArgs := make(map[string]string)
+		for k, v := range buildParams[i].Args {
+			newArgs[k] = v
+			// Replaces both ${flags1} and $flags1 syntax.
+			if strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}") {
+				if value, found := vars[v[2:len(v)-1]]; found {
+					newArgs[k] = value
+				}
+			} else if strings.HasPrefix(v, "$") {
+				if value, found := vars[v[1:]]; found {
+					newArgs[k] = value
+				}
+			}
+		}
+		buildParams[i].Args = newArgs
+	}
+	return buildParams
 }
 
 func (m *ModuleBase) RuleParamsForTests() map[blueprint.Rule]blueprint.RuleParams {
@@ -1666,10 +1764,12 @@ func (m *ModuleBase) VintfFragments() Paths {
 func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
 	var allInstalledFiles InstallPaths
 	var allCheckbuildFiles Paths
+	var allTidyFiles Paths
 	ctx.VisitAllModuleVariants(func(module Module) {
 		a := module.base()
 		allInstalledFiles = append(allInstalledFiles, a.installFiles...)
 		allCheckbuildFiles = append(allCheckbuildFiles, a.checkbuildFiles...)
+		allTidyFiles = append(allTidyFiles, a.tidyFiles...)
 	})
 
 	var deps Paths
@@ -1691,6 +1791,13 @@ func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
 		ctx.Phony(name, allCheckbuildFiles...)
 		m.checkbuildTarget = PathForPhony(ctx, name)
 		deps = append(deps, m.checkbuildTarget)
+	}
+
+	if len(allTidyFiles) > 0 {
+		name := namespacePrefix + ctx.ModuleName() + "-tidy"
+		ctx.Phony(name, allTidyFiles...)
+		m.tidyTarget = PathForPhony(ctx, name)
+		deps = append(deps, m.tidyTarget)
 	}
 
 	if len(deps) > 0 {
@@ -1901,6 +2008,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 		m.installFiles = append(m.installFiles, ctx.installFiles...)
 		m.checkbuildFiles = append(m.checkbuildFiles, ctx.checkbuildFiles...)
+		m.tidyFiles = append(m.tidyFiles, ctx.tidyFiles...)
 		m.packagingSpecs = append(m.packagingSpecs, ctx.packagingSpecs...)
 		for k, v := range ctx.phonies {
 			m.phonies[k] = append(m.phonies[k], v...)
@@ -2099,6 +2207,7 @@ type moduleContext struct {
 	packagingSpecs  []PackagingSpec
 	installFiles    InstallPaths
 	checkbuildFiles Paths
+	tidyFiles       Paths
 	module          Module
 	phonies         map[string]Paths
 
@@ -2831,6 +2940,10 @@ func (m *moduleContext) CheckbuildFile(srcPath Path) {
 	m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
 }
 
+func (m *moduleContext) TidyFile(srcPath Path) {
+	m.tidyFiles = append(m.tidyFiles, srcPath)
+}
+
 func (m *moduleContext) blueprintModuleContext() blueprint.ModuleContext {
 	return m.bp
 }
@@ -3089,19 +3202,49 @@ func parentDir(dir string) string {
 
 type buildTargetSingleton struct{}
 
+func addAncestors(ctx SingletonContext, dirMap map[string]Paths, mmName func(string) string) []string {
+	// Ensure ancestor directories are in dirMap
+	// Make directories build their direct subdirectories
+	dirs := SortedStringKeys(dirMap)
+	for _, dir := range dirs {
+		dir := parentDir(dir)
+		for dir != "." && dir != "/" {
+			if _, exists := dirMap[dir]; exists {
+				break
+			}
+			dirMap[dir] = nil
+			dir = parentDir(dir)
+		}
+	}
+	dirs = SortedStringKeys(dirMap)
+	for _, dir := range dirs {
+		p := parentDir(dir)
+		if p != "." && p != "/" {
+			dirMap[p] = append(dirMap[p], PathForPhony(ctx, mmName(dir)))
+		}
+	}
+	return SortedStringKeys(dirMap)
+}
+
 func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 	var checkbuildDeps Paths
+	var tidyDeps Paths
 
 	mmTarget := func(dir string) string {
 		return "MODULES-IN-" + strings.Replace(filepath.Clean(dir), "/", "-", -1)
 	}
+	mmTidyTarget := func(dir string) string {
+		return "tidy-" + strings.Replace(filepath.Clean(dir), "/", "-", -1)
+	}
 
 	modulesInDir := make(map[string]Paths)
+	tidyModulesInDir := make(map[string]Paths)
 
 	ctx.VisitAllModules(func(module Module) {
 		blueprintDir := module.base().blueprintDir
 		installTarget := module.base().installTarget
 		checkbuildTarget := module.base().checkbuildTarget
+		tidyTarget := module.base().tidyTarget
 
 		if checkbuildTarget != nil {
 			checkbuildDeps = append(checkbuildDeps, checkbuildTarget)
@@ -3110,6 +3253,16 @@ func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 
 		if installTarget != nil {
 			modulesInDir[blueprintDir] = append(modulesInDir[blueprintDir], installTarget)
+		}
+
+		if tidyTarget != nil {
+			tidyDeps = append(tidyDeps, tidyTarget)
+			// tidyTarget is in modulesInDir so it will be built with "mm".
+			modulesInDir[blueprintDir] = append(modulesInDir[blueprintDir], tidyTarget)
+			// tidyModulesInDir contains tidyTarget but not checkbuildTarget
+			// or installTarget, so tidy targets in a directory can be built
+			// without other checkbuild or install targets.
+			tidyModulesInDir[blueprintDir] = append(tidyModulesInDir[blueprintDir], tidyTarget)
 		}
 	})
 
@@ -3121,31 +3274,24 @@ func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 	// Create a top-level checkbuild target that depends on all modules
 	ctx.Phony("checkbuild"+suffix, checkbuildDeps...)
 
+	// Create a top-level tidy target that depends on all modules
+	ctx.Phony("tidy"+suffix, tidyDeps...)
+
+	dirs := addAncestors(ctx, tidyModulesInDir, mmTidyTarget)
+
+	// Kati does not generate tidy-* phony targets yet.
+	// Create a tidy-<directory> target that depends on all subdirectories
+	// and modules in the directory.
+	for _, dir := range dirs {
+		ctx.Phony(mmTidyTarget(dir), tidyModulesInDir[dir]...)
+	}
+
 	// Make will generate the MODULES-IN-* targets
 	if ctx.Config().KatiEnabled() {
 		return
 	}
 
-	// Ensure ancestor directories are in modulesInDir
-	dirs := SortedStringKeys(modulesInDir)
-	for _, dir := range dirs {
-		dir := parentDir(dir)
-		for dir != "." && dir != "/" {
-			if _, exists := modulesInDir[dir]; exists {
-				break
-			}
-			modulesInDir[dir] = nil
-			dir = parentDir(dir)
-		}
-	}
-
-	// Make directories build their direct subdirectories
-	for _, dir := range dirs {
-		p := parentDir(dir)
-		if p != "." && p != "/" {
-			modulesInDir[p] = append(modulesInDir[p], PathForPhony(ctx, mmTarget(dir)))
-		}
-	}
+	dirs = addAncestors(ctx, modulesInDir, mmTarget)
 
 	// Create a MODULES-IN-<directory> target that depends on all modules in a directory, and
 	// depends on the MODULES-IN-* targets of all of its subdirectories that contain Android.bp

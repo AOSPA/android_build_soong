@@ -24,12 +24,12 @@ import (
 )
 
 var (
-	nativeBridgeSuffix  = ".native_bridge"
-	productSuffix       = ".product"
+	NativeBridgeSuffix  = ".native_bridge"
+	ProductSuffix       = ".product"
 	VendorSuffix        = ".vendor"
-	ramdiskSuffix       = ".ramdisk"
+	RamdiskSuffix       = ".ramdisk"
 	VendorRamdiskSuffix = ".vendor_ramdisk"
-	recoverySuffix      = ".recovery"
+	RecoverySuffix      = ".recovery"
 	sdkSuffix           = ".sdk"
 )
 
@@ -185,7 +185,7 @@ func makeOverrideModuleNames(ctx AndroidMkContext, overrides []string) []string 
 	if ctx.Target().NativeBridge == android.NativeBridgeEnabled {
 		var result []string
 		for _, override := range overrides {
-			result = append(result, override+nativeBridgeSuffix)
+			result = append(result, override+NativeBridgeSuffix)
 		}
 		return result
 	}
@@ -408,6 +408,8 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 		if Bool(test.Properties.Test_options.Unit_test) {
 			entries.SetBool("LOCAL_IS_UNIT_TEST", true)
 		}
+
+		entries.SetBoolIfTrue("LOCAL_COMPATIBILITY_PER_TESTCASE_DIRECTORY", Bool(test.Properties.Per_testcase_directory))
 	})
 
 	AndroidMkWriteTestData(test.data, entries)

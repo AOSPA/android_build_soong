@@ -66,21 +66,29 @@ type Config struct {
 	*config
 }
 
-// BuildDir returns the build output directory for the configuration.
-func (c Config) BuildDir() string {
-	return c.buildDir
+// SoongOutDir returns the build output directory for the configuration.
+func (c Config) SoongOutDir() string {
+	return c.soongOutDir
 }
 
-func (c Config) NinjaBuildDir() string {
-	return c.buildDir
+func (c Config) OutDir() string {
+	return c.outDir
+}
+
+func (c Config) RunGoTests() bool {
+	return c.runGoTests
 }
 
 func (c Config) DebugCompilation() bool {
 	return false // Never compile Go code in the main build for debugging
 }
 
-func (c Config) SrcDir() string {
-	return c.srcDir
+func (c Config) Subninjas() []string {
+	return []string{}
+}
+
+func (c Config) PrimaryBuilderInvocations() []bootstrap.PrimaryBuilderInvocation {
+	return []bootstrap.PrimaryBuilderInvocation{}
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -126,9 +134,11 @@ type config struct {
 
 	deviceConfig *deviceConfig
 
-	srcDir         string // the path of the root source directory
-	buildDir       string // the path of the build output directory
+	outDir         string // The output directory (usually out/)
+	soongOutDir    string
 	moduleListFile string // the path to the file which lists blueprint files to parse.
+
+	runGoTests bool
 
 	env       map[string]string
 	envLock   sync.Mutex
@@ -141,8 +151,6 @@ type config struct {
 
 	captureBuild      bool // true for tests, saves build parameters for each module
 	ignoreEnvironment bool // true for tests, returns empty from all Getenv calls
-
-	stopBefore bootstrap.StopBefore
 
 	fs         pathtools.FileSystem
 	mockBpList string
@@ -209,6 +217,20 @@ func loadFromConfigFile(configurable *productVariables, filename string) error {
 		Bool(configurable.GcovCoverage) ||
 			Bool(configurable.ClangCoverage))
 
+	// when Platform_sdk_final is true (or PLATFORM_VERSION_CODENAME is REL), use Platform_sdk_version;
+	// if false (pre-released version, for example), use Platform_sdk_codename.
+	if Bool(configurable.Platform_sdk_final) {
+		if configurable.Platform_sdk_version != nil {
+			configurable.Platform_sdk_version_or_codename =
+				proptools.StringPtr(strconv.Itoa(*(configurable.Platform_sdk_version)))
+		} else {
+			return fmt.Errorf("Platform_sdk_version cannot be pointed by a NULL pointer")
+		}
+	} else {
+		configurable.Platform_sdk_version_or_codename =
+			proptools.StringPtr(String(configurable.Platform_sdk_codename))
+	}
+
 	return saveToBazelConfigFile(configurable, filepath.Dir(filename))
 }
 
@@ -274,11 +296,12 @@ func saveToBazelConfigFile(config *productVariables, outDir string) error {
 
 // NullConfig returns a mostly empty Config for use by standalone tools like dexpreopt_gen that
 // use the android package.
-func NullConfig(buildDir string) Config {
+func NullConfig(outDir, soongOutDir string) Config {
 	return Config{
 		config: &config{
-			buildDir: buildDir,
-			fs:       pathtools.OsFs,
+			outDir:      outDir,
+			soongOutDir: soongOutDir,
+			fs:          pathtools.OsFs,
 		},
 	}
 }
@@ -299,7 +322,7 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 			DeviceName:                        stringPtr("test_device"),
 			Platform_sdk_version:              intPtr(30),
 			Platform_sdk_codename:             stringPtr("S"),
-			Platform_version_active_codenames: []string{"S"},
+			Platform_version_active_codenames: []string{"S", "Tiramisu"},
 			DeviceSystemSdkVersions:           []string{"14", "15"},
 			Platform_systemsdk_versions:       []string{"29", "30"},
 			AAPTConfig:                        []string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
@@ -310,7 +333,10 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 			ShippingApiLevel:                  stringPtr("30"),
 		},
 
-		buildDir:     buildDir,
+		outDir: buildDir,
+		// soongOutDir is inconsistent with production (it should be buildDir + "/soong")
+		// but a lot of tests assume this :(
+		soongOutDir:  buildDir,
 		captureBuild: true,
 		env:          envCopy,
 
@@ -388,7 +414,7 @@ func TestArchConfig(buildDir string, env map[string]string, bp string, fs map[st
 // multiple runs in the same program execution is carried over (such as Bazel
 // context or environment deps).
 func ConfigForAdditionalRun(c Config) (Config, error) {
-	newConfig, err := NewConfig(c.srcDir, c.buildDir, c.moduleListFile, c.env)
+	newConfig, err := NewConfig(c.moduleListFile, c.runGoTests, c.outDir, c.soongOutDir, c.env)
 	if err != nil {
 		return Config{}, err
 	}
@@ -399,15 +425,16 @@ func ConfigForAdditionalRun(c Config) (Config, error) {
 
 // NewConfig creates a new Config object. The srcDir argument specifies the path
 // to the root source directory. It also loads the config file, if found.
-func NewConfig(srcDir, buildDir string, moduleListFile string, availableEnv map[string]string) (Config, error) {
+func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir string, availableEnv map[string]string) (Config, error) {
 	// Make a config with default options.
 	config := &config{
-		ProductVariablesFileName: filepath.Join(buildDir, productVariablesFileName),
+		ProductVariablesFileName: filepath.Join(soongOutDir, productVariablesFileName),
 
 		env: availableEnv,
 
-		srcDir:            srcDir,
-		buildDir:          buildDir,
+		outDir:            outDir,
+		soongOutDir:       soongOutDir,
+		runGoTests:        runGoTests,
 		multilibConflicts: make(map[ArchType]bool),
 
 		moduleListFile: moduleListFile,
@@ -420,12 +447,12 @@ func NewConfig(srcDir, buildDir string, moduleListFile string, availableEnv map[
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
-	absBuildDir, err := filepath.Abs(buildDir)
+	absBuildDir, err := filepath.Abs(soongOutDir)
 	if err != nil {
 		return Config{}, err
 	}
 
-	absSrcDir, err := filepath.Abs(srcDir)
+	absSrcDir, err := filepath.Abs(".")
 	if err != nil {
 		return Config{}, err
 	}
@@ -440,7 +467,7 @@ func NewConfig(srcDir, buildDir string, moduleListFile string, availableEnv map[
 		return Config{}, err
 	}
 
-	KatiEnabledMarkerFile := filepath.Join(buildDir, ".soong.kati_enabled")
+	KatiEnabledMarkerFile := filepath.Join(soongOutDir, ".soong.kati_enabled")
 	if _, err := os.Stat(absolutePath(KatiEnabledMarkerFile)); err == nil {
 		config.katiEnabled = true
 	}
@@ -517,7 +544,7 @@ func (c *config) mockFileSystem(bp string, fs map[string][]byte) {
 	pathsToParse := []string{}
 	for candidate := range mockFS {
 		base := filepath.Base(candidate)
-		if base == "Blueprints" || base == "Android.bp" {
+		if base == "Android.bp" {
 			pathsToParse = append(pathsToParse, candidate)
 		}
 	}
@@ -530,28 +557,15 @@ func (c *config) mockFileSystem(bp string, fs map[string][]byte) {
 	c.mockBpList = blueprint.MockModuleListFile
 }
 
-func (c *config) StopBefore() bootstrap.StopBefore {
-	return c.stopBefore
-}
-
-// SetStopBefore configures soong_build to exit earlier at a specific point.
-func (c *config) SetStopBefore(stopBefore bootstrap.StopBefore) {
-	c.stopBefore = stopBefore
-}
-
 func (c *config) SetAllowMissingDependencies() {
 	c.productVariables.Allow_missing_dependencies = proptools.BoolPtr(true)
 }
 
-var _ bootstrap.ConfigStopBefore = (*config)(nil)
-
 // BlueprintToolLocation returns the directory containing build system tools
 // from Blueprint, like soong_zip and merge_zips.
-func (c *config) BlueprintToolLocation() string {
-	return filepath.Join(c.buildDir, "host", c.PrebuiltOS(), "bin")
+func (c *config) HostToolDir() string {
+	return filepath.Join(c.soongOutDir, "host", c.PrebuiltOS(), "bin")
 }
-
-var _ bootstrap.ConfigBlueprintToolLocation = (*config)(nil)
 
 func (c *config) HostToolPath(ctx PathContext, tool string) Path {
 	return PathForOutput(ctx, "host", c.PrebuiltOS(), "bin", tool)
@@ -583,7 +597,7 @@ func (c *config) PrebuiltOS() string {
 
 // GoRoot returns the path to the root directory of the Go toolchain.
 func (c *config) GoRoot() string {
-	return fmt.Sprintf("%s/prebuilts/go/%s", c.srcDir, c.PrebuiltOS())
+	return fmt.Sprintf("prebuilts/go/%s", c.PrebuiltOS())
 }
 
 // PrebuiltBuildTool returns the path to a tool in the prebuilts directory containing
@@ -838,11 +852,6 @@ func (c *config) UnbundledBuildImage() bool {
 // Returns true if building modules against prebuilt SDKs.
 func (c *config) AlwaysUsePrebuiltSdks() bool {
 	return Bool(c.productVariables.Always_use_prebuilt_sdks)
-}
-
-// Returns true if the boot jars check should be skipped.
-func (c *config) SkipBootJarsCheck() bool {
-	return Bool(c.productVariables.Skip_boot_jars_check)
 }
 
 func (c *config) MinimizeJavaDebugInfo() bool {
@@ -1467,6 +1476,10 @@ func (c *deviceConfig) PlatformSepolicyVersion() string {
 	return String(c.config.productVariables.PlatformSepolicyVersion)
 }
 
+func (c *deviceConfig) TotSepolicyVersion() string {
+	return String(c.config.productVariables.TotSepolicyVersion)
+}
+
 func (c *deviceConfig) BoardSepolicyVers() string {
 	if ver := String(c.config.productVariables.BoardSepolicyVers); ver != "" {
 		return ver
@@ -1573,6 +1586,10 @@ func (c *deviceConfig) RamdiskSnapshotDirsIncludedMap() map[string]bool {
 		c.config.productVariables.RamdiskSnapshotDirsIncluded)
 }
 
+func (c *deviceConfig) HostFakeSnapshotEnabled() bool {
+	return c.config.productVariables.HostFakeSnapshotEnabled
+}
+
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
 	if c.config.productVariables.ShippingApiLevel == nil {
 		return NoneApiLevel
@@ -1607,6 +1624,14 @@ func (c *config) SelinuxIgnoreNeverallows() bool {
 
 func (c *deviceConfig) SepolicySplit() bool {
 	return c.config.productVariables.SepolicySplit
+}
+
+func (c *deviceConfig) SepolicyFreezeTestExtraDirs() []string {
+	return c.config.productVariables.SepolicyFreezeTestExtraDirs
+}
+
+func (c *deviceConfig) SepolicyFreezeTestExtraPrebuiltDirs() []string {
+	return c.config.productVariables.SepolicyFreezeTestExtraPrebuiltDirs
 }
 
 // The ConfiguredJarList struct provides methods for handling a list of (apex, jar) pairs.
@@ -1697,6 +1722,20 @@ func (l *ConfiguredJarList) Append(apex string, jar string) ConfiguredJarList {
 	return ConfiguredJarList{apexes, jars}
 }
 
+// Append a list of (apex, jar) pairs to the list.
+func (l *ConfiguredJarList) AppendList(other ConfiguredJarList) ConfiguredJarList {
+	apexes := make([]string, 0, l.Len()+other.Len())
+	jars := make([]string, 0, l.Len()+other.Len())
+
+	apexes = append(apexes, l.apexes...)
+	jars = append(jars, l.jars...)
+
+	apexes = append(apexes, other.apexes...)
+	jars = append(jars, other.jars...)
+
+	return ConfiguredJarList{apexes, jars}
+}
+
 // RemoveList filters out a list of (apex, jar) pairs from the receiving list of pairs.
 func (l *ConfiguredJarList) RemoveList(list ConfiguredJarList) ConfiguredJarList {
 	apexes := make([]string, 0, l.Len())
@@ -1713,8 +1752,9 @@ func (l *ConfiguredJarList) RemoveList(list ConfiguredJarList) ConfiguredJarList
 	return ConfiguredJarList{apexes, jars}
 }
 
-// Filter keeps the entries if a jar appears in the given list of jars to keep; returns a new list.
-func (l *ConfiguredJarList) Filter(jarsToKeep []string) ConfiguredJarList {
+// Filter keeps the entries if a jar appears in the given list of jars to keep. Returns a new list
+// and any remaining jars that are not on this list.
+func (l *ConfiguredJarList) Filter(jarsToKeep []string) (ConfiguredJarList, []string) {
 	var apexes []string
 	var jars []string
 
@@ -1725,7 +1765,7 @@ func (l *ConfiguredJarList) Filter(jarsToKeep []string) ConfiguredJarList {
 		}
 	}
 
-	return ConfiguredJarList{apexes, jars}
+	return ConfiguredJarList{apexes, jars}, RemoveListFromList(jarsToKeep, jars)
 }
 
 // CopyOfJars returns a copy of the list of strings containing jar module name

@@ -15,10 +15,12 @@
 package bp2build
 
 import (
-	"android/soong/android"
-	"android/soong/genrule"
+	"fmt"
 	"strings"
 	"testing"
+
+	"android/soong/android"
+	"android/soong/python"
 )
 
 func TestGenerateSoongModuleTargets(t *testing.T) {
@@ -200,7 +202,8 @@ func TestGenerateSoongModuleTargets(t *testing.T) {
 			android.FailIfErrored(t, errs)
 
 			codegenCtx := NewCodegenContext(config, *ctx.Context, QueryView)
-			bazelTargets := generateBazelTargetsForDir(codegenCtx, dir)
+			bazelTargets, err := generateBazelTargetsForDir(codegenCtx, dir)
+			android.FailIfErrored(t, err)
 			if actualCount, expectedCount := len(bazelTargets), 1; actualCount != expectedCount {
 				t.Fatalf("Expected %d bazel target, got %d", expectedCount, actualCount)
 			}
@@ -218,13 +221,9 @@ func TestGenerateSoongModuleTargets(t *testing.T) {
 }
 
 func TestGenerateBazelTargetModules(t *testing.T) {
-	testCases := []struct {
-		name                 string
-		bp                   string
-		expectedBazelTargets []string
-	}{
+	testCases := []bp2buildTestCase{
 		{
-			bp: `custom {
+			blueprint: `custom {
 	name: "foo",
     string_list_prop: ["a", "b"],
     string_prop: "a",
@@ -241,7 +240,7 @@ func TestGenerateBazelTargetModules(t *testing.T) {
 			},
 		},
 		{
-			bp: `custom {
+			blueprint: `custom {
 	name: "control_characters",
     string_list_prop: ["\t", "\n"],
     string_prop: "a\t\n\r",
@@ -258,7 +257,7 @@ func TestGenerateBazelTargetModules(t *testing.T) {
 			},
 		},
 		{
-			bp: `custom {
+			blueprint: `custom {
   name: "has_dep",
   arch_paths: [":dep"],
   bazel_module: { bp2build_available: true },
@@ -280,7 +279,7 @@ custom {
 			},
 		},
 		{
-			bp: `custom {
+			blueprint: `custom {
     name: "arch_paths",
     arch: {
       x86: {
@@ -299,7 +298,7 @@ custom {
 			},
 		},
 		{
-			bp: `custom {
+			blueprint: `custom {
   name: "has_dep",
   arch: {
     x86: {
@@ -327,28 +326,51 @@ custom {
 )`,
 			},
 		},
+		{
+			blueprint: `custom {
+    name: "embedded_props",
+    embedded_prop: "abc",
+    bazel_module: { bp2build_available: true },
+}`,
+			expectedBazelTargets: []string{`custom(
+    name = "embedded_props",
+    embedded_attr = "abc",
+)`,
+			},
+		},
+		{
+			blueprint: `custom {
+    name: "ptr_to_embedded_props",
+    other_embedded_prop: "abc",
+    bazel_module: { bp2build_available: true },
+}`,
+			expectedBazelTargets: []string{`custom(
+    name = "ptr_to_embedded_props",
+    other_embedded_attr = "abc",
+)`,
+			},
+		},
 	}
 
 	dir := "."
 	for _, testCase := range testCases {
-		config := android.TestConfig(buildDir, nil, testCase.bp, nil)
+		config := android.TestConfig(buildDir, nil, testCase.blueprint, nil)
 		ctx := android.NewTestContext(config)
 
-		ctx.RegisterModuleType("custom", customModuleFactory)
-		ctx.RegisterBp2BuildMutator("custom", customBp2BuildMutator)
-		ctx.RegisterForBazelConversion()
+		registerCustomModuleForBp2buildConversion(ctx)
 
 		_, errs := ctx.ParseFileList(dir, []string{"Android.bp"})
-		if errored(t, "", errs) {
+		if errored(t, testCase, errs) {
 			continue
 		}
 		_, errs = ctx.ResolveDependencies(config)
-		if errored(t, "", errs) {
+		if errored(t, testCase, errs) {
 			continue
 		}
 
 		codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
-		bazelTargets := generateBazelTargetsForDir(codegenCtx, dir)
+		bazelTargets, err := generateBazelTargetsForDir(codegenCtx, dir)
+		android.FailIfErrored(t, err)
 
 		if actualCount, expectedCount := len(bazelTargets), len(testCase.expectedBazelTargets); actualCount != expectedCount {
 			t.Errorf("Expected %d bazel target, got %d", expectedCount, actualCount)
@@ -482,12 +504,12 @@ func TestGenerateBazelTargetModules_OneToMany_LoadedFromStarlark(t *testing.T) {
     name = "bar",
 )
 
-my_proto_library(
-    name = "bar_my_proto_library_deps",
-)
-
 proto_library(
     name = "bar_proto_library_deps",
+)
+
+my_proto_library(
+    name = "bar_my_proto_library_deps",
 )`,
 			expectedBazelTargetCount: 3,
 			expectedLoadStatements: `load("//build/bazel/rules:proto.bzl", "my_proto_library", "proto_library")
@@ -509,7 +531,8 @@ load("//build/bazel/rules:rules.bzl", "my_library")`,
 		android.FailIfErrored(t, errs)
 
 		codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
-		bazelTargets := generateBazelTargetsForDir(codegenCtx, dir)
+		bazelTargets, err := generateBazelTargetsForDir(codegenCtx, dir)
+		android.FailIfErrored(t, err)
 		if actualCount := len(bazelTargets); actualCount != testCase.expectedBazelTargetCount {
 			t.Fatalf("Expected %d bazel target, got %d", testCase.expectedBazelTargetCount, actualCount)
 		}
@@ -535,38 +558,13 @@ load("//build/bazel/rules:rules.bzl", "my_library")`,
 }
 
 func TestModuleTypeBp2Build(t *testing.T) {
-	otherGenruleBp := map[string]string{
-		"other/Android.bp": `genrule {
-    name: "foo.tool",
-    out: ["foo_tool.out"],
-    srcs: ["foo_tool.in"],
-    cmd: "cp $(in) $(out)",
-}
-genrule {
-    name: "other.tool",
-    out: ["other_tool.out"],
-    srcs: ["other_tool.in"],
-    cmd: "cp $(in) $(out)",
-}`,
-	}
-
-	testCases := []struct {
-		description                        string
-		moduleTypeUnderTest                string
-		moduleTypeUnderTestFactory         android.ModuleFactory
-		moduleTypeUnderTestBp2BuildMutator func(android.TopDownMutatorContext)
-		preArchMutators                    []android.RegisterMutatorFunc
-		bp                                 string
-		expectedBazelTargets               []string
-		fs                                 map[string]string
-		dir                                string
-	}{
+	testCases := []bp2buildTestCase{
 		{
 			description:                        "filegroup with does not specify srcs",
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "fg_foo",
     bazel_module: { bp2build_available: true },
 }`,
@@ -581,7 +579,7 @@ genrule {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "fg_foo",
     srcs: [],
     bazel_module: { bp2build_available: true },
@@ -597,7 +595,7 @@ genrule {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "fg_foo",
     srcs: ["a", "b"],
     bazel_module: { bp2build_available: true },
@@ -616,7 +614,7 @@ genrule {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "fg_foo",
     srcs: ["a", "b"],
     exclude_srcs: ["a"],
@@ -633,7 +631,7 @@ genrule {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "foo",
     srcs: ["**/*.txt"],
     bazel_module: { bp2build_available: true },
@@ -647,7 +645,7 @@ genrule {
     ],
 )`,
 			},
-			fs: map[string]string{
+			filesystem: map[string]string{
 				"other/a.txt":        "",
 				"other/b.txt":        "",
 				"other/subdir/a.txt": "",
@@ -659,7 +657,7 @@ genrule {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "foo",
     srcs: ["a.txt"],
     bazel_module: { bp2build_available: true },
@@ -674,7 +672,7 @@ genrule {
     ],
 )`,
 			},
-			fs: map[string]string{
+			filesystem: map[string]string{
 				"other/Android.bp": `filegroup {
     name: "fg_foo",
     srcs: ["**/*.txt"],
@@ -691,7 +689,7 @@ genrule {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "foobar",
     srcs: [
         ":foo",
@@ -707,454 +705,46 @@ genrule {
     ],
 )`,
 			},
-			fs: map[string]string{
+			filesystem: map[string]string{
+				"other/Android.bp": `filegroup {
+    name: "foo",
+    srcs: ["a", "b"],
+    bazel_module: { bp2build_available: true },
+}`,
+			},
+		},
+		{
+			description:                        "depends_on_other_unconverted_module_error",
+			moduleTypeUnderTest:                "filegroup",
+			moduleTypeUnderTestFactory:         android.FileGroupFactory,
+			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
+			unconvertedDepsMode:                errorModulesUnconvertedDeps,
+			blueprint: `filegroup {
+    name: "foobar",
+    srcs: [
+        ":foo",
+        "c",
+    ],
+    bazel_module: { bp2build_available: true },
+}`,
+			expectedErr: fmt.Errorf(`"foobar" depends on unconverted modules: foo`),
+			filesystem: map[string]string{
 				"other/Android.bp": `filegroup {
     name: "foo",
     srcs: ["a", "b"],
 }`,
 			},
 		},
-		{
-			description:                        "genrule with command line variable replacements",
-			moduleTypeUnderTest:                "genrule",
-			moduleTypeUnderTestFactory:         genrule.GenRuleFactory,
-			moduleTypeUnderTestBp2BuildMutator: genrule.GenruleBp2Build,
-			bp: `genrule {
-    name: "foo.tool",
-    out: ["foo_tool.out"],
-    srcs: ["foo_tool.in"],
-    cmd: "cp $(in) $(out)",
-    bazel_module: { bp2build_available: true },
-}
-
-genrule {
-    name: "foo",
-    out: ["foo.out"],
-    srcs: ["foo.in"],
-    tools: [":foo.tool"],
-    cmd: "$(location :foo.tool) --genDir=$(genDir) arg $(in) $(out)",
-    bazel_module: { bp2build_available: true },
-}`,
-			expectedBazelTargets: []string{
-				`genrule(
-    name = "foo",
-    cmd = "$(location :foo.tool) --genDir=$(GENDIR) arg $(SRCS) $(OUTS)",
-    outs = ["foo.out"],
-    srcs = ["foo.in"],
-    tools = [":foo.tool"],
-)`,
-				`genrule(
-    name = "foo.tool",
-    cmd = "cp $(SRCS) $(OUTS)",
-    outs = ["foo_tool.out"],
-    srcs = ["foo_tool.in"],
-)`,
-			},
-		},
-		{
-			description:                        "genrule using $(locations :label)",
-			moduleTypeUnderTest:                "genrule",
-			moduleTypeUnderTestFactory:         genrule.GenRuleFactory,
-			moduleTypeUnderTestBp2BuildMutator: genrule.GenruleBp2Build,
-			bp: `genrule {
-    name: "foo.tools",
-    out: ["foo_tool.out", "foo_tool2.out"],
-    srcs: ["foo_tool.in"],
-    cmd: "cp $(in) $(out)",
-    bazel_module: { bp2build_available: true },
-}
-
-genrule {
-    name: "foo",
-    out: ["foo.out"],
-    srcs: ["foo.in"],
-    tools: [":foo.tools"],
-    cmd: "$(locations :foo.tools) -s $(out) $(in)",
-    bazel_module: { bp2build_available: true },
-}`,
-			expectedBazelTargets: []string{`genrule(
-    name = "foo",
-    cmd = "$(locations :foo.tools) -s $(OUTS) $(SRCS)",
-    outs = ["foo.out"],
-    srcs = ["foo.in"],
-    tools = [":foo.tools"],
-)`,
-				`genrule(
-    name = "foo.tools",
-    cmd = "cp $(SRCS) $(OUTS)",
-    outs = [
-        "foo_tool.out",
-        "foo_tool2.out",
-    ],
-    srcs = ["foo_tool.in"],
-)`,
-			},
-		},
-		{
-			description:                        "genrule using $(locations //absolute:label)",
-			moduleTypeUnderTest:                "genrule",
-			moduleTypeUnderTestFactory:         genrule.GenRuleFactory,
-			moduleTypeUnderTestBp2BuildMutator: genrule.GenruleBp2Build,
-			bp: `genrule {
-    name: "foo",
-    out: ["foo.out"],
-    srcs: ["foo.in"],
-    tool_files: [":foo.tool"],
-    cmd: "$(locations :foo.tool) -s $(out) $(in)",
-    bazel_module: { bp2build_available: true },
-}`,
-			expectedBazelTargets: []string{`genrule(
-    name = "foo",
-    cmd = "$(locations //other:foo.tool) -s $(OUTS) $(SRCS)",
-    outs = ["foo.out"],
-    srcs = ["foo.in"],
-    tools = ["//other:foo.tool"],
-)`,
-			},
-			fs: otherGenruleBp,
-		},
-		{
-			description:                        "genrule srcs using $(locations //absolute:label)",
-			moduleTypeUnderTest:                "genrule",
-			moduleTypeUnderTestFactory:         genrule.GenRuleFactory,
-			moduleTypeUnderTestBp2BuildMutator: genrule.GenruleBp2Build,
-			bp: `genrule {
-    name: "foo",
-    out: ["foo.out"],
-    srcs: [":other.tool"],
-    tool_files: [":foo.tool"],
-    cmd: "$(locations :foo.tool) -s $(out) $(location :other.tool)",
-    bazel_module: { bp2build_available: true },
-}`,
-			expectedBazelTargets: []string{`genrule(
-    name = "foo",
-    cmd = "$(locations //other:foo.tool) -s $(OUTS) $(location //other:other.tool)",
-    outs = ["foo.out"],
-    srcs = ["//other:other.tool"],
-    tools = ["//other:foo.tool"],
-)`,
-			},
-			fs: otherGenruleBp,
-		},
-		{
-			description:                        "genrule using $(location) label should substitute first tool label automatically",
-			moduleTypeUnderTest:                "genrule",
-			moduleTypeUnderTestFactory:         genrule.GenRuleFactory,
-			moduleTypeUnderTestBp2BuildMutator: genrule.GenruleBp2Build,
-			bp: `genrule {
-    name: "foo",
-    out: ["foo.out"],
-    srcs: ["foo.in"],
-    tool_files: [":foo.tool", ":other.tool"],
-    cmd: "$(location) -s $(out) $(in)",
-    bazel_module: { bp2build_available: true },
-}`,
-			expectedBazelTargets: []string{`genrule(
-    name = "foo",
-    cmd = "$(location //other:foo.tool) -s $(OUTS) $(SRCS)",
-    outs = ["foo.out"],
-    srcs = ["foo.in"],
-    tools = [
-        "//other:foo.tool",
-        "//other:other.tool",
-    ],
-)`,
-			},
-			fs: otherGenruleBp,
-		},
-		{
-			description:                        "genrule using $(locations) label should substitute first tool label automatically",
-			moduleTypeUnderTest:                "genrule",
-			moduleTypeUnderTestFactory:         genrule.GenRuleFactory,
-			moduleTypeUnderTestBp2BuildMutator: genrule.GenruleBp2Build,
-			bp: `genrule {
-    name: "foo",
-    out: ["foo.out"],
-    srcs: ["foo.in"],
-    tools: [":foo.tool", ":other.tool"],
-    cmd: "$(locations) -s $(out) $(in)",
-    bazel_module: { bp2build_available: true },
-}`,
-			expectedBazelTargets: []string{`genrule(
-    name = "foo",
-    cmd = "$(locations //other:foo.tool) -s $(OUTS) $(SRCS)",
-    outs = ["foo.out"],
-    srcs = ["foo.in"],
-    tools = [
-        "//other:foo.tool",
-        "//other:other.tool",
-    ],
-)`,
-			},
-			fs: otherGenruleBp,
-		},
-		{
-			description:                        "genrule without tools or tool_files can convert successfully",
-			moduleTypeUnderTest:                "genrule",
-			moduleTypeUnderTestFactory:         genrule.GenRuleFactory,
-			moduleTypeUnderTestBp2BuildMutator: genrule.GenruleBp2Build,
-			bp: `genrule {
-    name: "foo",
-    out: ["foo.out"],
-    srcs: ["foo.in"],
-    cmd: "cp $(in) $(out)",
-    bazel_module: { bp2build_available: true },
-}`,
-			expectedBazelTargets: []string{`genrule(
-    name = "foo",
-    cmd = "cp $(SRCS) $(OUTS)",
-    outs = ["foo.out"],
-    srcs = ["foo.in"],
-)`,
-			},
-		},
 	}
 
-	dir := "."
 	for _, testCase := range testCases {
-		fs := make(map[string][]byte)
-		toParse := []string{
-			"Android.bp",
-		}
-		for f, content := range testCase.fs {
-			if strings.HasSuffix(f, "Android.bp") {
-				toParse = append(toParse, f)
-			}
-			fs[f] = []byte(content)
-		}
-		config := android.TestConfig(buildDir, nil, testCase.bp, fs)
-		ctx := android.NewTestContext(config)
-		ctx.RegisterModuleType(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestFactory)
-		ctx.RegisterBp2BuildMutator(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestBp2BuildMutator)
-		ctx.RegisterForBazelConversion()
-
-		_, errs := ctx.ParseFileList(dir, toParse)
-		if errored(t, testCase.description, errs) {
-			continue
-		}
-		_, errs = ctx.ResolveDependencies(config)
-		if errored(t, testCase.description, errs) {
-			continue
-		}
-
-		checkDir := dir
-		if testCase.dir != "" {
-			checkDir = testCase.dir
-		}
-
-		codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
-		bazelTargets := generateBazelTargetsForDir(codegenCtx, checkDir)
-		if actualCount, expectedCount := len(bazelTargets), len(testCase.expectedBazelTargets); actualCount != expectedCount {
-			t.Errorf("%s: Expected %d bazel target, got %d", testCase.description, expectedCount, actualCount)
-		} else {
-			for i, target := range bazelTargets {
-				if w, g := testCase.expectedBazelTargets[i], target.content; w != g {
-					t.Errorf(
-						"%s: Expected generated Bazel target to be '%s', got '%s'",
-						testCase.description,
-						w,
-						g,
-					)
-				}
-			}
-		}
+		t.Run(testCase.description, func(t *testing.T) {
+			runBp2BuildTestCase(t, func(ctx android.RegistrationContext) {}, testCase)
+		})
 	}
 }
 
 type bp2buildMutator = func(android.TopDownMutatorContext)
-
-func TestBp2BuildInlinesDefaults(t *testing.T) {
-	testCases := []struct {
-		moduleTypesUnderTest      map[string]android.ModuleFactory
-		bp2buildMutatorsUnderTest map[string]bp2buildMutator
-		bp                        string
-		expectedBazelTarget       string
-		description               string
-	}{
-		{
-			moduleTypesUnderTest: map[string]android.ModuleFactory{
-				"genrule":          genrule.GenRuleFactory,
-				"genrule_defaults": func() android.Module { return genrule.DefaultsFactory() },
-			},
-			bp2buildMutatorsUnderTest: map[string]bp2buildMutator{
-				"genrule": genrule.GenruleBp2Build,
-			},
-			bp: `genrule_defaults {
-    name: "gen_defaults",
-    cmd: "do-something $(in) $(out)",
-}
-genrule {
-    name: "gen",
-    out: ["out"],
-    srcs: ["in1"],
-    defaults: ["gen_defaults"],
-    bazel_module: { bp2build_available: true },
-}
-`,
-			expectedBazelTarget: `genrule(
-    name = "gen",
-    cmd = "do-something $(SRCS) $(OUTS)",
-    outs = ["out"],
-    srcs = ["in1"],
-)`,
-			description: "genrule applies properties from a genrule_defaults dependency if not specified",
-		},
-		{
-			moduleTypesUnderTest: map[string]android.ModuleFactory{
-				"genrule":          genrule.GenRuleFactory,
-				"genrule_defaults": func() android.Module { return genrule.DefaultsFactory() },
-			},
-			bp2buildMutatorsUnderTest: map[string]bp2buildMutator{
-				"genrule": genrule.GenruleBp2Build,
-			},
-			bp: `genrule_defaults {
-    name: "gen_defaults",
-    out: ["out-from-defaults"],
-    srcs: ["in-from-defaults"],
-    cmd: "cmd-from-defaults",
-}
-genrule {
-    name: "gen",
-    out: ["out"],
-    srcs: ["in1"],
-    defaults: ["gen_defaults"],
-    cmd: "do-something $(in) $(out)",
-    bazel_module: { bp2build_available: true },
-}
-`,
-			expectedBazelTarget: `genrule(
-    name = "gen",
-    cmd = "do-something $(SRCS) $(OUTS)",
-    outs = [
-        "out-from-defaults",
-        "out",
-    ],
-    srcs = [
-        "in-from-defaults",
-        "in1",
-    ],
-)`,
-			description: "genrule does merges properties from a genrule_defaults dependency, latest-first",
-		},
-		{
-			moduleTypesUnderTest: map[string]android.ModuleFactory{
-				"genrule":          genrule.GenRuleFactory,
-				"genrule_defaults": func() android.Module { return genrule.DefaultsFactory() },
-			},
-			bp2buildMutatorsUnderTest: map[string]bp2buildMutator{
-				"genrule": genrule.GenruleBp2Build,
-			},
-			bp: `genrule_defaults {
-    name: "gen_defaults1",
-    cmd: "cp $(in) $(out)",
-}
-
-genrule_defaults {
-    name: "gen_defaults2",
-    srcs: ["in1"],
-}
-
-genrule {
-    name: "gen",
-    out: ["out"],
-    defaults: ["gen_defaults1", "gen_defaults2"],
-    bazel_module: { bp2build_available: true },
-}
-`,
-			expectedBazelTarget: `genrule(
-    name = "gen",
-    cmd = "cp $(SRCS) $(OUTS)",
-    outs = ["out"],
-    srcs = ["in1"],
-)`,
-			description: "genrule applies properties from list of genrule_defaults",
-		},
-		{
-			moduleTypesUnderTest: map[string]android.ModuleFactory{
-				"genrule":          genrule.GenRuleFactory,
-				"genrule_defaults": func() android.Module { return genrule.DefaultsFactory() },
-			},
-			bp2buildMutatorsUnderTest: map[string]bp2buildMutator{
-				"genrule": genrule.GenruleBp2Build,
-			},
-			bp: `genrule_defaults {
-    name: "gen_defaults1",
-    defaults: ["gen_defaults2"],
-    cmd: "cmd1 $(in) $(out)", // overrides gen_defaults2's cmd property value.
-}
-
-genrule_defaults {
-    name: "gen_defaults2",
-    defaults: ["gen_defaults3"],
-    cmd: "cmd2 $(in) $(out)",
-    out: ["out-from-2"],
-    srcs: ["in1"],
-}
-
-genrule_defaults {
-    name: "gen_defaults3",
-    out: ["out-from-3"],
-    srcs: ["srcs-from-3"],
-}
-
-genrule {
-    name: "gen",
-    out: ["out"],
-    defaults: ["gen_defaults1"],
-    bazel_module: { bp2build_available: true },
-}
-`,
-			expectedBazelTarget: `genrule(
-    name = "gen",
-    cmd = "cmd1 $(SRCS) $(OUTS)",
-    outs = [
-        "out-from-3",
-        "out-from-2",
-        "out",
-    ],
-    srcs = [
-        "srcs-from-3",
-        "in1",
-    ],
-)`,
-			description: "genrule applies properties from genrule_defaults transitively",
-		},
-	}
-
-	dir := "."
-	for _, testCase := range testCases {
-		config := android.TestConfig(buildDir, nil, testCase.bp, nil)
-		ctx := android.NewTestContext(config)
-		for m, factory := range testCase.moduleTypesUnderTest {
-			ctx.RegisterModuleType(m, factory)
-		}
-		for mutator, f := range testCase.bp2buildMutatorsUnderTest {
-			ctx.RegisterBp2BuildMutator(mutator, f)
-		}
-		ctx.RegisterForBazelConversion()
-
-		_, errs := ctx.ParseFileList(dir, []string{"Android.bp"})
-		android.FailIfErrored(t, errs)
-		_, errs = ctx.ResolveDependencies(config)
-		android.FailIfErrored(t, errs)
-
-		codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
-		bazelTargets := generateBazelTargetsForDir(codegenCtx, dir)
-		if actualCount := len(bazelTargets); actualCount != 1 {
-			t.Fatalf("%s: Expected 1 bazel target, got %d", testCase.description, actualCount)
-		}
-
-		actualBazelTarget := bazelTargets[0]
-		if actualBazelTarget.content != testCase.expectedBazelTarget {
-			t.Errorf(
-				"%s: Expected generated Bazel target to be '%s', got '%s'",
-				testCase.description,
-				testCase.expectedBazelTarget,
-				actualBazelTarget.content,
-			)
-		}
-	}
-}
 
 func TestAllowlistingBp2buildTargetsExplicitly(t *testing.T) {
 	testCases := []struct {
@@ -1215,22 +805,25 @@ func TestAllowlistingBp2buildTargetsExplicitly(t *testing.T) {
 
 	dir := "."
 	for _, testCase := range testCases {
-		config := android.TestConfig(buildDir, nil, testCase.bp, nil)
-		ctx := android.NewTestContext(config)
-		ctx.RegisterModuleType(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestFactory)
-		ctx.RegisterBp2BuildMutator(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestBp2BuildMutator)
-		ctx.RegisterForBazelConversion()
+		t.Run(testCase.description, func(t *testing.T) {
+			config := android.TestConfig(buildDir, nil, testCase.bp, nil)
+			ctx := android.NewTestContext(config)
+			ctx.RegisterModuleType(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestFactory)
+			ctx.RegisterBp2BuildMutator(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestBp2BuildMutator)
+			ctx.RegisterForBazelConversion()
 
-		_, errs := ctx.ParseFileList(dir, []string{"Android.bp"})
-		android.FailIfErrored(t, errs)
-		_, errs = ctx.ResolveDependencies(config)
-		android.FailIfErrored(t, errs)
+			_, errs := ctx.ParseFileList(dir, []string{"Android.bp"})
+			android.FailIfErrored(t, errs)
+			_, errs = ctx.ResolveDependencies(config)
+			android.FailIfErrored(t, errs)
 
-		codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
-		bazelTargets := generateBazelTargetsForDir(codegenCtx, dir)
-		if actualCount := len(bazelTargets); actualCount != testCase.expectedCount {
-			t.Fatalf("%s: Expected %d bazel target, got %d", testCase.description, testCase.expectedCount, actualCount)
-		}
+			codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
+			bazelTargets, err := generateBazelTargetsForDir(codegenCtx, dir)
+			android.FailIfErrored(t, err)
+			if actualCount := len(bazelTargets); actualCount != testCase.expectedCount {
+				t.Fatalf("%s: Expected %d bazel target, got %d", testCase.description, testCase.expectedCount, actualCount)
+			}
+		})
 	}
 }
 
@@ -1338,7 +931,8 @@ filegroup { name: "opt-out-h", bazel_module: { bp2build_available: false } }
 
 		// For each directory, test that the expected number of generated targets is correct.
 		for dir, expectedCount := range testCase.expectedCount {
-			bazelTargets := generateBazelTargetsForDir(codegenCtx, dir)
+			bazelTargets, err := generateBazelTargetsForDir(codegenCtx, dir)
+			android.FailIfErrored(t, err)
 			if actualCount := len(bazelTargets); actualCount != expectedCount {
 				t.Fatalf(
 					"%s: Expected %d bazel target for %s package, got %d",
@@ -1353,30 +947,20 @@ filegroup { name: "opt-out-h", bazel_module: { bp2build_available: false } }
 }
 
 func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
-	testCases := []struct {
-		description                        string
-		moduleTypeUnderTest                string
-		moduleTypeUnderTestFactory         android.ModuleFactory
-		moduleTypeUnderTestBp2BuildMutator func(android.TopDownMutatorContext)
-		preArchMutators                    []android.RegisterMutatorFunc
-		bp                                 string
-		expectedBazelTargets               []string
-		fs                                 map[string]string
-		dir                                string
-	}{
+	testCases := []bp2buildTestCase{
 		{
 			description:                        "filegroup bazel_module.label",
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "fg_foo",
     bazel_module: { label: "//other:fg_foo" },
 }`,
 			expectedBazelTargets: []string{
 				`// BUILD file`,
 			},
-			fs: map[string]string{
+			filesystem: map[string]string{
 				"other/BUILD.bazel": `// BUILD file`,
 			},
 		},
@@ -1385,7 +969,7 @@ func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
 		    name: "fg_foo",
 		    bazel_module: { label: "//other:fg_foo" },
 		}
@@ -1397,7 +981,7 @@ func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
 			expectedBazelTargets: []string{
 				`// BUILD file`,
 			},
-			fs: map[string]string{
+			filesystem: map[string]string{
 				"other/BUILD.bazel": `// BUILD file`,
 			},
 		},
@@ -1407,8 +991,8 @@ func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
 			dir:                                "other",
-			bp:                                 ``,
-			fs: map[string]string{
+			blueprint:                          ``,
+			filesystem: map[string]string{
 				"other/Android.bp": `filegroup {
 				name: "fg_foo",
 				bazel_module: {
@@ -1434,7 +1018,7 @@ func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
 		    name: "fg_foo",
 		    bazel_module: {
 		      label: "//other:fg_foo",
@@ -1453,7 +1037,7 @@ func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
 )`,
 				`// BUILD file`,
 			},
-			fs: map[string]string{
+			filesystem: map[string]string{
 				"other/BUILD.bazel": `// BUILD file`,
 			},
 		},
@@ -1466,24 +1050,24 @@ func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
 			toParse := []string{
 				"Android.bp",
 			}
-			for f, content := range testCase.fs {
+			for f, content := range testCase.filesystem {
 				if strings.HasSuffix(f, "Android.bp") {
 					toParse = append(toParse, f)
 				}
 				fs[f] = []byte(content)
 			}
-			config := android.TestConfig(buildDir, nil, testCase.bp, fs)
+			config := android.TestConfig(buildDir, nil, testCase.blueprint, fs)
 			ctx := android.NewTestContext(config)
 			ctx.RegisterModuleType(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestFactory)
 			ctx.RegisterBp2BuildMutator(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestBp2BuildMutator)
 			ctx.RegisterForBazelConversion()
 
 			_, errs := ctx.ParseFileList(dir, toParse)
-			if errored(t, testCase.description, errs) {
+			if errored(t, testCase, errs) {
 				return
 			}
 			_, errs = ctx.ResolveDependencies(config)
-			if errored(t, testCase.description, errs) {
+			if errored(t, testCase, errs) {
 				return
 			}
 
@@ -1491,7 +1075,9 @@ func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
 			if testCase.dir != "" {
 				checkDir = testCase.dir
 			}
-			bazelTargets := generateBazelTargetsForDir(NewCodegenContext(config, *ctx.Context, Bp2Build), checkDir)
+			codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
+			bazelTargets, err := generateBazelTargetsForDir(codegenCtx, checkDir)
+			android.FailIfErrored(t, err)
 			bazelTargets.sort()
 			actualCount := len(bazelTargets)
 			expectedCount := len(testCase.expectedBazelTargets)
@@ -1517,22 +1103,13 @@ func TestCombineBuildFilesBp2buildTargets(t *testing.T) {
 }
 
 func TestGlobExcludeSrcs(t *testing.T) {
-	testCases := []struct {
-		description                        string
-		moduleTypeUnderTest                string
-		moduleTypeUnderTestFactory         android.ModuleFactory
-		moduleTypeUnderTestBp2BuildMutator func(android.TopDownMutatorContext)
-		bp                                 string
-		expectedBazelTargets               []string
-		fs                                 map[string]string
-		dir                                string
-	}{
+	testCases := []bp2buildTestCase{
 		{
 			description:                        "filegroup top level exclude_srcs",
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp: `filegroup {
+			blueprint: `filegroup {
     name: "fg_foo",
     srcs: ["**/*.txt"],
     exclude_srcs: ["c.txt"],
@@ -1548,7 +1125,7 @@ func TestGlobExcludeSrcs(t *testing.T) {
     ],
 )`,
 			},
-			fs: map[string]string{
+			filesystem: map[string]string{
 				"a.txt":          "",
 				"b.txt":          "",
 				"c.txt":          "",
@@ -1562,9 +1139,9 @@ func TestGlobExcludeSrcs(t *testing.T) {
 			moduleTypeUnderTest:                "filegroup",
 			moduleTypeUnderTestFactory:         android.FileGroupFactory,
 			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
-			bp:                                 "",
+			blueprint:                          "",
 			dir:                                "dir",
-			fs: map[string]string{
+			filesystem: map[string]string{
 				"dir/Android.bp": `filegroup {
     name: "fg_foo",
     srcs: ["**/*.txt"],
@@ -1596,24 +1173,24 @@ func TestGlobExcludeSrcs(t *testing.T) {
 		toParse := []string{
 			"Android.bp",
 		}
-		for f, content := range testCase.fs {
+		for f, content := range testCase.filesystem {
 			if strings.HasSuffix(f, "Android.bp") {
 				toParse = append(toParse, f)
 			}
 			fs[f] = []byte(content)
 		}
-		config := android.TestConfig(buildDir, nil, testCase.bp, fs)
+		config := android.TestConfig(buildDir, nil, testCase.blueprint, fs)
 		ctx := android.NewTestContext(config)
 		ctx.RegisterModuleType(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestFactory)
 		ctx.RegisterBp2BuildMutator(testCase.moduleTypeUnderTest, testCase.moduleTypeUnderTestBp2BuildMutator)
 		ctx.RegisterForBazelConversion()
 
 		_, errs := ctx.ParseFileList(dir, toParse)
-		if errored(t, testCase.description, errs) {
+		if errored(t, testCase, errs) {
 			continue
 		}
 		_, errs = ctx.ResolveDependencies(config)
-		if errored(t, testCase.description, errs) {
+		if errored(t, testCase, errs) {
 			continue
 		}
 
@@ -1621,7 +1198,9 @@ func TestGlobExcludeSrcs(t *testing.T) {
 		if testCase.dir != "" {
 			checkDir = testCase.dir
 		}
-		bazelTargets := generateBazelTargetsForDir(NewCodegenContext(config, *ctx.Context, Bp2Build), checkDir)
+		codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
+		bazelTargets, err := generateBazelTargetsForDir(codegenCtx, checkDir)
+		android.FailIfErrored(t, err)
 		if actualCount, expectedCount := len(bazelTargets), len(testCase.expectedBazelTargets); actualCount != expectedCount {
 			t.Errorf("%s: Expected %d bazel target, got %d\n%s", testCase.description, expectedCount, actualCount, bazelTargets)
 		} else {
@@ -1636,5 +1215,135 @@ func TestGlobExcludeSrcs(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestCommonBp2BuildModuleAttrs(t *testing.T) {
+	testCases := []bp2buildTestCase{
+		{
+			description:                        "Required into data test",
+			moduleTypeUnderTest:                "filegroup",
+			moduleTypeUnderTestFactory:         android.FileGroupFactory,
+			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
+			blueprint: `filegroup {
+    name: "reqd",
+}
+
+filegroup {
+    name: "fg_foo",
+    required: ["reqd"],
+    bazel_module: { bp2build_available: true },
+}`,
+			expectedBazelTargets: []string{`filegroup(
+    name = "fg_foo",
+    data = [":reqd"],
+)`,
+				`filegroup(
+    name = "reqd",
+)`,
+			},
+		},
+		{
+			description:                        "Required via arch into data test",
+			moduleTypeUnderTest:                "python_library",
+			moduleTypeUnderTestFactory:         python.PythonLibraryFactory,
+			moduleTypeUnderTestBp2BuildMutator: python.PythonLibraryBp2Build,
+			blueprint: `python_library {
+    name: "reqdx86",
+    bazel_module: { bp2build_available: false, },
+}
+
+python_library {
+    name: "reqdarm",
+    bazel_module: { bp2build_available: false, },
+}
+
+python_library {
+    name: "fg_foo",
+    arch: {
+			 arm: {
+				 required: ["reqdarm"],
+			 },
+			 x86: {
+				 required: ["reqdx86"],
+			 },
+    },
+    bazel_module: { bp2build_available: true },
+}`,
+			expectedBazelTargets: []string{`py_library(
+    name = "fg_foo",
+    data = select({
+        "//build/bazel/platforms/arch:arm": [":reqdarm"],
+        "//build/bazel/platforms/arch:x86": [":reqdx86"],
+        "//conditions:default": [],
+    }),
+    srcs_version = "PY3",
+)`,
+			},
+		},
+		{
+			description:                        "Required appended to data test",
+			moduleTypeUnderTest:                "python_library",
+			moduleTypeUnderTestFactory:         python.PythonLibraryFactory,
+			moduleTypeUnderTestBp2BuildMutator: python.PythonLibraryBp2Build,
+			blueprint: `python_library {
+    name: "reqd",
+    srcs: ["src.py"],
+}
+
+python_library {
+    name: "fg_foo",
+    data: ["data.bin"],
+    required: ["reqd"],
+    bazel_module: { bp2build_available: true },
+}`,
+			expectedBazelTargets: []string{
+				`py_library(
+    name = "fg_foo",
+    data = [
+        "data.bin",
+        ":reqd",
+    ],
+    srcs_version = "PY3",
+)`,
+				`py_library(
+    name = "reqd",
+    srcs = ["src.py"],
+    srcs_version = "PY3",
+)`,
+			},
+			filesystem: map[string]string{
+				"data.bin": "",
+				"src.py":   "",
+			},
+		},
+		{
+			description:                        "All props-to-attrs at once together test",
+			moduleTypeUnderTest:                "filegroup",
+			moduleTypeUnderTestFactory:         android.FileGroupFactory,
+			moduleTypeUnderTestBp2BuildMutator: android.FilegroupBp2Build,
+			blueprint: `filegroup {
+    name: "reqd"
+}
+filegroup {
+    name: "fg_foo",
+    required: ["reqd"],
+    bazel_module: { bp2build_available: true },
+}`,
+			expectedBazelTargets: []string{
+				`filegroup(
+    name = "fg_foo",
+    data = [":reqd"],
+)`,
+				`filegroup(
+    name = "reqd",
+)`,
+			},
+			filesystem: map[string]string{},
+		},
+	}
+
+	for _, test := range testCases {
+		runBp2BuildTestCaseSimple(t, test)
 	}
 }

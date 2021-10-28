@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"android/soong/android"
+
 	"github.com/google/blueprint"
 )
 
@@ -218,7 +219,7 @@ func (b hiddenAPIStubsDependencyTag) ExcludeFromVisibilityEnforcement() {
 var _ android.ExcludeFromVisibilityEnforcementTag = hiddenAPIStubsDependencyTag{}
 var _ android.ReplaceSourceWithPrebuilt = hiddenAPIStubsDependencyTag{}
 var _ android.ExcludeFromApexContentsTag = hiddenAPIStubsDependencyTag{}
-var _ android.SdkMemberTypeDependencyTag = hiddenAPIStubsDependencyTag{}
+var _ android.SdkMemberDependencyTag = hiddenAPIStubsDependencyTag{}
 
 // hiddenAPIComputeMonolithicStubLibModules computes the set of module names that provide stubs
 // needed to produce the hidden API monolithic stub flags file.
@@ -277,7 +278,7 @@ func hiddenAPIAddStubLibDependencies(ctx android.BottomUpMutatorContext, apiScop
 // hiddenAPIRetrieveDexJarBuildPath retrieves the DexJarBuildPath from the specified module, if
 // available, or reports an error.
 func hiddenAPIRetrieveDexJarBuildPath(ctx android.ModuleContext, module android.Module, kind android.SdkKind) android.Path {
-	var dexJar android.Path
+	var dexJar OptionalDexJarPath
 	if sdkLibrary, ok := module.(SdkLibraryDependency); ok {
 		dexJar = sdkLibrary.SdkApiStubDexJar(ctx, kind)
 	} else if j, ok := module.(UsesLibraryDependency); ok {
@@ -287,10 +288,11 @@ func hiddenAPIRetrieveDexJarBuildPath(ctx android.ModuleContext, module android.
 		return nil
 	}
 
-	if dexJar == nil {
-		ctx.ModuleErrorf("dependency %s does not provide a dex jar, consider setting compile_dex: true", module)
+	if !dexJar.Valid() {
+		ctx.ModuleErrorf("dependency %s does not provide a dex jar: %s", module, dexJar.InvalidReason())
+		return nil
 	}
-	return dexJar
+	return dexJar.Path()
 }
 
 // buildRuleToGenerateHiddenAPIStubFlagsFile creates a rule to create a hidden API stub flags file.
@@ -546,18 +548,18 @@ func (i *HiddenAPIInfo) mergeFromFragmentDeps(ctx android.ModuleContext, fragmen
 	}
 }
 
-// StubFlagSubset returns a SignatureCsvSubset that contains a path to a stub-flags.csv file and a
-// path to a signature-patterns.csv file that defines a subset of the monolithic stub flags file,
-// i.e. out/soong/hiddenapi/hiddenapi-stub-flags.txt, against which it will be compared.
+// StubFlagSubset returns a SignatureCsvSubset that contains a path to a filtered-stub-flags.csv
+// file and a path to a signature-patterns.csv file that defines a subset of the monolithic stub
+// flags file, i.e. out/soong/hiddenapi/hiddenapi-stub-flags.txt, against which it will be compared.
 func (i *HiddenAPIInfo) StubFlagSubset() SignatureCsvSubset {
-	return SignatureCsvSubset{i.StubFlagsPath, i.SignaturePatternsPath}
+	return SignatureCsvSubset{i.FilteredStubFlagsPath, i.SignaturePatternsPath}
 }
 
-// FlagSubset returns a SignatureCsvSubset that contains a path to an all-flags.csv file and a
+// FlagSubset returns a SignatureCsvSubset that contains a path to a filtered-flags.csv file and a
 // path to a signature-patterns.csv file that defines a subset of the monolithic flags file, i.e.
 // out/soong/hiddenapi/hiddenapi-flags.csv, against which it will be compared.
 func (i *HiddenAPIInfo) FlagSubset() SignatureCsvSubset {
-	return SignatureCsvSubset{i.AllFlagsPath, i.SignaturePatternsPath}
+	return SignatureCsvSubset{i.FilteredFlagsPath, i.SignaturePatternsPath}
 }
 
 var HiddenAPIInfoProvider = blueprint.NewProvider(HiddenAPIInfo{})
@@ -782,9 +784,6 @@ func (i *HiddenAPIFlagInput) transitiveStubDexJarsByScope() StubDexJarsByModule 
 // HiddenAPIFlagOutput contains paths to output files from the hidden API flag generation for a
 // bootclasspath_fragment module.
 type HiddenAPIFlagOutput struct {
-	// The path to the generated stub-flags.csv file.
-	StubFlagsPath android.Path
-
 	// The path to the generated annotation-flags.csv file.
 	AnnotationFlagsPath android.Path
 
@@ -794,12 +793,21 @@ type HiddenAPIFlagOutput struct {
 	// The path to the generated index.csv file.
 	IndexPath android.Path
 
+	// The path to the generated stub-flags.csv file.
+	StubFlagsPath android.Path
+
 	// The path to the generated all-flags.csv file.
 	AllFlagsPath android.Path
 
 	// The path to the generated signature-patterns.txt file which defines the subset of the
 	// monolithic hidden API files provided in this.
 	SignaturePatternsPath android.Path
+
+	// The path to the generated filtered-stub-flags.csv file.
+	FilteredStubFlagsPath android.Path
+
+	// The path to the generated filtered-flags.csv file.
+	FilteredFlagsPath android.Path
 }
 
 // bootDexJarByModule is a map from base module name (without prebuilt_ prefix) to the boot dex
@@ -1065,11 +1073,13 @@ func hiddenAPIRulesForBootclasspathFragment(ctx android.ModuleContext, contents 
 	// Store the paths in the info for use by other modules and sdk snapshot generation.
 	output := HiddenAPIOutput{
 		HiddenAPIFlagOutput: HiddenAPIFlagOutput{
-			StubFlagsPath:       filteredStubFlagsCSV,
-			AnnotationFlagsPath: annotationFlagsCSV,
-			MetadataPath:        metadataCSV,
-			IndexPath:           indexCSV,
-			AllFlagsPath:        filteredFlagsCSV,
+			AnnotationFlagsPath:   annotationFlagsCSV,
+			MetadataPath:          metadataCSV,
+			IndexPath:             indexCSV,
+			StubFlagsPath:         stubFlagsCSV,
+			AllFlagsPath:          allFlagsCSV,
+			FilteredStubFlagsPath: filteredStubFlagsCSV,
+			FilteredFlagsPath:     filteredFlagsCSV,
 		},
 		EncodedBootDexFilesByModule: encodedBootDexJarsByModule,
 	}
@@ -1159,18 +1169,17 @@ func extractBootDexInfoFromModules(ctx android.ModuleContext, contents []android
 
 // retrieveBootDexJarFromHiddenAPIModule retrieves the boot dex jar from the hiddenAPIModule.
 //
-// If the module does not provide a boot dex jar, i.e. the returned boot dex jar is nil, then  that
-// create a fake path and either report an error immediately or defer reporting of the error until
-// the path is actually used.
+// If the module does not provide a boot dex jar, i.e. the returned boot dex jar is unset or
+// invalid, then create a fake path and either report an error immediately or defer reporting of the
+// error until the path is actually used.
 func retrieveBootDexJarFromHiddenAPIModule(ctx android.ModuleContext, module hiddenAPIModule) android.Path {
 	bootDexJar := module.bootDexJar()
-	if bootDexJar == nil {
+	if !bootDexJar.Valid() {
 		fake := android.PathForModuleOut(ctx, fmt.Sprintf("fake/boot-dex/%s.jar", module.Name()))
-		bootDexJar = fake
-
-		handleMissingDexBootFile(ctx, module, fake)
+		handleMissingDexBootFile(ctx, module, fake, bootDexJar.InvalidReason())
+		return fake
 	}
-	return bootDexJar
+	return bootDexJar.Path()
 }
 
 // extractClassesJarsFromModules extracts the class jars from the supplied modules.
@@ -1194,13 +1203,6 @@ func retrieveClassesJarsFromModule(module android.Module) android.Paths {
 // deferReportingMissingBootDexJar returns true if a missing boot dex jar should not be reported by
 // Soong but should instead only be reported in ninja if the file is actually built.
 func deferReportingMissingBootDexJar(ctx android.ModuleContext, module android.Module) bool {
-	// TODO(b/179354495): Remove this workaround when it is unnecessary.
-	// Prebuilt modules like framework-wifi do not yet provide dex implementation jars. So,
-	// create a fake one that will cause a build error only if it is used.
-	if ctx.Config().AlwaysUsePrebuiltSdks() {
-		return true
-	}
-
 	// Any missing dependency should be allowed.
 	if ctx.Config().AllowMissingDependencies() {
 		return true
@@ -1271,7 +1273,7 @@ func deferReportingMissingBootDexJar(ctx android.ModuleContext, module android.M
 
 // handleMissingDexBootFile will either log a warning or create an error rule to create the fake
 // file depending on the value returned from deferReportingMissingBootDexJar.
-func handleMissingDexBootFile(ctx android.ModuleContext, module android.Module, fake android.WritablePath) {
+func handleMissingDexBootFile(ctx android.ModuleContext, module android.Module, fake android.WritablePath, reason string) {
 	if deferReportingMissingBootDexJar(ctx, module) {
 		// Create an error rule that pretends to create the output file but will actually fail if it
 		// is run.
@@ -1279,11 +1281,11 @@ func handleMissingDexBootFile(ctx android.ModuleContext, module android.Module, 
 			Rule:   android.ErrorRule,
 			Output: fake,
 			Args: map[string]string{
-				"error": fmt.Sprintf("missing dependencies: boot dex jar for %s", module),
+				"error": fmt.Sprintf("missing boot dex jar dependency for %s: %s", module, reason),
 			},
 		})
 	} else {
-		ctx.ModuleErrorf("module %s does not provide a dex jar", module)
+		ctx.ModuleErrorf("module %s does not provide a dex jar: %s", module, reason)
 	}
 }
 
@@ -1294,14 +1296,13 @@ func handleMissingDexBootFile(ctx android.ModuleContext, module android.Module, 
 // However, under certain conditions, e.g. errors, or special build configurations it will return
 // a path to a fake file.
 func retrieveEncodedBootDexJarFromModule(ctx android.ModuleContext, module android.Module) android.Path {
-	bootDexJar := module.(interface{ DexJarBuildPath() android.Path }).DexJarBuildPath()
-	if bootDexJar == nil {
+	bootDexJar := module.(interface{ DexJarBuildPath() OptionalDexJarPath }).DexJarBuildPath()
+	if !bootDexJar.Valid() {
 		fake := android.PathForModuleOut(ctx, fmt.Sprintf("fake/encoded-dex/%s.jar", module.Name()))
-		bootDexJar = fake
-
-		handleMissingDexBootFile(ctx, module, fake)
+		handleMissingDexBootFile(ctx, module, fake, bootDexJar.InvalidReason())
+		return fake
 	}
-	return bootDexJar
+	return bootDexJar.Path()
 }
 
 // extractEncodedDexJarsFromModules extracts the encoded dex jars from the supplied modules.

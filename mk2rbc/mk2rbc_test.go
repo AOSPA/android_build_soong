@@ -120,22 +120,25 @@ def init(g, handle):
 		desc:   "Inherit configuration always",
 		mkname: "product.mk",
 		in: `
-ifdef PRODUCT_NAME
 $(call inherit-product, part.mk)
+ifdef PRODUCT_NAME
+$(call inherit-product, part1.mk)
 else # Comment
-$(call inherit-product, $(LOCAL_PATH)/part.mk)
+$(call inherit-product, $(LOCAL_PATH)/part1.mk)
 endif
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 load(":part.star", _part_init = "init")
+load(":part1.star|init", _part1_init = "init")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
+  rblf.inherit(handle, "part", _part_init)
   if g.get("PRODUCT_NAME") != None:
-    rblf.inherit(handle, "part", _part_init)
+    rblf.inherit(handle, "part1", _part1_init)
   else:
     # Comment
-    rblf.inherit(handle, "part", _part_init)
+    rblf.inherit(handle, "part1", _part1_init)
 `,
 	},
 	{
@@ -158,22 +161,25 @@ def init(g, handle):
 		desc:   "Include configuration",
 		mkname: "product.mk",
 		in: `
-ifdef PRODUCT_NAME
 include part.mk
+ifdef PRODUCT_NAME
+include part1.mk
 else
--include $(LOCAL_PATH)/part.mk)
+-include $(LOCAL_PATH)/part1.mk)
 endif
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
-load(":part.star|init", _part_init = "init")
+load(":part.star", _part_init = "init")
+load(":part1.star|init", _part1_init = "init")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
+  _part_init(g, handle)
   if g.get("PRODUCT_NAME") != None:
-    _part_init(g, handle)
+    _part1_init(g, handle)
   else:
-    if _part_init != None:
-      _part_init(g, handle)
+    if _part1_init != None:
+      _part1_init(g, handle)
 `,
 	},
 
@@ -259,7 +265,7 @@ def init(g, handle):
 ifdef PRODUCT_NAME
 # Comment
 else
-  TARGET_COPY_OUT_VENDOR := foo
+  TARGET_COPY_OUT_RECOVERY := foo
 endif
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
@@ -270,7 +276,7 @@ def init(g, handle):
     # Comment
     pass
   else:
-    # MK2RBC TRANSLATION ERROR: cannot set predefined variable TARGET_COPY_OUT_VENDOR to "foo", its value should be "||VENDOR-PATH-PH||"
+    # MK2RBC TRANSLATION ERROR: cannot set predefined variable TARGET_COPY_OUT_RECOVERY to "foo", its value should be "recovery"
     pass
   rblf.warning("product.mk", "partially successful conversion")
 `,
@@ -414,7 +420,7 @@ endif
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  if rblf.filter(g.get("PRODUCT_LIST", ""), g["TARGET_PRODUCT"]):
+  if rblf.filter(g.get("PRODUCT_LIST", []), g["TARGET_PRODUCT"]):
     pass
 `,
 	},
@@ -669,6 +675,7 @@ $(info $(notdir foo/bar))
 $(call add_soong_config_namespace,snsconfig)
 $(call add_soong_config_var_value,snsconfig,imagetype,odm_image)
 PRODUCT_COPY_FILES := $(call copy-files,$(wildcard foo*.mk),etc)
+PRODUCT_COPY_FILES := $(call product-copy-files-by-pattern,from/%,to/%,a b c)
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
@@ -689,6 +696,7 @@ def init(g, handle):
   rblf.add_soong_config_namespace(g, "snsconfig")
   rblf.add_soong_config_var_value(g, "snsconfig", "imagetype", "odm_image")
   cfg["PRODUCT_COPY_FILES"] = rblf.copy_files(rblf.expand_wildcard("foo*.mk"), "etc")
+  cfg["PRODUCT_COPY_FILES"] = rblf.product_copy_files_by_pattern("from/%", "to/%", "a b c")
 `,
 	},
 	{

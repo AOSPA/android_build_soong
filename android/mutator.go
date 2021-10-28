@@ -15,11 +15,10 @@
 package android
 
 import (
-	"android/soong/bazel"
-	"fmt"
 	"reflect"
-	"strings"
 	"sync"
+
+	"android/soong/bazel"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -270,7 +269,7 @@ type TopDownMutatorContext interface {
 	// factory method, just like in CreateModule, but also requires
 	// BazelTargetModuleProperties containing additional metadata for the
 	// bp2build codegenerator.
-	CreateBazelTargetModule(ModuleFactory, string, bazel.BazelTargetModuleProperties, interface{}) BazelTargetModule
+	CreateBazelTargetModule(bazel.BazelTargetModuleProperties, CommonAttributes, interface{})
 }
 
 type topDownMutatorContext struct {
@@ -516,26 +515,18 @@ func registerDepsMutatorBp2Build(ctx RegisterMutatorsContext) {
 }
 
 func (t *topDownMutatorContext) CreateBazelTargetModule(
-	factory ModuleFactory,
-	name string,
 	bazelProps bazel.BazelTargetModuleProperties,
-	attrs interface{}) BazelTargetModule {
-	if strings.HasPrefix(name, bazel.BazelTargetModuleNamePrefix) {
-		panic(fmt.Errorf(
-			"The %s name prefix is added automatically, do not set it manually: %s",
-			bazel.BazelTargetModuleNamePrefix,
-			name))
+	commonAttrs CommonAttributes,
+	attrs interface{}) {
+	commonAttrs.fillCommonBp2BuildModuleAttrs(t)
+	mod := t.Module()
+	info := bp2buildInfo{
+		Dir:         t.OtherModuleDir(mod),
+		BazelProps:  bazelProps,
+		CommonAttrs: commonAttrs,
+		Attrs:       attrs,
 	}
-	name = bazel.BazelTargetModuleNamePrefix + name
-	nameProp := struct {
-		Name *string
-	}{
-		Name: &name,
-	}
-
-	b := t.createModuleWithoutInheritance(factory, &nameProp, attrs).(BazelTargetModule)
-	b.SetBazelTargetModuleProperties(bazelProps)
-	return b
+	mod.base().addBp2buildInfo(info)
 }
 
 func (t *topDownMutatorContext) AppendProperties(props ...interface{}) {

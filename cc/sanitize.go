@@ -41,7 +41,6 @@ var (
 
 	hwasanCflags = []string{"-fno-omit-frame-pointer", "-Wno-frame-larger-than=",
 		"-fsanitize-hwaddress-abi=platform",
-		"-fno-experimental-new-pass-manager",
 		// The following improves debug location information
 		// availability at the cost of its accuracy. It increases
 		// the likelihood of a stack variable's frame offset
@@ -466,8 +465,8 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
         s.Integer_overflow = nil
 	}
 
-	// Enable CFI for all components in the include paths (for Aarch64 only)
-	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
+	// Enable CFI for non-host components in the include paths
+	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && !ctx.Host() {
 		s.Cfi = proptools.BoolPtr(true)
 		if inList("cfi", ctx.Config().SanitizeDeviceDiag()) {
 			s.Diag.Cfi = proptools.BoolPtr(true)

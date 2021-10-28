@@ -229,6 +229,26 @@ func FixtureConfigureApexBootJars(bootJars ...string) android.FixturePreparer {
 	)
 }
 
+// FixtureUseLegacyCorePlatformApi prepares the fixture by setting the exception list of those
+// modules that are allowed to use the legacy core platform API to be the ones supplied.
+func FixtureUseLegacyCorePlatformApi(moduleNames ...string) android.FixturePreparer {
+	lookup := make(map[string]struct{})
+	for _, moduleName := range moduleNames {
+		lookup[moduleName] = struct{}{}
+	}
+	return android.FixtureModifyConfig(func(config android.Config) {
+		// Try and set the legacyCorePlatformApiLookup in the config, the returned value will be the
+		// actual value that is set.
+		cached := config.Once(legacyCorePlatformApiLookupKey, func() interface{} {
+			return lookup
+		})
+		// Make sure that the cached value is the one we need.
+		if !reflect.DeepEqual(cached, lookup) {
+			panic(fmt.Errorf("attempting to set legacyCorePlatformApiLookupKey to %q but it has already been set to %q", lookup, cached))
+		}
+	})
+}
+
 // registerRequiredBuildComponentsForTest registers the build components used by
 // PrepareForTestWithJavaDefaultModules.
 //
@@ -280,6 +300,7 @@ func gatherRequiredDepsForTest() string {
 		"kotlin-stdlib-jdk7",
 		"kotlin-stdlib-jdk8",
 		"kotlin-annotations",
+		"stub-annotations",
 	}
 
 	for _, extra := range extraModules {
@@ -430,4 +451,46 @@ func CheckMergedCompatConfigInputs(t *testing.T, result *android.TestResult, mes
 	android.AssertIntEquals(t, message+": output len", 1, len(allOutputs))
 	output := sourceGlobalCompatConfig.Output(allOutputs[0])
 	android.AssertPathsRelativeToTopEquals(t, message+": inputs", expectedPaths, output.Implicits)
+}
+
+// Register the fake APEX mutator to `android.InitRegistrationContext` as if the real mutator exists
+// at runtime. This must be called in `init()` of a test if the test is going to use the fake APEX
+// mutator. Otherwise, we will be missing the runtime mutator because "soong-apex" is not a
+// dependency, which will cause an inconsistency between testing and runtime mutators.
+func RegisterFakeRuntimeApexMutator() {
+	registerFakeApexMutator(android.InitRegistrationContext)
+}
+
+var PrepareForTestWithFakeApexMutator = android.GroupFixturePreparers(
+	android.FixtureRegisterWithContext(registerFakeApexMutator),
+)
+
+func registerFakeApexMutator(ctx android.RegistrationContext) {
+	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
+		ctx.BottomUp("apex", fakeApexMutator).Parallel()
+	})
+}
+
+type apexModuleBase interface {
+	ApexAvailable() []string
+}
+
+var _ apexModuleBase = (*Library)(nil)
+var _ apexModuleBase = (*SdkLibrary)(nil)
+
+// A fake APEX mutator that creates a platform variant and an APEX variant for modules with
+// `apex_available`. It helps us avoid a dependency on the real mutator defined in "soong-apex",
+// which will cause a cyclic dependency, and it provides an easy way to create an APEX variant for
+// testing without dealing with all the complexities in the real mutator.
+func fakeApexMutator(mctx android.BottomUpMutatorContext) {
+	switch mctx.Module().(type) {
+	case *Library, *SdkLibrary:
+		if len(mctx.Module().(apexModuleBase).ApexAvailable()) > 0 {
+			modules := mctx.CreateVariations("", "apex1000")
+			apexInfo := android.ApexInfo{
+				ApexVariationName: "apex1000",
+			}
+			mctx.SetVariationProvider(modules[1], android.ApexInfoProvider, apexInfo)
+		}
+	}
 }

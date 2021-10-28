@@ -48,7 +48,7 @@ var (
 
 	// License modules, i.e. modules depended upon via a licensesTag, must be automatically added to
 	// any sdk/module_exports to which their referencing module is a member.
-	_ SdkMemberTypeDependencyTag = licensesTag
+	_ SdkMemberDependencyTag = licensesTag
 )
 
 // Describes the property provided by a module to reference applicable licenses.
@@ -253,7 +253,7 @@ func getLicenses(ctx BaseModuleContext, module Module) []string {
 
 	primaryProperty := module.base().primaryLicensesProperty
 	if primaryProperty == nil {
-		if ctx.Config().IsEnvTrue("ANDROID_REQUIRE_LICENSES") {
+		if !ctx.Config().IsEnvFalse("ANDROID_REQUIRE_LICENSES") {
 			ctx.ModuleErrorf("module type %q must have an applicable licenses property", ctx.OtherModuleType(module))
 		}
 		return nil
@@ -293,7 +293,7 @@ func exemptFromRequiredApplicableLicensesProperty(module Module) bool {
 	case "*android.soongConfigModuleTypeModule": // creates aliases for modules with licenses
 	case "*android.soongConfigModuleTypeImport": // creates aliases for modules with licenses
 	case "*android.soongConfigStringVariableDummyModule": // used for creating aliases
-	case "*android.SoongConfigBoolVariableDummyModule": // used for creating aliases
+	case "*android.soongConfigBoolVariableDummyModule": // used for creating aliases
 	default:
 		return false
 	}

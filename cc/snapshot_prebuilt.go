@@ -65,7 +65,7 @@ func (recoverySnapshotImage) imageVariantName(cfg android.DeviceConfig) string {
 }
 
 func (recoverySnapshotImage) moduleNameSuffix() string {
-	return recoverySuffix
+	return RecoverySuffix
 }
 
 func (ramdiskSnapshotImage) imageVariantName(cfg android.DeviceConfig) string {
@@ -73,7 +73,7 @@ func (ramdiskSnapshotImage) imageVariantName(cfg android.DeviceConfig) string {
 }
 
 func (ramdiskSnapshotImage) moduleNameSuffix() string {
-	return ramdiskSuffix
+	return RamdiskSuffix
 }
 
 // Override existing vendor, recovery and ramdisk snapshot for cc module specific extra functions

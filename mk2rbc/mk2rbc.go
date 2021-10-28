@@ -118,7 +118,7 @@ var knownFunctions = map[string]struct {
 	"notdir":                              {baseName + ".notdir", starlarkTypeString, hiddenArgNone},
 	"my-dir":                              {"!my-dir", starlarkTypeString, hiddenArgNone},
 	"patsubst":                            {baseName + ".mkpatsubst", starlarkTypeString, hiddenArgNone},
-	"produce_copy_files":                  {baseName + ".produce_copy_files", starlarkTypeList, hiddenArgNone},
+	"product-copy-files-by-pattern":       {baseName + ".product_copy_files_by_pattern", starlarkTypeList, hiddenArgNone},
 	"require-artifacts-in-path":           {baseName + ".require_artifacts_in_path", starlarkTypeVoid, hiddenArgNone},
 	"require-artifacts-in-path-relaxed":   {baseName + ".require_artifacts_in_path_relaxed", starlarkTypeVoid, hiddenArgNone},
 	// TODO(asmundak): remove it once all calls are removed from configuration makefiles. see b/183161002
@@ -419,14 +419,7 @@ func newParseContext(ss *StarlarkScript, nodes []mkparser.Node) *parseContext {
 		{"TARGET_COPY_OUT_TEST_HARNESS_RAMDISK", "test_harness_ramdisk"},
 		{"TARGET_COPY_OUT_ROOT", "root"},
 		{"TARGET_COPY_OUT_RECOVERY", "recovery"},
-		{"TARGET_COPY_OUT_VENDOR", "||VENDOR-PATH-PH||"},
 		{"TARGET_COPY_OUT_VENDOR_RAMDISK", "vendor_ramdisk"},
-		{"TARGET_COPY_OUT_PRODUCT", "||PRODUCT-PATH-PH||"},
-		{"TARGET_COPY_OUT_PRODUCT_SERVICES", "||PRODUCT-PATH-PH||"},
-		{"TARGET_COPY_OUT_SYSTEM_EXT", "||SYSTEM_EXT-PATH-PH||"},
-		{"TARGET_COPY_OUT_ODM", "||ODM-PATH-PH||"},
-		{"TARGET_COPY_OUT_VENDOR_DLKM", "||VENDOR_DLKM-PATH-PH||"},
-		{"TARGET_COPY_OUT_ODM_DLKM", "||ODM_DLKM-PATH-PH||"},
 		// TODO(asmundak): to process internal config files, we need the following variables:
 		//    BOARD_CONFIG_VENDOR_PATH
 		//    TARGET_VENDOR
@@ -733,7 +726,7 @@ func (ctx *parseContext) buildConcatExpr(a *mkparser.Assignment) *concatExpr {
 func (ctx *parseContext) newDependentModule(path string, optional bool) *moduleInfo {
 	modulePath := ctx.loadedModulePath(path)
 	if mi, ok := ctx.dependentModules[modulePath]; ok {
-		mi.optional = mi.optional || optional
+		mi.optional = mi.optional && optional
 		return mi
 	}
 	moduleName := moduleNameForFile(path)
@@ -760,16 +753,21 @@ func (ctx *parseContext) handleSubConfig(
 
 	// In a simple case, the name of a module to inherit/include is known statically.
 	if path, ok := maybeString(pathExpr); ok {
+		// Note that even if this directive loads a module unconditionally, a module may be
+		// absent without causing any harm if this directive is inside an if/else block.
+		moduleShouldExist := loadAlways && ctx.ifNestLevel == 0
 		if strings.Contains(path, "*") {
 			if paths, err := fs.Glob(ctx.script.sourceFS, path); err == nil {
 				for _, p := range paths {
-					processModule(inheritedStaticModule{ctx.newDependentModule(p, !loadAlways), loadAlways})
+					mi := ctx.newDependentModule(p, !moduleShouldExist)
+					processModule(inheritedStaticModule{mi, loadAlways})
 				}
 			} else {
 				ctx.errorf(v, "cannot glob wildcard argument")
 			}
 		} else {
-			processModule(inheritedStaticModule{ctx.newDependentModule(path, !loadAlways), loadAlways})
+			mi := ctx.newDependentModule(path, !moduleShouldExist)
+			processModule(inheritedStaticModule{mi, loadAlways})
 		}
 		return
 	}
@@ -859,13 +857,13 @@ func (ctx *parseContext) findMatchingPaths(pattern []string) []string {
 
 func (ctx *parseContext) handleInheritModule(v mkparser.Node, pathExpr starlarkExpr, loadAlways bool) {
 	ctx.handleSubConfig(v, pathExpr, loadAlways, func(im inheritedModule) {
-		ctx.receiver.newNode(&inheritNode{im})
+		ctx.receiver.newNode(&inheritNode{im, loadAlways})
 	})
 }
 
 func (ctx *parseContext) handleInclude(v mkparser.Node, pathExpr starlarkExpr, loadAlways bool) {
 	ctx.handleSubConfig(v, pathExpr, loadAlways, func(im inheritedModule) {
-		ctx.receiver.newNode(&includeNode{im})
+		ctx.receiver.newNode(&includeNode{im, loadAlways})
 	})
 }
 
@@ -1625,12 +1623,12 @@ func Convert(req Request) (*StarlarkScript, error) {
 	return starScript, nil
 }
 
-func Launcher(path, name string) string {
+func Launcher(mainModuleUri, versionDefaultsUri, mainModuleName string) string {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "load(%q, %q)\n", baseUri, baseName)
-	fmt.Fprintf(&buf, "load(%q, \"init\")\n", path)
-	fmt.Fprintf(&buf, "g, config = %s(%q, init)\n", cfnMain, name)
-	fmt.Fprintf(&buf, "%s(g, config)\n", cfnPrintVars)
+	fmt.Fprintf(&buf, "load(%q, \"version_defaults\")\n", versionDefaultsUri)
+	fmt.Fprintf(&buf, "load(%q, \"init\")\n", mainModuleUri)
+	fmt.Fprintf(&buf, "%s(%s(%q, init, version_defaults))\n", cfnPrintVars, cfnMain, mainModuleName)
 	return buf.String()
 }
 
