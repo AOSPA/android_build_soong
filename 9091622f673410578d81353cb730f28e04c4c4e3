@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5269c45a_b666a9f1",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000488
+      },
+      "writtenOn": "2021-10-28T05:33:57Z",
+      "side": 1,
+      "message": "can you check on how CAF does it without adding this entry in build soong? thanks",
+      "revId": "9091622f673410578d81353cb730f28e04c4c4e3",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
