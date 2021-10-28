@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5e7579d8_dc8ab72f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000488
+      },
+      "writtenOn": "2021-10-28T18:26:40Z",
+      "side": 1,
+      "message": "i would honestly wait for sdclang public release to arrive",
+      "revId": "2a265a0102fe21d997119e0f7e79f2c07c0477b8",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
