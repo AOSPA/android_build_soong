@@ -16,6 +16,24 @@
       "message": "i would honestly wait for sdclang public release to arrive",
       "revId": "2a265a0102fe21d997119e0f7e79f2c07c0477b8",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "db9dfe8d_28f6a2d6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000002
+      },
+      "writtenOn": "2021-11-07T03:29:05Z",
+      "side": 1,
+      "message": "This has been broken since ruby. SDclang public release won\u0027t change it. I ran into the issue when running the dist targetin ruby for releases.",
+      "parentUuid": "5e7579d8_dc8ab72f",
+      "revId": "2a265a0102fe21d997119e0f7e79f2c07c0477b8",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
