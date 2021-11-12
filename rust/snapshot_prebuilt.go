@@ -46,6 +46,8 @@ func registerRustSnapshotModules(ctx android.RegistrationContext) {
 		"vendor_snapshot_rlib", VendorSnapshotRlibFactory)
 	cc.RecoverySnapshotImageSingleton.RegisterAdditionalModule(ctx,
 		"recovery_snapshot_rlib", RecoverySnapshotRlibFactory)
+	cc.RamdiskSnapshotImageSingleton.RegisterAdditionalModule(ctx,
+		"ramdisk_snapshot_rlib", RamdiskSnapshotRlibFactory)
 }
 
 func snapshotLibraryFactory(image cc.SnapshotImage, moduleSuffix string) (*Module, *snapshotLibraryDecorator) {
@@ -109,6 +111,13 @@ func VendorSnapshotRlibFactory() android.Module {
 
 func RecoverySnapshotRlibFactory() android.Module {
 	module, prebuilt := snapshotLibraryFactory(cc.RecoverySnapshotImageSingleton, cc.SnapshotRlibSuffix)
+	prebuilt.libraryDecorator.BuildOnlyRlib()
+	prebuilt.libraryDecorator.setNoStdlibs()
+	return module.Init()
+}
+
+func RamdiskSnapshotRlibFactory() android.Module {
+	module, prebuilt := snapshotLibraryFactory(cc.RamdiskSnapshotImageSingleton, cc.SnapshotRlibSuffix)
 	prebuilt.libraryDecorator.BuildOnlyRlib()
 	prebuilt.libraryDecorator.setNoStdlibs()
 	return module.Init()

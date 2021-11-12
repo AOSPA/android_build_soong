@@ -2130,6 +2130,8 @@ func GetSnapshot(c LinkableInterface, snapshotInfo **SnapshotInfo, actx android.
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "vendor_snapshot")
 		} else if recoverySnapshotVersion := actx.DeviceConfig().RecoverySnapshotVersion(); recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" && c.InRecovery() {
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "recovery_snapshot")
+		} else if ramdiskSnapshotVersion := actx.DeviceConfig().RamdiskSnapshotVersion(); ramdiskSnapshotVersion != "current" && ramdiskSnapshotVersion != "" && c.InRamdisk() {
+			snapshotModule = actx.AddVariationDependencies(nil, nil, "ramdisk_snapshot")
 		}
 		if len(snapshotModule) > 0 && snapshotModule[0] != nil {
 			snapshot := actx.OtherModuleProvider(snapshotModule[0], SnapshotInfoProvider).(SnapshotInfo)
@@ -2174,6 +2176,8 @@ func RewriteLibs(c LinkableInterface, snapshotInfo **SnapshotInfo, actx android.
 		// strip #version suffix out
 		name, _ := StubsLibNameAndVersion(entry)
 		if c.InRecovery() {
+			nonvariantLibs = append(nonvariantLibs, RewriteSnapshotLib(entry, GetSnapshot(c, snapshotInfo, actx).SharedLibs))
+		} else if c.InRamdisk() {
 			nonvariantLibs = append(nonvariantLibs, RewriteSnapshotLib(entry, GetSnapshot(c, snapshotInfo, actx).SharedLibs))
 		} else if c.UseSdk() && inList(name, *getNDKKnownLibs(config)) {
 			variantLibs = append(variantLibs, name+ndkLibrarySuffix)
