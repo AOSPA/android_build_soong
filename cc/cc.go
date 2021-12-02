@@ -3276,16 +3276,6 @@ func (c *Module) TestFor() []string {
 	return c.Properties.Test_for
 }
 
-func (c *Module) UniqueApexVariations() bool {
-	if u, ok := c.compiler.(interface {
-		uniqueApexVariations() bool
-	}); ok {
-		return u.uniqueApexVariations()
-	} else {
-		return false
-	}
-}
-
 func (c *Module) EverInstallable() bool {
 	return c.installer != nil &&
 		// Check to see whether the module is actually ever installable.
