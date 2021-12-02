@@ -32,8 +32,8 @@ import (
 )
 
 type QiifaAbiLibs struct {
-	XMLName         xml.Name `xml:"abilibs"`
-        Library         []string `xml:"library"`
+	XMLName xml.Name `xml:"abilibs"`
+	Library []string `xml:"library"`
 }
 
 var (
@@ -91,6 +91,7 @@ var (
 		// TODO: can we remove this now?
 		"-Wno-reserved-id-macro",
 
+		// TODO(b/207393703): delete this line after failures resolved
 		// Workaround for ccache with clang.
 		// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
 		"-Wno-unused-command-line-argument",
@@ -282,7 +283,7 @@ var (
 		"-Wno-unknown-warning-option",
 		"-Wno-unused-variable",
 		"-Wno-unused-value",
-		"-Wno-unused-parameter", 
+		"-Wno-unused-parameter",
 		"-Wno-non-c-typedef-for-linkage",
 		"-Wno-typedef-redefinition",
 		"-Wno-format",
@@ -339,14 +340,14 @@ var (
 	ExperimentalCStdVersion   = "gnu11"
 	ExperimentalCppStdVersion = "gnu++2a"
 
-	SDClang             = false
-	SDClangPath         = ""
-	ForceSDClangOff     = false
+	SDClang         = false
+	SDClangPath     = ""
+	ForceSDClangOff = false
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r433403"
-	ClangDefaultShortVersion = "13.0.2"
+	ClangDefaultVersion      = "clang-r433403b"
+	ClangDefaultShortVersion = "13.0.3"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -356,7 +357,7 @@ var (
 
 	// Directories with warnings from Android.mk files.
 	WarningAllowedOldProjects = []string{}
-        QiifaAbiLibraryList       = []string{}
+	QiifaAbiLibraryList       = []string{}
 )
 
 var pctx = android.NewPackageContext("android/soong/cc/config")
@@ -370,11 +371,11 @@ func init() {
 		data, _ := ioutil.ReadFile(qiifaBuildConfig)
 		var qiifalibs QiifaAbiLibs
 		_ = xml.Unmarshal([]byte(data), &qiifalibs)
-                for i := 0; i < len(qiifalibs.Library); i++ {
-                    QiifaAbiLibraryList = append(QiifaAbiLibraryList, qiifalibs.Library[i])
+		for i := 0; i < len(qiifalibs.Library); i++ {
+			QiifaAbiLibraryList = append(QiifaAbiLibraryList, qiifalibs.Library[i])
 
-                }
-        }
+		}
+	}
 
 	exportStringListStaticVariable("CommonGlobalConlyflags", commonGlobalConlyflags)
 	exportStringListStaticVariable("DeviceGlobalCppflags", deviceGlobalCppflags)
@@ -411,6 +412,15 @@ func init() {
 			// Default to zero initialization.
 			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
 		}
+
+		// TODO(b/207393703): Re-enable -Wno-unused-command-line-argument after failures are resolved.
+		/*
+			// Workaround for ccache with clang.
+			// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
+			if ctx.Config().IsEnvTrue("USE_CCACHE") {
+				flags = append(flags, "-Wno-unused-command-line-argument")
+			}
+		*/
 		return strings.Join(flags, " ")
 	})
 
@@ -448,28 +458,12 @@ func init() {
 	exportStringStaticVariable("CLANG_DEFAULT_VERSION", ClangDefaultVersion)
 	exportStringStaticVariable("CLANG_DEFAULT_SHORT_VERSION", ClangDefaultShortVersion)
 
-	pctx.SourcePathVariable("ClangDefaultBase", ClangDefaultBase)
-	pctx.VariableFunc("ClangBase", func(ctx android.PackageVarContext) string {
-		if override := ctx.Config().Getenv("LLVM_PREBUILTS_BASE"); override != "" {
-			return override
-		}
-		return "${ClangDefaultBase}"
-	})
-	pctx.VariableFunc("ClangVersion", func(ctx android.PackageVarContext) string {
-		if override := ctx.Config().Getenv("LLVM_PREBUILTS_VERSION"); override != "" {
-			return override
-		}
-		return ClangDefaultVersion
-	})
+	pctx.StaticVariableWithEnvOverride("ClangBase", "LLVM_PREBUILTS_BASE", ClangDefaultBase)
+	pctx.StaticVariableWithEnvOverride("ClangVersion", "LLVM_PREBUILTS_VERSION", ClangDefaultVersion)
 	pctx.StaticVariable("ClangPath", "${ClangBase}/${HostPrebuiltTag}/${ClangVersion}")
 	pctx.StaticVariable("ClangBin", "${ClangPath}/bin")
 
-	pctx.VariableFunc("ClangShortVersion", func(ctx android.PackageVarContext) string {
-		if override := ctx.Config().Getenv("LLVM_RELEASE_VERSION"); override != "" {
-			return override
-		}
-		return ClangDefaultShortVersion
-	})
+	pctx.StaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
 	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib64/clang/${ClangShortVersion}/lib/linux")
 
 	// These are tied to the version of LLVM directly in external/llvm, so they might trail the host prebuilts
@@ -646,3 +640,29 @@ func setSdclangVars() {
 }
 
 var HostPrebuiltTag = pctx.VariableConfigMethod("HostPrebuiltTag", android.Config.PrebuiltOS)
+
+func ClangPath(ctx android.PathContext, file string) android.SourcePath {
+	type clangToolKey string
+
+	key := android.NewCustomOnceKey(clangToolKey(file))
+
+	return ctx.Config().OnceSourcePath(key, func() android.SourcePath {
+		return clangPath(ctx).Join(ctx, file)
+	})
+}
+
+var clangPathKey = android.NewOnceKey("clangPath")
+
+func clangPath(ctx android.PathContext) android.SourcePath {
+	return ctx.Config().OnceSourcePath(clangPathKey, func() android.SourcePath {
+		clangBase := ClangDefaultBase
+		if override := ctx.Config().Getenv("LLVM_PREBUILTS_BASE"); override != "" {
+			clangBase = override
+		}
+		clangVersion := ClangDefaultVersion
+		if override := ctx.Config().Getenv("LLVM_PREBUILTS_VERSION"); override != "" {
+			clangVersion = override
+		}
+		return android.PathForSource(ctx, clangBase, ctx.Config().PrebuiltOS(), clangVersion)
+	})
+}
