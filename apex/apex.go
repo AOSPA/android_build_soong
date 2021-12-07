@@ -348,7 +348,6 @@ type apexBundle struct {
 	// Flags for special variants of APEX
 	testApex bool
 	vndkApex bool
-	artApex  bool
 
 	// Tells whether this variant of the APEX bundle is the primary one or not. Only the primary
 	// one gets installed to the device.
@@ -754,13 +753,6 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
 	ctx.AddFarVariationDependencies(commonVariation, compatConfigTag, a.properties.Compat_configs...)
 
-	if a.artApex {
-		// With EMMA_INSTRUMENT_FRAMEWORK=true the ART boot image includes jacoco library.
-		if ctx.Config().IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK") {
-			ctx.AddFarVariationDependencies(commonVariation, javaLibTag, "jacocoagent")
-		}
-	}
-
 	// Marks that this APEX (in fact all the modules in it) has to be built with the given SDKs.
 	// This field currently isn't used.
 	// TODO(jiyong): consider dropping this feature
@@ -1151,8 +1143,8 @@ const (
 	zipApexType       = "zip"
 	flattenedApexType = "flattened"
 
-	ext4FsType = "ext4"
-	f2fsFsType = "f2fs"
+	ext4FsType  = "ext4"
+	f2fsFsType  = "f2fs"
 	erofsFsType = "erofs"
 )
 
@@ -1683,6 +1675,9 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if _, ok := depTag.(android.ExcludeFromApexContentsTag); ok {
 			return false
 		}
+		if mod, ok := child.(android.Module); ok && !mod.Enabled() {
+			return false
+		}
 		depName := ctx.OtherModuleName(child)
 		if _, isDirectDep := parent.(*apexBundle); isDirectDep {
 			switch depTag {
@@ -2200,10 +2195,9 @@ func newApexBundle() *apexBundle {
 	return module
 }
 
-func ApexBundleFactory(testApex bool, artApex bool) android.Module {
+func ApexBundleFactory(testApex bool) android.Module {
 	bundle := newApexBundle()
 	bundle.testApex = testApex
-	bundle.artApex = artApex
 	return bundle
 }
 
