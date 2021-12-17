@@ -18,6 +18,7 @@ var (
 		"frameworks/native/libs/binder/rust",
 		"frameworks/proto_logging/stats",
 		"packages/modules/DnsResolver",
+		"packages/modules/Uwb",
 		"packages/modules/Virtualization",
 		"prebuilts/rust",
 		"system/bt",
@@ -32,6 +33,7 @@ var (
 		"system/security",
 		"system/tools/aidl",
 		"tools/security/fuzzing/example_rust_fuzzer",
+		"tools/security/fuzzing/orphans",
 		"vendor/",
 	}
 
