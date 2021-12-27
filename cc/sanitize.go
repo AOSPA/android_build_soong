@@ -732,8 +732,7 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize=implicit-integer-sign-change")
 		}
 		// http://b/171275751, Android doesn't build with this sanitizer yet.
-		// KEYSTONE(I31a5c1934a7faae000833f849a7c022b0e45a6f4,b/178857879)
-		if toDisableUnsignedShiftBaseChange(flags.Local.CFlags) && !flags.Sdclang {
+		if toDisableUnsignedShiftBaseChange(flags.Local.CFlags) {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize=unsigned-shift-base")
 		}
 	}
