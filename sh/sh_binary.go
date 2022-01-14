@@ -168,6 +168,10 @@ type ShBinary struct {
 
 var _ android.HostToolProvider = (*ShBinary)(nil)
 
+func (s *ShBinary) InstallBypassMake() bool {
+	return true
+}
+
 type ShTest struct {
 	ShBinary
 
@@ -271,13 +275,16 @@ func (s *ShBinary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	s.generateAndroidBuildActions(ctx)
 	installDir := android.PathForModuleInstall(ctx, "bin", proptools.String(s.properties.Sub_dir))
 	s.installedFile = ctx.InstallExecutable(installDir, s.outputFilePath.Base(), s.outputFilePath)
+	for _, symlink := range s.Symlinks() {
+		ctx.InstallSymlink(installDir, symlink, s.installedFile)
+	}
 }
 
 func (s *ShBinary) AndroidMkEntries() []android.AndroidMkEntries {
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "EXECUTABLES",
 		OutputFile: android.OptionalPathForPath(s.outputFilePath),
-		Include:    "$(BUILD_SYSTEM)/soong_cc_prebuilt.mk",
+		Include:    "$(BUILD_SYSTEM)/soong_cc_rust_prebuilt.mk",
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 				s.customAndroidMkEntries(entries)
@@ -426,7 +433,7 @@ func (s *ShTest) AndroidMkEntries() []android.AndroidMkEntries {
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "NATIVE_TESTS",
 		OutputFile: android.OptionalPathForPath(s.outputFilePath),
-		Include:    "$(BUILD_SYSTEM)/soong_cc_prebuilt.mk",
+		Include:    "$(BUILD_SYSTEM)/soong_cc_rust_prebuilt.mk",
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 				s.customAndroidMkEntries(entries)

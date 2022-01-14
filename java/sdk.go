@@ -60,6 +60,30 @@ func defaultJavaLanguageVersion(ctx android.EarlyModuleContext, s android.SdkSpe
 	}
 }
 
+// systemModuleKind returns the kind of system modules to use for the supplied combination of sdk
+// kind and API level.
+func systemModuleKind(sdkKind android.SdkKind, apiLevel android.ApiLevel) android.SdkKind {
+	systemModuleKind := sdkKind
+	if apiLevel.LessThanOrEqualTo(android.LastWithoutModuleLibCoreSystemModules) {
+		// API levels less than or equal to 31 did not provide a core-for-system-modules.jar
+		// specifically for the module-lib API. So, always use the public system modules for them.
+		systemModuleKind = android.SdkPublic
+	} else if systemModuleKind == android.SdkCore {
+		// Core is by definition what is included in the system module for the public API so should
+		// just use its system modules.
+		systemModuleKind = android.SdkPublic
+	} else if systemModuleKind == android.SdkSystem || systemModuleKind == android.SdkTest {
+		// The core system and test APIs are currently the same as the public API so they should use
+		// its system modules.
+		systemModuleKind = android.SdkPublic
+	} else if systemModuleKind == android.SdkSystemServer {
+		// The core system server API is the same as the core module-lib API.
+		systemModuleKind = android.SdkModule
+	}
+
+	return systemModuleKind
+}
+
 func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext android.SdkContext) sdkDep {
 	sdkVersion := sdkContext.SdkVersion(ctx)
 	if !sdkVersion.Valid() {
@@ -105,7 +129,8 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext android.SdkContext)
 
 		var systemModules string
 		if defaultJavaLanguageVersion(ctx, sdkVersion).usesJavaModules() {
-			systemModules = "sdk_public_" + sdkVersion.ApiLevel.String() + "_system_modules"
+			systemModuleKind := systemModuleKind(sdkVersion.Kind, sdkVersion.ApiLevel)
+			systemModules = fmt.Sprintf("sdk_%s_%s_system_modules", systemModuleKind, sdkVersion.ApiLevel)
 		}
 
 		return sdkDep{
@@ -116,13 +141,15 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext android.SdkContext)
 		}
 	}
 
-	toModule := func(modules []string, res string, aidl android.Path) sdkDep {
+	toModule := func(module string, aidl android.Path) sdkDep {
+		// Select the kind of system modules needed for the sdk version.
+		systemModulesKind := systemModuleKind(sdkVersion.Kind, android.FutureApiLevel)
 		return sdkDep{
 			useModule:          true,
-			bootclasspath:      append(modules, config.DefaultLambdaStubsLibrary),
-			systemModules:      "core-current-stubs-system-modules",
-			java9Classpath:     modules,
-			frameworkResModule: res,
+			bootclasspath:      []string{module, config.DefaultLambdaStubsLibrary},
+			systemModules:      fmt.Sprintf("core-%s-stubs-system-modules", systemModulesKind),
+			java9Classpath:     []string{module},
+			frameworkResModule: "framework-res",
 			aidl:               android.OptionalPathForPath(aidl),
 		}
 	}
@@ -161,38 +188,24 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext android.SdkContext)
 			noFrameworksLibs: true,
 		}
 	case android.SdkPublic:
-		return toModule([]string{"android_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
+		return toModule("android_stubs_current", sdkFrameworkAidlPath(ctx))
 	case android.SdkSystem:
-		return toModule([]string{"android_system_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
+		return toModule("android_system_stubs_current", sdkFrameworkAidlPath(ctx))
 	case android.SdkTest:
-		return toModule([]string{"android_test_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
+		return toModule("android_test_stubs_current", sdkFrameworkAidlPath(ctx))
 	case android.SdkCore:
 		return sdkDep{
 			useModule:        true,
 			bootclasspath:    []string{"core.current.stubs", config.DefaultLambdaStubsLibrary},
-			systemModules:    "core-current-stubs-system-modules",
+			systemModules:    "core-public-stubs-system-modules",
 			noFrameworksLibs: true,
 		}
 	case android.SdkModule:
 		// TODO(146757305): provide .apk and .aidl that have more APIs for modules
-		return sdkDep{
-			useModule:          true,
-			bootclasspath:      []string{"android_module_lib_stubs_current", config.DefaultLambdaStubsLibrary},
-			systemModules:      "core-module-lib-stubs-system-modules",
-			java9Classpath:     []string{"android_module_lib_stubs_current"},
-			frameworkResModule: "framework-res",
-			aidl:               android.OptionalPathForPath(nonUpdatableFrameworkAidlPath(ctx)),
-		}
+		return toModule("android_module_lib_stubs_current", nonUpdatableFrameworkAidlPath(ctx))
 	case android.SdkSystemServer:
 		// TODO(146757305): provide .apk and .aidl that have more APIs for modules
-		return sdkDep{
-			useModule:          true,
-			bootclasspath:      []string{"android_system_server_stubs_current", config.DefaultLambdaStubsLibrary},
-			systemModules:      "core-module-lib-stubs-system-modules",
-			java9Classpath:     []string{"android_system_server_stubs_current"},
-			frameworkResModule: "framework-res",
-			aidl:               android.OptionalPathForPath(sdkFrameworkAidlPath(ctx)),
-		}
+		return toModule("android_system_server_stubs_current", sdkFrameworkAidlPath(ctx))
 	default:
 		panic(fmt.Errorf("invalid sdk %q", sdkVersion.Raw))
 	}

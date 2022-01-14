@@ -15,6 +15,7 @@
 package build
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -43,6 +44,12 @@ const (
 	jsonModuleGraphTag = "modulegraph"
 	queryviewTag       = "queryview"
 	soongDocsTag       = "soong_docs"
+
+	// bootstrapEpoch is used to determine if an incremental build is incompatible with the current
+	// version of bootstrap and needs cleaning before continuing the build.  Increment this for
+	// incompatible changes, for example when moving the location of the bpglob binary that is
+	// executed during bootstrap before the primary builder has had a chance to update the path.
+	bootstrapEpoch = 1
 )
 
 func writeEnvironmentFile(ctx Context, envFile string, envDeps map[string]string) error {
@@ -121,18 +128,29 @@ func environmentArgs(config Config, tag string) []string {
 	}
 }
 
-func writeEmptyGlobFile(ctx Context, path string) {
+func writeEmptyFile(ctx Context, path string) {
 	err := os.MkdirAll(filepath.Dir(path), 0777)
 	if err != nil {
-		ctx.Fatalf("Failed to create parent directories of empty ninja glob file '%s': %s", path, err)
+		ctx.Fatalf("Failed to create parent directories of empty file '%s': %s", path, err)
 	}
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	if exists, err := fileExists(path); err != nil {
+		ctx.Fatalf("Failed to check if file '%s' exists: %s", path, err)
+	} else if !exists {
 		err = ioutil.WriteFile(path, nil, 0666)
 		if err != nil {
-			ctx.Fatalf("Failed to create empty ninja glob file '%s': %s", path, err)
+			ctx.Fatalf("Failed to create empty file '%s': %s", path, err)
 		}
 	}
+}
+
+func fileExists(path string) (bool, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func primaryBuilderInvocation(config Config, name string, output string, specificArgs []string) bootstrap.PrimaryBuilderInvocation {
@@ -166,11 +184,46 @@ func primaryBuilderInvocation(config Config, name string, output string, specifi
 	}
 }
 
+// bootstrapEpochCleanup deletes files used by bootstrap during incremental builds across
+// incompatible changes.  Incompatible changes are marked by incrementing the bootstrapEpoch
+// constant.  A tree is considered out of date for the current epoch of the
+// .soong.bootstrap.epoch.<epoch> file doesn't exist.
+func bootstrapEpochCleanup(ctx Context, config Config) {
+	epochFile := fmt.Sprintf(".soong.bootstrap.epoch.%d", bootstrapEpoch)
+	epochPath := filepath.Join(config.SoongOutDir(), epochFile)
+	if exists, err := fileExists(epochPath); err != nil {
+		ctx.Fatalf("failed to check if bootstrap epoch file %q exists: %q", epochPath, err)
+	} else if !exists {
+		// The tree is out of date for the current epoch, delete files used by bootstrap
+		// and force the primary builder to rerun.
+		os.Remove(filepath.Join(config.SoongOutDir(), "build.ninja"))
+		for _, globFile := range bootstrapGlobFileList(config) {
+			os.Remove(globFile)
+		}
+
+		// Mark the tree as up to date with the current epoch by writing the epoch marker file.
+		writeEmptyFile(ctx, epochPath)
+	}
+}
+
+func bootstrapGlobFileList(config Config) []string {
+	return []string{
+		config.NamedGlobFile(soongBuildTag),
+		config.NamedGlobFile(bp2buildTag),
+		config.NamedGlobFile(jsonModuleGraphTag),
+		config.NamedGlobFile(queryviewTag),
+		config.NamedGlobFile(soongDocsTag),
+	}
+}
+
 func bootstrapBlueprint(ctx Context, config Config) {
 	ctx.BeginTrace(metrics.RunSoong, "blueprint bootstrap")
 	defer ctx.EndTrace()
 
-	mainSoongBuildExtraArgs := []string{"-o", config.MainNinjaFile()}
+	// Clean up some files for incremental builds across incompatible changes.
+	bootstrapEpochCleanup(ctx, config)
+
+	mainSoongBuildExtraArgs := []string{"-o", config.SoongNinjaFile()}
 	if config.EmptyNinjaFile() {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--empty-ninja-file")
 	}
@@ -178,7 +231,7 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	mainSoongBuildInvocation := primaryBuilderInvocation(
 		config,
 		soongBuildTag,
-		config.MainNinjaFile(),
+		config.SoongNinjaFile(),
 		mainSoongBuildExtraArgs)
 
 	if config.bazelBuildMode() == mixedBuild {
@@ -232,14 +285,14 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	// The glob .ninja files are subninja'd. However, they are generated during
 	// the build itself so we write an empty file if the file does not exist yet
 	// so that the subninja doesn't fail on clean builds
-	for _, globFile := range globFiles {
-		writeEmptyGlobFile(ctx, globFile)
+	for _, globFile := range bootstrapGlobFileList(config) {
+		writeEmptyFile(ctx, globFile)
 	}
 
 	var blueprintArgs bootstrap.Args
 
 	blueprintArgs.ModuleListFile = filepath.Join(config.FileListDir(), "Android.bp.list")
-	blueprintArgs.OutFile = shared.JoinPath(config.SoongOutDir(), ".bootstrap/build.ninja")
+	blueprintArgs.OutFile = shared.JoinPath(config.SoongOutDir(), "bootstrap.ninja")
 	blueprintArgs.EmptyNinjaFile = false
 
 	blueprintCtx := blueprint.NewContext()
@@ -261,7 +314,7 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	}
 
 	bootstrapDeps := bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
-	bootstrapDepFile := shared.JoinPath(config.SoongOutDir(), ".bootstrap/build.ninja.d")
+	bootstrapDepFile := shared.JoinPath(config.SoongOutDir(), "bootstrap.ninja.d")
 	err := deptools.WriteDepFile(bootstrapDepFile, blueprintArgs.OutFile, bootstrapDeps)
 	if err != nil {
 		ctx.Fatalf("Error writing depfile '%s': %s", bootstrapDepFile, err)
@@ -288,11 +341,6 @@ func runSoong(ctx Context, config Config) {
 	// determine whether Soong needs to be re-run since why re-run it if only
 	// unused variables were changed?
 	envFile := filepath.Join(config.SoongOutDir(), availableEnvFile)
-
-	dir := filepath.Join(config.SoongOutDir(), ".bootstrap")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		ctx.Fatalf("Cannot mkdir " + dir)
-	}
 
 	buildMode := config.bazelBuildMode()
 	integratedBp2Build := buildMode == mixedBuild
@@ -342,7 +390,7 @@ func runSoong(ctx Context, config Config) {
 		}
 	}()
 
-	runMicrofactory(ctx, config, filepath.Join(config.HostToolDir(), "bpglob"), "github.com/google/blueprint/bootstrap/bpglob",
+	runMicrofactory(ctx, config, "bpglob", "github.com/google/blueprint/bootstrap/bpglob",
 		map[string]string{"github.com/google/blueprint": "build/blueprint"})
 
 	ninja := func(name, ninjaFile string, targets ...string) {
@@ -412,10 +460,10 @@ func runSoong(ctx Context, config Config) {
 
 	if config.SoongBuildInvocationNeeded() {
 		// This build generates <builddir>/build.ninja, which is used later by build/soong/ui/build/build.go#Build().
-		targets = append(targets, config.MainNinjaFile())
+		targets = append(targets, config.SoongNinjaFile())
 	}
 
-	ninja("bootstrap", ".bootstrap/build.ninja", targets...)
+	ninja("bootstrap", "bootstrap.ninja", targets...)
 
 	var soongBuildMetrics *soong_metrics_proto.SoongBuildMetrics
 	if shouldCollectBuildSoongMetrics(config) {
@@ -435,8 +483,7 @@ func runSoong(ctx Context, config Config) {
 	}
 }
 
-func runMicrofactory(ctx Context, config Config, relExePath string, pkg string, mapping map[string]string) {
-	name := filepath.Base(relExePath)
+func runMicrofactory(ctx Context, config Config, name string, pkg string, mapping map[string]string) {
 	ctx.BeginTrace(metrics.RunSoong, name)
 	defer ctx.EndTrace()
 	cfg := microfactory.Config{TrimPath: absPath(ctx, ".")}
@@ -444,7 +491,7 @@ func runMicrofactory(ctx Context, config Config, relExePath string, pkg string, 
 		cfg.Map(pkgPrefix, pathPrefix)
 	}
 
-	exePath := filepath.Join(config.SoongOutDir(), relExePath)
+	exePath := filepath.Join(config.SoongOutDir(), name)
 	dir := filepath.Dir(exePath)
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		ctx.Fatalf("cannot create %s: %s", dir, err)

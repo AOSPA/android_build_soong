@@ -347,7 +347,7 @@ func checkVndkOutput(t *testing.T, ctx *android.TestContext, output string, expe
 
 func checkVndkLibrariesOutput(t *testing.T, ctx *android.TestContext, module string, expected []string) {
 	t.Helper()
-	got := ctx.ModuleForTests(module, "").Module().(*vndkLibrariesTxt).fileNames
+	got := ctx.ModuleForTests(module, "android_common").Module().(*vndkLibrariesTxt).fileNames
 	assertArrayString(t, got, expected)
 }
 
@@ -533,11 +533,11 @@ func TestVndk(t *testing.T) {
 	CheckSnapshot(t, ctx, snapshotSingleton, "libllndk", "libllndk.so", llndkLib2ndPath, variant2nd)
 
 	snapshotConfigsPath := filepath.Join(snapshotVariantPath, "configs")
-	CheckSnapshot(t, ctx, snapshotSingleton, "llndk.libraries.txt", "llndk.libraries.txt", snapshotConfigsPath, "")
-	CheckSnapshot(t, ctx, snapshotSingleton, "vndkcore.libraries.txt", "vndkcore.libraries.txt", snapshotConfigsPath, "")
-	CheckSnapshot(t, ctx, snapshotSingleton, "vndksp.libraries.txt", "vndksp.libraries.txt", snapshotConfigsPath, "")
-	CheckSnapshot(t, ctx, snapshotSingleton, "vndkprivate.libraries.txt", "vndkprivate.libraries.txt", snapshotConfigsPath, "")
-	CheckSnapshot(t, ctx, snapshotSingleton, "vndkproduct.libraries.txt", "vndkproduct.libraries.txt", snapshotConfigsPath, "")
+	CheckSnapshot(t, ctx, snapshotSingleton, "llndk.libraries.txt", "llndk.libraries.txt", snapshotConfigsPath, "android_common")
+	CheckSnapshot(t, ctx, snapshotSingleton, "vndkcore.libraries.txt", "vndkcore.libraries.txt", snapshotConfigsPath, "android_common")
+	CheckSnapshot(t, ctx, snapshotSingleton, "vndksp.libraries.txt", "vndksp.libraries.txt", snapshotConfigsPath, "android_common")
+	CheckSnapshot(t, ctx, snapshotSingleton, "vndkprivate.libraries.txt", "vndkprivate.libraries.txt", snapshotConfigsPath, "android_common")
+	CheckSnapshot(t, ctx, snapshotSingleton, "vndkproduct.libraries.txt", "vndkproduct.libraries.txt", snapshotConfigsPath, "android_common")
 
 	checkVndkOutput(t, ctx, "vndk/vndk.libraries.txt", []string{
 		"LLNDK: libc.so",
@@ -615,7 +615,7 @@ func TestVndkLibrariesTxtAndroidMk(t *testing.T) {
 	config.TestProductVariables.Platform_vndk_version = StringPtr("29")
 	ctx := testCcWithConfig(t, config)
 
-	module := ctx.ModuleForTests("llndk.libraries.txt", "")
+	module := ctx.ModuleForTests("llndk.libraries.txt", "android_common")
 	entries := android.AndroidMkEntriesForTest(t, ctx, module.Module())[0]
 	assertArrayString(t, entries.EntryMap["LOCAL_MODULE_STEM"], []string{"llndk.libraries.29.txt"})
 }
@@ -3618,6 +3618,58 @@ func TestAidlFlagsPassedToTheAidlCompiler(t *testing.T) {
 	expectedAidlFlag := "-Werror"
 	if !strings.Contains(aidlCommand, expectedAidlFlag) {
 		t.Errorf("aidl command %q does not contain %q", aidlCommand, expectedAidlFlag)
+	}
+}
+
+func TestAidlFlagsWithMinSdkVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sdkVersion string
+		variant    string
+		expected   string
+	}{
+		{
+			name:       "default is current",
+			sdkVersion: "",
+			variant:    "android_arm64_armv8-a_static",
+			expected:   "platform_apis",
+		},
+		{
+			name:       "use sdk_version",
+			sdkVersion: `sdk_version: "29"`,
+			variant:    "android_arm64_armv8-a_static",
+			expected:   "platform_apis",
+		},
+		{
+			name:       "use sdk_version(sdk variant)",
+			sdkVersion: `sdk_version: "29"`,
+			variant:    "android_arm64_armv8-a_sdk_static",
+			expected:   "29",
+		},
+		{
+			name:       "use min_sdk_version",
+			sdkVersion: `min_sdk_version: "29"`,
+			variant:    "android_arm64_armv8-a_static",
+			expected:   "29",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testCc(t, `
+				cc_library {
+					name: "libfoo",
+					stl: "none",
+					srcs: ["a/Foo.aidl"],
+					`+tc.sdkVersion+`
+				}
+			`)
+			libfoo := ctx.ModuleForTests("libfoo", tc.variant)
+			manifest := android.RuleBuilderSboxProtoForTests(t, libfoo.Output("aidl.sbox.textproto"))
+			aidlCommand := manifest.Commands[0].GetCommand()
+			expectedAidlFlag := "--min_sdk_version=" + tc.expected
+			if !strings.Contains(aidlCommand, expectedAidlFlag) {
+				t.Errorf("aidl command %q does not contain %q", aidlCommand, expectedAidlFlag)
+			}
+		})
 	}
 }
 

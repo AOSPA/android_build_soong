@@ -7685,6 +7685,28 @@ func TestApexKeysTxt(t *testing.T) {
 			name: "myapex",
 			key: "myapex.key",
 			updatable: false,
+			custom_sign_tool: "sign_myapex",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	apexKeysText := ctx.SingletonForTests("apex_keys_text")
+	content := apexKeysText.MaybeDescription("apexkeys.txt").BuildParams.Args["content"]
+	ensureContains(t, content, `name="myapex.apex" public_key="vendor/foo/devkeys/testkey.avbpubkey" private_key="vendor/foo/devkeys/testkey.pem" container_certificate="vendor/foo/devkeys/test.x509.pem" container_private_key="vendor/foo/devkeys/test.pk8" partition="system_ext" sign_tool="sign_myapex"`)
+}
+
+func TestApexKeysTxtOverrides(t *testing.T) {
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: false,
+			custom_sign_tool: "sign_myapex",
 		}
 
 		apex_key {
@@ -8328,6 +8350,46 @@ func TestAndroidMk_DexpreoptBuiltInstalledForApex_Prebuilt(t *testing.T) {
 			"foo-dexpreopt-arm64-apex@myapex@javalib@foo.jar@classes.odex",
 			"foo-dexpreopt-arm64-apex@myapex@javalib@foo.jar@classes.vdex",
 		})
+}
+
+func TestAndroidMk_RequiredModules(t *testing.T) {
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: false,
+			java_libs: ["foo"],
+			required: ["otherapex"],
+		}
+
+		apex {
+			name: "otherapex",
+			key: "myapex.key",
+			updatable: false,
+			java_libs: ["foo"],
+			required: ["otherapex"],
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_library {
+			name: "foo",
+			srcs: ["foo.java"],
+			apex_available: ["myapex", "otherapex"],
+			installable: true,
+		}
+	`)
+
+	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
+	var builder strings.Builder
+	data.Custom(&builder, apexBundle.BaseModuleName(), "TARGET_", "", data)
+	androidMk := builder.String()
+	ensureContains(t, androidMk, "LOCAL_REQUIRED_MODULES += otherapex")
 }
 
 func TestMain(m *testing.M) {

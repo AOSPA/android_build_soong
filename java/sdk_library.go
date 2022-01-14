@@ -344,13 +344,14 @@ type ApiScopeProperties struct {
 	// The sdk_version to use for building the stubs.
 	//
 	// If not specified then it will use an sdk_version determined as follows:
+	//
 	// 1) If the sdk_version specified on the java_sdk_library is none then this
-	//    will be none. This is used for java_sdk_library instances that are used
-	//    to create stubs that contribute to the core_current sdk version.
-	// 2) Otherwise, it is assumed that this library extends but does not contribute
-	//    directly to a specific sdk_version and so this uses the sdk_version appropriate
-	//    for the api scope. e.g. public will use sdk_version: current, system will use
-	//    sdk_version: system_current, etc.
+	// will be none. This is used for java_sdk_library instances that are used
+	// to create stubs that contribute to the core_current sdk version.
+	// 2) Otherwise, it is assumed that this library extends but does not
+	// contribute directly to a specific sdk_version and so this uses the
+	// sdk_version appropriate for the api scope. e.g. public will use
+	// sdk_version: current, system will use sdk_version: system_current, etc.
 	//
 	// This does not affect the sdk_version used for either generating the stubs source
 	// or the API file. They both have to use the same sdk_version as is used for
@@ -2521,7 +2522,8 @@ func formattedOptionalSdkLevelAttribute(ctx android.ModuleContext, attrName stri
 	}
 	apiLevel, err := android.ApiLevelFromUser(ctx, *value)
 	if err != nil {
-		ctx.PropertyErrorf(attrName, err.Error())
+		// attributes in bp files have underscores but in the xml have dashes.
+		ctx.PropertyErrorf(strings.ReplaceAll(attrName, "-", "_"), err.Error())
 		return ""
 	}
 	intStr := strconv.Itoa(apiLevel.FinalOrPreviewInt())
@@ -2542,10 +2544,10 @@ func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) stri
 	libNameAttr := formattedOptionalAttribute("name", &libName)
 	filePath := module.implPath(ctx)
 	filePathAttr := formattedOptionalAttribute("file", &filePath)
-	implicitFromAttr := formattedOptionalSdkLevelAttribute(ctx, "on_bootclasspath_since", module.properties.On_bootclasspath_since)
-	implicitUntilAttr := formattedOptionalSdkLevelAttribute(ctx, "on_bootclasspath_before", module.properties.On_bootclasspath_before)
-	minSdkAttr := formattedOptionalSdkLevelAttribute(ctx, "min_device_sdk", module.properties.Min_device_sdk)
-	maxSdkAttr := formattedOptionalSdkLevelAttribute(ctx, "max_device_sdk", module.properties.Max_device_sdk)
+	implicitFromAttr := formattedOptionalSdkLevelAttribute(ctx, "on-bootclasspath-since", module.properties.On_bootclasspath_since)
+	implicitUntilAttr := formattedOptionalSdkLevelAttribute(ctx, "on-bootclasspath-before", module.properties.On_bootclasspath_before)
+	minSdkAttr := formattedOptionalSdkLevelAttribute(ctx, "min-device-sdk", module.properties.Min_device_sdk)
+	maxSdkAttr := formattedOptionalSdkLevelAttribute(ctx, "max-device-sdk", module.properties.Max_device_sdk)
 	// <library> is understood in all android versions whereas <updatable-library> is only understood from API T (and ignored before that).
 	// similarly, min_device_sdk is only understood from T. So if a library is using that, we need to use the updatable-library to make sure this library is not loaded before T
 	var libraryTag string
