@@ -11,10 +11,10 @@ readonly GENERATED_BUILD_FILE_NAME="BUILD.bazel"
 function test_bp2build_null_build() {
   setup
   run_soong bp2build
-  local output_mtime1=$(stat -c "%y" out/soong/.bootstrap/bp2build_workspace_marker)
+  local output_mtime1=$(stat -c "%y" out/soong/bp2build_workspace_marker)
 
   run_soong bp2build
-  local output_mtime2=$(stat -c "%y" out/soong/.bootstrap/bp2build_workspace_marker)
+  local output_mtime2=$(stat -c "%y" out/soong/bp2build_workspace_marker)
 
   if [[ "$output_mtime1" != "$output_mtime2" ]]; then
     fail "Output bp2build marker file changed on null build"
@@ -36,10 +36,10 @@ EOF
   touch foo/bar/a.txt foo/bar/b.txt
 
   run_soong bp2build
-  local output_mtime1=$(stat -c "%y" out/soong/.bootstrap/bp2build_workspace_marker)
+  local output_mtime1=$(stat -c "%y" out/soong/bp2build_workspace_marker)
 
   run_soong bp2build
-  local output_mtime2=$(stat -c "%y" out/soong/.bootstrap/bp2build_workspace_marker)
+  local output_mtime2=$(stat -c "%y" out/soong/bp2build_workspace_marker)
 
   if [[ "$output_mtime1" != "$output_mtime2" ]]; then
     fail "Output bp2build marker file changed on null build"
@@ -105,7 +105,7 @@ EOF
   # NOTE: We don't actually use the extra BUILD file for anything here
   run_bazel build --package_path=out/soong/workspace //foo/...
 
-  local the_answer_file="bazel-out/k8-fastbuild/bin/foo/convertible_soong_module/the_answer.txt"
+  local the_answer_file="bazel-out/android_target-fastbuild/bin/foo/convertible_soong_module/the_answer.txt"
   if [[ ! -f "${the_answer_file}" ]]; then
     fail "Expected '${the_answer_file}' to be generated, but was missing"
   fi

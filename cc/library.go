@@ -159,6 +159,8 @@ type StaticOrSharedProperties struct {
 	Export_static_lib_headers []string `android:"arch_variant"`
 
 	Apex_available []string `android:"arch_variant"`
+
+	Installable *bool `android:"arch_variant"`
 }
 
 type LibraryMutatedProperties struct {
@@ -1062,6 +1064,8 @@ type libraryInterface interface {
         loadQiifaMetadata(ctx android.BaseModuleContext)
 
 	getAPIListCoverageXMLPath() android.ModuleOutPath
+
+	installable() *bool
 }
 
 type versionedInterface interface {
@@ -1387,7 +1391,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	// depending on a table of contents file instead of the library itself.
 	tocFile := outputFile.ReplaceExtension(ctx, flags.Toolchain.ShlibSuffix()[1:]+".toc")
 	library.tocFile = android.OptionalPathForPath(tocFile)
-	transformSharedObjectToToc(ctx, outputFile, tocFile, builderFlags)
+	TransformSharedObjectToToc(ctx, outputFile, tocFile)
 
 	stripFlags := flagsToStripFlags(flags)
 	needsStrip := library.stripper.NeedsStrip(ctx)
@@ -1994,6 +1998,15 @@ func (library *libraryDecorator) availableFor(what string) bool {
 	return android.CheckAvailableForApex(what, list)
 }
 
+func (library *libraryDecorator) installable() *bool {
+	if library.static() {
+		return library.StaticProperties.Static.Installable
+	} else if library.shared() {
+		return library.SharedProperties.Shared.Installable
+	}
+	return nil
+}
+
 func (library *libraryDecorator) makeUninstallable(mod *Module) {
 	if library.static() && library.buildStatic() && !library.buildStubs() {
 		// If we're asked to make a static library uninstallable we don't do
@@ -2367,9 +2380,6 @@ func ccSharedOrStaticBp2BuildMutator(ctx android.TopDownMutatorContext, modType 
 	if !module.ConvertWithBp2build(ctx) {
 		return
 	}
-	if ctx.ModuleType() != modType {
-		return
-	}
 
 	ccSharedOrStaticBp2BuildMutatorInternal(ctx, module, modType)
 }
@@ -2507,7 +2517,15 @@ type bazelCcLibraryStaticAttributes struct {
 }
 
 func CcLibraryStaticBp2Build(ctx android.TopDownMutatorContext) {
-	ccSharedOrStaticBp2BuildMutator(ctx, "cc_library_static")
+	isLibraryStatic := ctx.ModuleType() == "cc_library_static"
+	if b, ok := ctx.Module().(android.Bazelable); ok {
+		// This is created by a custom soong config module type, so its ctx.ModuleType() is not
+		// cc_library_static. Check its BaseModuleType.
+		isLibraryStatic = isLibraryStatic || b.BaseModuleType() == "cc_library_static"
+	}
+	if isLibraryStatic {
+		ccSharedOrStaticBp2BuildMutator(ctx, "cc_library_static")
+	}
 }
 
 // TODO(b/199902614): Can this be factored to share with the other Attributes?
@@ -2538,5 +2556,13 @@ type bazelCcLibrarySharedAttributes struct {
 }
 
 func CcLibrarySharedBp2Build(ctx android.TopDownMutatorContext) {
-	ccSharedOrStaticBp2BuildMutator(ctx, "cc_library_shared")
+	isLibraryShared := ctx.ModuleType() == "cc_library_shared"
+	if b, ok := ctx.Module().(android.Bazelable); ok {
+		// This is created by a custom soong config module type, so its ctx.ModuleType() is not
+		// cc_library_shared. Check its BaseModuleType.
+		isLibraryShared = isLibraryShared || b.BaseModuleType() == "cc_library_shared"
+	}
+	if isLibraryShared {
+		ccSharedOrStaticBp2BuildMutator(ctx, "cc_library_shared")
+	}
 }

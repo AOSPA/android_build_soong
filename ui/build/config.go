@@ -784,24 +784,25 @@ func (c *configImpl) PrebuiltOS() string {
 		panic("Unknown GOOS")
 	}
 }
+
 func (c *configImpl) HostToolDir() string {
-	return filepath.Join(c.SoongOutDir(), "host", c.PrebuiltOS(), "bin")
+	if c.SkipKatiNinja() {
+		return filepath.Join(c.SoongOutDir(), "host", c.PrebuiltOS(), "bin")
+	} else {
+		return filepath.Join(c.OutDir(), "host", c.PrebuiltOS(), "bin")
+	}
 }
 
 func (c *configImpl) NamedGlobFile(name string) string {
-	return shared.JoinPath(c.SoongOutDir(), ".bootstrap/build-globs."+name+".ninja")
+	return shared.JoinPath(c.SoongOutDir(), "globs-"+name+".ninja")
 }
 
 func (c *configImpl) UsedEnvFile(tag string) string {
 	return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+tag)
 }
 
-func (c *configImpl) MainNinjaFile() string {
-	return shared.JoinPath(c.SoongOutDir(), "build.ninja")
-}
-
 func (c *configImpl) Bp2BuildMarkerFile() string {
-	return shared.JoinPath(c.SoongOutDir(), ".bootstrap/bp2build_workspace_marker")
+	return shared.JoinPath(c.SoongOutDir(), "bp2build_workspace_marker")
 }
 
 func (c *configImpl) SoongDocsHtml() string {

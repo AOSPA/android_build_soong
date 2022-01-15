@@ -31,6 +31,12 @@ type BinaryCompilerProperties struct {
 	Static_executable *bool `android:"arch_variant"`
 }
 
+type binaryInterface interface {
+	binary() bool
+	staticallyLinked() bool
+	testBinary() bool
+}
+
 type binaryDecorator struct {
 	*baseCompiler
 	stripper Stripper
@@ -117,20 +123,24 @@ func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps Path
 	fileName := binary.getStem(ctx) + ctx.toolchain().ExecutableSuffix()
 	srcPath, _ := srcPathFromModuleSrcs(ctx, binary.baseCompiler.Properties.Srcs)
 	outputFile := android.PathForModuleOut(ctx, fileName)
+	ret := outputFile
 
 	flags.RustFlags = append(flags.RustFlags, deps.depFlags...)
 	flags.LinkFlags = append(flags.LinkFlags, deps.depLinkFlags...)
 	flags.LinkFlags = append(flags.LinkFlags, deps.linkObjects...)
 
+	if binary.stripper.NeedsStrip(ctx) {
+		strippedOutputFile := outputFile
+		outputFile = android.PathForModuleOut(ctx, "unstripped", fileName)
+		binary.stripper.StripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile)
+
+		binary.baseCompiler.strippedOutputFile = android.OptionalPathForPath(strippedOutputFile)
+	}
+	binary.baseCompiler.unstrippedOutputFile = outputFile
+
 	TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile)
 
-	if binary.stripper.NeedsStrip(ctx) {
-		strippedOutputFile := android.PathForModuleOut(ctx, "stripped", fileName)
-		binary.stripper.StripExecutableOrSharedLib(ctx, outputFile, strippedOutputFile)
-		binary.strippedOutputFile = android.OptionalPathForPath(strippedOutputFile)
-	}
-
-	return outputFile
+	return ret
 }
 
 func (binary *binaryDecorator) autoDep(ctx android.BottomUpMutatorContext) autoDep {
@@ -154,4 +164,16 @@ func (binary *binaryDecorator) stdLinkage(ctx *depsContext) RustLinkage {
 		return RlibLinkage
 	}
 	return binary.baseCompiler.stdLinkage(ctx)
+}
+
+func (binary *binaryDecorator) binary() bool {
+	return true
+}
+
+func (binary *binaryDecorator) staticallyLinked() bool {
+	return Bool(binary.Properties.Static_executable)
+}
+
+func (binary *binaryDecorator) testBinary() bool {
+	return false
 }
