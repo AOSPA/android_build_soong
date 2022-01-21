@@ -155,9 +155,10 @@ type config struct {
 	fs         pathtools.FileSystem
 	mockBpList string
 
-	runningAsBp2Build        bool
-	bp2buildPackageConfig    Bp2BuildConfig
-	bp2buildModuleTypeConfig map[string]bool
+	runningAsBp2Build              bool
+	bp2buildPackageConfig          Bp2BuildConfig
+	bp2buildModuleTypeConfig       map[string]bool
+	Bp2buildSoongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions
 
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
 	// in tests when a path doesn't exist.
@@ -764,6 +765,16 @@ func (c *config) PreviewApiLevels() []ApiLevel {
 	return levels
 }
 
+func (c *config) LatestPreviewApiLevel() ApiLevel {
+	level := NoneApiLevel
+	for _, l := range c.PreviewApiLevels() {
+		if l.GreaterThan(level) {
+			level = l
+		}
+	}
+	return level
+}
+
 func (c *config) AllSupportedApiLevels() []ApiLevel {
 	var levels []ApiLevel
 	levels = append(levels, c.FinalApiLevels()...)
@@ -855,7 +866,7 @@ func (c *config) UnbundledBuild() bool {
 // Returns true if building apps that aren't bundled with the platform.
 // UnbundledBuild() is always true when this is true.
 func (c *config) UnbundledBuildApps() bool {
-	return Bool(c.productVariables.Unbundled_build_apps)
+	return len(c.productVariables.Unbundled_build_apps) > 0
 }
 
 // Returns true if building image that aren't bundled with the platform.

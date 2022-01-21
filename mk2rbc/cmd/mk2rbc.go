@@ -46,8 +46,6 @@ var (
 	dryRun   = flag.Bool("dry_run", false, "dry run")
 	recurse  = flag.Bool("convert_dependents", false, "convert all dependent files")
 	mode     = flag.String("mode", "", `"backup" to back up existing files, "write" to overwrite them`)
-	noWarn   = flag.Bool("no_warnings", false, "don't warn about partially failed conversions")
-	verbose  = flag.Bool("v", false, "print summary")
 	errstat  = flag.Bool("error_stat", false, "print error statistics")
 	traceVar = flag.String("trace", "", "comma-separated list of variables to trace")
 	// TODO(asmundak): this option is for debugging
@@ -75,7 +73,6 @@ func init() {
 	flagAlias("root", "d")
 	flagAlias("dry_run", "n")
 	flagAlias("convert_dependents", "r")
-	flagAlias("no_warnings", "w")
 	flagAlias("error_stat", "e")
 }
 
@@ -83,7 +80,6 @@ var backupSuffix string
 var tracedVariables []string
 var errorLogger = errorSink{data: make(map[string]datum)}
 var makefileFinder = &LinuxMakefileFinder{}
-var versionDefaultsMk = filepath.Join("build", "make", "core", "version_defaults.mk")
 
 func main() {
 	flag.Usage = func() {
@@ -171,18 +167,14 @@ func main() {
 		if len(files) != 1 {
 			quit(fmt.Errorf("a launcher can be generated only for a single product"))
 		}
-		versionDefaults, err := generateVersionDefaults()
-		if err != nil {
-			quit(err)
+		if *inputVariables == "" {
+			quit(fmt.Errorf("the product launcher requires an input variables file"))
 		}
-		versionDefaultsPath := outputFilePath(versionDefaultsMk)
-		err = writeGenerated(versionDefaultsPath, versionDefaults)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %s", files[0], err)
-			ok = false
+		if !convertOne(*inputVariables) {
+			quit(fmt.Errorf("the product launcher input variables file failed to convert"))
 		}
 
-		err = writeGenerated(*launcher, mk2rbc.Launcher(outputFilePath(files[0]), versionDefaultsPath,
+		err := writeGenerated(*launcher, mk2rbc.Launcher(outputFilePath(files[0]), outputFilePath(*inputVariables),
 			mk2rbc.MakePath2ModuleName(files[0])))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %s", files[0], err)
@@ -207,22 +199,13 @@ func main() {
 		}
 	}
 
-	printStats()
 	if *errstat {
 		errorLogger.printStatistics()
+		printStats()
 	}
 	if !ok {
 		os.Exit(1)
 	}
-}
-
-func generateVersionDefaults() (string, error) {
-	versionSettings, err := mk2rbc.ParseVersionDefaults(filepath.Join(*rootDir, versionDefaultsMk))
-	if err != nil {
-		return "", err
-	}
-	return mk2rbc.VersionDefaults(versionSettings), nil
-
 }
 
 func quit(s interface{}) {
@@ -329,17 +312,16 @@ func convertOne(mkFile string) (ok bool) {
 	}()
 
 	mk2starRequest := mk2rbc.Request{
-		MkFile:             mkFile,
-		Reader:             nil,
-		RootDir:            *rootDir,
-		OutputDir:          *outputTop,
-		OutputSuffix:       *suffix,
-		TracedVariables:    tracedVariables,
-		TraceCalls:         *traceCalls,
-		WarnPartialSuccess: !*noWarn,
-		SourceFS:           os.DirFS(*rootDir),
-		MakefileFinder:     makefileFinder,
-		ErrorLogger:        errorLogger,
+		MkFile:          mkFile,
+		Reader:          nil,
+		RootDir:         *rootDir,
+		OutputDir:       *outputTop,
+		OutputSuffix:    *suffix,
+		TracedVariables: tracedVariables,
+		TraceCalls:      *traceCalls,
+		SourceFS:        os.DirFS(*rootDir),
+		MakefileFinder:  makefileFinder,
+		ErrorLogger:     errorLogger,
 	}
 	ss, err := mk2rbc.Convert(mk2starRequest)
 	if err != nil {
@@ -417,9 +399,6 @@ func writeGenerated(path string, contents string) error {
 
 func printStats() {
 	var sortedFiles []string
-	if *noWarn && !*verbose {
-		return
-	}
 	for p := range converted {
 		sortedFiles = append(sortedFiles, p)
 	}
@@ -435,27 +414,22 @@ func printStats() {
 			nOk++
 		}
 	}
-	if !*noWarn {
-		if nPartial > 0 {
-			fmt.Fprintf(os.Stderr, "Conversion was partially successful for:\n")
-			for _, f := range sortedFiles {
-				if ss := converted[f]; ss != nil && ss.HasErrors() {
-					fmt.Fprintln(os.Stderr, "  ", f)
-				}
-			}
-		}
-
-		if nFailed > 0 {
-			fmt.Fprintf(os.Stderr, "Conversion failed for files:\n")
-			for _, f := range sortedFiles {
-				if converted[f] == nil {
-					fmt.Fprintln(os.Stderr, "  ", f)
-				}
+	if nPartial > 0 {
+		fmt.Fprintf(os.Stderr, "Conversion was partially successful for:\n")
+		for _, f := range sortedFiles {
+			if ss := converted[f]; ss != nil && ss.HasErrors() {
+				fmt.Fprintln(os.Stderr, "  ", f)
 			}
 		}
 	}
-	if *verbose && (nPartial > 0 || nFailed > 0) {
-		fmt.Fprintln(os.Stderr, "Succeeded: ", nOk, " Partial: ", nPartial, " Failed: ", nFailed)
+
+	if nFailed > 0 {
+		fmt.Fprintf(os.Stderr, "Conversion failed for files:\n")
+		for _, f := range sortedFiles {
+			if converted[f] == nil {
+				fmt.Fprintln(os.Stderr, "  ", f)
+			}
+		}
 	}
 }
 
@@ -468,8 +442,8 @@ type errorSink struct {
 	data map[string]datum
 }
 
-func (ebt errorSink) NewError(sourceFile string, sourceLine int, node parser.Node, message string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "%s:%d ", sourceFile, sourceLine)
+func (ebt errorSink) NewError(el mk2rbc.ErrorLocation, node parser.Node, message string, args ...interface{}) {
+	fmt.Fprint(os.Stderr, el, ": ")
 	fmt.Fprintf(os.Stderr, message, args...)
 	fmt.Fprintln(os.Stderr)
 	if !*errstat {

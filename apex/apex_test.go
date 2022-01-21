@@ -4250,7 +4250,7 @@ func TestApexWithShBinary(t *testing.T) {
 		apex {
 			name: "myapex",
 			key: "myapex.key",
-			binaries: ["myscript"],
+			sh_binaries: ["myscript"],
 			updatable: false,
 		}
 
@@ -7065,6 +7065,23 @@ func TestUpdatableDefault_should_set_min_sdk_version(t *testing.T) {
 		apex {
 			name: "myapex",
 			key: "myapex.key",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+}
+
+func TestUpdatable_cannot_be_vendor_apex(t *testing.T) {
+	testApexError(t, `"myapex" .*: updatable: vendor APEXes are not updatable`, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: true,
+			soc_specific: true,
 		}
 
 		apex_key {

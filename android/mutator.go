@@ -529,34 +529,6 @@ func (t *topDownMutatorContext) CreateBazelTargetModule(
 	mod.base().addBp2buildInfo(info)
 }
 
-func (t *topDownMutatorContext) AppendProperties(props ...interface{}) {
-	for _, p := range props {
-		err := proptools.AppendMatchingProperties(t.Module().base().customizableProperties,
-			p, nil)
-		if err != nil {
-			if propertyErr, ok := err.(*proptools.ExtendPropertyError); ok {
-				t.PropertyErrorf(propertyErr.Property, "%s", propertyErr.Err.Error())
-			} else {
-				panic(err)
-			}
-		}
-	}
-}
-
-func (t *topDownMutatorContext) PrependProperties(props ...interface{}) {
-	for _, p := range props {
-		err := proptools.PrependMatchingProperties(t.Module().base().customizableProperties,
-			p, nil)
-		if err != nil {
-			if propertyErr, ok := err.(*proptools.ExtendPropertyError); ok {
-				t.PropertyErrorf(propertyErr.Property, "%s", propertyErr.Err.Error())
-			} else {
-				panic(err)
-			}
-		}
-	}
-}
-
 // android.topDownMutatorContext either has to embed blueprint.TopDownMutatorContext, in which case every method that
 // has an overridden version in android.BaseModuleContext has to be manually forwarded to BaseModuleContext to avoid
 // ambiguous method errors, or it has to store a blueprint.TopDownMutatorContext non-embedded, in which case every
