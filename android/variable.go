@@ -15,12 +15,13 @@
 package android
 
 import (
-	"android/soong/android/soongconfig"
-	"android/soong/bazel"
 	"fmt"
 	"reflect"
 	"runtime"
 	"strings"
+
+	"android/soong/android/soongconfig"
+	"android/soong/bazel"
 
 	"github.com/google/blueprint/proptools"
 )
@@ -281,32 +282,32 @@ type productVariables struct {
 	Qmaa_hal                   *bool `json:",omitempty"`
 	Device_support_hwfde       *bool `json:",omitempty"`
 	Device_support_hwfde_perf  *bool `json:",omitempty"`
-	Allow_missing_dependencies       *bool `json:",omitempty"`
-	Unbundled_build                  *bool `json:",omitempty"`
-	Unbundled_build_apps             *bool `json:",omitempty"`
-	Unbundled_build_image            *bool `json:",omitempty"`
-	Unbundled_build_sdks_from_source *bool `json:",omitempty"`
-	Always_use_prebuilt_sdks         *bool `json:",omitempty"`
-	Skip_boot_jars_check             *bool `json:",omitempty"`
-	Malloc_not_svelte                *bool `json:",omitempty"`
-	Malloc_zero_contents             *bool `json:",omitempty"`
-	Malloc_pattern_fill_contents     *bool `json:",omitempty"`
-	Safestack                        *bool `json:",omitempty"`
-	HostStaticBinaries               *bool `json:",omitempty"`
-	Binder32bit                      *bool `json:",omitempty"`
-	UseGoma                          *bool `json:",omitempty"`
-	UseRBE                           *bool `json:",omitempty"`
-	UseRBEJAVAC                      *bool `json:",omitempty"`
-	UseRBER8                         *bool `json:",omitempty"`
-	UseRBED8                         *bool `json:",omitempty"`
-	Debuggable                       *bool `json:",omitempty"`
-	Eng                              *bool `json:",omitempty"`
-	Treble_linker_namespaces         *bool `json:",omitempty"`
-	Enforce_vintf_manifest           *bool `json:",omitempty"`
-	Pdk                              *bool `json:",omitempty"`
-	Uml                              *bool `json:",omitempty"`
-	Arc                              *bool `json:",omitempty"`
-	MinimizeJavaDebugInfo            *bool `json:",omitempty"`
+	Allow_missing_dependencies       *bool    `json:",omitempty"`
+	Unbundled_build                  *bool    `json:",omitempty"`
+	Unbundled_build_apps             []string `json:",omitempty"`
+	Unbundled_build_image            *bool    `json:",omitempty"`
+	Unbundled_build_sdks_from_source *bool    `json:",omitempty"`
+	Always_use_prebuilt_sdks         *bool    `json:",omitempty"`
+	Skip_boot_jars_check             *bool    `json:",omitempty"`
+	Malloc_not_svelte                *bool    `json:",omitempty"`
+	Malloc_zero_contents             *bool    `json:",omitempty"`
+	Malloc_pattern_fill_contents     *bool    `json:",omitempty"`
+	Safestack                        *bool    `json:",omitempty"`
+	HostStaticBinaries               *bool    `json:",omitempty"`
+	Binder32bit                      *bool    `json:",omitempty"`
+	UseGoma                          *bool    `json:",omitempty"`
+	UseRBE                           *bool    `json:",omitempty"`
+	UseRBEJAVAC                      *bool    `json:",omitempty"`
+	UseRBER8                         *bool    `json:",omitempty"`
+	UseRBED8                         *bool    `json:",omitempty"`
+	Debuggable                       *bool    `json:",omitempty"`
+	Eng                              *bool    `json:",omitempty"`
+	Treble_linker_namespaces         *bool    `json:",omitempty"`
+	Enforce_vintf_manifest           *bool    `json:",omitempty"`
+	Pdk                              *bool    `json:",omitempty"`
+	Uml                              *bool    `json:",omitempty"`
+	Arc                              *bool    `json:",omitempty"`
+	MinimizeJavaDebugInfo            *bool    `json:",omitempty"`
 
 	Check_elf_files *bool `json:",omitempty"`
 
@@ -540,11 +541,11 @@ type ProductConfigContext interface {
 type ProductConfigProperty struct {
 	// The name of the product variable, e.g. "safestack", "malloc_not_svelte",
 	// "board"
-	ProductConfigVariable string
+	Name string
 
 	// Namespace of the variable, if this is a soong_config_module_type variable
-	// e.g. "acme", "ANDROID", "vendor_nae"
-	Namespace string // for soong config variables
+	// e.g. "acme", "ANDROID", "vendor_name"
+	Namespace string
 
 	// Unique configuration to identify this product config property (i.e. a
 	// primary key), as just using the product variable name is not sufficient.
@@ -611,9 +612,10 @@ type ProductConfigProperty struct {
 	// "acme__board__soc_a", "acme__board__soc_b", and
 	// "acme__board__conditions_default"
 	FullConfig string
+}
 
-	// The actual property value: list, bool, string..
-	Property interface{}
+func (p *ProductConfigProperty) AlwaysEmit() bool {
+	return p.Namespace != ""
 }
 
 func (p *ProductConfigProperty) ConfigurationAxis() bazel.ConfigurationAxis {
@@ -622,14 +624,43 @@ func (p *ProductConfigProperty) ConfigurationAxis() bazel.ConfigurationAxis {
 	} else {
 		// Soong config variables can be uniquely identified by the namespace
 		// (e.g. acme, android) and the product variable name (e.g. board, size)
-		return bazel.ProductVariableConfigurationAxis(p.Namespace + "__" + p.ProductConfigVariable)
+		return bazel.ProductVariableConfigurationAxis(p.Namespace + "__" + p.Name)
 	}
 }
 
-// ProductConfigProperties is a map of property name to a slice of
-// ProductConfigProperty such that all product variable-specific versions of a
-// property are easily accessed together
-type ProductConfigProperties map[string]map[string]ProductConfigProperty
+// SelectKey returns the literal string that represents this variable in a BUILD
+// select statement.
+func (p *ProductConfigProperty) SelectKey() string {
+	if p.Namespace == "" {
+		return strings.ToLower(p.FullConfig)
+	}
+
+	if p.FullConfig == bazel.ConditionsDefaultConfigKey {
+		return bazel.ConditionsDefaultConfigKey
+	}
+
+	value := p.FullConfig
+	if value == p.Name {
+		value = "enabled"
+	}
+	// e.g. acme__feature1__enabled, android__board__soc_a
+	return strings.ToLower(strings.Join([]string{p.Namespace, p.Name, value}, "__"))
+}
+
+// ProductConfigProperties is a map of maps to group property values according
+// their property name and the product config variable they're set under.
+//
+// The outer map key is the name of the property, like "cflags".
+//
+// The inner map key is a ProductConfigProperty, which is a struct of product
+// variable name, namespace, and the "full configuration" of the product
+// variable.
+//
+// e.g. product variable name: board, namespace: acme, full config: vendor_chip_foo
+//
+// The value of the map is the interface{} representing the value of the
+// property, like ["-DDEFINES"] for cflags.
+type ProductConfigProperties map[string]map[ProductConfigProperty]interface{}
 
 // ProductVariableProperties returns a ProductConfigProperties containing only the properties which
 // have been set for the module in the given context.
@@ -663,34 +694,159 @@ func ProductVariableProperties(ctx BazelConversionPathContext) ProductConfigProp
 	}
 
 	if m, ok := module.(Bazelable); ok && m.namespacedVariableProps() != nil {
-		for namespace, namespacedVariableProp := range m.namespacedVariableProps() {
-			productVariableValues(
-				soongconfig.SoongConfigProperty,
-				namespacedVariableProp,
-				namespace,
-				"",
-				&productConfigProperties)
+		for namespace, namespacedVariableProps := range m.namespacedVariableProps() {
+			for _, namespacedVariableProp := range namespacedVariableProps {
+				productVariableValues(
+					soongconfig.SoongConfigProperty,
+					namespacedVariableProp,
+					namespace,
+					"",
+					&productConfigProperties)
+			}
 		}
 	}
 
+	productConfigProperties.zeroValuesForNamespacedVariables()
+
 	return productConfigProperties
+}
+
+// zeroValuesForNamespacedVariables ensures that selects that contain __only__
+// conditions default values have zero values set for the other non-default
+// values for that select statement.
+//
+// If the ProductConfigProperties map contains these items, as parsed from the .bp file:
+//
+// library_linking_strategy: {
+//     prefer_static: {
+//         static_libs: [
+//             "lib_a",
+//             "lib_b",
+//         ],
+//     },
+//     conditions_default: {
+//         shared_libs: [
+//             "lib_a",
+//             "lib_b",
+//         ],
+//     },
+// },
+//
+// Static_libs {Library_linking_strategy ANDROID prefer_static} [lib_a lib_b]
+// Shared_libs {Library_linking_strategy ANDROID conditions_default} [lib_a lib_b]
+//
+// We need to add this:
+//
+// Shared_libs {Library_linking_strategy ANDROID prefer_static} []
+//
+// so that the following gets generated for the "dynamic_deps" attribute,
+// instead of putting lib_a and lib_b directly into dynamic_deps without a
+// select:
+//
+// dynamic_deps = select({
+//     "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [],
+//     "//conditions:default": [
+//         "//foo/bar:lib_a",
+//         "//foo/bar:lib_b",
+//     ],
+// }),
+func (props *ProductConfigProperties) zeroValuesForNamespacedVariables() {
+	// A map of product config properties to the zero values of their respective
+	// property value.
+	zeroValues := make(map[ProductConfigProperty]interface{})
+
+	// A map of prop names (e.g. cflags) to product config properties where the
+	// (prop name, ProductConfigProperty) tuple contains a non-conditions_default key.
+	//
+	// e.g.
+	//
+	// prefer_static: {
+	//     static_libs: [
+	//         "lib_a",
+	//         "lib_b",
+	//     ],
+	// },
+	// conditions_default: {
+	//     shared_libs: [
+	//         "lib_a",
+	//         "lib_b",
+	//     ],
+	// },
+	//
+	// The tuple of ("static_libs", prefer_static) would be in this map.
+	hasNonDefaultValue := make(map[string]map[ProductConfigProperty]bool)
+
+	// Iterate over all added soong config variables.
+	for propName, v := range *props {
+		for p, intf := range v {
+			if p.Namespace == "" {
+				// If there's no namespace, this isn't a soong config variable,
+				// i.e. this is a product variable. product variables have no
+				// conditions_defaults, so skip them.
+				continue
+			}
+			if p.FullConfig == bazel.ConditionsDefaultConfigKey {
+				// Skip conditions_defaults.
+				continue
+			}
+			if hasNonDefaultValue[propName] == nil {
+				hasNonDefaultValue[propName] = make(map[ProductConfigProperty]bool)
+				hasNonDefaultValue[propName][p] = false
+			}
+			// Create the zero value of the variable.
+			if _, exists := zeroValues[p]; !exists {
+				zeroValue := reflect.Zero(reflect.ValueOf(intf).Type()).Interface()
+				if zeroValue == nil {
+					panic(fmt.Errorf("Expected non-nil zero value for product/config variable %+v\n", intf))
+				}
+				zeroValues[p] = zeroValue
+			}
+			hasNonDefaultValue[propName][p] = true
+		}
+	}
+
+	for propName := range *props {
+		for p, zeroValue := range zeroValues {
+			// Ignore variables that already have a non-default value for that axis
+			if exists, _ := hasNonDefaultValue[propName][p]; !exists {
+				// fmt.Println(propName, p.Namespace, p.Name, p.FullConfig, zeroValue)
+				// Insert the zero value for this propname + product config value.
+				props.AddProductConfigProperty(
+					propName,
+					p.Namespace,
+					p.Name,
+					p.FullConfig,
+					zeroValue,
+				)
+			}
+		}
+	}
 }
 
 func (p *ProductConfigProperties) AddProductConfigProperty(
 	propertyName, namespace, productVariableName, config string, property interface{}) {
 	if (*p)[propertyName] == nil {
-		(*p)[propertyName] = make(map[string]ProductConfigProperty)
+		(*p)[propertyName] = make(map[ProductConfigProperty]interface{})
 	}
 
-	// Normalize config to be all lowercase. It's the "primary key" of this
-	// unique property value. This can be the conditions_default value of the
-	// product variable as well.
-	config = strings.ToLower(config)
-	(*p)[propertyName][config] = ProductConfigProperty{
-		Namespace:             namespace,           // e.g. acme, android
-		ProductConfigVariable: productVariableName, // e.g. size, feature1, feature2, FEATURE3, board
-		FullConfig:            config,              // e.g. size, feature1-x86, size__conditions_default
-		Property:              property,            // e.g. ["-O3"]
+	productConfigProp := ProductConfigProperty{
+		Namespace:  namespace,           // e.g. acme, android
+		Name:       productVariableName, // e.g. size, feature1, feature2, FEATURE3, board
+		FullConfig: config,              // e.g. size, feature1-x86, size__conditions_default
+	}
+
+	if existing, ok := (*p)[propertyName][productConfigProp]; ok && namespace != "" {
+		switch dst := existing.(type) {
+		case []string:
+			if src, ok := property.([]string); ok {
+				dst = append(dst, src...)
+				(*p)[propertyName][productConfigProp] = dst
+			}
+		default:
+			panic(fmt.Errorf("TODO: handle merging value %s", existing))
+		}
+	} else {
+		(*p)[propertyName][productConfigProp] = property
 	}
 }
 
@@ -727,19 +883,10 @@ func maybeExtractConfigVarProp(v reflect.Value) (reflect.Value, bool) {
 	return v, true
 }
 
-// productVariableValues uses reflection to convert a property struct for
-// product_variables and soong_config_variables to structs that can be generated
-// as select statements.
-func productVariableValues(
-	fieldName string, variableProps interface{}, namespace, suffix string, productConfigProperties *ProductConfigProperties) {
-	if suffix != "" {
-		suffix = "-" + suffix
-	}
-
-	// variableValues represent the product_variables or soong_config_variables
-	// struct.
-	variableValues := reflect.ValueOf(variableProps).Elem().FieldByName(fieldName)
-
+func (productConfigProperties *ProductConfigProperties) AddProductConfigProperties(namespace, suffix string, variableValues reflect.Value) {
+	// variableValues can either be a product_variables or
+	// soong_config_variables struct.
+	//
 	// Example of product_variables:
 	//
 	// product_variables: {
@@ -832,8 +979,8 @@ func productVariableValues(
 					if field.Field(k).IsZero() {
 						continue
 					}
-					productVariableValue := proptools.PropertyNameForField(propertyName)
-					config := strings.Join([]string{namespace, productVariableName, productVariableValue}, "__")
+					// config can also be "conditions_default".
+					config := proptools.PropertyNameForField(propertyName)
 					actualPropertyName := field.Type().Field(k).Name
 
 					productConfigProperties.AddProductConfigProperty(
@@ -844,13 +991,11 @@ func productVariableValues(
 						field.Field(k).Interface(), // e.g. ["-DDEFAULT"], ["foo", "bar"]
 					)
 				}
-			} else {
-				// Not a conditions_default or a struct prop, i.e. regular
-				// product variables, or not a string-typed config var.
+			} else if property.Kind() != reflect.Interface {
+				// If not an interface, then this is not a conditions_default or
+				// a struct prop. That is, this is a regular product variable,
+				// or a bool/value config variable.
 				config := productVariableName + suffix
-				if namespace != "" {
-					config = namespace + "__" + config
-				}
 				productConfigProperties.AddProductConfigProperty(
 					propertyName,
 					namespace,
@@ -861,6 +1006,20 @@ func productVariableValues(
 			}
 		}
 	}
+}
+
+// productVariableValues uses reflection to convert a property struct for
+// product_variables and soong_config_variables to structs that can be generated
+// as select statements.
+func productVariableValues(
+	fieldName string, variableProps interface{}, namespace, suffix string, productConfigProperties *ProductConfigProperties) {
+	if suffix != "" {
+		suffix = "-" + suffix
+	}
+
+	// variableValues represent the product_variables or soong_config_variables struct.
+	variableValues := reflect.ValueOf(variableProps).Elem().FieldByName(fieldName)
+	productConfigProperties.AddProductConfigProperties(namespace, suffix, variableValues)
 }
 
 func VariableMutator(mctx BottomUpMutatorContext) {

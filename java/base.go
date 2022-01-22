@@ -197,6 +197,10 @@ type DeviceProperties struct {
 	// Defaults to sdk_version if not set. See sdk_version for possible values.
 	Min_sdk_version *string
 
+	// if not blank, set the maximum version of the sdk that the compiled artifacts will run against.
+	// Defaults to empty string "". See sdk_version for possible values.
+	Max_sdk_version *string
+
 	// if not blank, set the targetSdkVersion in the AndroidManifest.xml.
 	// Defaults to sdk_version if not set. See sdk_version for possible values.
 	Target_sdk_version *string
@@ -460,6 +464,7 @@ type Module struct {
 
 	sdkVersion    android.SdkSpec
 	minSdkVersion android.SdkSpec
+	maxSdkVersion android.SdkSpec
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -510,9 +515,9 @@ func (j *Module) checkPlatformAPI(ctx android.ModuleContext) {
 		usePlatformAPI := proptools.Bool(j.deviceProperties.Platform_apis)
 		sdkVersionSpecified := sc.SdkVersion(ctx).Specified()
 		if usePlatformAPI && sdkVersionSpecified {
-			ctx.PropertyErrorf("platform_apis", "platform_apis must be false when sdk_version is not empty.")
+			ctx.PropertyErrorf("platform_apis", "This module has conflicting settings. sdk_version is not empty, which means this module cannot use platform APIs. However platform_apis is set to true.")
 		} else if !usePlatformAPI && !sdkVersionSpecified {
-			ctx.PropertyErrorf("platform_apis", "platform_apis must be true when sdk_version is empty.")
+			ctx.PropertyErrorf("platform_apis", "This module has conflicting settings. sdk_version is empty, which means that this module is build against platform APIs. However platform_apis is not set to true")
 		}
 
 	}
@@ -615,6 +620,13 @@ func (j *Module) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
 		return android.SdkSpecFrom(ctx, *j.deviceProperties.Min_sdk_version)
 	}
 	return j.SdkVersion(ctx)
+}
+
+func (j *Module) MaxSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	maxSdkVersion := proptools.StringDefault(j.deviceProperties.Max_sdk_version, "")
+	// SdkSpecFrom returns SdkSpecPrivate for this, which may be confusing.
+	// TODO(b/208456999): ideally MaxSdkVersion should be an ApiLevel and not SdkSpec.
+	return android.SdkSpecFrom(ctx, maxSdkVersion)
 }
 
 func (j *Module) MinSdkVersionString() string {

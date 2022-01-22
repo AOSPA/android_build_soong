@@ -394,6 +394,10 @@ type Deps struct {
 	WholeStaticLibs []string
 	HeaderLibs      []string
 
+	// Used for data dependencies adjacent to tests
+	DataLibs []string
+	DataBins []string
+
 	CrtBegin, CrtEnd string
 }
 
@@ -578,7 +582,7 @@ func (mod *Module) CrateName() string {
 
 func (mod *Module) CcLibrary() bool {
 	if mod.compiler != nil {
-		if _, ok := mod.compiler.(*libraryDecorator); ok {
+		if _, ok := mod.compiler.(libraryInterface); ok {
 			return true
 		}
 	}
@@ -983,6 +987,8 @@ var (
 	procMacroDepTag     = dependencyTag{name: "procMacro", procMacro: true}
 	testPerSrcDepTag    = dependencyTag{name: "rust_unit_tests"}
 	sourceDepTag        = dependencyTag{name: "source"}
+	dataLibDepTag       = dependencyTag{name: "data lib"}
+	dataBinDepTag       = dependencyTag{name: "data bin"}
 )
 
 func IsDylibDepTag(depTag blueprint.DependencyTag) bool {
@@ -1429,6 +1435,12 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 	}
 
+	actx.AddVariationDependencies([]blueprint.Variation{
+		{Mutator: "link", Variation: "shared"},
+	}, dataLibDepTag, deps.DataLibs...)
+
+	actx.AddVariationDependencies(nil, dataBinDepTag, deps.DataBins...)
+
 	// proc_macros are compiler plugins, and so we need the host arch variant as a dependendcy.
 	actx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(), procMacroDepTag, deps.ProcMacros...)
 }
@@ -1543,7 +1555,7 @@ func (mod *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Mo
 // Overrides ApexModule.IsInstallabeToApex()
 func (mod *Module) IsInstallableToApex() bool {
 	if mod.compiler != nil {
-		if lib, ok := mod.compiler.(*libraryDecorator); ok && (lib.shared() || lib.dylib()) {
+		if lib, ok := mod.compiler.(libraryInterface); ok && (lib.shared() || lib.dylib()) {
 			return true
 		}
 		if _, ok := mod.compiler.(*binaryDecorator); ok {
