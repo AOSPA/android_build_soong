@@ -44,13 +44,14 @@ var manifestMergerRule = pctx.AndroidStaticRule("manifestMerger",
 	"args", "libs")
 
 // targetSdkVersion for manifest_fixer
-// When TARGET_BUILD_APPS is not empty, this method returns the unreleased(future) API level
+// When TARGET_BUILD_APPS is not empty, this method returns 10000 for modules targeting an unreleased SDK
 // This enables release builds (that run with TARGET_BUILD_APPS=[val...]) to target APIs that have not yet been finalized as part of an SDK
 func targetSdkVersionForManifestFixer(ctx android.ModuleContext, sdkContext android.SdkContext) string {
-	if ctx.Config().UnbundledBuildApps() {
+	targetSdkVersionSpec := sdkContext.TargetSdkVersion(ctx)
+	if ctx.Config().UnbundledBuildApps() && targetSdkVersionSpec.ApiLevel.IsPreview() {
 		return strconv.Itoa(android.FutureApiLevel.FinalOrFutureInt())
 	}
-	targetSdkVersion, err := sdkContext.TargetSdkVersion(ctx).EffectiveVersionString(ctx)
+	targetSdkVersion, err := targetSdkVersionSpec.EffectiveVersionString(ctx)
 	if err != nil {
 		ctx.ModuleErrorf("invalid targetSdkVersion: %s", err)
 	}
@@ -105,6 +106,7 @@ func manifestFixer(ctx android.ModuleContext, manifest android.Path, sdkContext 
 	}
 	var deps android.Paths
 	targetSdkVersion := targetSdkVersionForManifestFixer(ctx, sdkContext)
+
 	if UseApiFingerprint(ctx) && ctx.ModuleName() != "framework-res" {
 		targetSdkVersion = ctx.Config().PlatformSdkCodename() + fmt.Sprintf(".$$(cat %s)", ApiFingerprintPath(ctx).String())
 		deps = append(deps, ApiFingerprintPath(ctx))

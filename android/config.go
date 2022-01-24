@@ -892,8 +892,13 @@ func (c *config) Eng() bool {
 	return Bool(c.productVariables.Eng)
 }
 
+// DevicePrimaryArchType returns the ArchType for the first configured device architecture, or
+// Common if there are no device architectures.
 func (c *config) DevicePrimaryArchType() ArchType {
-	return c.Targets[Android][0].Arch.ArchType
+	if androidTargets := c.Targets[Android]; len(androidTargets) > 0 {
+		return androidTargets[0].Arch.ArchType
+	}
+	return Common
 }
 
 func (c *config) SanitizeHost() []string {
@@ -1196,10 +1201,6 @@ func (c *deviceConfig) BtConfigIncludeDir() string {
 
 func (c *deviceConfig) DeviceKernelHeaderDirs() []string {
 	return c.config.productVariables.DeviceKernelHeaders
-}
-
-func (c *deviceConfig) SamplingPGO() bool {
-	return Bool(c.config.productVariables.SamplingPGO)
 }
 
 // JavaCoverageEnabledForPath returns whether Java code coverage is enabled for
@@ -1511,6 +1512,10 @@ func (c *deviceConfig) BoardSepolicyVers() string {
 		return ver
 	}
 	return c.PlatformSepolicyVersion()
+}
+
+func (c *deviceConfig) BoardPlatVendorPolicy() []string {
+	return c.config.productVariables.BoardPlatVendorPolicy
 }
 
 func (c *deviceConfig) BoardReqdMaskPolicy() []string {
