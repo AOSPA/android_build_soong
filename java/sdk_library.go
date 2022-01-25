@@ -1129,6 +1129,22 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 	return generatedScopes
 }
 
+var _ android.ModuleWithMinSdkVersionCheck = (*SdkLibrary)(nil)
+
+func (module *SdkLibrary) CheckMinSdkVersion(ctx android.ModuleContext) {
+	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx).ApiLevel, func(c android.ModuleContext, do android.PayloadDepsCallback) {
+		ctx.WalkDeps(func(child android.Module, parent android.Module) bool {
+			isExternal := !module.depIsInSameApex(ctx, child)
+			if am, ok := child.(android.ApexModule); ok {
+				if !do(ctx, parent, am, isExternal) {
+					return false
+				}
+			}
+			return !isExternal
+		})
+	})
+}
+
 type sdkLibraryComponentTag struct {
 	blueprint.BaseDependencyTag
 	name string
@@ -1206,14 +1222,23 @@ func (module *SdkLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 func (module *SdkLibrary) OutputFiles(tag string) (android.Paths, error) {
 	paths, err := module.commonOutputFiles(tag)
-	if paths == nil && err == nil {
-		return module.Library.OutputFiles(tag)
-	} else {
+	if paths != nil || err != nil {
 		return paths, err
 	}
+	if module.requiresRuntimeImplementationLibrary() {
+		return module.Library.OutputFiles(tag)
+	}
+	if tag == "" {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 }
 
 func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if proptools.String(module.deviceProperties.Min_sdk_version) != "" {
+		module.CheckMinSdkVersion(ctx)
+	}
+
 	module.generateCommonBuildActions(ctx)
 
 	// Only build an implementation library if required.
@@ -2605,12 +2630,12 @@ func (module *sdkLibraryXml) GenerateAndroidBuildActions(ctx android.ModuleConte
 
 func (module *sdkLibraryXml) AndroidMkEntries() []android.AndroidMkEntries {
 	if module.hideApexVariantFromMake {
-		return []android.AndroidMkEntries{android.AndroidMkEntries{
+		return []android.AndroidMkEntries{{
 			Disabled: true,
 		}}
 	}
 
-	return []android.AndroidMkEntries{android.AndroidMkEntries{
+	return []android.AndroidMkEntries{{
 		Class:      "ETC",
 		OutputFile: android.OptionalPathForPath(module.outputFilePath),
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{

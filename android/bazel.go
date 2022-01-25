@@ -226,13 +226,50 @@ var (
 
 	// Configure modules in these directories to enable bp2build_available: true or false by default.
 	bp2buildDefaultConfig = Bp2BuildConfig{
-		"art/libdexfile": Bp2BuildDefaultTrueRecursively,
-		"bionic":         Bp2BuildDefaultTrueRecursively,
+		"art/libdexfile":                        Bp2BuildDefaultTrueRecursively,
+		"bionic":                                Bp2BuildDefaultTrueRecursively,
+		"bootable/recovery/tools/recovery_l10n": Bp2BuildDefaultTrue,
 		"build/bazel/examples/soong_config_variables":        Bp2BuildDefaultTrueRecursively,
 		"build/bazel/examples/apex/minimal":                  Bp2BuildDefaultTrueRecursively,
 		"build/soong":                                        Bp2BuildDefaultTrue,
 		"build/soong/cc/libbuildversion":                     Bp2BuildDefaultTrue, // Skip tests subdir
+		"build/soong/cc/ndkstubgen":                          Bp2BuildDefaultTrue,
+		"build/soong/cc/symbolfile":                          Bp2BuildDefaultTrue,
 		"cts/common/device-side/nativetesthelper/jni":        Bp2BuildDefaultTrueRecursively,
+		"development/apps/DevelopmentSettings":               Bp2BuildDefaultTrue,
+		"development/apps/Fallback":                          Bp2BuildDefaultTrue,
+		"development/apps/WidgetPreview":                     Bp2BuildDefaultTrue,
+		"development/samples/BasicGLSurfaceView":             Bp2BuildDefaultTrue,
+		"development/samples/BluetoothChat":                  Bp2BuildDefaultTrue,
+		"development/samples/BrokenKeyDerivation":            Bp2BuildDefaultTrue,
+		"development/samples/Compass":                        Bp2BuildDefaultTrue,
+		"development/samples/ContactManager":                 Bp2BuildDefaultTrue,
+		"development/samples/FixedGridLayout":                Bp2BuildDefaultTrue,
+		"development/samples/HelloEffects":                   Bp2BuildDefaultTrue,
+		"development/samples/Home":                           Bp2BuildDefaultTrue,
+		"development/samples/HoneycombGallery":               Bp2BuildDefaultTrue,
+		"development/samples/JetBoy":                         Bp2BuildDefaultTrue,
+		"development/samples/KeyChainDemo":                   Bp2BuildDefaultTrue,
+		"development/samples/LceDemo":                        Bp2BuildDefaultTrue,
+		"development/samples/LunarLander":                    Bp2BuildDefaultTrue,
+		"development/samples/MultiResolution":                Bp2BuildDefaultTrue,
+		"development/samples/MultiWindow":                    Bp2BuildDefaultTrue,
+		"development/samples/NotePad":                        Bp2BuildDefaultTrue,
+		"development/samples/Obb":                            Bp2BuildDefaultTrue,
+		"development/samples/RSSReader":                      Bp2BuildDefaultTrue,
+		"development/samples/ReceiveShareDemo":               Bp2BuildDefaultTrue,
+		"development/samples/SearchableDictionary":           Bp2BuildDefaultTrue,
+		"development/samples/SipDemo":                        Bp2BuildDefaultTrue,
+		"development/samples/SkeletonApp":                    Bp2BuildDefaultTrue,
+		"development/samples/Snake":                          Bp2BuildDefaultTrue,
+		"development/samples/SpellChecker/":                  Bp2BuildDefaultTrueRecursively,
+		"development/samples/ThemedNavBarKeyboard":           Bp2BuildDefaultTrue,
+		"development/samples/ToyVpn":                         Bp2BuildDefaultTrue,
+		"development/samples/TtsEngine":                      Bp2BuildDefaultTrue,
+		"development/samples/USB/AdbTest":                    Bp2BuildDefaultTrue,
+		"development/samples/USB/MissileLauncher":            Bp2BuildDefaultTrue,
+		"development/samples/VoiceRecognitionService":        Bp2BuildDefaultTrue,
+		"development/samples/VoicemailProviderDemo":          Bp2BuildDefaultTrue,
 		"development/sdk":                                    Bp2BuildDefaultTrueRecursively,
 		"external/arm-optimized-routines":                    Bp2BuildDefaultTrueRecursively,
 		"external/boringssl":                                 Bp2BuildDefaultTrueRecursively,
@@ -259,9 +296,19 @@ var (
 		"external/selinux/libselinux":                        Bp2BuildDefaultTrueRecursively,
 		"external/zlib":                                      Bp2BuildDefaultTrueRecursively,
 		"external/zstd":                                      Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/media/tests/MediaDump":              Bp2BuildDefaultTrue,
+		"frameworks/base/startop/apps/test":                  Bp2BuildDefaultTrue,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/opengl/tests/gl2_cameraeye":       Bp2BuildDefaultTrue,
+		"frameworks/native/opengl/tests/gl2_java":            Bp2BuildDefaultTrue,
+		"frameworks/native/opengl/tests/testLatency":         Bp2BuildDefaultTrue,
+		"frameworks/native/opengl/tests/testPauseResume":     Bp2BuildDefaultTrue,
+		"frameworks/native/opengl/tests/testViewport":        Bp2BuildDefaultTrue,
 		"frameworks/proto_logging/stats/stats_log_api_gen":   Bp2BuildDefaultTrueRecursively,
 		"libnativehelper":                                    Bp2BuildDefaultTrueRecursively,
+		"packages/apps/DevCamera":                            Bp2BuildDefaultTrue,
+		"packages/apps/HTMLViewer":                           Bp2BuildDefaultTrue,
+		"packages/apps/Protips":                              Bp2BuildDefaultTrue,
 		"packages/modules/adb":                               Bp2BuildDefaultTrue,
 		"packages/modules/adb/crypto":                        Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/libs":                          Bp2BuildDefaultTrueRecursively,
@@ -269,6 +316,9 @@ var (
 		"packages/modules/adb/pairing_connection":            Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/proto":                         Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/tls":                           Bp2BuildDefaultTrueRecursively,
+		"packages/providers/MediaProvider/tools/dialogs":     Bp2BuildDefaultTrue,
+		"packages/screensavers/Basic":                        Bp2BuildDefaultTrue,
+		"packages/services/Car/tests/SampleRearViewCamera":   Bp2BuildDefaultTrue,
 		"prebuilts/clang/host/linux-x86":                     Bp2BuildDefaultTrueRecursively,
 		"system/apex":                                        Bp2BuildDefaultFalse, // TODO(b/207466993): flaky failures
 		"system/core/debuggerd":                              Bp2BuildDefaultTrue,
@@ -336,9 +386,8 @@ var (
 		"host_bionic_linker_asm",    // depends on extract_linker, a go binary.
 		"host_bionic_linker_script", // depends on extract_linker, a go binary.
 
-		"pbtombstone",                                  // depends on libprotobuf-cpp-lite, libtombstone_proto
-		"crash_dump",                                   // depends on unconverted module libprotobuf-cpp-lite
-		"libprotobuf-cpp-full", "libprotobuf-cpp-lite", // Unsupported product&vendor suffix. b/204811222 and b/204810610.
+		"pbtombstone", // depends on libprotobuf-cpp-lite, libtombstone_proto
+		"crash_dump",  // depends on unconverted module libprotobuf-cpp-lite
 
 		"libunwindstack_local", "libunwindstack_utils", // depends on unconverted module libunwindstack
 		"libunwindstack",    // depends on libdexfile_support, of unsupported module type art_cc_library_static
@@ -373,19 +422,10 @@ var (
 		// APEX support
 		"com.android.runtime", // http://b/194746715, apex, depends on 'libc_malloc_debug'
 
-		"libadb_crypto",                    // Depends on libadb_protos
-		"libadb_crypto_static",             // Depends on libadb_protos_static
-		"libadb_pairing_connection",        // Depends on libadb_protos
-		"libadb_pairing_connection_static", // Depends on libadb_protos_static
-		"libadb_pairing_server",            // Depends on libadb_protos
-		"libadb_pairing_server_static",     // Depends on libadb_protos_static
-		"libadbd",                          // Depends on libadbd_core
-		"libadbd_core",                     // Depends on libadb_protos
-		"libadbd_services",                 // Depends on libadb_protos
+		"libadbd_core",     // http://b/208481704: requijres use_version_lib
+		"libadbd_services", // http://b/208481704: requires use_version_lib
 
-		"libadb_protos_static",         // b/200601772: Requires cc_library proto support
-		"libadb_protos",                // b/200601772: Requires cc_library proto support
-		"libapp_processes_protos_lite", // b/200601772: Requires cc_library proto support
+		"libadbd", // depends on unconverted modules: libadbd_core, libadbd_services
 
 		"libgtest_ndk_c++",      // b/201816222: Requires sdk_version support.
 		"libgtest_main_ndk_c++", // b/201816222: Requires sdk_version support.
@@ -401,6 +441,7 @@ var (
 		"mdnsd",        // http://b/202876379 has arch-variant static_executable
 
 		"acvp_modulewrapper", // disabled for android x86/x86_64
+		"CarHTMLViewer",      // depends on unconverted modules android.car-stubs, car-ui-lib
 	}
 
 	// Per-module denylist of cc_library modules to only generate the static
@@ -418,6 +459,11 @@ var (
 		"cap_names.h",                                  // TODO(b/204913827) runfiles need to be handled in mixed builds
 		"libcap",                                       // TODO(b/204913827) runfiles need to be handled in mixed builds
 		"libprotobuf-cpp-full", "libprotobuf-cpp-lite", // Unsupported product&vendor suffix. b/204811222 and b/204810610.
+
+		// Depends on libprotobuf-cpp-*
+		"libadb_pairing_connection",
+		"libadb_pairing_connection_static",
+		"libadb_pairing_server", "libadb_pairing_server_static",
 	}
 
 	// Used for quicker lookups

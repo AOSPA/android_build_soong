@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
 	"android/soong/bazel"
@@ -344,6 +345,12 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,--no-dynamic-linker")
 	}
 
+	if ctx.Darwin() && deps.DarwinSecondArchOutput.Valid() {
+		fatOutputFile := outputFile
+		outputFile = android.PathForModuleOut(ctx, "pre-fat", fileName)
+		transformDarwinUniversalBinary(ctx, fatOutputFile, outputFile, deps.DarwinSecondArchOutput.Path())
+	}
+
 	builderFlags := flagsToBuilderFlags(flags)
 	stripFlags := flagsToStripFlags(flags)
 	if binary.stripper.NeedsStrip(ctx) {
@@ -388,7 +395,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		}
 	}
 
-	var validations android.WritablePaths
+	var validations android.Paths
 
 	// Handle host bionic linker symbols.
 	if ctx.Os() == android.LinuxBionic && !binary.static() {
@@ -411,6 +418,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		linkerDeps = append(linkerDeps, deps.EarlySharedLibsDeps...)
 		linkerDeps = append(linkerDeps, deps.SharedLibsDeps...)
 		linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
+		linkerDeps = append(linkerDeps, ndkSharedLibDeps(ctx)...)
 	}
 
 	validations = append(validations, objs.tidyFiles...)
@@ -578,9 +586,16 @@ func binaryBp2build(ctx android.TopDownMutatorContext, typ string) {
 	}
 
 	baseAttrs := bp2BuildParseBaseProps(ctx, m)
+	binaryLinkerAttrs := bp2buildBinaryLinkerProps(ctx, m)
+
+	if proptools.BoolDefault(binaryLinkerAttrs.Linkshared, true) {
+		baseAttrs.implementationDynamicDeps.Add(baseAttrs.protoDependency)
+	} else {
+		baseAttrs.implementationDeps.Add(baseAttrs.protoDependency)
+	}
 
 	attrs := &binaryAttributes{
-		binaryLinkerAttrs: bp2buildBinaryLinkerProps(ctx, m),
+		binaryLinkerAttrs: binaryLinkerAttrs,
 
 		Srcs:    baseAttrs.srcs,
 		Srcs_c:  baseAttrs.cSrcs,

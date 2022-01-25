@@ -41,7 +41,7 @@ var (
 	}
 
 	GlobalRustFlags = []string{
-		"--remap-path-prefix $$(pwd)=",
+		"-Z remap-cwd-prefix=.",
 		"-C codegen-units=1",
 		"-C debuginfo=2",
 		"-C opt-level=3",
@@ -55,6 +55,8 @@ var (
 	deviceGlobalRustFlags = []string{
 		"-C panic=abort",
 		"-Z link-native-libraries=no",
+		// Generate additional debug info for AutoFDO
+		"-Z debug-info-for-profiling",
 	}
 
 	deviceGlobalLinkFlags = []string{

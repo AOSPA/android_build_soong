@@ -130,6 +130,13 @@ type apexBundleProperties struct {
 	// symlinking to the system libs. Default is true.
 	Updatable *bool
 
+	// Marks that this APEX is designed to be updatable in the future, although it's not
+	// updatable yet. This is used to mimic some of the build behaviors that are applied only to
+	// updatable APEXes. Currently, this disables the size optimization, so that the size of
+	// APEX will not increase when the APEX is actually marked as truly updatable. Default is
+	// false.
+	Future_updatable *bool
+
 	// Whether this APEX can use platform APIs or not. Can be set to true only when `updatable:
 	// false`. Default is false.
 	Platform_apis *bool
@@ -1306,6 +1313,10 @@ func (a *apexBundle) Updatable() bool {
 	return proptools.BoolDefault(a.properties.Updatable, true)
 }
 
+func (a *apexBundle) FutureUpdatable() bool {
+	return proptools.BoolDefault(a.properties.Future_updatable, false)
+}
+
 func (a *apexBundle) UsePlatformApis() bool {
 	return proptools.BoolDefault(a.properties.Platform_apis, false)
 }
@@ -1670,7 +1681,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// 1) do some validity checks such as apex_available, min_sdk_version, etc.
 	a.checkApexAvailability(ctx)
 	a.checkUpdatable(ctx)
-	a.checkMinSdkVersion(ctx)
+	a.CheckMinSdkVersion(ctx)
 	a.checkStaticLinkingToStubLibraries(ctx)
 	a.checkStaticExecutables(ctx)
 	if len(a.properties.Tests) > 0 && !a.testApex {
@@ -2004,6 +2015,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					}
 				} else if _, ok := depTag.(android.CopyDirectlyInAnyApexTag); ok {
 					// nothing
+				} else if depTag == android.DarwinUniversalVariantTag {
+					// nothing
 				} else if am.CanHaveApexVariants() && am.IsInstallableToApex() {
 					ctx.ModuleErrorf("unexpected tag %s for indirect dependency %q", android.PrettyPrintTag(depTag), depName)
 				}
@@ -2105,10 +2118,11 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	forced := ctx.Config().ForceApexSymlinkOptimization()
+	updatable := a.Updatable() || a.FutureUpdatable()
 
 	// We don't need the optimization for updatable APEXes, as it might give false signal
 	// to the system health when the APEXes are still bundled (b/149805758).
-	if !forced && a.Updatable() && a.properties.ApexType == imageApex {
+	if !forced && updatable && a.properties.ApexType == imageApex {
 		a.linkToSystemLib = false
 	}
 
@@ -2172,6 +2186,40 @@ func apexBootclasspathFragmentFiles(ctx android.ModuleContext, module blueprint.
 	// Add classpaths.proto config.
 	if af := apexClasspathFragmentProtoFile(ctx, module); af != nil {
 		filesToAdd = append(filesToAdd, *af)
+	}
+
+	if pathInApex := bootclasspathFragmentInfo.ProfileInstallPathInApex(); pathInApex != "" {
+		pathOnHost := bootclasspathFragmentInfo.ProfilePathOnHost()
+		tempPath := android.PathForModuleOut(ctx, "boot_image_profile", pathInApex)
+
+		if pathOnHost != nil {
+			// We need to copy the profile to a temporary path with the right filename because the apexer
+			// will take the filename as is.
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   android.Cp,
+				Input:  pathOnHost,
+				Output: tempPath,
+			})
+		} else {
+			// At this point, the boot image profile cannot be generated. It is probably because the boot
+			// image profile source file does not exist on the branch, or it is not available for the
+			// current build target.
+			// However, we cannot enforce the boot image profile to be generated because some build
+			// targets (such as module SDK) do not need it. It is only needed when the APEX is being
+			// built. Therefore, we create an error rule so that an error will occur at the ninja phase
+			// only if the APEX is being built.
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   android.ErrorRule,
+				Output: tempPath,
+				Args: map[string]string{
+					"error": "Boot image profile cannot be generated",
+				},
+			})
+		}
+
+		androidMkModuleName := filepath.Base(pathInApex)
+		af := newApexFile(ctx, tempPath, androidMkModuleName, filepath.Dir(pathInApex), etc, nil)
+		filesToAdd = append(filesToAdd, af)
 	}
 
 	return filesToAdd
@@ -2300,18 +2348,28 @@ func overrideApexFactory() android.Module {
 //
 // TODO(jiyong): move these checks to a separate go file.
 
+var _ android.ModuleWithMinSdkVersionCheck = (*apexBundle)(nil)
+
 // Entures that min_sdk_version of the included modules are equal or less than the min_sdk_version
 // of this apexBundle.
-func (a *apexBundle) checkMinSdkVersion(ctx android.ModuleContext) {
+func (a *apexBundle) CheckMinSdkVersion(ctx android.ModuleContext) {
 	if a.testApex || a.vndkApex {
 		return
 	}
 	// apexBundle::minSdkVersion reports its own errors.
 	minSdkVersion := a.minSdkVersion(ctx)
-	android.CheckMinSdkVersion(a, ctx, minSdkVersion)
+	android.CheckMinSdkVersion(ctx, minSdkVersion, a.WalkPayloadDeps)
 }
 
-func (a *apexBundle) minSdkVersion(ctx android.BaseModuleContext) android.ApiLevel {
+func (a *apexBundle) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	return android.SdkSpec{
+		Kind:     android.SdkNone,
+		ApiLevel: a.minSdkVersion(ctx),
+		Raw:      String(a.properties.Min_sdk_version),
+	}
+}
+
+func (a *apexBundle) minSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
 	ver := proptools.String(a.properties.Min_sdk_version)
 	if ver == "" {
 		return android.NoneApiLevel
@@ -2379,6 +2437,9 @@ func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
 		}
 		if a.SocSpecific() || a.DeviceSpecific() {
 			ctx.PropertyErrorf("updatable", "vendor APEXes are not updatable")
+		}
+		if a.FutureUpdatable() {
+			ctx.PropertyErrorf("future_updatable", "Already updatable. Remove `future_updatable: true:`")
 		}
 		a.checkJavaStableSdkVersion(ctx)
 		a.checkClasspathFragments(ctx)
@@ -3146,15 +3207,16 @@ func createApexPermittedPackagesRules(modules_packages map[string][]string) []an
 			BootclasspathJar().
 			With("apex_available", module_name).
 			WithMatcher("permitted_packages", android.NotInList(module_packages)).
+			WithMatcher("min_sdk_version", android.LessThanSdkVersion("Tiramisu")).
 			Because("jars that are part of the " + module_name +
 				" module may only allow these packages: " + strings.Join(module_packages, ",") +
-				". Please jarjar or move code around.")
+				" with min_sdk < T. Please jarjar or move code around.")
 		rules = append(rules, permittedPackagesRule)
 	}
 	return rules
 }
 
-// DO NOT EDIT! These are the package prefixes that are exempted from being AOT'ed by ART.
+// DO NOT EDIT! These are the package prefixes that are exempted from being AOT'ed by ART on Q/R/S.
 // Adding code to the bootclasspath in new packages will cause issues on module update.
 func qModulesPackages() map[string][]string {
 	return map[string][]string{
@@ -3168,7 +3230,7 @@ func qModulesPackages() map[string][]string {
 	}
 }
 
-// DO NOT EDIT! These are the package prefixes that are exempted from being AOT'ed by ART.
+// DO NOT EDIT! These are the package prefixes that are exempted from being AOT'ed by ART on R/S.
 // Adding code to the bootclasspath in new packages will cause issues on module update.
 func rModulesPackages() map[string][]string {
 	return map[string][]string{
@@ -3217,7 +3279,7 @@ type bazelApexBundleAttributes struct {
 	Updatable          bazel.BoolAttribute
 	Installable        bazel.BoolAttribute
 	Native_shared_libs bazel.LabelListAttribute
-	Binaries           bazel.StringListAttribute
+	Binaries           bazel.LabelListAttribute
 	Prebuilts          bazel.LabelListAttribute
 }
 
@@ -3276,8 +3338,8 @@ func apexBundleBp2BuildInternal(ctx android.TopDownMutatorContext, module *apexB
 	prebuiltsLabelList := android.BazelLabelForModuleDeps(ctx, prebuilts)
 	prebuiltsLabelListAttribute := bazel.MakeLabelListAttribute(prebuiltsLabelList)
 
-	binaries := module.properties.ApexNativeDependencies.Binaries
-	binariesStringListAttribute := bazel.MakeStringListAttribute(binaries)
+	binaries := android.BazelLabelForModuleDeps(ctx, module.properties.ApexNativeDependencies.Binaries)
+	binariesLabelListAttribute := bazel.MakeLabelListAttribute(binaries)
 
 	var updatableAttribute bazel.BoolAttribute
 	if module.properties.Updatable != nil {
@@ -3299,7 +3361,7 @@ func apexBundleBp2BuildInternal(ctx android.TopDownMutatorContext, module *apexB
 		Updatable:          updatableAttribute,
 		Installable:        installableAttribute,
 		Native_shared_libs: nativeSharedLibsLabelListAttribute,
-		Binaries:           binariesStringListAttribute,
+		Binaries:           binariesLabelListAttribute,
 		Prebuilts:          prebuiltsLabelListAttribute,
 	}
 
