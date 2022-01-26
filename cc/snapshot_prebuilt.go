@@ -78,8 +78,8 @@ func (ramdiskSnapshotImage) moduleNameSuffix() string {
 
 // Override existing vendor, recovery and ramdisk snapshot for cc module specific extra functions
 var VendorSnapshotImageSingleton vendorSnapshotImage = vendorSnapshotImage{&snapshot.VendorSnapshotImageSingleton}
-var recoverySnapshotImageSingleton recoverySnapshotImage = recoverySnapshotImage{&snapshot.RecoverySnapshotImageSingleton}
-var ramdiskSnapshotImageSingleton ramdiskSnapshotImage = ramdiskSnapshotImage{&snapshot.RamdiskSnapshotImageSingleton}
+var RecoverySnapshotImageSingleton recoverySnapshotImage = recoverySnapshotImage{&snapshot.RecoverySnapshotImageSingleton}
+var RamdiskSnapshotImageSingleton ramdiskSnapshotImage = ramdiskSnapshotImage{&snapshot.RamdiskSnapshotImageSingleton}
 
 func RegisterVendorSnapshotModules(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("vendor_snapshot", vendorSnapshotFactory)
@@ -255,11 +255,11 @@ func vendorSnapshotFactory() android.Module {
 }
 
 func recoverySnapshotFactory() android.Module {
-	return snapshotFactory(recoverySnapshotImageSingleton)
+	return snapshotFactory(RecoverySnapshotImageSingleton)
 }
 
 func ramdiskSnapshotFactory() android.Module {
-	return snapshotFactory(ramdiskSnapshotImageSingleton)
+	return snapshotFactory(RamdiskSnapshotImageSingleton)
 }
 
 func snapshotFactory(image SnapshotImage) android.Module {
@@ -354,7 +354,7 @@ func (p *BaseSnapshotDecorator) SetSnapshotAndroidMkSuffix(ctx android.ModuleCon
 		return
 	}
 
-	images := []SnapshotImage{VendorSnapshotImageSingleton, recoverySnapshotImageSingleton, ramdiskSnapshotImageSingleton}
+	images := []SnapshotImage{VendorSnapshotImageSingleton, RecoverySnapshotImageSingleton, RamdiskSnapshotImageSingleton}
 
 	for _, image := range images {
 		if p.Image == image {
@@ -504,13 +504,12 @@ func (p *snapshotLibraryDecorator) link(ctx ModuleContext, flags Flags, deps Pat
 
 	if p.shared() {
 		libName := in.Base()
-		builderFlags := flagsToBuilderFlags(flags)
 
 		// Optimize out relinking against shared libraries whose interface hasn't changed by
 		// depending on a table of contents file instead of the library itself.
 		tocFile := android.PathForModuleOut(ctx, libName+".toc")
 		p.tocFile = android.OptionalPathForPath(tocFile)
-		transformSharedObjectToToc(ctx, in, tocFile, builderFlags)
+		TransformSharedObjectToToc(ctx, in, tocFile)
 
 		ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
 			SharedLibrary: in,
@@ -612,7 +611,7 @@ func VendorSnapshotSharedFactory() android.Module {
 // overrides the recovery variant of the cc shared library with the same name, if BOARD_VNDK_VERSION
 // is set.
 func RecoverySnapshotSharedFactory() android.Module {
-	module, prebuilt := snapshotLibraryFactory(recoverySnapshotImageSingleton, SnapshotSharedSuffix)
+	module, prebuilt := snapshotLibraryFactory(RecoverySnapshotImageSingleton, SnapshotSharedSuffix)
 	prebuilt.libraryDecorator.BuildOnlyShared()
 	return module.Init()
 }
@@ -622,7 +621,7 @@ func RecoverySnapshotSharedFactory() android.Module {
 // overrides the ramdisk variant of the cc shared library with the same name, if BOARD_VNDK_VERSION
 // is set.
 func RamdiskSnapshotSharedFactory() android.Module {
-	module, prebuilt := snapshotLibraryFactory(ramdiskSnapshotImageSingleton, SnapshotSharedSuffix)
+	module, prebuilt := snapshotLibraryFactory(RamdiskSnapshotImageSingleton, SnapshotSharedSuffix)
 	prebuilt.libraryDecorator.BuildOnlyShared()
 	return module.Init()
 }
@@ -642,7 +641,7 @@ func VendorSnapshotStaticFactory() android.Module {
 // overrides the recovery variant of the cc static library with the same name, if BOARD_VNDK_VERSION
 // is set.
 func RecoverySnapshotStaticFactory() android.Module {
-	module, prebuilt := snapshotLibraryFactory(recoverySnapshotImageSingleton, SnapshotStaticSuffix)
+	module, prebuilt := snapshotLibraryFactory(RecoverySnapshotImageSingleton, SnapshotStaticSuffix)
 	prebuilt.libraryDecorator.BuildOnlyStatic()
 	return module.Init()
 }
@@ -652,7 +651,7 @@ func RecoverySnapshotStaticFactory() android.Module {
 // overrides the ramdisk variant of the cc static library with the same name, if BOARD_VNDK_VERSION
 // is set.
 func RamdiskSnapshotStaticFactory() android.Module {
-	module, prebuilt := snapshotLibraryFactory(ramdiskSnapshotImageSingleton, SnapshotStaticSuffix)
+	module, prebuilt := snapshotLibraryFactory(RamdiskSnapshotImageSingleton, SnapshotStaticSuffix)
 	prebuilt.libraryDecorator.BuildOnlyStatic()
 	return module.Init()
 }
@@ -672,7 +671,7 @@ func VendorSnapshotHeaderFactory() android.Module {
 // overrides the recovery variant of the cc header library with the same name, if BOARD_VNDK_VERSION
 // is set.
 func RecoverySnapshotHeaderFactory() android.Module {
-	module, prebuilt := snapshotLibraryFactory(recoverySnapshotImageSingleton, snapshotHeaderSuffix)
+	module, prebuilt := snapshotLibraryFactory(RecoverySnapshotImageSingleton, snapshotHeaderSuffix)
 	prebuilt.libraryDecorator.HeaderOnly()
 	return module.Init()
 }
@@ -682,7 +681,7 @@ func RecoverySnapshotHeaderFactory() android.Module {
 // overrides the ramdisk variant of the cc header library with the same name, if BOARD_VNDK_VERSION
 // is set.
 func RamdiskSnapshotHeaderFactory() android.Module {
-	module, prebuilt := snapshotLibraryFactory(ramdiskSnapshotImageSingleton, snapshotHeaderSuffix)
+	module, prebuilt := snapshotLibraryFactory(RamdiskSnapshotImageSingleton, snapshotHeaderSuffix)
 	prebuilt.libraryDecorator.HeaderOnly()
 	return module.Init()
 }
@@ -757,14 +756,14 @@ func VendorSnapshotBinaryFactory() android.Module {
 // development/vendor_snapshot/update.py. As a part of recovery snapshot, recovery_snapshot_binary
 // overrides the recovery variant of the cc binary with the same name, if BOARD_VNDK_VERSION is set.
 func RecoverySnapshotBinaryFactory() android.Module {
-	return snapshotBinaryFactory(recoverySnapshotImageSingleton, snapshotBinarySuffix)
+	return snapshotBinaryFactory(RecoverySnapshotImageSingleton, snapshotBinarySuffix)
 }
 
 // ramdisk_snapshot_binary is a special prebuilt executable binary which is auto-generated by
 // development/vendor_snapshot/update.py. As a part of ramdisk snapshot, ramdisk_snapshot_binary
 // overrides the ramdisk variant of the cc binary with the same name, if BOARD_VNDK_VERSION is set.
 func RamdiskSnapshotBinaryFactory() android.Module {
-	return snapshotBinaryFactory(ramdiskSnapshotImageSingleton, snapshotBinarySuffix)
+	return snapshotBinaryFactory(RamdiskSnapshotImageSingleton, snapshotBinarySuffix)
 }
 
 func snapshotBinaryFactory(image SnapshotImage, moduleSuffix string) android.Module {
@@ -866,7 +865,7 @@ func RecoverySnapshotObjectFactory() android.Module {
 	}
 	module.linker = prebuilt
 
-	prebuilt.Init(module, recoverySnapshotImageSingleton, snapshotObjectSuffix)
+	prebuilt.Init(module, RecoverySnapshotImageSingleton, snapshotObjectSuffix)
 	module.AddProperties(&prebuilt.properties)
 	return module.Init()
 }
@@ -884,7 +883,7 @@ func RamdiskSnapshotObjectFactory() android.Module {
 	}
 	module.linker = prebuilt
 
-	prebuilt.Init(module, ramdiskSnapshotImageSingleton, snapshotObjectSuffix)
+	prebuilt.Init(module, RamdiskSnapshotImageSingleton, snapshotObjectSuffix)
 	module.AddProperties(&prebuilt.properties)
 	return module.Init()
 }

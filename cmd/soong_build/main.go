@@ -217,20 +217,24 @@ func doChosenActivity(configuration android.Config, extraNinjaDeps []string) str
 	generateModuleGraphFile := moduleGraphFile != ""
 	generateDocFile := docFile != ""
 
-	blueprintArgs := cmdlineArgs
-
-	var stopBefore bootstrap.StopBefore
-	if !generateModuleGraphFile && !generateQueryView && !generateDocFile {
-		stopBefore = bootstrap.DoEverything
-	} else {
-		stopBefore = bootstrap.StopBeforePrepareBuildActions
-	}
-
 	if generateBazelWorkspace {
 		// Run the alternate pipeline of bp2build mutators and singleton to convert
 		// Blueprint to BUILD files before everything else.
 		runBp2Build(configuration, extraNinjaDeps)
 		return bp2buildMarker
+	}
+
+	blueprintArgs := cmdlineArgs
+
+	var stopBefore bootstrap.StopBefore
+	if generateModuleGraphFile {
+		stopBefore = bootstrap.StopBeforeWriteNinja
+	} else if generateQueryView {
+		stopBefore = bootstrap.StopBeforePrepareBuildActions
+	} else if generateDocFile {
+		stopBefore = bootstrap.StopBeforePrepareBuildActions
+	} else {
+		stopBefore = bootstrap.DoEverything
 	}
 
 	ctx := newContext(configuration)
@@ -459,6 +463,11 @@ func runBp2Build(configuration android.Config, extraNinjaDeps []string) {
 	// Register an alternate set of singletons and mutators for bazel
 	// conversion for Bazel conversion.
 	bp2buildCtx := android.NewContext(configuration)
+
+	// Soong internals like LoadHooks behave differently when running as
+	// bp2build. This is the bit to differentiate between Soong-as-Soong and
+	// Soong-as-bp2build.
+	bp2buildCtx.SetRunningAsBp2build()
 
 	// Propagate "allow misssing dependencies" bit. This is normally set in
 	// newContext(), but we create bp2buildCtx without calling that method.

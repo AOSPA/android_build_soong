@@ -409,7 +409,7 @@ type ModuleContext interface {
 	PackageFile(installPath InstallPath, name string, srcPath Path) PackagingSpec
 
 	CheckbuildFile(srcPath Path)
-	TidyFile(srcPath Path)
+	TidyFile(srcPath WritablePath)
 
 	InstallInData() bool
 	InstallInTestcases() bool
@@ -1190,11 +1190,14 @@ type ModuleBase struct {
 	installFiles         InstallPaths
 	installFilesDepSet   *installPathsDepSet
 	checkbuildFiles      Paths
-	tidyFiles            Paths
+	tidyFiles            WritablePaths
 	packagingSpecs       []PackagingSpec
 	packagingSpecsDepSet *packagingSpecsDepSet
 	noticeFiles          Paths
-	phonies              map[string]Paths
+	// katiInstalls tracks the install rules that were created by Soong but are being exported
+	// to Make to convert to ninja rules so that Make can add additional dependencies.
+	katiInstalls katiInstalls
+	katiSymlinks katiInstalls
 
 	// The files to copy to the dist as explicitly specified in the .bp file.
 	distFiles TaggedDistFiles
@@ -1764,12 +1767,18 @@ func (m *ModuleBase) VintfFragments() Paths {
 func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
 	var allInstalledFiles InstallPaths
 	var allCheckbuildFiles Paths
-	var allTidyFiles Paths
+	var allTidyFiles WritablePaths
 	ctx.VisitAllModuleVariants(func(module Module) {
 		a := module.base()
 		allInstalledFiles = append(allInstalledFiles, a.installFiles...)
-		allCheckbuildFiles = append(allCheckbuildFiles, a.checkbuildFiles...)
-		allTidyFiles = append(allTidyFiles, a.tidyFiles...)
+		// A module's -{checkbuild,tidy} phony targets should
+		// not be created if the module is not exported to make.
+		// Those could depend on the build target and fail to compile
+		// for the current build target.
+		if !ctx.Config().KatiEnabled() || !shouldSkipAndroidMkProcessing(a) {
+			allCheckbuildFiles = append(allCheckbuildFiles, a.checkbuildFiles...)
+			allTidyFiles = append(allTidyFiles, a.tidyFiles...)
+		}
 	})
 
 	var deps Paths
@@ -1795,7 +1804,7 @@ func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
 
 	if len(allTidyFiles) > 0 {
 		name := namespacePrefix + ctx.ModuleName() + "-tidy"
-		ctx.Phony(name, allTidyFiles...)
+		ctx.Phony(name, allTidyFiles.Paths()...)
 		m.tidyTarget = PathForPhony(ctx, name)
 		deps = append(deps, m.tidyTarget)
 	}
@@ -2010,9 +2019,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		m.checkbuildFiles = append(m.checkbuildFiles, ctx.checkbuildFiles...)
 		m.tidyFiles = append(m.tidyFiles, ctx.tidyFiles...)
 		m.packagingSpecs = append(m.packagingSpecs, ctx.packagingSpecs...)
-		for k, v := range ctx.phonies {
-			m.phonies[k] = append(m.phonies[k], v...)
-		}
+		m.katiInstalls = append(m.katiInstalls, ctx.katiInstalls...)
+		m.katiSymlinks = append(m.katiSymlinks, ctx.katiSymlinks...)
 	} else if ctx.Config().AllowMissingDependencies() {
 		// If the module is not enabled it will not create any build rules, nothing will call
 		// ctx.GetMissingDependencies(), and blueprint will consider the missing dependencies to be unhandled
@@ -2207,14 +2215,54 @@ type moduleContext struct {
 	packagingSpecs  []PackagingSpec
 	installFiles    InstallPaths
 	checkbuildFiles Paths
-	tidyFiles       Paths
+	tidyFiles       WritablePaths
 	module          Module
 	phonies         map[string]Paths
+
+	katiInstalls []katiInstall
+	katiSymlinks []katiInstall
 
 	// For tests
 	buildParams []BuildParams
 	ruleParams  map[blueprint.Rule]blueprint.RuleParams
 	variables   map[string]string
+}
+
+// katiInstall stores a request from Soong to Make to create an install rule.
+type katiInstall struct {
+	from          Path
+	to            InstallPath
+	implicitDeps  Paths
+	orderOnlyDeps Paths
+	executable    bool
+
+	absFrom string
+}
+
+type katiInstalls []katiInstall
+
+// BuiltInstalled returns the katiInstalls in the form used by $(call copy-many-files) in Make, a
+// space separated list of from:to tuples.
+func (installs katiInstalls) BuiltInstalled() string {
+	sb := strings.Builder{}
+	for i, install := range installs {
+		if i != 0 {
+			sb.WriteRune(' ')
+		}
+		sb.WriteString(install.from.String())
+		sb.WriteRune(':')
+		sb.WriteString(install.to.String())
+	}
+	return sb.String()
+}
+
+// InstallPaths returns the install path of each entry.
+func (installs katiInstalls) InstallPaths() InstallPaths {
+	paths := make(InstallPaths, 0, len(installs))
+	for _, install := range installs {
+		paths = append(paths, install.to)
+	}
+	return paths
 }
 
 func (m *moduleContext) ninjaError(params BuildParams, err error) (PackageContext, BuildParams) {
@@ -2818,11 +2866,13 @@ func (m *moduleContext) PackageFile(installPath InstallPath, name string, srcPat
 }
 
 func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, executable bool) PackagingSpec {
+	licenseFiles := m.Module().EffectiveLicenseFiles()
 	spec := PackagingSpec{
-		relPathInPackage: Rel(m, fullInstallPath.PartitionDir(), fullInstallPath.String()),
-		srcPath:          srcPath,
-		symlinkTarget:    "",
-		executable:       executable,
+		relPathInPackage:      Rel(m, fullInstallPath.PartitionDir(), fullInstallPath.String()),
+		srcPath:               srcPath,
+		symlinkTarget:         "",
+		executable:            executable,
+		effectiveLicenseFiles: &licenseFiles,
 	}
 	m.packagingSpecs = append(m.packagingSpecs, spec)
 	return spec
@@ -2846,20 +2896,33 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 			orderOnlyDeps = deps
 		}
 
-		rule := Cp
-		if executable {
-			rule = CpExecutable
-		}
+		if m.Config().KatiEnabled() && m.InstallBypassMake() {
+			// When creating the install rule in Soong but embedding in Make, write the rule to a
+			// makefile instead of directly to the ninja file so that main.mk can add the
+			// dependencies from the `required` property that are hard to resolve in Soong.
+			m.katiInstalls = append(m.katiInstalls, katiInstall{
+				from:          srcPath,
+				to:            fullInstallPath,
+				implicitDeps:  implicitDeps,
+				orderOnlyDeps: orderOnlyDeps,
+				executable:    executable,
+			})
+		} else {
+			rule := Cp
+			if executable {
+				rule = CpExecutable
+			}
 
-		m.Build(pctx, BuildParams{
-			Rule:        rule,
-			Description: "install " + fullInstallPath.Base(),
-			Output:      fullInstallPath,
-			Input:       srcPath,
-			Implicits:   implicitDeps,
-			OrderOnly:   orderOnlyDeps,
-			Default:     !m.Config().KatiEnabled(),
-		})
+			m.Build(pctx, BuildParams{
+				Rule:        rule,
+				Description: "install " + fullInstallPath.Base(),
+				Output:      fullInstallPath,
+				Input:       srcPath,
+				Implicits:   implicitDeps,
+				OrderOnly:   orderOnlyDeps,
+				Default:     !m.Config().KatiEnabled(),
+			})
+		}
 
 		m.installFiles = append(m.installFiles, fullInstallPath)
 	}
@@ -2881,16 +2944,30 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 	}
 	if !m.skipInstall() {
 
-		m.Build(pctx, BuildParams{
-			Rule:        Symlink,
-			Description: "install symlink " + fullInstallPath.Base(),
-			Output:      fullInstallPath,
-			Input:       srcPath,
-			Default:     !m.Config().KatiEnabled(),
-			Args: map[string]string{
-				"fromPath": relPath,
-			},
-		})
+		if m.Config().KatiEnabled() && m.InstallBypassMake() {
+			// When creating the symlink rule in Soong but embedding in Make, write the rule to a
+			// makefile instead of directly to the ninja file so that main.mk can add the
+			// dependencies from the `required` property that are hard to resolve in Soong.
+			m.katiSymlinks = append(m.katiSymlinks, katiInstall{
+				from: srcPath,
+				to:   fullInstallPath,
+			})
+		} else {
+			// The symlink doesn't need updating when the target is modified, but we sometimes
+			// have a dependency on a symlink to a binary instead of to the binary directly, and
+			// the mtime of the symlink must be updated when the binary is modified, so use a
+			// normal dependency here instead of an order-only dependency.
+			m.Build(pctx, BuildParams{
+				Rule:        Symlink,
+				Description: "install symlink " + fullInstallPath.Base(),
+				Output:      fullInstallPath,
+				Input:       srcPath,
+				Default:     !m.Config().KatiEnabled(),
+				Args: map[string]string{
+					"fromPath": relPath,
+				},
+			})
+		}
 
 		m.installFiles = append(m.installFiles, fullInstallPath)
 		m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
@@ -2913,15 +2990,25 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 	m.module.base().hooks.runInstallHooks(m, nil, fullInstallPath, true)
 
 	if !m.skipInstall() {
-		m.Build(pctx, BuildParams{
-			Rule:        Symlink,
-			Description: "install symlink " + fullInstallPath.Base() + " -> " + absPath,
-			Output:      fullInstallPath,
-			Default:     !m.Config().KatiEnabled(),
-			Args: map[string]string{
-				"fromPath": absPath,
-			},
-		})
+		if m.Config().KatiEnabled() && m.InstallBypassMake() {
+			// When creating the symlink rule in Soong but embedding in Make, write the rule to a
+			// makefile instead of directly to the ninja file so that main.mk can add the
+			// dependencies from the `required` property that are hard to resolve in Soong.
+			m.katiSymlinks = append(m.katiSymlinks, katiInstall{
+				absFrom: absPath,
+				to:      fullInstallPath,
+			})
+		} else {
+			m.Build(pctx, BuildParams{
+				Rule:        Symlink,
+				Description: "install symlink " + fullInstallPath.Base() + " -> " + absPath,
+				Output:      fullInstallPath,
+				Default:     !m.Config().KatiEnabled(),
+				Args: map[string]string{
+					"fromPath": absPath,
+				},
+			})
+		}
 
 		m.installFiles = append(m.installFiles, fullInstallPath)
 	}
@@ -2940,7 +3027,7 @@ func (m *moduleContext) CheckbuildFile(srcPath Path) {
 	m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
 }
 
-func (m *moduleContext) TidyFile(srcPath Path) {
+func (m *moduleContext) TidyFile(srcPath WritablePath) {
 	m.tidyFiles = append(m.tidyFiles, srcPath)
 }
 

@@ -181,7 +181,11 @@ type baseCompiler struct {
 	sanitize *sanitize
 
 	distFile android.OptionalPath
-	// Stripped output file. If Valid(), this file will be installed instead of outputFile.
+
+	// unstripped output file.
+	unstrippedOutputFile android.Path
+
+	// stripped output file.
 	strippedOutputFile android.OptionalPath
 
 	// If a crate has a source-generated dependency, a copy of the source file
@@ -340,6 +344,10 @@ func (compiler *baseCompiler) CargoPkgVersion() string {
 	return String(compiler.Properties.Cargo_pkg_version)
 }
 
+func (compiler *baseCompiler) unstrippedOutputFilePath() android.Path {
+	return compiler.unstrippedOutputFile
+}
+
 func (compiler *baseCompiler) strippedOutputFilePath() android.OptionalPath {
 	return compiler.strippedOutputFile
 }
@@ -355,9 +363,9 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 
 	if !Bool(compiler.Properties.No_stdlibs) {
 		for _, stdlib := range config.Stdlibs {
-			// If we're building for the primary arch of the build host, use the compiler's stdlibs
+			// If we're building for the build host, use the prebuilt stdlibs
 			if ctx.Target().Os == ctx.Config().BuildOS {
-				stdlib = stdlib + "_" + ctx.toolchain().RustTriple()
+				stdlib = "prebuilt_" + stdlib
 			}
 			deps.Stdlibs = append(deps.Stdlibs, stdlib)
 		}
@@ -449,6 +457,10 @@ func (compiler *baseCompiler) relativeInstallPath() string {
 
 // Returns the Path for the main source file along with Paths for generated source files from modules listed in srcs.
 func srcPathFromModuleSrcs(ctx ModuleContext, srcs []string) (android.Path, android.Paths) {
+	if len(srcs) == 0 {
+		ctx.PropertyErrorf("srcs", "srcs must not be empty")
+	}
+
 	// The srcs can contain strings with prefix ":".
 	// They are dependent modules of this module, with android.SourceDepTag.
 	// They are not the main source file compiled by rustc.

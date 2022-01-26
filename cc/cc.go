@@ -325,7 +325,7 @@ type BaseProperties struct {
 	SnapshotStaticLibs  []string `blueprint:"mutated"`
 	SnapshotRuntimeLibs []string `blueprint:"mutated"`
 
-	Installable *bool
+	Installable *bool `android:"arch_variant"`
 
 	// Set by factories of module types that can only be referenced from variants compiled against
 	// the SDK.
@@ -1376,6 +1376,8 @@ func (c *Module) InstallInRoot() bool {
 	return c.installer != nil && c.installer.installInRoot()
 }
 
+func (c *Module) InstallBypassMake() bool { return true }
+
 type baseModuleContext struct {
 	android.BaseModuleContext
 	moduleContextImpl
@@ -1726,7 +1728,7 @@ func (c *Module) maybeGenerateBazelActions(actx android.ModuleContext) bool {
 	bazelActionsUsed := false
 	// Mixed builds mode is disabled for modules outside of device OS.
 	// TODO(b/200841190): Support non-device OS in mixed builds.
-	if c.MixedBuildsEnabled(actx) && c.bazelHandler != nil && actx.Os().Class == android.Device {
+	if c.MixedBuildsEnabled(actx) && c.bazelHandler != nil {
 		bazelActionsUsed = c.bazelHandler.GenerateBazelBuildActions(actx, bazelModuleLabel)
 	}
 	return bazelActionsUsed
@@ -1877,7 +1879,7 @@ func (c *Module) maybeUnhideFromMake() {
 }
 
 func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
-	if !proptools.BoolDefault(c.Properties.Installable, true) {
+	if !proptools.BoolDefault(c.Installable(), true) {
 		// If the module has been specifically configure to not be installed then
 		// hide from make as otherwise it will break when running inside make
 		// as the output path to install will not be specified. Not all uninstallable
@@ -3276,16 +3278,6 @@ func (c *Module) TestFor() []string {
 	return c.Properties.Test_for
 }
 
-func (c *Module) UniqueApexVariations() bool {
-	if u, ok := c.compiler.(interface {
-		uniqueApexVariations() bool
-	}); ok {
-		return u.uniqueApexVariations()
-	} else {
-		return false
-	}
-}
-
 func (c *Module) EverInstallable() bool {
 	return c.installer != nil &&
 		// Check to see whether the module is actually ever installable.
@@ -3297,6 +3289,11 @@ func (c *Module) PreventInstall() bool {
 }
 
 func (c *Module) Installable() *bool {
+	if c.library != nil {
+		if i := c.library.installable(); i != nil {
+			return i
+		}
+	}
 	return c.Properties.Installable
 }
 

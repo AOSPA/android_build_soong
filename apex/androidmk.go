@@ -272,7 +272,7 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 					fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", ccMod.CoverageOutputFile().String())
 				}
 			}
-			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_prebuilt.mk")
+			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_rust_prebuilt.mk")
 		default:
 			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.stem())
 			if fi.builtFile == a.manifestPbOut && apexType == flattenedApex {
@@ -326,6 +326,9 @@ func (a *apexBundle) writeRequiredModules(w io.Writer, apexBundleName string) {
 	var required []string
 	var targetRequired []string
 	var hostRequired []string
+	required = append(required, a.RequiredModuleNames()...)
+	targetRequired = append(targetRequired, a.TargetRequiredModuleNames()...)
+	hostRequired = append(hostRequired, a.HostRequiredModuleNames()...)
 	installMapSet := make(map[string]bool) // set of dependency module:location mappings
 	for _, fi := range a.filesInfo {
 		required = append(required, fi.requiredModuleNames...)
@@ -446,23 +449,18 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 					fmt.Fprintf(w, dist)
 				}
 
-				if a.apisUsedByModuleFile.String() != "" {
-					goal := "apps_only"
-					distFile := a.apisUsedByModuleFile.String()
-					fmt.Fprintf(w, "ifneq (,$(filter $(my_register_name),$(TARGET_BUILD_APPS)))\n"+
-						" $(call dist-for-goals,%s,%s:ndk_apis_usedby_apex/$(notdir %s))\n"+
-						"endif\n",
-						goal, distFile, distFile)
-				}
-
-				if a.apisBackedByModuleFile.String() != "" {
-					goal := "apps_only"
-					distFile := a.apisBackedByModuleFile.String()
-					fmt.Fprintf(w, "ifneq (,$(filter $(my_register_name),$(TARGET_BUILD_APPS)))\n"+
-						" $(call dist-for-goals,%s,%s:ndk_apis_backedby_apex/$(notdir %s))\n"+
-						"endif\n",
-						goal, distFile, distFile)
-				}
+				distCoverageFiles(w, "ndk_apis_usedby_apex", a.nativeApisUsedByModuleFile.String())
+				distCoverageFiles(w, "ndk_apis_usedby_apex", a.nativeApisBackedByModuleFile.String())
+				distCoverageFiles(w, "java_apis_used_by_apex", a.javaApisUsedByModuleFile.String())
 			}
 		}}
+}
+
+func distCoverageFiles(w io.Writer, dir string, distfile string) {
+	if distfile != "" {
+		goal := "apps_only"
+		fmt.Fprintf(w, "ifneq (,$(filter $(my_register_name),$(TARGET_BUILD_APPS)))\n"+
+			" $(call dist-for-goals,%s,%s:%s/$(notdir %s))\n"+
+			"endif\n", goal, distfile, dir, distfile)
+	}
 }

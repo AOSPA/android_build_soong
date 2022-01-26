@@ -17,6 +17,7 @@ MAINLINE_MODULES=(
 MODULES_SDK_AND_EXPORTS=(
   art-module-sdk
   art-module-test-exports
+  compos-module-sdk
   conscrypt-module-host-exports
   conscrypt-module-sdk
   conscrypt-module-test-exports
@@ -98,7 +99,7 @@ done
 export FORCE_BUILD_LLVM_COMPONENTS=true
 
 # Create multi-archs SDKs in a different out directory. The multi-arch script
-# uses Soong in --skip-make mode which cannot use the same directory as normal
+# uses Soong in --soong-only mode which cannot use the same directory as normal
 # mode with make.
 export OUT_DIR=${OUT_DIR}/aml
 echo_and_run build/soong/scripts/build-aml-prebuilts.sh \

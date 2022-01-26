@@ -62,6 +62,7 @@ toolchain_library {
         },
     },
     notice: ":mingw-libwinpthread-notice",
+    licenses: ["winpthreads_license"],
 }
 
 kernel_headers {
@@ -125,4 +126,8 @@ genrule {
     tools: ["get_clang_version"],
     srcs: ["cc/config/global.go"],
     out: ["clang-prebuilts-version.txt"],
+}
+
+dexpreopt_systemserver_check {
+    name: "dexpreopt_systemserver_check",
 }

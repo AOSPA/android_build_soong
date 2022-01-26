@@ -3185,7 +3185,6 @@ func TestMacro(t *testing.T) {
 				"myapex",
 				"otherapex",
 			],
-			use_apex_name_macro: true,
 			recovery_available: true,
 			min_sdk_version: "29",
 		}
@@ -3200,13 +3199,11 @@ func TestMacro(t *testing.T) {
 	mylibCFlags = ctx.ModuleForTests("mylib", "android_arm64_armv8-a_static_apex10000").Rule("cc").Args["cFlags"]
 	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX__")
 	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX_MIN_SDK_VERSION__=10000")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_MYAPEX__")
 
 	// APEX variant has __ANDROID_APEX__ and __ANDROID_APEX_SDK__ defined
 	mylibCFlags = ctx.ModuleForTests("mylib", "android_arm64_armv8-a_static_apex29").Rule("cc").Args["cFlags"]
 	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX__")
 	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX_MIN_SDK_VERSION__=29")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_OTHERAPEX__")
 
 	// When a cc_library sets use_apex_name_macro: true each apex gets a unique variant and
 	// each variant defines additional macros to distinguish which apex variant it is built for
@@ -3215,41 +3212,14 @@ func TestMacro(t *testing.T) {
 	mylibCFlags = ctx.ModuleForTests("mylib3", "android_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
 	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX__")
 
-	// APEX variant has __ANDROID_APEX__ defined
-	mylibCFlags = ctx.ModuleForTests("mylib3", "android_arm64_armv8-a_static_myapex").Rule("cc").Args["cFlags"]
-	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX__")
-	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX_MYAPEX__")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_OTHERAPEX__")
-
-	// APEX variant has __ANDROID_APEX__ defined
-	mylibCFlags = ctx.ModuleForTests("mylib3", "android_arm64_armv8-a_static_otherapex").Rule("cc").Args["cFlags"]
-	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX__")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_MYAPEX__")
-	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX_OTHERAPEX__")
-
 	// recovery variant does not set __ANDROID_APEX_MIN_SDK_VERSION__
 	mylibCFlags = ctx.ModuleForTests("mylib3", "android_recovery_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
 	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX__")
 	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_MIN_SDK_VERSION__")
 
-	// When a dependency of a cc_library sets use_apex_name_macro: true each apex gets a unique
-	// variant.
-
 	// non-APEX variant does not have __ANDROID_APEX__ defined
 	mylibCFlags = ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
 	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX__")
-
-	// APEX variant has __ANDROID_APEX__ defined
-	mylibCFlags = ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_static_myapex").Rule("cc").Args["cFlags"]
-	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX__")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_MYAPEX__")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_OTHERAPEX__")
-
-	// APEX variant has __ANDROID_APEX__ defined
-	mylibCFlags = ctx.ModuleForTests("mylib2", "android_arm64_armv8-a_static_otherapex").Rule("cc").Args["cFlags"]
-	ensureContains(t, mylibCFlags, "-D__ANDROID_APEX__")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_MYAPEX__")
-	ensureNotContains(t, mylibCFlags, "-D__ANDROID_APEX_OTHERAPEX__")
 
 	// recovery variant does not set __ANDROID_APEX_MIN_SDK_VERSION__
 	mylibCFlags = ctx.ModuleForTests("mylib2", "android_recovery_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
@@ -7715,6 +7685,28 @@ func TestApexKeysTxt(t *testing.T) {
 			name: "myapex",
 			key: "myapex.key",
 			updatable: false,
+			custom_sign_tool: "sign_myapex",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	apexKeysText := ctx.SingletonForTests("apex_keys_text")
+	content := apexKeysText.MaybeDescription("apexkeys.txt").BuildParams.Args["content"]
+	ensureContains(t, content, `name="myapex.apex" public_key="vendor/foo/devkeys/testkey.avbpubkey" private_key="vendor/foo/devkeys/testkey.pem" container_certificate="vendor/foo/devkeys/test.x509.pem" container_private_key="vendor/foo/devkeys/test.pk8" partition="system_ext" sign_tool="sign_myapex"`)
+}
+
+func TestApexKeysTxtOverrides(t *testing.T) {
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: false,
+			custom_sign_tool: "sign_myapex",
 		}
 
 		apex_key {
@@ -8289,6 +8281,115 @@ func TestProhibitStaticExecutable(t *testing.T) {
 			min_sdk_version: "29",
 		}
 	`)
+}
+
+func TestAndroidMk_DexpreoptBuiltInstalledForApex(t *testing.T) {
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: false,
+			java_libs: ["foo"],
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_library {
+			name: "foo",
+			srcs: ["foo.java"],
+			apex_available: ["myapex"],
+			installable: true,
+		}
+	`,
+		dexpreopt.FixtureSetApexSystemServerJars("myapex:foo"),
+	)
+
+	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
+	var builder strings.Builder
+	data.Custom(&builder, apexBundle.BaseModuleName(), "TARGET_", "", data)
+	androidMk := builder.String()
+	ensureContains(t, androidMk, "LOCAL_REQUIRED_MODULES += foo-dexpreopt-arm64-apex@myapex@javalib@foo.jar@classes.odex foo-dexpreopt-arm64-apex@myapex@javalib@foo.jar@classes.vdex")
+}
+
+func TestAndroidMk_DexpreoptBuiltInstalledForApex_Prebuilt(t *testing.T) {
+	ctx := testApex(t, `
+		prebuilt_apex {
+			name: "myapex",
+			arch: {
+				arm64: {
+					src: "myapex-arm64.apex",
+				},
+				arm: {
+					src: "myapex-arm.apex",
+				},
+			},
+			exported_java_libs: ["foo"],
+		}
+
+		java_import {
+			name: "foo",
+			jars: ["foo.jar"],
+			installable: true,
+		}
+	`,
+		dexpreopt.FixtureSetApexSystemServerJars("myapex:foo"),
+	)
+
+	prebuilt := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*Prebuilt)
+	entriesList := android.AndroidMkEntriesForTest(t, ctx, prebuilt)
+	mainModuleEntries := entriesList[0]
+	android.AssertArrayString(t,
+		"LOCAL_REQUIRED_MODULES",
+		mainModuleEntries.EntryMap["LOCAL_REQUIRED_MODULES"],
+		[]string{
+			"foo-dexpreopt-arm64-apex@myapex@javalib@foo.jar@classes.odex",
+			"foo-dexpreopt-arm64-apex@myapex@javalib@foo.jar@classes.vdex",
+		})
+}
+
+func TestAndroidMk_RequiredModules(t *testing.T) {
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: false,
+			java_libs: ["foo"],
+			required: ["otherapex"],
+		}
+
+		apex {
+			name: "otherapex",
+			key: "myapex.key",
+			updatable: false,
+			java_libs: ["foo"],
+			required: ["otherapex"],
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_library {
+			name: "foo",
+			srcs: ["foo.java"],
+			apex_available: ["myapex", "otherapex"],
+			installable: true,
+		}
+	`)
+
+	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
+	var builder strings.Builder
+	data.Custom(&builder, apexBundle.BaseModuleName(), "TARGET_", "", data)
+	androidMk := builder.String()
+	ensureContains(t, androidMk, "LOCAL_REQUIRED_MODULES += otherapex")
 }
 
 func TestMain(m *testing.M) {

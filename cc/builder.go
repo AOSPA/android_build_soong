@@ -238,14 +238,6 @@ var (
 		},
 		"asFlags")
 
-	// Rule to invoke windres, for interaction with Windows resources.
-	windres = pctx.AndroidStaticRule("windres",
-		blueprint.RuleParams{
-			Command:     "$windresCmd $flags -I$$(dirname $in) -i $in -o $out --preprocessor \"${config.ClangBin}/clang -E -xc-header -DRC_INVOKED\"",
-			CommandDeps: []string{"$windresCmd"},
-		},
-		"windresCmd", "flags")
-
 	_ = pctx.SourcePathVariable("sAbiDumper", "prebuilts/clang-tools/${config.HostPrebuiltTag}/bin/header-abi-dumper")
 
 	// -w has been added since header-abi-dumper does not need to produce any sort of diagnostic information.
@@ -422,7 +414,7 @@ type StripFlags struct {
 // Objects is a collection of file paths corresponding to outputs for C++ related build statements.
 type Objects struct {
 	objFiles      android.Paths
-	tidyFiles     android.Paths
+	tidyFiles     android.WritablePaths
 	coverageFiles android.Paths
 	sAbiDumpFiles android.Paths
 	kytheFiles    android.Paths
@@ -431,7 +423,7 @@ type Objects struct {
 func (a Objects) Copy() Objects {
 	return Objects{
 		objFiles:      append(android.Paths{}, a.objFiles...),
-		tidyFiles:     append(android.Paths{}, a.tidyFiles...),
+		tidyFiles:     append(android.WritablePaths{}, a.tidyFiles...),
 		coverageFiles: append(android.Paths{}, a.coverageFiles...),
 		sAbiDumpFiles: append(android.Paths{}, a.sAbiDumpFiles...),
 		kytheFiles:    append(android.Paths{}, a.kytheFiles...),
@@ -460,11 +452,11 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles, no
 
 	// Source files are one-to-one with tidy, coverage, or kythe files, if enabled.
 	objFiles := make(android.Paths, len(srcFiles))
-	var tidyFiles android.Paths
+	var tidyFiles android.WritablePaths
 	noTidySrcsMap := make(map[android.Path]bool)
 	var tidyVars string
 	if flags.tidy {
-		tidyFiles = make(android.Paths, 0, len(srcFiles))
+		tidyFiles = make(android.WritablePaths, 0, len(srcFiles))
 		for _, path := range noTidySrcs {
 			noTidySrcsMap[path] = true
 		}
@@ -575,20 +567,6 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles, no
 				OrderOnly:   pathDeps,
 				Args: map[string]string{
 					"asFlags": shareFlags("asFlags", flags.globalYasmFlags+" "+flags.localYasmFlags),
-				},
-			})
-			continue
-		case ".rc":
-			ctx.Build(pctx, android.BuildParams{
-				Rule:        windres,
-				Description: "windres " + srcFile.Rel(),
-				Output:      objFile,
-				Input:       srcFile,
-				Implicits:   cFlagsDeps,
-				OrderOnly:   pathDeps,
-				Args: map[string]string{
-					"windresCmd": mingwCmd(flags.toolchain, "windres"),
-					"flags":      shareFlags("flags", flags.toolchain.WindresFlags()),
 				},
 			})
 			continue
@@ -748,7 +726,7 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles, no
 // Generate a rule for compiling multiple .o files to a static library (.a)
 func transformObjToStaticLib(ctx android.ModuleContext,
 	objFiles android.Paths, wholeStaticLibs android.Paths,
-	flags builderFlags, outputFile android.ModuleOutPath, deps android.Paths) {
+	flags builderFlags, outputFile android.ModuleOutPath, deps android.Paths, validations android.WritablePaths) {
 
 	arCmd := "${config.ClangBin}/llvm-ar"
 	if flags.sdclang {
@@ -766,6 +744,7 @@ func transformObjToStaticLib(ctx android.ModuleContext,
 			Output:      outputFile,
 			Inputs:      objFiles,
 			Implicits:   deps,
+			Validations: validations.Paths(),
 			Args: map[string]string{
 				"arFlags": "crsPD" + arFlags,
 				"arCmd":   arCmd,
@@ -1000,8 +979,7 @@ func sourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 }
 
 // Generate a rule for extracting a table of contents from a shared library (.so)
-func transformSharedObjectToToc(ctx android.ModuleContext, inputFile android.Path,
-	outputFile android.WritablePath, flags builderFlags) {
+func TransformSharedObjectToToc(ctx android.ModuleContext, inputFile android.Path, outputFile android.WritablePath) {
 
 	var format string
 	if ctx.Darwin() {

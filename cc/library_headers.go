@@ -57,7 +57,7 @@ type libraryHeaderBazelHander struct {
 
 func (h *libraryHeaderBazelHander) GenerateBazelBuildActions(ctx android.ModuleContext, label string) bool {
 	bazelCtx := ctx.Config().BazelContext
-	ccInfo, ok, err := bazelCtx.GetCcInfo(label, ctx.Arch().ArchType)
+	ccInfo, ok, err := bazelCtx.GetCcInfo(label, android.GetConfigKey(ctx))
 	if err != nil {
 		ctx.ModuleErrorf("Error getting Bazel CcInfo: %s", err)
 		return false
@@ -132,7 +132,8 @@ func CcLibraryHeadersBp2Build(ctx android.TopDownMutatorContext) {
 	}
 
 	exportedIncludes := bp2BuildParseExportedIncludes(ctx, module)
-	linkerAttrs := bp2BuildParseLinkerProps(ctx, module)
+	baseAttributes := bp2BuildParseBaseProps(ctx, module)
+	linkerAttrs := baseAttributes.linkerAttributes
 
 	attrs := &bazelCcLibraryHeadersAttributes{
 		Export_includes:        exportedIncludes.Includes,
@@ -140,6 +141,7 @@ func CcLibraryHeadersBp2Build(ctx android.TopDownMutatorContext) {
 		Implementation_deps:    linkerAttrs.implementationDeps,
 		Deps:                   linkerAttrs.deps,
 		System_dynamic_deps:    linkerAttrs.systemDynamicDeps,
+		Hdrs:                   baseAttributes.hdrs,
 	}
 
 	props := bazel.BazelTargetModuleProperties{

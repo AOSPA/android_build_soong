@@ -283,7 +283,7 @@ func customBp2BuildMutator(ctx android.TopDownMutatorContext) {
 			return
 		}
 
-		paths := bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrcExcludes(ctx, m.props.Arch_paths, m.props.Arch_paths_exclude))
+		paths := bazel.LabelListAttribute{}
 
 		for axis, configToProps := range m.GetArchVariantProperties(ctx, &customProps{}) {
 			for config, props := range configToProps {
@@ -363,4 +363,17 @@ func simpleModuleDoNotConvertBp2build(typ, name string) string {
 		name: "%s",
 		bazel_module: { bp2build_available: false },
 }`, typ, name)
+}
+
+type attrNameToString map[string]string
+
+func makeBazelTarget(typ, name string, attrs attrNameToString) string {
+	attrStrings := make([]string, 0, len(attrs)+1)
+	attrStrings = append(attrStrings, fmt.Sprintf(`    name = "%s",`, name))
+	for _, k := range android.SortedStringKeys(attrs) {
+		attrStrings = append(attrStrings, fmt.Sprintf("    %s = %s,", k, attrs[k]))
+	}
+	return fmt.Sprintf(`%s(
+%s
+)`, typ, strings.Join(attrStrings, "\n"))
 }

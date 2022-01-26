@@ -47,6 +47,7 @@ func (library *Library) AndroidMkEntriesHostDex() android.AndroidMkEntries {
 					if library.dexJarFile.IsSet() {
 						entries.SetPath("LOCAL_SOONG_DEX_JAR", library.dexJarFile.Path())
 					}
+					entries.SetPath("LOCAL_SOONG_INSTALLED_MODULE", library.hostdexInstallFile)
 					entries.SetPath("LOCAL_SOONG_HEADER_JAR", library.headerJarFile)
 					entries.SetPath("LOCAL_SOONG_CLASSES_JAR", library.implementationAndResourcesJar)
 					entries.SetString("LOCAL_MODULE_STEM", library.Stem()+"-hostdex")
@@ -59,6 +60,11 @@ func (library *Library) AndroidMkEntriesHostDex() android.AndroidMkEntries {
 
 func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 	var entriesList []android.AndroidMkEntries
+
+	if library.Os() == android.Windows {
+		// Make does not support Windows Java modules
+		return nil
+	}
 
 	if library.hideApexVariantFromMake {
 		// For a java library built for an APEX, we don't need a Make module for itself. Otherwise, it
@@ -250,6 +256,10 @@ func (prebuilt *AARImport) AndroidMkEntries() []android.AndroidMkEntries {
 }
 
 func (binary *Binary) AndroidMkEntries() []android.AndroidMkEntries {
+	if binary.Os() == android.Windows {
+		// Make does not support Windows Java modules
+		return nil
+	}
 
 	if !binary.isWrapperVariant {
 		return []android.AndroidMkEntries{android.AndroidMkEntries{
@@ -276,11 +286,6 @@ func (binary *Binary) AndroidMkEntries() []android.AndroidMkEntries {
 		}}
 	} else {
 		outputFile := binary.wrapperFile
-		// Have Make installation trigger Soong installation by using Soong's install path as
-		// the output file.
-		if binary.Host() {
-			outputFile = binary.binaryFile
-		}
 
 		return []android.AndroidMkEntries{android.AndroidMkEntries{
 			Class:      "EXECUTABLES",

@@ -130,6 +130,9 @@ type overridableAppProperties struct {
 	// Name of the signing certificate lineage file or filegroup module.
 	Lineage *string `android:"path"`
 
+	// For overriding the --rotation-min-sdk-version property of apksig
+	RotationMinSdkVersion *string
+
 	// the package name of this app. The package name in the manifest file is used if one was not given.
 	Package_name *string
 
@@ -473,6 +476,7 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) android.Path {
 	a.dexpreopter.enforceUsesLibs = a.usesLibrary.enforceUsesLibraries()
 	a.dexpreopter.classLoaderContexts = a.classLoaderContexts
 	a.dexpreopter.manifestFile = a.mergedManifestFile
+	a.dexpreopter.preventInstall = a.appProperties.PreventInstall
 
 	if ctx.ModuleName() != "framework-res" {
 		a.Module.compile(ctx, a.aaptSrcJar)
@@ -695,7 +699,10 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	if lineage := String(a.overridableAppProperties.Lineage); lineage != "" {
 		lineageFile = android.PathForModuleSrc(ctx, lineage)
 	}
-	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, v4SignatureFile, lineageFile)
+
+	rotationMinSdkVersion := String(a.overridableAppProperties.RotationMinSdkVersion)
+
+	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion)
 	a.outputFile = packageFile
 	if v4SigningRequested {
 		a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
@@ -707,7 +714,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		if v4SigningRequested {
 			v4SignatureFile = android.PathForModuleOut(ctx, a.installApkName+"_"+split.suffix+".apk.idsig")
 		}
-		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, v4SignatureFile, lineageFile)
+		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion)
 		a.extraOutputFiles = append(a.extraOutputFiles, packageFile)
 		if v4SigningRequested {
 			a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
@@ -722,11 +729,15 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 
 	// Install the app package.
-	if (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() {
-		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile)
+	if (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() &&
+		!a.appProperties.PreventInstall {
+
+		var extraInstalledPaths android.Paths
 		for _, extra := range a.extraOutputFiles {
-			ctx.InstallFile(a.installDir, extra.Base(), extra)
+			installed := ctx.InstallFile(a.installDir, extra.Base(), extra)
+			extraInstalledPaths = append(extraInstalledPaths, installed)
 		}
+		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile, extraInstalledPaths...)
 	}
 
 	a.buildAppDependencyInfo(ctx)

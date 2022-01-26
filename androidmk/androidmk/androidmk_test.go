@@ -1479,6 +1479,60 @@ android_test {
 }
 `,
 	},
+	{
+		desc: "LOCAL_USES_LIBRARIES",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_USES_LIBRARIES := foo.test bar.test baz.test
+include $(BUILD_PACKAGE)
+`,
+		expected: `
+android_app {
+    name: "foo",
+    uses_libs: [
+        "foo.test",
+        "bar.test",
+        "baz.test",
+    ],
+}
+`,
+	},
+	{
+		desc: "LOCAL_OPTIONAL_USES_LIBRARIES",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_OPTIONAL_USES_LIBRARIES := foo.test bar.test baz.test
+include $(BUILD_PACKAGE)
+`,
+		expected: `
+android_app {
+    name: "foo",
+    optional_uses_libs: [
+        "foo.test",
+        "bar.test",
+        "baz.test",
+    ],
+}
+`,
+	}, {
+		desc: "Obsolete LOCAL_MODULE_PATH",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_MODULE_PATH := $(TARGET_OUT_DATA_APPS)
+LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
+LOCAL_CTS_TEST_PACKAGE := bar
+LOCAL_USE_AAPT2 := blah
+include $(BUILD_PACKAGE)
+`,
+		expected: `
+android_app {
+  name: "foo",
+
+}
+`},
 }
 
 func TestEndToEnd(t *testing.T) {

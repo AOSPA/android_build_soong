@@ -24,7 +24,7 @@ import (
 func genProto(ctx android.ModuleContext, protoFiles android.Paths, flags android.ProtoFlags) android.Paths {
 	// Shard proto files into groups of 100 to avoid having to recompile all of them if one changes and to avoid
 	// hitting command line length limits.
-	shards := android.ShardPaths(protoFiles, 100)
+	shards := android.ShardPaths(protoFiles, 50)
 
 	srcJarFiles := make(android.Paths, 0, len(shards))
 
@@ -102,6 +102,9 @@ func protoFlags(ctx android.ModuleContext, j *CommonProperties, p *android.Proto
 	if String(p.Proto.Plugin) == "" {
 		var typeToPlugin string
 		switch String(p.Proto.Type) {
+		case "stream":
+			flags.proto.OutTypeFlag = "--javastream_out"
+			typeToPlugin = "javastream"
 		case "micro":
 			flags.proto.OutTypeFlag = "--javamicro_out"
 			typeToPlugin = "javamicro"

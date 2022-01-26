@@ -248,7 +248,7 @@ func toolDepsMutator(ctx android.BottomUpMutatorContext) {
 // Returns true if information was available from Bazel, false if bazel invocation still needs to occur.
 func (c *Module) GenerateBazelBuildActions(ctx android.ModuleContext, label string) bool {
 	bazelCtx := ctx.Config().BazelContext
-	filePaths, ok := bazelCtx.GetOutputFiles(label, ctx.Arch().ArchType)
+	filePaths, ok := bazelCtx.GetOutputFiles(label, android.GetConfigKey(ctx))
 	if ok {
 		var bazelOutputFiles android.Paths
 		exportIncludeDirs := map[string]bool{}
@@ -336,14 +336,9 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					}
 				case bootstrap.GoBinaryTool:
 					// A GoBinaryTool provides the install path to a tool, which will be copied.
-					if s, err := filepath.Rel(android.PathForOutput(ctx).String(), t.InstallPath()); err == nil {
-						toolPath := android.PathForOutput(ctx, s)
-						tools = append(tools, toolPath)
-						addLocationLabel(tag.label, toolLocation{android.Paths{toolPath}})
-					} else {
-						ctx.ModuleErrorf("cannot find path for %q: %v", tool, err)
-						return
-					}
+					p := android.PathForGoBinary(ctx, t)
+					tools = append(tools, p)
+					addLocationLabel(tag.label, toolLocation{android.Paths{p}})
 				default:
 					ctx.ModuleErrorf("%q is not a host tool provider", tool)
 					return

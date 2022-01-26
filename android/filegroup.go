@@ -112,15 +112,24 @@ func FileGroupFactory() Module {
 	return module
 }
 
-func (fg *fileGroup) GenerateBazelBuildActions(ctx ModuleContext) bool {
+func (fg *fileGroup) maybeGenerateBazelBuildActions(ctx ModuleContext) {
 	if !fg.MixedBuildsEnabled(ctx) {
-		return false
+		return
+	}
+
+	archVariant := ctx.Arch().ArchType
+	osVariant := ctx.Os()
+	if len(fg.Srcs()) == 1 && fg.Srcs()[0].Base() == fg.Name() {
+		// This will be a regular file target, not filegroup, in Bazel.
+		// See FilegroupBp2Build for more information.
+		archVariant = Common
+		osVariant = CommonOS
 	}
 
 	bazelCtx := ctx.Config().BazelContext
-	filePaths, ok := bazelCtx.GetOutputFiles(fg.GetBazelLabel(ctx, fg), Common)
+	filePaths, ok := bazelCtx.GetOutputFiles(fg.GetBazelLabel(ctx, fg), configKey{archVariant, osVariant})
 	if !ok {
-		return false
+		return
 	}
 
 	bazelOuts := make(Paths, 0, len(filePaths))
@@ -130,19 +139,15 @@ func (fg *fileGroup) GenerateBazelBuildActions(ctx ModuleContext) bool {
 	}
 
 	fg.srcs = bazelOuts
-
-	return true
 }
 
 func (fg *fileGroup) GenerateAndroidBuildActions(ctx ModuleContext) {
-	if fg.GenerateBazelBuildActions(ctx) {
-		return
-	}
-
 	fg.srcs = PathsForModuleSrcExcludes(ctx, fg.properties.Srcs, fg.properties.Exclude_srcs)
 	if fg.properties.Path != nil {
 		fg.srcs = PathsWithModuleSrcSubDir(ctx, fg.srcs, String(fg.properties.Path))
 	}
+
+	fg.maybeGenerateBazelBuildActions(ctx)
 }
 
 func (fg *fileGroup) Srcs() Paths {

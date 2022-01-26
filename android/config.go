@@ -155,6 +155,7 @@ type config struct {
 	fs         pathtools.FileSystem
 	mockBpList string
 
+	runningAsBp2Build        bool
 	bp2buildPackageConfig    Bp2BuildConfig
 	bp2buildModuleTypeConfig map[string]bool
 
@@ -333,10 +334,8 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 			ShippingApiLevel:                  stringPtr("30"),
 		},
 
-		outDir: buildDir,
-		// soongOutDir is inconsistent with production (it should be buildDir + "/soong")
-		// but a lot of tests assume this :(
-		soongOutDir:  buildDir,
+		outDir:       buildDir,
+		soongOutDir:  filepath.Join(buildDir, "soong"),
 		captureBuild: true,
 		env:          envCopy,
 
@@ -355,13 +354,13 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 
 	config.bp2buildModuleTypeConfig = map[string]bool{}
 
+	determineBuildOS(config)
+
 	return Config{config}
 }
 
 func modifyTestConfigToSupportArchMutator(testConfig Config) {
 	config := testConfig.config
-
-	determineBuildOS(config)
 
 	config.Targets = map[OsType][]Target{
 		Android: []Target{
@@ -564,23 +563,39 @@ func (c *config) SetAllowMissingDependencies() {
 // BlueprintToolLocation returns the directory containing build system tools
 // from Blueprint, like soong_zip and merge_zips.
 func (c *config) HostToolDir() string {
-	return filepath.Join(c.soongOutDir, "host", c.PrebuiltOS(), "bin")
+	if c.KatiEnabled() {
+		return filepath.Join(c.outDir, "host", c.PrebuiltOS(), "bin")
+	} else {
+		return filepath.Join(c.soongOutDir, "host", c.PrebuiltOS(), "bin")
+	}
 }
 
 func (c *config) HostToolPath(ctx PathContext, tool string) Path {
-	return PathForOutput(ctx, "host", c.PrebuiltOS(), "bin", tool)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", false, tool)
+	if ctx.Config().KatiEnabled() {
+		path = path.ToMakePath()
+	}
+	return path
 }
 
-func (c *config) HostJNIToolPath(ctx PathContext, path string) Path {
+func (c *config) HostJNIToolPath(ctx PathContext, lib string) Path {
 	ext := ".so"
 	if runtime.GOOS == "darwin" {
 		ext = ".dylib"
 	}
-	return PathForOutput(ctx, "host", c.PrebuiltOS(), "lib64", path+ext)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "lib64", false, lib+ext)
+	if ctx.Config().KatiEnabled() {
+		path = path.ToMakePath()
+	}
+	return path
 }
 
-func (c *config) HostJavaToolPath(ctx PathContext, path string) Path {
-	return PathForOutput(ctx, "host", c.PrebuiltOS(), "framework", path)
+func (c *config) HostJavaToolPath(ctx PathContext, tool string) Path {
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", false, tool)
+	if ctx.Config().KatiEnabled() {
+		path = path.ToMakePath()
+	}
+	return path
 }
 
 // PrebuiltOS returns the name of the host OS used in prebuilts directories.
@@ -1632,6 +1647,10 @@ func (c *deviceConfig) SepolicyFreezeTestExtraDirs() []string {
 
 func (c *deviceConfig) SepolicyFreezeTestExtraPrebuiltDirs() []string {
 	return c.config.productVariables.SepolicyFreezeTestExtraPrebuiltDirs
+}
+
+func (c *deviceConfig) GenerateAidlNdkPlatformBackend() bool {
+	return c.config.productVariables.GenerateAidlNdkPlatformBackend
 }
 
 // The ConfiguredJarList struct provides methods for handling a list of (apex, jar) pairs.

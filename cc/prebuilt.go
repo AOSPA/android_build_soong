@@ -16,9 +16,9 @@ package cc
 
 import (
 	"path/filepath"
-	"strings"
 
 	"android/soong/android"
+	"android/soong/bazel"
 )
 
 func init() {
@@ -32,6 +32,8 @@ func RegisterPrebuiltBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_prebuilt_test_library_shared", PrebuiltSharedTestLibraryFactory)
 	ctx.RegisterModuleType("cc_prebuilt_object", prebuiltObjectFactory)
 	ctx.RegisterModuleType("cc_prebuilt_binary", prebuiltBinaryFactory)
+
+	android.RegisterBp2BuildMutator("cc_prebuilt_library_shared", PrebuiltLibrarySharedBp2Build)
 }
 
 type prebuiltLinkerInterface interface {
@@ -112,8 +114,6 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 	// TODO(ccross): verify shared library dependencies
 	srcs := p.prebuiltSrcs(ctx)
 	if len(srcs) > 0 {
-		builderFlags := flagsToBuilderFlags(flags)
-
 		if len(srcs) > 1 {
 			ctx.PropertyErrorf("srcs", "multiple prebuilt source files")
 			return nil
@@ -150,7 +150,7 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 			// depending on a table of contents file instead of the library itself.
 			tocFile := android.PathForModuleOut(ctx, libName+".toc")
 			p.tocFile = android.OptionalPathForPath(tocFile)
-			transformSharedObjectToToc(ctx, outputFile, tocFile, builderFlags)
+			TransformSharedObjectToToc(ctx, outputFile, tocFile)
 
 			if ctx.Windows() && p.properties.Windows_import_lib != nil {
 				// Consumers of this library actually links to the import library in build
@@ -232,7 +232,7 @@ func (p *prebuiltLibraryLinker) disablePrebuilt() {
 
 // Implements versionedInterface
 func (p *prebuiltLibraryLinker) implementationModuleName(name string) string {
-	return strings.TrimPrefix(name, "prebuilt_")
+	return android.RemoveOptionalPrebuiltPrefix(name)
 }
 
 func NewPrebuiltLibrary(hod android.HostOrDeviceSupported) (*Module, *libraryDecorator) {
@@ -310,6 +310,42 @@ func NewPrebuiltStaticLibrary(hod android.HostOrDeviceSupported) (*Module, *libr
 	return module, library
 }
 
+type bazelPrebuiltLibrarySharedAttributes struct {
+	Shared_library bazel.LabelAttribute
+}
+
+func PrebuiltLibrarySharedBp2Build(ctx android.TopDownMutatorContext) {
+	module, ok := ctx.Module().(*Module)
+	if !ok {
+		// Not a cc module
+		return
+	}
+	if !module.ConvertWithBp2build(ctx) {
+		return
+	}
+	if ctx.ModuleType() != "cc_prebuilt_library_shared" {
+		return
+	}
+
+	prebuiltLibrarySharedBp2BuildInternal(ctx, module)
+}
+
+func prebuiltLibrarySharedBp2BuildInternal(ctx android.TopDownMutatorContext, module *Module) {
+	prebuiltAttrs := Bp2BuildParsePrebuiltLibraryProps(ctx, module)
+
+	attrs := &bazelPrebuiltLibrarySharedAttributes{
+		Shared_library: prebuiltAttrs.Src,
+	}
+
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "prebuilt_library_shared",
+		Bzl_load_location: "//build/bazel/rules:prebuilt_library_shared.bzl",
+	}
+
+	name := android.RemoveOptionalPrebuiltPrefix(module.Name())
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: name}, attrs)
+}
+
 type prebuiltObjectProperties struct {
 	Srcs []string `android:"path,arch_variant"`
 }
@@ -330,7 +366,7 @@ type prebuiltStaticLibraryBazelHandler struct {
 
 func (h *prebuiltStaticLibraryBazelHandler) GenerateBazelBuildActions(ctx android.ModuleContext, label string) bool {
 	bazelCtx := ctx.Config().BazelContext
-	ccInfo, ok, err := bazelCtx.GetCcInfo(label, ctx.Arch().ArchType)
+	ccInfo, ok, err := bazelCtx.GetCcInfo(label, android.GetConfigKey(ctx))
 	if err != nil {
 		ctx.ModuleErrorf("Error getting Bazel CcInfo: %s", err)
 	}

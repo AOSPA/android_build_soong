@@ -20,6 +20,7 @@ import (
 	"github.com/google/blueprint"
 
 	"android/soong/android"
+	"android/soong/bazel"
 )
 
 type BinaryLinkerProperties struct {
@@ -62,7 +63,7 @@ func init() {
 
 func RegisterBinaryBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_binary", BinaryFactory)
-	ctx.RegisterModuleType("cc_binary_host", binaryHostFactory)
+	ctx.RegisterModuleType("cc_binary_host", BinaryHostFactory)
 }
 
 // cc_binary produces a binary that is runnable on a device.
@@ -72,7 +73,7 @@ func BinaryFactory() android.Module {
 }
 
 // cc_binary_host produces a binary that is runnable on a host.
-func binaryHostFactory() android.Module {
+func BinaryHostFactory() android.Module {
 	module, _ := NewBinary(android.HostSupported)
 	return module.Init()
 }
@@ -412,7 +413,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
 	}
 
-	linkerDeps = append(linkerDeps, objs.tidyFiles...)
+	validations = append(validations, objs.tidyFiles...)
 	linkerDeps = append(linkerDeps, flags.LdFlagsDeps...)
 
 	// Register link action.
@@ -540,4 +541,125 @@ func (binary *binaryDecorator) verifyHostBionicLinker(ctx ModuleContext, in, lin
 			"linker": linker.String(),
 		},
 	})
+}
+
+func init() {
+	android.RegisterBp2BuildMutator("cc_binary", BinaryBp2build)
+	android.RegisterBp2BuildMutator("cc_binary_host", BinaryHostBp2build)
+}
+
+func BinaryBp2build(ctx android.TopDownMutatorContext) {
+	binaryBp2build(ctx, "cc_binary")
+}
+
+func BinaryHostBp2build(ctx android.TopDownMutatorContext) {
+	binaryBp2build(ctx, "cc_binary_host")
+}
+
+func binaryBp2build(ctx android.TopDownMutatorContext, typ string) {
+	m, ok := ctx.Module().(*Module)
+	if !ok {
+		// Not a cc module
+		return
+	}
+	if !m.ConvertWithBp2build(ctx) {
+		return
+	}
+
+	if ctx.ModuleType() != typ {
+		return
+	}
+
+	var compatibleWith bazel.StringListAttribute
+	if typ == "cc_binary_host" {
+		//incompatible with android OS
+		compatibleWith.SetSelectValue(bazel.OsConfigurationAxis, android.Android.Name, []string{"@platforms//:incompatible"})
+		compatibleWith.SetSelectValue(bazel.OsConfigurationAxis, bazel.ConditionsDefaultConfigKey, []string{})
+	}
+
+	baseAttrs := bp2BuildParseBaseProps(ctx, m)
+
+	attrs := &binaryAttributes{
+		binaryLinkerAttrs: bp2buildBinaryLinkerProps(ctx, m),
+
+		Srcs:    baseAttrs.srcs,
+		Srcs_c:  baseAttrs.cSrcs,
+		Srcs_as: baseAttrs.asSrcs,
+
+		Copts:      baseAttrs.copts,
+		Cppflags:   baseAttrs.cppFlags,
+		Conlyflags: baseAttrs.conlyFlags,
+		Asflags:    baseAttrs.asFlags,
+
+		Deps:               baseAttrs.implementationDeps,
+		Dynamic_deps:       baseAttrs.implementationDynamicDeps,
+		Whole_archive_deps: baseAttrs.wholeArchiveDeps,
+		System_deps:        baseAttrs.systemDynamicDeps,
+
+		Local_includes:    baseAttrs.localIncludes,
+		Absolute_includes: baseAttrs.absoluteIncludes,
+		Linkopts:          baseAttrs.linkopts,
+		Link_crt:          baseAttrs.linkCrt,
+		Use_libcrt:        baseAttrs.useLibcrt,
+		Rtti:              baseAttrs.rtti,
+		Stl:               baseAttrs.stl,
+		Cpp_std:           baseAttrs.cppStd,
+
+		Additional_linker_inputs: baseAttrs.additionalLinkerInputs,
+
+		Strip: stripAttributes{
+			Keep_symbols:                 baseAttrs.stripKeepSymbols,
+			Keep_symbols_and_debug_frame: baseAttrs.stripKeepSymbolsAndDebugFrame,
+			Keep_symbols_list:            baseAttrs.stripKeepSymbolsList,
+			All:                          baseAttrs.stripAll,
+			None:                         baseAttrs.stripNone,
+		},
+
+		Target_compatible_with: compatibleWith,
+		Features:               baseAttrs.features,
+	}
+
+	ctx.CreateBazelTargetModule(bazel.BazelTargetModuleProperties{
+		Rule_class:        "cc_binary",
+		Bzl_load_location: "//build/bazel/rules:cc_binary.bzl",
+	},
+		android.CommonAttributes{Name: m.Name()},
+		attrs)
+}
+
+// binaryAttributes contains Bazel attributes corresponding to a cc binary
+type binaryAttributes struct {
+	binaryLinkerAttrs
+	Srcs    bazel.LabelListAttribute
+	Srcs_c  bazel.LabelListAttribute
+	Srcs_as bazel.LabelListAttribute
+
+	Copts      bazel.StringListAttribute
+	Cppflags   bazel.StringListAttribute
+	Conlyflags bazel.StringListAttribute
+	Asflags    bazel.StringListAttribute
+
+	Deps               bazel.LabelListAttribute
+	Dynamic_deps       bazel.LabelListAttribute
+	Whole_archive_deps bazel.LabelListAttribute
+	System_deps        bazel.LabelListAttribute
+
+	Local_includes    bazel.StringListAttribute
+	Absolute_includes bazel.StringListAttribute
+
+	Linkopts                 bazel.StringListAttribute
+	Additional_linker_inputs bazel.LabelListAttribute
+
+	Link_crt   bazel.BoolAttribute
+	Use_libcrt bazel.BoolAttribute
+
+	Rtti    bazel.BoolAttribute
+	Stl     *string
+	Cpp_std *string
+
+	Strip stripAttributes
+
+	Features bazel.StringListAttribute
+
+	Target_compatible_with bazel.StringListAttribute
 }

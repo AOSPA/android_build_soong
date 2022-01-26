@@ -83,6 +83,8 @@ type configImpl struct {
 
 	// Set by multiproduct_kati
 	emptyNinjaFile bool
+
+	metricsUploader string
 }
 
 const srcDirFileCheck = "build/soong/root.bp"
@@ -237,13 +239,16 @@ func NewConfig(ctx Context, args ...string) Config {
 	// Precondition: the current directory is the top of the source tree
 	checkTopDir(ctx)
 
-	if srcDir := absPath(ctx, "."); strings.ContainsRune(srcDir, ' ') {
+	srcDir := absPath(ctx, ".")
+	if strings.ContainsRune(srcDir, ' ') {
 		ctx.Println("You are building in a directory whose absolute path contains a space character:")
 		ctx.Println()
 		ctx.Printf("%q\n", srcDir)
 		ctx.Println()
 		ctx.Fatalln("Directory names containing spaces are not supported")
 	}
+
+	ret.metricsUploader = GetMetricsUploader(srcDir, ret.environ)
 
 	if outDir := ret.OutDir(); strings.ContainsRune(outDir, ' ') {
 		ctx.Println("The absolute path of your output directory ($OUT_DIR) contains a space character:")
@@ -355,13 +360,16 @@ func storeConfigMetrics(ctx Context, config Config) {
 }
 
 func buildConfig(config Config) *smpb.BuildConfig {
-	return &smpb.BuildConfig{
+	c := &smpb.BuildConfig{
 		ForceUseGoma:    proto.Bool(config.ForceUseGoma()),
 		UseGoma:         proto.Bool(config.UseGoma()),
 		UseRbe:          proto.Bool(config.UseRBE()),
 		BazelAsNinja:    proto.Bool(config.UseBazel()),
 		BazelMixedBuild: proto.Bool(config.bazelBuildMode() == mixedBuild),
 	}
+	c.Targets = append(c.Targets, config.arguments...)
+
+	return c
 }
 
 // getConfigArgs processes the command arguments based on the build action and creates a set of new
@@ -776,24 +784,25 @@ func (c *configImpl) PrebuiltOS() string {
 		panic("Unknown GOOS")
 	}
 }
+
 func (c *configImpl) HostToolDir() string {
-	return filepath.Join(c.SoongOutDir(), "host", c.PrebuiltOS(), "bin")
+	if c.SkipKatiNinja() {
+		return filepath.Join(c.SoongOutDir(), "host", c.PrebuiltOS(), "bin")
+	} else {
+		return filepath.Join(c.OutDir(), "host", c.PrebuiltOS(), "bin")
+	}
 }
 
 func (c *configImpl) NamedGlobFile(name string) string {
-	return shared.JoinPath(c.SoongOutDir(), ".bootstrap/build-globs."+name+".ninja")
+	return shared.JoinPath(c.SoongOutDir(), "globs-"+name+".ninja")
 }
 
 func (c *configImpl) UsedEnvFile(tag string) string {
 	return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+tag)
 }
 
-func (c *configImpl) MainNinjaFile() string {
-	return shared.JoinPath(c.SoongOutDir(), "build.ninja")
-}
-
 func (c *configImpl) Bp2BuildMarkerFile() string {
-	return shared.JoinPath(c.SoongOutDir(), ".bootstrap/bp2build_workspace_marker")
+	return shared.JoinPath(c.SoongOutDir(), "bp2build_workspace_marker")
 }
 
 func (c *configImpl) SoongDocsHtml() string {
@@ -1243,10 +1252,7 @@ func (c *configImpl) BuildDateTime() string {
 }
 
 func (c *configImpl) MetricsUploaderApp() string {
-	if p, ok := c.environ.Get("ANDROID_ENABLE_METRICS_UPLOAD"); ok {
-		return p
-	}
-	return ""
+	return c.metricsUploader
 }
 
 // LogsDir returns the logs directory where build log and metrics
@@ -1273,4 +1279,15 @@ func (c *configImpl) SetEmptyNinjaFile(v bool) {
 
 func (c *configImpl) EmptyNinjaFile() bool {
 	return c.emptyNinjaFile
+}
+
+func GetMetricsUploader(topDir string, env *Environment) string {
+	if p, ok := env.Get("METRICS_UPLOADER"); ok {
+		metricsUploader := filepath.Join(topDir, p)
+		if _, err := os.Stat(metricsUploader); err == nil {
+			return metricsUploader
+		}
+	}
+
+	return ""
 }

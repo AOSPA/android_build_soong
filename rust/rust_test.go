@@ -439,6 +439,13 @@ func TestLibrarySizes(t *testing.T) {
 		}`)
 
 	m := ctx.SingletonForTests("file_metrics")
+	m.Output("unstripped/libwaldo.dylib.so.bloaty.csv")
 	m.Output("libwaldo.dylib.so.bloaty.csv")
-	m.Output("stripped/libwaldo.dylib.so.bloaty.csv")
+}
+
+func assertString(t *testing.T, got, expected string) {
+	t.Helper()
+	if got != expected {
+		t.Errorf("expected %q got %q", expected, got)
+	}
 }

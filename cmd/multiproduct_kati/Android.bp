@@ -31,4 +31,14 @@ blueprint_go_binary {
     testSrcs: [
         "main_test.go",
     ],
+    linux: {
+        srcs: [
+            "main_linux.go",
+        ],
+    },
+    darwin: {
+        srcs: [
+            "main_darwin.go",
+        ],
+    },
 }

@@ -53,12 +53,7 @@ var (
 	}
 
 	darwinSupportedSdkVersions = []string{
-		"10.13",
-		"10.14",
-		"10.15",
-		"11.0",
-		"11.1",
-		"11.3",
+		"11",
 	}
 
 	darwinAvailableLibraries = append(
@@ -113,6 +108,10 @@ func init() {
 	pctx.StaticVariable("DarwinYasmFlags", "-f macho -m amd64")
 }
 
+func MacStripPath(ctx android.PathContext) string {
+	return getMacTools(ctx).stripPath
+}
+
 type macPlatformTools struct {
 	once sync.Once
 	err  error
@@ -125,7 +124,7 @@ type macPlatformTools struct {
 
 var macTools = &macPlatformTools{}
 
-func getMacTools(ctx android.PackageVarContext) *macPlatformTools {
+func getMacTools(ctx android.PathContext) *macPlatformTools {
 	macTools.once.Do(func() {
 		xcrunTool := "/usr/bin/xcrun"
 
@@ -134,7 +133,7 @@ func getMacTools(ctx android.PackageVarContext) *macPlatformTools {
 				return ""
 			}
 
-			bytes, err := exec.Command(xcrunTool, args...).Output()
+			bytes, err := exec.Command(xcrunTool, append([]string{"--sdk", "macosx"}, args...)...).Output()
 			if err != nil {
 				macTools.err = fmt.Errorf("xcrun %q failed with: %q", args, err)
 				return ""
@@ -143,34 +142,26 @@ func getMacTools(ctx android.PackageVarContext) *macPlatformTools {
 			return strings.TrimSpace(string(bytes))
 		}
 
-		xcrunSdk := func(arg string) string {
-			if selected := ctx.Config().Getenv("MAC_SDK_VERSION"); selected != "" {
-				if !inList(selected, darwinSupportedSdkVersions) {
-					macTools.err = fmt.Errorf("MAC_SDK_VERSION %s isn't supported: %q", selected, darwinSupportedSdkVersions)
-					return ""
-				}
-
-				return xcrun("--sdk", "macosx"+selected, arg)
+		sdkVersion := xcrun("--show-sdk-version")
+		sdkVersionSupported := false
+		for _, version := range darwinSupportedSdkVersions {
+			if version == sdkVersion || strings.HasPrefix(sdkVersion, version+".") {
+				sdkVersionSupported = true
 			}
-
-			for _, sdk := range darwinSupportedSdkVersions {
-				bytes, err := exec.Command(xcrunTool, "--sdk", "macosx"+sdk, arg).Output()
-				if err == nil {
-					return strings.TrimSpace(string(bytes))
-				}
-			}
-			macTools.err = fmt.Errorf("Could not find a supported mac sdk: %q", darwinSupportedSdkVersions)
-			return ""
+		}
+		if !sdkVersionSupported {
+			macTools.err = fmt.Errorf("Unsupported macOS SDK version %q not in %v", sdkVersion, darwinSupportedSdkVersions)
+			return
 		}
 
-		macTools.sdkRoot = xcrunSdk("--show-sdk-path")
+		macTools.sdkRoot = xcrun("--show-sdk-path")
 
 		macTools.arPath = xcrun("--find", "ar")
 		macTools.stripPath = xcrun("--find", "strip")
 		macTools.toolPath = filepath.Dir(xcrun("--find", "ld"))
 	})
 	if macTools.err != nil {
-		ctx.Errorf("%q", macTools.err)
+		android.ReportPathErrorf(ctx, "%q", macTools.err)
 	}
 	return macTools
 }
@@ -180,19 +171,43 @@ type toolchainDarwin struct {
 	toolchain64Bit
 }
 
-func (t *toolchainDarwin) Name() string {
+type toolchainDarwinX86 struct {
+	toolchainDarwin
+}
+
+type toolchainDarwinArm struct {
+	toolchainDarwin
+}
+
+func (t *toolchainDarwinArm) Name() string {
+	return "arm64"
+}
+
+func (t *toolchainDarwinX86) Name() string {
 	return "x86_64"
 }
 
-func (t *toolchainDarwin) GccRoot() string {
+func (t *toolchainDarwinArm) GccRoot() string {
+	panic("unimplemented")
+}
+
+func (t *toolchainDarwinArm) GccTriple() string {
+	panic("unimplemented")
+}
+
+func (t *toolchainDarwinArm) GccVersion() string {
+	panic("unimplemented")
+}
+
+func (t *toolchainDarwinX86) GccRoot() string {
 	return "${config.DarwinGccRoot}"
 }
 
-func (t *toolchainDarwin) GccTriple() string {
+func (t *toolchainDarwinX86) GccTriple() string {
 	return "${config.DarwinGccTriple}"
 }
 
-func (t *toolchainDarwin) GccVersion() string {
+func (t *toolchainDarwinX86) GccVersion() string {
 	return darwinGccVersion
 }
 
@@ -200,7 +215,11 @@ func (t *toolchainDarwin) IncludeFlags() string {
 	return ""
 }
 
-func (t *toolchainDarwin) ClangTriple() string {
+func (t *toolchainDarwinArm) ClangTriple() string {
+	return "aarch64-apple-darwin"
+}
+
+func (t *toolchainDarwinX86) ClangTriple() string {
 	return "x86_64-apple-darwin"
 }
 
@@ -236,12 +255,18 @@ func (t *toolchainDarwin) ToolPath() string {
 	return "${config.MacToolPath}"
 }
 
-var toolchainDarwinSingleton Toolchain = &toolchainDarwin{}
+var toolchainDarwinArmSingleton Toolchain = &toolchainDarwinArm{}
+var toolchainDarwinX86Singleton Toolchain = &toolchainDarwinX86{}
 
-func darwinToolchainFactory(arch android.Arch) Toolchain {
-	return toolchainDarwinSingleton
+func darwinArmToolchainFactory(arch android.Arch) Toolchain {
+	return toolchainDarwinArmSingleton
+}
+
+func darwinX86ToolchainFactory(arch android.Arch) Toolchain {
+	return toolchainDarwinX86Singleton
 }
 
 func init() {
-	registerToolchainFactory(android.Darwin, android.X86_64, darwinToolchainFactory)
+	registerToolchainFactory(android.Darwin, android.Arm64, darwinArmToolchainFactory)
+	registerToolchainFactory(android.Darwin, android.X86_64, darwinX86ToolchainFactory)
 }

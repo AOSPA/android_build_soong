@@ -988,11 +988,11 @@ func TestSharding(t *testing.T) {
 		}
 		`)
 
-	barHeaderJar := filepath.Join("out", "soong", ".intermediates", "bar", "android_common", "turbine-combined", "bar.jar")
+	barHeaderJar := filepath.Join("out", "soong", ".intermediates", "bar", "android_common", "turbine", "bar.jar")
 	for i := 0; i < 3; i++ {
 		barJavac := ctx.ModuleForTests("bar", "android_common").Description("javac" + strconv.Itoa(i))
-		if !strings.Contains(barJavac.Args["classpath"], barHeaderJar) {
-			t.Errorf("bar javac classpath %v does not contain %q", barJavac.Args["classpath"], barHeaderJar)
+		if !strings.HasPrefix(barJavac.Args["classpath"], "-classpath "+barHeaderJar+":") {
+			t.Errorf("bar javac classpath %v does start with %q", barJavac.Args["classpath"], barHeaderJar)
 		}
 	}
 }
@@ -1354,6 +1354,36 @@ func TestAidlFlagsArePassedToTheAidlCompiler(t *testing.T) {
 	expectedAidlFlag := "-Werror"
 	if !strings.Contains(aidlCommand, expectedAidlFlag) {
 		t.Errorf("aidl command %q does not contain %q", aidlCommand, expectedAidlFlag)
+	}
+}
+
+func TestAidlFlagsWithMinSdkVersion(t *testing.T) {
+	fixture := android.GroupFixturePreparers(
+		prepareForJavaTest, FixtureWithPrebuiltApis(map[string][]string{"14": {"foo"}}))
+
+	for _, tc := range []struct {
+		name       string
+		sdkVersion string
+		expected   string
+	}{
+		{"default is current", "", "current"},
+		{"use sdk_version", `sdk_version: "14"`, "14"},
+		{"system_current", `sdk_version: "system_current"`, "current"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := fixture.RunTestWithBp(t, `
+				java_library {
+					name: "foo",
+					srcs: ["aidl/foo/IFoo.aidl"],
+					`+tc.sdkVersion+`
+				}
+			`)
+			aidlCommand := ctx.ModuleForTests("foo", "android_common").Rule("aidl").RuleParams.Command
+			expectedAidlFlag := "--min_sdk_version=" + tc.expected
+			if !strings.Contains(aidlCommand, expectedAidlFlag) {
+				t.Errorf("aidl command %q does not contain %q", aidlCommand, expectedAidlFlag)
+			}
+		})
 	}
 }
 
