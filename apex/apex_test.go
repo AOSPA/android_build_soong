@@ -2581,22 +2581,21 @@ func TestFilesInSubDir(t *testing.T) {
 	`)
 
 	generateFsRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("generateFsConfig")
-	dirs := strings.Split(generateFsRule.Args["exec_paths"], " ")
+	cmd := generateFsRule.RuleParams.Command
 
 	// Ensure that the subdirectories are all listed
-	ensureListContains(t, dirs, "etc")
-	ensureListContains(t, dirs, "etc/foo")
-	ensureListContains(t, dirs, "etc/foo/bar")
-	ensureListContains(t, dirs, "lib64")
-	ensureListContains(t, dirs, "lib64/foo")
-	ensureListContains(t, dirs, "lib64/foo/bar")
-	ensureListContains(t, dirs, "lib")
-	ensureListContains(t, dirs, "lib/foo")
-	ensureListContains(t, dirs, "lib/foo/bar")
-
-	ensureListContains(t, dirs, "bin")
-	ensureListContains(t, dirs, "bin/foo")
-	ensureListContains(t, dirs, "bin/foo/bar")
+	ensureContains(t, cmd, "/etc ")
+	ensureContains(t, cmd, "/etc/foo ")
+	ensureContains(t, cmd, "/etc/foo/bar ")
+	ensureContains(t, cmd, "/lib64 ")
+	ensureContains(t, cmd, "/lib64/foo ")
+	ensureContains(t, cmd, "/lib64/foo/bar ")
+	ensureContains(t, cmd, "/lib ")
+	ensureContains(t, cmd, "/lib/foo ")
+	ensureContains(t, cmd, "/lib/foo/bar ")
+	ensureContains(t, cmd, "/bin ")
+	ensureContains(t, cmd, "/bin/foo ")
+	ensureContains(t, cmd, "/bin/foo/bar ")
 }
 
 func TestFilesInSubDirWhenNativeBridgeEnabled(t *testing.T) {
@@ -2658,7 +2657,10 @@ func TestFilesInSubDirWhenNativeBridgeEnabled(t *testing.T) {
 }
 
 func TestVendorApex(t *testing.T) {
-	ctx := testApex(t, `
+	result := android.GroupFixturePreparers(
+		prepareForApexTest,
+		android.FixtureModifyConfig(android.SetKatiEnabledForTests),
+	).RunTestWithBp(t, `
 		apex {
 			name: "myapex",
 			key: "myapex.key",
@@ -2682,24 +2684,24 @@ func TestVendorApex(t *testing.T) {
 		}
 	`)
 
-	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
+	ensureExactContents(t, result.TestContext, "myapex", "android_common_myapex_image", []string{
 		"bin/mybin",
 		"lib64/libfoo.so",
 		// TODO(b/159195575): Add an option to use VNDK libs from VNDK APEX
 		"lib64/libc++.so",
 	})
 
-	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().(*apexBundle)
-	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
+	apexBundle := result.ModuleForTests("myapex", "android_common_myapex_image").Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, result.TestContext, apexBundle)
 	name := apexBundle.BaseModuleName()
 	prefix := "TARGET_"
 	var builder strings.Builder
 	data.Custom(&builder, name, prefix, "", data)
-	androidMk := android.StringRelativeToTop(ctx.Config(), builder.String())
+	androidMk := android.StringRelativeToTop(result.Config, builder.String())
 	installPath := "out/target/product/test_device/vendor/apex"
 	ensureContains(t, androidMk, "LOCAL_MODULE_PATH := "+installPath)
 
-	apexManifestRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexManifestRule")
+	apexManifestRule := result.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexManifestRule")
 	requireNativeLibs := names(apexManifestRule.Args["requireNativeLibs"])
 	ensureListNotContains(t, requireNativeLibs, ":vndk")
 }
@@ -7455,7 +7457,7 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 		},
 		{
 			name:          "Bootclasspath apex jar not satisfying allowed module packages on Q.",
-			expectedError: `module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar with min_sdk < T. Please jarjar or move code around.`,
+			expectedError: `(?s)module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar with min_sdk < T. Please jarjar or move code around.`,
 			bp: `
 				java_library {
 					name: "bcp_lib1",
@@ -7492,7 +7494,7 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 		},
 		{
 			name:          "Bootclasspath apex jar not satisfying allowed module packages on R.",
-			expectedError: `module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar with min_sdk < T. Please jarjar or move code around.`,
+			expectedError: `(?s)module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar with min_sdk < T. Please jarjar or move code around.`,
 			bp: `
 				java_library {
 					name: "bcp_lib1",
@@ -8501,7 +8503,7 @@ func TestAndroidMk_DexpreoptBuiltInstalledForApex_Prebuilt(t *testing.T) {
 		java_import {
 			name: "foo",
 			jars: ["foo.jar"],
-			installable: true,
+			apex_available: ["myapex"],
 		}
 	`,
 		dexpreopt.FixtureSetApexSystemServerJars("myapex:foo"),

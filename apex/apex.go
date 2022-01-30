@@ -54,8 +54,6 @@ func registerApexBuildComponents(ctx android.RegistrationContext) {
 	ctx.PreArchMutators(registerPreArchMutators)
 	ctx.PreDepsMutators(RegisterPreDepsMutators)
 	ctx.PostDepsMutators(RegisterPostDepsMutators)
-
-	android.RegisterBp2BuildMutator("apex", ApexBundleBp2Build)
 }
 
 func registerPreArchMutators(ctx android.RegisterMutatorsContext) {
@@ -97,6 +95,14 @@ type apexBundleProperties struct {
 	// bundle. For platform APEXes, this should points to a file under /system/sepolicy Default:
 	// /system/sepolicy/apex/<module_name>_file_contexts.
 	File_contexts *string `android:"path"`
+
+	// Path to the canned fs config file for customizing file's uid/gid/mod/capabilities. The
+	// format is /<path_or_glob> <uid> <gid> <mode> [capabilities=0x<cap>], where path_or_glob is a
+	// path or glob pattern for a file or set of files, uid/gid are numerial values of user ID
+	// and group ID, mode is octal value for the file mode, and cap is hexadecimal value for the
+	// capability. If this property is not set, or a file is missing in the file, default config
+	// is used.
+	Canned_fs_config *string `android:"path"`
 
 	ApexNativeDependencies
 
@@ -450,10 +456,6 @@ type apexBundle struct {
 
 	// Collect the module directory for IDE info in java/jdeps.go.
 	modulePaths []string
-}
-
-func (*apexBundle) InstallBypassMake() bool {
-	return true
 }
 
 // apexFileClass represents a type of file that can be included in APEX.
@@ -2641,7 +2643,7 @@ func makeApexAvailableBaseline() map[string][]string {
 	//
 	// Module separator
 	//
-	m["com.android.bluetooth.updatable"] = []string{
+	m["com.android.bluetooth"] = []string{
 		"android.hardware.audio.common@5.0",
 		"android.hardware.bluetooth.a2dp@1.0",
 		"android.hardware.bluetooth.audio@2.0",
@@ -3283,72 +3285,62 @@ type bazelApexBundleAttributes struct {
 	Prebuilts          bazel.LabelListAttribute
 }
 
-func ApexBundleBp2Build(ctx android.TopDownMutatorContext) {
-	module, ok := ctx.Module().(*apexBundle)
-	if !ok {
-		// Not an APEX bundle
-		return
-	}
-	if !module.ConvertWithBp2build(ctx) {
-		return
-	}
+// ConvertWithBp2build performs bp2build conversion of an apex
+func (a *apexBundle) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+	// We do not convert apex_test modules at this time
 	if ctx.ModuleType() != "apex" {
 		return
 	}
 
-	apexBundleBp2BuildInternal(ctx, module)
-}
-
-func apexBundleBp2BuildInternal(ctx android.TopDownMutatorContext, module *apexBundle) {
 	var manifestLabelAttribute bazel.LabelAttribute
-	if module.properties.Manifest != nil {
-		manifestLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *module.properties.Manifest))
+	if a.properties.Manifest != nil {
+		manifestLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *a.properties.Manifest))
 	}
 
 	var androidManifestLabelAttribute bazel.LabelAttribute
-	if module.properties.AndroidManifest != nil {
-		androidManifestLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *module.properties.AndroidManifest))
+	if a.properties.AndroidManifest != nil {
+		androidManifestLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *a.properties.AndroidManifest))
 	}
 
 	var fileContextsLabelAttribute bazel.LabelAttribute
-	if module.properties.File_contexts != nil {
-		fileContextsLabelAttribute.SetValue(android.BazelLabelForModuleDepSingle(ctx, *module.properties.File_contexts))
+	if a.properties.File_contexts != nil {
+		fileContextsLabelAttribute.SetValue(android.BazelLabelForModuleDepSingle(ctx, *a.properties.File_contexts))
 	}
 
 	var minSdkVersion *string
-	if module.properties.Min_sdk_version != nil {
-		minSdkVersion = module.properties.Min_sdk_version
+	if a.properties.Min_sdk_version != nil {
+		minSdkVersion = a.properties.Min_sdk_version
 	}
 
 	var keyLabelAttribute bazel.LabelAttribute
-	if module.overridableProperties.Key != nil {
-		keyLabelAttribute.SetValue(android.BazelLabelForModuleDepSingle(ctx, *module.overridableProperties.Key))
+	if a.overridableProperties.Key != nil {
+		keyLabelAttribute.SetValue(android.BazelLabelForModuleDepSingle(ctx, *a.overridableProperties.Key))
 	}
 
 	var certificateLabelAttribute bazel.LabelAttribute
-	if module.overridableProperties.Certificate != nil {
-		certificateLabelAttribute.SetValue(android.BazelLabelForModuleDepSingle(ctx, *module.overridableProperties.Certificate))
+	if a.overridableProperties.Certificate != nil {
+		certificateLabelAttribute.SetValue(android.BazelLabelForModuleDepSingle(ctx, *a.overridableProperties.Certificate))
 	}
 
-	nativeSharedLibs := module.properties.ApexNativeDependencies.Native_shared_libs
+	nativeSharedLibs := a.properties.ApexNativeDependencies.Native_shared_libs
 	nativeSharedLibsLabelList := android.BazelLabelForModuleDeps(ctx, nativeSharedLibs)
 	nativeSharedLibsLabelListAttribute := bazel.MakeLabelListAttribute(nativeSharedLibsLabelList)
 
-	prebuilts := module.overridableProperties.Prebuilts
+	prebuilts := a.overridableProperties.Prebuilts
 	prebuiltsLabelList := android.BazelLabelForModuleDeps(ctx, prebuilts)
 	prebuiltsLabelListAttribute := bazel.MakeLabelListAttribute(prebuiltsLabelList)
 
-	binaries := android.BazelLabelForModuleDeps(ctx, module.properties.ApexNativeDependencies.Binaries)
+	binaries := android.BazelLabelForModuleDeps(ctx, a.properties.ApexNativeDependencies.Binaries)
 	binariesLabelListAttribute := bazel.MakeLabelListAttribute(binaries)
 
 	var updatableAttribute bazel.BoolAttribute
-	if module.properties.Updatable != nil {
-		updatableAttribute.Value = module.properties.Updatable
+	if a.properties.Updatable != nil {
+		updatableAttribute.Value = a.properties.Updatable
 	}
 
 	var installableAttribute bazel.BoolAttribute
-	if module.properties.Installable != nil {
-		installableAttribute.Value = module.properties.Installable
+	if a.properties.Installable != nil {
+		installableAttribute.Value = a.properties.Installable
 	}
 
 	attrs := &bazelApexBundleAttributes{
@@ -3370,5 +3362,5 @@ func apexBundleBp2BuildInternal(ctx android.TopDownMutatorContext, module *apexB
 		Bzl_load_location: "//build/bazel/rules:apex.bzl",
 	}
 
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, attrs)
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: a.Name()}, attrs)
 }

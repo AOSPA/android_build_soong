@@ -157,7 +157,6 @@ type config struct {
 
 	runningAsBp2Build              bool
 	bp2buildPackageConfig          Bp2BuildConfig
-	bp2buildModuleTypeConfig       map[string]bool
 	Bp2buildSoongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions
 
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
@@ -353,8 +352,6 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 
 	config.mockFileSystem(bp, fs)
 
-	config.bp2buildModuleTypeConfig = map[string]bool{}
-
 	determineBuildOS(config)
 
 	return Config{config}
@@ -522,7 +519,6 @@ func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir strin
 
 	config.BazelContext, err = NewBazelContext(config)
 	config.bp2buildPackageConfig = bp2buildDefaultConfig
-	config.bp2buildModuleTypeConfig = make(map[string]bool)
 
 	return Config{config}, err
 }
@@ -573,9 +569,6 @@ func (c *config) HostToolDir() string {
 
 func (c *config) HostToolPath(ctx PathContext, tool string) Path {
 	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", false, tool)
-	if ctx.Config().KatiEnabled() {
-		path = path.ToMakePath()
-	}
 	return path
 }
 
@@ -585,17 +578,11 @@ func (c *config) HostJNIToolPath(ctx PathContext, lib string) Path {
 		ext = ".dylib"
 	}
 	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "lib64", false, lib+ext)
-	if ctx.Config().KatiEnabled() {
-		path = path.ToMakePath()
-	}
 	return path
 }
 
 func (c *config) HostJavaToolPath(ctx PathContext, tool string) Path {
 	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", false, tool)
-	if ctx.Config().KatiEnabled() {
-		path = path.ToMakePath()
-	}
 	return path
 }
 
@@ -669,6 +656,10 @@ func (c *config) IsEnvTrue(key string) bool {
 func (c *config) IsEnvFalse(key string) bool {
 	value := c.Getenv(key)
 	return value == "0" || value == "n" || value == "no" || value == "off" || value == "false"
+}
+
+func (c *config) TargetsJava11() bool {
+	return c.IsEnvTrue("EXPERIMENTAL_TARGET_JAVA_VERSION_11")
 }
 
 // EnvDeps returns the environment variables this build depends on. The first
@@ -1258,6 +1249,10 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 	return coverage
 }
 
+func (c *deviceConfig) AfdoAdditionalProfileDirs() []string {
+	return c.config.productVariables.AfdoAdditionalProfileDirs
+}
+
 func (c *deviceConfig) PgoAdditionalProfileDirs() []string {
 	return c.config.productVariables.PgoAdditionalProfileDirs
 }
@@ -1522,6 +1517,22 @@ func (c *deviceConfig) BoardReqdMaskPolicy() []string {
 	return c.config.productVariables.BoardReqdMaskPolicy
 }
 
+func (c *deviceConfig) BoardSystemExtPublicPrebuiltDirs() []string {
+	return c.config.productVariables.BoardSystemExtPublicPrebuiltDirs
+}
+
+func (c *deviceConfig) BoardSystemExtPrivatePrebuiltDirs() []string {
+	return c.config.productVariables.BoardSystemExtPrivatePrebuiltDirs
+}
+
+func (c *deviceConfig) BoardProductPublicPrebuiltDirs() []string {
+	return c.config.productVariables.BoardProductPublicPrebuiltDirs
+}
+
+func (c *deviceConfig) BoardProductPrivatePrebuiltDirs() []string {
+	return c.config.productVariables.BoardProductPrivatePrebuiltDirs
+}
+
 func (c *deviceConfig) DirectedVendorSnapshot() bool {
 	return c.config.productVariables.DirectedVendorSnapshot
 }
@@ -1758,7 +1769,7 @@ func (l *ConfiguredJarList) Append(apex string, jar string) ConfiguredJarList {
 }
 
 // Append a list of (apex, jar) pairs to the list.
-func (l *ConfiguredJarList) AppendList(other ConfiguredJarList) ConfiguredJarList {
+func (l *ConfiguredJarList) AppendList(other *ConfiguredJarList) ConfiguredJarList {
 	apexes := make([]string, 0, l.Len()+other.Len())
 	jars := make([]string, 0, l.Len()+other.Len())
 

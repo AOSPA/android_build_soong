@@ -122,6 +122,14 @@ type CommonProperties struct {
 		Javacflags []string
 	}
 
+	Openjdk11 struct {
+		// List of source files that should only be used when passing -source 1.9 or higher
+		Srcs []string `android:"path"`
+
+		// List of javac flags that should only be used when passing -source 1.9 or higher
+		Javacflags []string
+	}
+
 	// When compiling language level 9+ .java code in packages that are part of
 	// a system module, patch_module names the module that your sources and
 	// dependencies should be patched into. The Android runtime currently
@@ -372,6 +380,7 @@ type Module struct {
 	android.DefaultableModuleBase
 	android.ApexModuleBase
 	android.SdkBase
+	android.BazelModuleBase
 
 	// Functionality common to Module and Import.
 	embeddableInModuleAndImport
@@ -958,6 +967,10 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	if flags.javaVersion.usesJavaModules() {
 		j.properties.Srcs = append(j.properties.Srcs, j.properties.Openjdk9.Srcs...)
 	}
+	if ctx.Config().TargetsJava11() {
+		j.properties.Srcs = append(j.properties.Srcs, j.properties.Openjdk11.Srcs...)
+	}
+
 	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
 	if hasSrcExt(srcFiles.Strings(), ".proto") {
 		flags = protoFlags(ctx, &j.properties, &j.protoProperties, flags)
@@ -1952,3 +1965,17 @@ type ModuleWithStem interface {
 }
 
 var _ ModuleWithStem = (*Module)(nil)
+
+func (j *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+	switch ctx.ModuleType() {
+	case "java_library", "java_library_host":
+		if lib, ok := ctx.Module().(*Library); ok {
+			javaLibraryBp2Build(ctx, lib)
+		}
+	case "java_binary_host":
+		if binary, ok := ctx.Module().(*Binary); ok {
+			javaBinaryHostBp2Build(ctx, binary)
+		}
+	}
+
+}
