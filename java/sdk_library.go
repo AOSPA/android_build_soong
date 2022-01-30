@@ -1392,6 +1392,10 @@ func (module *SdkLibrary) createStubsLibrary(mctx android.DefaultableHookContext
 			Srcs       []string
 			Javacflags []string
 		}
+		Openjdk11 struct {
+			Srcs       []string
+			Javacflags []string
+		}
 		Dist struct {
 			Targets []string
 			Dest    *string
@@ -1418,6 +1422,8 @@ func (module *SdkLibrary) createStubsLibrary(mctx android.DefaultableHookContext
 	}
 	props.Openjdk9.Srcs = module.properties.Openjdk9.Srcs
 	props.Openjdk9.Javacflags = module.properties.Openjdk9.Javacflags
+	props.Openjdk11.Srcs = module.properties.Openjdk11.Srcs
+	props.Openjdk11.Javacflags = module.properties.Openjdk11.Javacflags
 	// We compile the stubs for 1.8 in line with the main android.jar stubs, and potential
 	// interop with older developer tools that don't support 1.9.
 	props.Java_version = proptools.StringPtr("1.8")
@@ -2573,11 +2579,11 @@ func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) stri
 	implicitUntilAttr := formattedOptionalSdkLevelAttribute(ctx, "on-bootclasspath-before", module.properties.On_bootclasspath_before)
 	minSdkAttr := formattedOptionalSdkLevelAttribute(ctx, "min-device-sdk", module.properties.Min_device_sdk)
 	maxSdkAttr := formattedOptionalSdkLevelAttribute(ctx, "max-device-sdk", module.properties.Max_device_sdk)
-	// <library> is understood in all android versions whereas <updatable-library> is only understood from API T (and ignored before that).
-	// similarly, min_device_sdk is only understood from T. So if a library is using that, we need to use the updatable-library to make sure this library is not loaded before T
+	// <library> is understood in all android versions whereas <apex-library> is only understood from API T (and ignored before that).
+	// similarly, min_device_sdk is only understood from T. So if a library is using that, we need to use the apex-library to make sure this library is not loaded before T
 	var libraryTag string
 	if module.properties.Min_device_sdk != nil {
-		libraryTag = `    <updatable-library\n`
+		libraryTag = `    <apex-library\n`
 	} else {
 		libraryTag = `    <library\n`
 	}
@@ -2641,7 +2647,7 @@ func (module *sdkLibraryXml) AndroidMkEntries() []android.AndroidMkEntries {
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 				entries.SetString("LOCAL_MODULE_TAGS", "optional")
-				entries.SetString("LOCAL_MODULE_PATH", module.installDirPath.ToMakePath().String())
+				entries.SetString("LOCAL_MODULE_PATH", module.installDirPath.String())
 				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", module.outputFilePath.Base())
 			},
 		},

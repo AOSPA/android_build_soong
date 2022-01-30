@@ -902,6 +902,9 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		bloaty.MeasureSizeForPaths(ctx, mod.compiler.strippedOutputFilePath(), android.OptionalPathForPath(mod.compiler.unstrippedOutputFilePath()))
 
 		mod.docTimestampFile = mod.compiler.rustdoc(ctx, flags, deps)
+		if mod.docTimestampFile.Valid() {
+			ctx.CheckbuildFile(mod.docTimestampFile.Path())
+		}
 
 		// glob exported headers for snapshot, if BOARD_VNDK_VERSION is current or
 		// RECOVERY_SNAPSHOT_VERSION is current.
@@ -1311,10 +1314,6 @@ func (mod *Module) InstallInVendorRamdisk() bool {
 
 func (mod *Module) InstallInRecovery() bool {
 	return mod.InRecovery()
-}
-
-func (mod *Module) InstallBypassMake() bool {
-	return true
 }
 
 func linkPathFromFilePath(filepath android.Path) string {
