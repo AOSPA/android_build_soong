@@ -429,7 +429,6 @@ type ModuleContext interface {
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallInVendor() bool
-	InstallBypassMake() bool
 	InstallForceOS() (*OsType, *ArchType)
 
 	RequiredModuleNames() []string
@@ -496,7 +495,6 @@ type Module interface {
 	InstallInRecovery() bool
 	InstallInRoot() bool
 	InstallInVendor() bool
-	InstallBypassMake() bool
 	InstallForceOS() (*OsType, *ArchType)
 	HideFromMake()
 	IsHideFromMake() bool
@@ -871,6 +869,13 @@ type CommonAttributes struct {
 	Data bazel.LabelListAttribute
 }
 
+// constraintAttributes represents Bazel attributes pertaining to build constraints,
+// which make restrict building a Bazel target for some set of platforms.
+type constraintAttributes struct {
+	// Constraint values this target can be built for.
+	Target_compatible_with bazel.LabelListAttribute
+}
+
 type distProperties struct {
 	// configuration to distribute output files from this module to the distribution
 	// directory (default: $OUT/dist, configurable with $DIST_DIR)
@@ -1028,7 +1033,6 @@ func InitAndroidModule(m Module) {
 	initProductVariableModule(m)
 
 	base.generalProperties = m.GetProperties()
-	base.customizableProperties = m.GetProperties()
 
 	// The default_visibility property needs to be checked and parsed by the visibility module during
 	// its checking and parsing phases so make it the primary visibility property.
@@ -1091,7 +1095,8 @@ func InitCommonOSAndroidMultiTargetsArchModule(m Module, hod HostOrDeviceSupport
 	m.base().commonProperties.CreateCommonOSVariant = true
 }
 
-func (attrs *CommonAttributes) fillCommonBp2BuildModuleAttrs(ctx *topDownMutatorContext) {
+func (attrs *CommonAttributes) fillCommonBp2BuildModuleAttrs(ctx *topDownMutatorContext,
+	enabledPropertyOverrides bazel.BoolAttribute) constraintAttributes {
 	// Assert passed-in attributes include Name
 	name := attrs.Name
 	if len(name) == 0 {
@@ -1109,14 +1114,45 @@ func (attrs *CommonAttributes) fillCommonBp2BuildModuleAttrs(ctx *topDownMutator
 
 	required := depsToLabelList(props.Required)
 	archVariantProps := mod.GetArchVariantProperties(ctx, &commonProperties{})
+
+	var enabledProperty bazel.BoolAttribute
+	if props.Enabled != nil {
+		enabledProperty.Value = props.Enabled
+	}
+
 	for axis, configToProps := range archVariantProps {
 		for config, _props := range configToProps {
 			if archProps, ok := _props.(*commonProperties); ok {
 				required.SetSelectValue(axis, config, depsToLabelList(archProps.Required).Value)
+				if archProps.Enabled != nil {
+					enabledProperty.SetSelectValue(axis, config, archProps.Enabled)
+				}
 			}
 		}
 	}
+
+	if enabledPropertyOverrides.Value != nil {
+		enabledProperty.Value = enabledPropertyOverrides.Value
+	}
+	for _, axis := range enabledPropertyOverrides.SortedConfigurationAxes() {
+		configToBools := enabledPropertyOverrides.ConfigurableValues[axis]
+		for cfg, val := range configToBools {
+			enabledProperty.SetSelectValue(axis, cfg, &val)
+		}
+	}
+
 	data.Append(required)
+
+	var err error
+	constraints := constraintAttributes{}
+	constraints.Target_compatible_with, err = enabledProperty.ToLabelListAttribute(
+		bazel.LabelList{[]bazel.Label{bazel.Label{Label: "@platforms//:incompatible"}}, nil},
+		bazel.LabelList{[]bazel.Label{}, nil})
+
+	if err != nil {
+		ctx.ModuleErrorf("Error processing enabled attribute: %s", err)
+	}
+	return constraints
 }
 
 // A ModuleBase object contains the properties that are common to all Android
@@ -1180,8 +1216,6 @@ type ModuleBase struct {
 	// filled with arch specific values by the arch mutator.
 	archProperties [][]interface{}
 
-	customizableProperties []interface{}
-
 	// Properties specific to the Blueprint to BUILD migration.
 	bazelTargetModuleProperties bazel.BazelTargetModuleProperties
 
@@ -1235,10 +1269,11 @@ type ModuleBase struct {
 
 // A struct containing all relevant information about a Bazel target converted via bp2build.
 type bp2buildInfo struct {
-	Dir         string
-	BazelProps  bazel.BazelTargetModuleProperties
-	CommonAttrs CommonAttributes
-	Attrs       interface{}
+	Dir             string
+	BazelProps      bazel.BazelTargetModuleProperties
+	CommonAttrs     CommonAttributes
+	ConstraintAttrs constraintAttributes
+	Attrs           interface{}
 }
 
 // TargetName returns the Bazel target name of a bp2build converted target.
@@ -1264,7 +1299,7 @@ func (b bp2buildInfo) BazelRuleLoadLocation() string {
 
 // BazelAttributes returns the Bazel attributes of a bp2build converted target.
 func (b bp2buildInfo) BazelAttributes() []interface{} {
-	return []interface{}{&b.CommonAttrs, b.Attrs}
+	return []interface{}{&b.CommonAttrs, &b.ConstraintAttrs, b.Attrs}
 }
 
 func (m *ModuleBase) addBp2buildInfo(info bp2buildInfo) {
@@ -1290,7 +1325,7 @@ func (b *baseModuleContext) AddUnconvertedBp2buildDep(dep string) {
 // GetUnconvertedBp2buildDeps returns the list of module names of this module's direct dependencies that
 // were not converted to Bazel.
 func (m *ModuleBase) GetUnconvertedBp2buildDeps() []string {
-	return m.commonProperties.UnconvertedBp2buildDeps
+	return FirstUniqueStrings(m.commonProperties.UnconvertedBp2buildDeps)
 }
 
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
@@ -1704,10 +1739,6 @@ func (m *ModuleBase) InstallInRoot() bool {
 	return false
 }
 
-func (m *ModuleBase) InstallBypassMake() bool {
-	return true
-}
-
 func (m *ModuleBase) InstallForceOS() (*OsType, *ArchType) {
 	return nil, nil
 }
@@ -2096,18 +2127,18 @@ func (e *earlyModuleContext) GlobFiles(globPattern string, excludes []string) Pa
 	return GlobFiles(e, globPattern, excludes)
 }
 
-func (b *earlyModuleContext) IsSymlink(path Path) bool {
-	fileInfo, err := b.config.fs.Lstat(path.String())
+func (e *earlyModuleContext) IsSymlink(path Path) bool {
+	fileInfo, err := e.config.fs.Lstat(path.String())
 	if err != nil {
-		b.ModuleErrorf("os.Lstat(%q) failed: %s", path.String(), err)
+		e.ModuleErrorf("os.Lstat(%q) failed: %s", path.String(), err)
 	}
 	return fileInfo.Mode()&os.ModeSymlink == os.ModeSymlink
 }
 
-func (b *earlyModuleContext) Readlink(path Path) string {
-	dest, err := b.config.fs.Readlink(path.String())
+func (e *earlyModuleContext) Readlink(path Path) string {
+	dest, err := e.config.fs.Readlink(path.String())
 	if err != nil {
-		b.ModuleErrorf("os.Readlink(%q) failed: %s", path.String(), err)
+		e.ModuleErrorf("os.Readlink(%q) failed: %s", path.String(), err)
 	}
 	return dest
 }
@@ -2829,10 +2860,6 @@ func (m *moduleContext) InstallInRoot() bool {
 	return m.module.InstallInRoot()
 }
 
-func (m *moduleContext) InstallBypassMake() bool {
-	return m.module.InstallBypassMake()
-}
-
 func (m *moduleContext) InstallForceOS() (*OsType, *ArchType) {
 	return m.module.InstallForceOS()
 }
@@ -2855,12 +2882,6 @@ func (m *moduleContext) skipInstall() bool {
 	// list of namespaces to install in a Soong-only build.
 	if !m.module.base().commonProperties.NamespaceExportedToMake {
 		return true
-	}
-
-	if m.Device() {
-		if m.Config().KatiEnabled() && !m.InstallBypassMake() {
-			return true
-		}
 	}
 
 	return false
@@ -2921,7 +2942,7 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 			orderOnlyDeps = deps
 		}
 
-		if m.Config().KatiEnabled() && m.InstallBypassMake() {
+		if m.Config().KatiEnabled() {
 			// When creating the install rule in Soong but embedding in Make, write the rule to a
 			// makefile instead of directly to the ninja file so that main.mk can add the
 			// dependencies from the `required` property that are hard to resolve in Soong.
@@ -2980,7 +3001,7 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 	}
 	if !m.skipInstall() {
 
-		if m.Config().KatiEnabled() && m.InstallBypassMake() {
+		if m.Config().KatiEnabled() {
 			// When creating the symlink rule in Soong but embedding in Make, write the rule to a
 			// makefile instead of directly to the ninja file so that main.mk can add the
 			// dependencies from the `required` property that are hard to resolve in Soong.
@@ -3026,7 +3047,7 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 	m.module.base().hooks.runInstallHooks(m, nil, fullInstallPath, true)
 
 	if !m.skipInstall() {
-		if m.Config().KatiEnabled() && m.InstallBypassMake() {
+		if m.Config().KatiEnabled() {
 			// When creating the symlink rule in Soong but embedding in Make, write the rule to a
 			// makefile instead of directly to the ninja file so that main.mk can add the
 			// dependencies from the `required` property that are hard to resolve in Soong.

@@ -63,7 +63,6 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 
 	ctx.RegisterModuleType("prebuilt_defaults", defaultsFactory)
 
-	android.RegisterBp2BuildMutator("prebuilt_etc", PrebuiltEtcBp2Build)
 }
 
 var PrepareForTestWithPrebuiltEtc = android.FixtureRegisterWithContext(RegisterPrebuiltEtcBuildComponents)
@@ -377,7 +376,7 @@ func (p *PrebuiltEtc) AndroidMkEntries() []android.AndroidMkEntries {
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 				entries.SetString("LOCAL_MODULE_TAGS", "optional")
-				entries.SetString("LOCAL_MODULE_PATH", p.installDirPath.ToMakePath().String())
+				entries.SetString("LOCAL_MODULE_PATH", p.installDirPath.String())
 				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", p.outputFilePath.Base())
 				if len(p.properties.Symlinks) > 0 {
 					entries.AddStrings("LOCAL_MODULE_SYMLINKS", p.properties.Symlinks...)
@@ -440,6 +439,7 @@ func PrebuiltEtcHostFactory() android.Module {
 	// This module is host-only
 	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
+	android.InitBazelModule(module)
 	return module
 }
 
@@ -663,20 +663,14 @@ type bazelPrebuiltEtcAttributes struct {
 	Installable bazel.BoolAttribute
 }
 
-func PrebuiltEtcBp2Build(ctx android.TopDownMutatorContext) {
-	module, ok := ctx.Module().(*PrebuiltEtc)
-	if !ok {
-		// Not an prebuilt_etc
-		return
-	}
-	if !module.ConvertWithBp2build(ctx) {
-		return
-	}
-	if ctx.ModuleType() != "prebuilt_etc" {
+// ConvertWithBp2build performs bp2build conversion of PrebuiltEtc
+func (p *PrebuiltEtc) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+	// All prebuilt_* modules are PrebuiltEtc, but at this time, we only convert prebuilt_etc modules.
+	if p.installDirBase != "etc" {
 		return
 	}
 
-	prebuiltEtcBp2BuildInternal(ctx, module)
+	prebuiltEtcBp2BuildInternal(ctx, p)
 }
 
 func prebuiltEtcBp2BuildInternal(ctx android.TopDownMutatorContext, module *PrebuiltEtc) {
@@ -688,7 +682,8 @@ func prebuiltEtcBp2BuildInternal(ctx android.TopDownMutatorContext, module *Preb
 				continue
 			}
 			if props.Src != nil {
-				srcLabelAttribute.SetSelectValue(axis, config, android.BazelLabelForModuleSrcSingle(ctx, *props.Src))
+				label := android.BazelLabelForModuleSrcSingle(ctx, *props.Src)
+				srcLabelAttribute.SetSelectValue(axis, config, label)
 			}
 		}
 	}
