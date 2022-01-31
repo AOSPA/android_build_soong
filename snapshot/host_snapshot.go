@@ -62,12 +62,6 @@ type hostSnapshot struct {
 	installDir android.InstallPath
 }
 
-func (*hostSnapshot) InstallBypassMake() bool {
-	//TODO(b/216351382)
-	//return true
-	return false
-}
-
 func hostSnapshotFactory() android.Module {
 	module := &hostSnapshot{}
 	initHostToolsModule(module)
