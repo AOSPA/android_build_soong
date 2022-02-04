@@ -103,7 +103,6 @@ type HostToolProvider interface {
 
 type hostToolDependencyTag struct {
 	blueprint.BaseDependencyTag
-	android.LicenseAnnotationToolchainDependencyTag
 	label string
 }
 
