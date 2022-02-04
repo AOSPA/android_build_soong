@@ -213,6 +213,7 @@ type Flags struct {
 	Toolchain    config.Toolchain
 	Sdclang      bool
 	Tidy         bool // True if clang-tidy is enabled.
+	NeedTidyFiles bool // True if module link should depend on .tidy files
 	GcovCoverage bool // True if coverage files should be generated.
 	SAbiDump     bool // True if header abi dumps should be generated.
 	EmitXrefs    bool // If true, generate Ninja rules to generate emitXrefs input files for Kythe
@@ -523,6 +524,12 @@ type ModuleContextIntf interface {
 	directlyInAnyApex() bool
 	isPreventInstall() bool
 	isCfiAssemblySupportEnabled() bool
+	getSharedFlags() *SharedFlags
+}
+
+type SharedFlags struct {
+	numSharedFlags int
+	flagsMap       map[string]string
 }
 
 type ModuleContext interface {
@@ -833,6 +840,9 @@ type Module struct {
 
 	// Flags used to compile this module
 	flags Flags
+
+	// Shared flags among build rules of this module
+	sharedFlags SharedFlags
 
 	// only non-nil when this is a shared library that reuses the objects of a static library
 	staticAnalogue *StaticLibraryInfo
@@ -1614,6 +1624,15 @@ func (ctx *moduleContextImpl) directlyInAnyApex() bool {
 
 func (ctx *moduleContextImpl) isPreventInstall() bool {
 	return ctx.mod.Properties.PreventInstall
+}
+
+func (ctx *moduleContextImpl) getSharedFlags() *SharedFlags {
+	shared := &ctx.mod.sharedFlags
+	if shared.flagsMap == nil {
+		shared.numSharedFlags = 0
+		shared.flagsMap = make(map[string]string)
+	}
+	return shared
 }
 
 func (ctx *moduleContextImpl) isCfiAssemblySupportEnabled() bool {
@@ -3517,9 +3536,7 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 				libraryBp2Build(ctx, c)
 			}
 		} else if !static && !shared {
-			if !prebuilt {
-				libraryHeadersBp2Build(ctx, c)
-			}
+			libraryHeadersBp2Build(ctx, c)
 		} else if static {
 			if prebuilt {
 				prebuiltLibraryStaticBp2Build(ctx, c)

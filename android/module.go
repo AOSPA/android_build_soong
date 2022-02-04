@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"text/scanner"
@@ -320,6 +321,9 @@ type BaseModuleContext interface {
 	// AddUnconvertedBp2buildDep stores module name of a direct dependency that was not converted via bp2build
 	AddUnconvertedBp2buildDep(dep string)
 
+	// AddMissingBp2buildDep stores the module name of a direct dependency that was not found.
+	AddMissingBp2buildDep(dep string)
+
 	Target() Target
 	TargetPrimary() bool
 
@@ -516,6 +520,7 @@ type Module interface {
 	// Bp2buildTargets returns the target(s) generated for Bazel via bp2build for this module
 	Bp2buildTargets() []bp2buildInfo
 	GetUnconvertedBp2buildDeps() []string
+	GetMissingBp2buildDeps() []string
 
 	BuildParamsForTests() []BuildParams
 	RuleParamsForTests() map[blueprint.Rule]blueprint.RuleParams
@@ -857,6 +862,9 @@ type commonProperties struct {
 	// UnconvertedBp2buildDep stores the module names of direct dependency that were not converted to
 	// Bazel
 	UnconvertedBp2buildDeps []string `blueprint:"mutated"`
+
+	// MissingBp2buildDep stores the module names of direct dependency that were not found
+	MissingBp2buildDeps []string `blueprint:"mutated"`
 }
 
 // CommonAttributes represents the common Bazel attributes from which properties
@@ -1032,8 +1040,6 @@ func InitAndroidModule(m Module) {
 
 	initProductVariableModule(m)
 
-	base.generalProperties = m.GetProperties()
-
 	// The default_visibility property needs to be checked and parsed by the visibility module during
 	// its checking and parsing phases so make it the primary visibility property.
 	setPrimaryVisibilityProperty(m, "visibility", &base.commonProperties.Visibility)
@@ -1141,18 +1147,69 @@ func (attrs *CommonAttributes) fillCommonBp2BuildModuleAttrs(ctx *topDownMutator
 		}
 	}
 
-	data.Append(required)
+	productConfigEnabledLabels := []bazel.Label{}
+	if !proptools.BoolDefault(enabledProperty.Value, true) {
+		// If the module is not enabled by default, then we can check if a
+		// product variable enables it
+		productConfigEnabledLabels = productVariableConfigEnableLabels(ctx)
 
-	var err error
-	constraints := constraintAttributes{}
-	constraints.Target_compatible_with, err = enabledProperty.ToLabelListAttribute(
+		if len(productConfigEnabledLabels) > 0 {
+			// In this case, an existing product variable configuration overrides any
+			// module-level `enable: false` definition
+			newValue := true
+			enabledProperty.Value = &newValue
+		}
+	}
+
+	productConfigEnabledAttribute := bazel.MakeLabelListAttribute(bazel.LabelList{
+		productConfigEnabledLabels, nil,
+	})
+
+	platformEnabledAttribute, err := enabledProperty.ToLabelListAttribute(
 		bazel.LabelList{[]bazel.Label{bazel.Label{Label: "@platforms//:incompatible"}}, nil},
 		bazel.LabelList{[]bazel.Label{}, nil})
-
 	if err != nil {
-		ctx.ModuleErrorf("Error processing enabled attribute: %s", err)
+		ctx.ModuleErrorf("Error processing platform enabled attribute: %s", err)
 	}
+
+	data.Append(required)
+
+	constraints := constraintAttributes{}
+	moduleEnableConstraints := bazel.LabelListAttribute{}
+	moduleEnableConstraints.Append(platformEnabledAttribute)
+	moduleEnableConstraints.Append(productConfigEnabledAttribute)
+	constraints.Target_compatible_with = moduleEnableConstraints
+
 	return constraints
+}
+
+// Check product variables for `enabled: true` flag override.
+// Returns a list of the constraint_value targets who enable this override.
+func productVariableConfigEnableLabels(ctx *topDownMutatorContext) []bazel.Label {
+	productVariableProps := ProductVariableProperties(ctx)
+	productConfigEnablingTargets := []bazel.Label{}
+	const propName = "Enabled"
+	if productConfigProps, exists := productVariableProps[propName]; exists {
+		for productConfigProp, prop := range productConfigProps {
+			flag, ok := prop.(*bool)
+			if !ok {
+				ctx.ModuleErrorf("Could not convert product variable %s property", proptools.PropertyNameForField(propName))
+			}
+
+			if *flag {
+				axis := productConfigProp.ConfigurationAxis()
+				targetLabel := axis.SelectKey(productConfigProp.SelectKey())
+				productConfigEnablingTargets = append(productConfigEnablingTargets, bazel.Label{
+					Label: targetLabel,
+				})
+			} else {
+				// TODO(b/210546943): handle negative case where `enabled: false`
+				ctx.ModuleErrorf("`enabled: false` is not currently supported for configuration variables. See b/210546943", proptools.PropertyNameForField(propName))
+			}
+		}
+	}
+
+	return productConfigEnablingTargets
 }
 
 // A ModuleBase object contains the properties that are common to all Android
@@ -1207,13 +1264,12 @@ type ModuleBase struct {
 	distProperties          distProperties
 	variableProperties      interface{}
 	hostAndDeviceProperties hostAndDeviceProperties
-	generalProperties       []interface{}
 
-	// Arch specific versions of structs in generalProperties. The outer index
-	// has the same order as generalProperties as initialized in
-	// InitAndroidArchModule, and the inner index chooses the props specific to
-	// the architecture. The interface{} value is an archPropRoot that is
-	// filled with arch specific values by the arch mutator.
+	// Arch specific versions of structs in GetProperties() prior to
+	// initialization in InitAndroidArchModule, lets call it `generalProperties`.
+	// The outer index has the same order as generalProperties and the inner index
+	// chooses the props specific to the architecture. The interface{} value is an
+	// archPropRoot that is filled with arch specific values by the arch mutator.
 	archProperties [][]interface{}
 
 	// Properties specific to the Blueprint to BUILD migration.
@@ -1322,14 +1378,82 @@ func (b *baseModuleContext) AddUnconvertedBp2buildDep(dep string) {
 	*unconvertedDeps = append(*unconvertedDeps, dep)
 }
 
+// AddMissingBp2buildDep stores module name of a dependency that was not found in a Android.bp file.
+func (b *baseModuleContext) AddMissingBp2buildDep(dep string) {
+	missingDeps := &b.Module().base().commonProperties.MissingBp2buildDeps
+	*missingDeps = append(*missingDeps, dep)
+}
+
 // GetUnconvertedBp2buildDeps returns the list of module names of this module's direct dependencies that
 // were not converted to Bazel.
 func (m *ModuleBase) GetUnconvertedBp2buildDeps() []string {
 	return FirstUniqueStrings(m.commonProperties.UnconvertedBp2buildDeps)
 }
 
+// GetMissingBp2buildDeps eturns the list of module names that were not found in Android.bp files.
+func (m *ModuleBase) GetMissingBp2buildDeps() []string {
+	return FirstUniqueStrings(m.commonProperties.MissingBp2buildDeps)
+}
+
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
-	(*d)["Android"] = map[string]interface{}{}
+	(*d)["Android"] = map[string]interface{}{
+		// Properties set in Blueprint or in blueprint of a defaults modules
+		"SetProperties": m.propertiesWithValues(),
+	}
+}
+
+type propInfo struct {
+	Name string
+	Type string
+}
+
+func (m *ModuleBase) propertiesWithValues() []propInfo {
+	var info []propInfo
+	props := m.GetProperties()
+
+	var propsWithValues func(name string, v reflect.Value)
+	propsWithValues = func(name string, v reflect.Value) {
+		kind := v.Kind()
+		switch kind {
+		case reflect.Ptr, reflect.Interface:
+			if v.IsNil() {
+				return
+			}
+			propsWithValues(name, v.Elem())
+		case reflect.Struct:
+			if v.IsZero() {
+				return
+			}
+			for i := 0; i < v.NumField(); i++ {
+				namePrefix := name
+				sTyp := v.Type().Field(i)
+				if proptools.ShouldSkipProperty(sTyp) {
+					continue
+				}
+				if name != "" && !strings.HasSuffix(namePrefix, ".") {
+					namePrefix += "."
+				}
+				if !proptools.IsEmbedded(sTyp) {
+					namePrefix += sTyp.Name
+				}
+				sVal := v.Field(i)
+				propsWithValues(namePrefix, sVal)
+			}
+		case reflect.Array, reflect.Slice:
+			if v.IsNil() {
+				return
+			}
+			elKind := v.Type().Elem().Kind()
+			info = append(info, propInfo{name, elKind.String() + " " + kind.String()})
+		default:
+			info = append(info, propInfo{name, kind.String()})
+		}
+	}
+
+	for _, p := range props {
+		propsWithValues("", reflect.ValueOf(p).Elem())
+	}
+	return info
 }
 
 func (m *ModuleBase) ComponentDepsMutator(BottomUpMutatorContext) {}
@@ -1806,6 +1930,10 @@ func (m *ModuleBase) InitRc() Paths {
 
 func (m *ModuleBase) VintfFragments() Paths {
 	return append(Paths{}, m.vintfFragmentsPaths...)
+}
+
+func (m *ModuleBase) CompileMultilib() *string {
+	return m.base().commonProperties.Compile_multilib
 }
 
 // SetLicenseInstallMap stores the set of dependency module:location mappings for files in an
