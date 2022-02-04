@@ -1323,10 +1323,6 @@ type ModuleBase struct {
 	initRcPaths         Paths
 	vintfFragmentsPaths Paths
 
-	// set of dependency module:location mappings used to populate the license metadata for
-	// apex containers.
-	licenseInstallMap []string
-
 	// The path to the generated license metadata file for the module.
 	licenseMetadataFile WritablePath
 }
@@ -1944,12 +1940,6 @@ func (m *ModuleBase) CompileMultilib() *string {
 	return m.base().commonProperties.Compile_multilib
 }
 
-// SetLicenseInstallMap stores the set of dependency module:location mappings for files in an
-// apex container for use when generation the license metadata file.
-func (m *ModuleBase) SetLicenseInstallMap(installMap []string) {
-	m.licenseInstallMap = append(m.licenseInstallMap, installMap...)
-}
-
 func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
 	var allInstalledFiles InstallPaths
 	var allCheckbuildFiles Paths
@@ -2216,8 +2206,6 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	m.installFilesDepSet = newInstallPathsDepSet(m.installFiles, dependencyInstallFiles)
 	m.packagingSpecsDepSet = newPackagingSpecsDepSet(m.packagingSpecs, dependencyPackagingSpecs)
-
-	buildLicenseMetadata(ctx, m.licenseMetadataFile)
 
 	m.buildParams = ctx.buildParams
 	m.ruleParams = ctx.ruleParams
