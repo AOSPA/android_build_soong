@@ -626,7 +626,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.aapt.useEmbeddedDex = Bool(a.appProperties.Use_embedded_dex)
 
 	// Check if the install APK name needs to be overridden.
-	a.installApkName = ctx.DeviceConfig().OverridePackageNameFor(a.Name())
+	a.installApkName = ctx.DeviceConfig().OverridePackageNameFor(a.Stem())
 
 	if ctx.ModuleName() == "framework-res" {
 		// framework-res.apk is installed as system/framework/framework-res.apk
@@ -1067,6 +1067,7 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 	command := rule.Command().BuiltTool("test_config_fixer").Input(testConfig).Output(fixedConfig)
 	fixNeeded := false
 
+	// Auto-generated test config uses `ModuleName` as the APK name. So fix it if it is not the case.
 	if ctx.ModuleName() != a.installApkName {
 		fixNeeded = true
 		command.FlagWithArg("--test-file-name ", a.installApkName+".apk")
@@ -1223,7 +1224,10 @@ func (i *OverrideAndroidApp) GenerateAndroidBuildActions(_ android.ModuleContext
 // some of its properties.
 func OverrideAndroidAppModuleFactory() android.Module {
 	m := &OverrideAndroidApp{}
-	m.AddProperties(&overridableAppProperties{})
+	m.AddProperties(
+		&OverridableDeviceProperties{},
+		&overridableAppProperties{},
+	)
 
 	android.InitAndroidMultiTargetsArchModule(m, android.DeviceSupported, android.MultilibCommon)
 	android.InitOverrideModule(m)

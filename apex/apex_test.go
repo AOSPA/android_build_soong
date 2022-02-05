@@ -623,7 +623,7 @@ func TestDefaults(t *testing.T) {
 			java_libs: ["myjar"],
 			apps: ["AppFoo"],
 			rros: ["rro"],
-			bpfs: ["bpf"],
+			bpfs: ["bpf", "netd_test"],
 			updatable: false,
 		}
 
@@ -676,6 +676,12 @@ func TestDefaults(t *testing.T) {
 			srcs: ["bpf.c", "bpf2.c"],
 		}
 
+		bpf {
+			name: "netd_test",
+			srcs: ["netd_test.c"],
+			sub_dir: "netd",
+		}
+
 	`)
 	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
 		"etc/myetc",
@@ -685,6 +691,7 @@ func TestDefaults(t *testing.T) {
 		"overlay/blue/rro.apk",
 		"etc/bpf/bpf.o",
 		"etc/bpf/bpf2.o",
+		"etc/bpf/netd/netd_test.o",
 	})
 }
 
@@ -8737,6 +8744,22 @@ func TestSdkLibraryCanHaveHigherMinSdkVersion(t *testing.T) {
 				}
 		`)
 	})
+}
+
+// Verifies that the APEX depends on all the Make modules in the list.
+func ensureContainsRequiredDeps(t *testing.T, ctx *android.TestContext, moduleName, variant string, deps []string) {
+	a := ctx.ModuleForTests(moduleName, variant).Module().(*apexBundle)
+	for _, dep := range deps {
+		android.AssertStringListContains(t, "", a.requiredDeps, dep)
+	}
+}
+
+// Verifies that the APEX does not depend on any of the Make modules in the list.
+func ensureDoesNotContainRequiredDeps(t *testing.T, ctx *android.TestContext, moduleName, variant string, deps []string) {
+	a := ctx.ModuleForTests(moduleName, variant).Module().(*apexBundle)
+	for _, dep := range deps {
+		android.AssertStringListDoesNotContain(t, "", a.requiredDeps, dep)
+	}
 }
 
 func TestMain(m *testing.M) {
