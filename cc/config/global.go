@@ -60,6 +60,7 @@ var (
 
 		"-O2",
 		"-g",
+		"-fdebug-default-version=5",
 
 		"-fno-strict-aliasing",
 
