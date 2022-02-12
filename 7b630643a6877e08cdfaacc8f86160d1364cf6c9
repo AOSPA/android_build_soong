@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1a4034e5_55bac222",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000488
+      },
+      "writtenOn": "2022-02-12T14:12:57Z",
+      "side": 1,
+      "message": "hi, is this needed even with https://github.com/AOSPA/android_vendor_aospa/blob/sapphire/build/envsetup.sh#L24. Please double check if the flag is exported in your terminal",
+      "revId": "7b630643a6877e08cdfaacc8f86160d1364cf6c9",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
