@@ -16,6 +16,24 @@
       "message": "hi, is this needed even with https://github.com/AOSPA/android_vendor_aospa/blob/sapphire/build/envsetup.sh#L24. Please double check if the flag is exported in your terminal",
       "revId": "7b630643a6877e08cdfaacc8f86160d1364cf6c9",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "16284d1e_14b96434",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000760
+      },
+      "writtenOn": "2022-02-13T09:26:15Z",
+      "side": 1,
+      "message": "https://gerrit.aospa.co/c/AOSPA/android_kernel_build/+/20581\n\nwe need this commit for 4.19 kernel, which apparently errors out as per the commit desc",
+      "parentUuid": "1a4034e5_55bac222",
+      "revId": "7b630643a6877e08cdfaacc8f86160d1364cf6c9",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
