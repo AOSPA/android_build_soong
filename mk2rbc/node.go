@@ -47,6 +47,7 @@ type moduleInfo struct {
 	originalPath    string // Makefile file path
 	moduleLocalName string
 	optional        bool
+	missing         bool // a module may not exist if a module that depends on it is loaded dynamically
 }
 
 func (im moduleInfo) entryName() string {
@@ -57,7 +58,8 @@ type inheritedModule interface {
 	name() string
 	entryName() string
 	emitSelect(gctx *generationContext)
-	shouldExist() bool
+	pathExpr() starlarkExpr
+	needsLoadCheck() bool
 }
 
 type inheritedStaticModule struct {
@@ -72,8 +74,12 @@ func (im inheritedStaticModule) name() string {
 func (im inheritedStaticModule) emitSelect(_ *generationContext) {
 }
 
-func (im inheritedStaticModule) shouldExist() bool {
-	return im.loadAlways
+func (im inheritedStaticModule) pathExpr() starlarkExpr {
+	return &stringLiteralExpr{im.path}
+}
+
+func (im inheritedStaticModule) needsLoadCheck() bool {
+	return im.missing
 }
 
 type inheritedDynamicModule struct {
@@ -105,18 +111,14 @@ func (i inheritedDynamicModule) emitSelect(gctx *generationContext) {
 	gctx.write(")")
 	gctx.newLine()
 	gctx.writef("(%s, %s) = _entry if _entry else (None, None)", i.name(), i.entryName())
-	if i.loadAlways {
-		gctx.newLine()
-		gctx.writef("if not %s:", i.entryName())
-		gctx.indentLevel++
-		gctx.newLine()
-		gctx.write(`rblf.mkerror("cannot")`)
-		gctx.indentLevel--
-	}
 }
 
-func (i inheritedDynamicModule) shouldExist() bool {
-	return i.loadAlways
+func (i inheritedDynamicModule) pathExpr() starlarkExpr {
+	return &i.path
+}
+
+func (i inheritedDynamicModule) needsLoadCheck() bool {
+	return true
 }
 
 type inheritNode struct {
@@ -126,20 +128,22 @@ type inheritNode struct {
 
 func (inn *inheritNode) emit(gctx *generationContext) {
 	// Unconditional case:
+	//    maybe check that loaded
 	//    rblf.inherit(handle, <module>, module_init)
 	// Conditional case:
 	//    if <module>_init != None:
 	//      same as above
 	inn.module.emitSelect(gctx)
-
 	name := inn.module.name()
 	entry := inn.module.entryName()
-	gctx.newLine()
 	if inn.loadAlways {
+		gctx.emitLoadCheck(inn.module)
+		gctx.newLine()
 		gctx.writef("%s(handle, %s, %s)", cfnInherit, name, entry)
 		return
 	}
 
+	gctx.newLine()
 	gctx.writef("if %s:", entry)
 	gctx.indentLevel++
 	gctx.newLine()
@@ -155,12 +159,14 @@ type includeNode struct {
 func (inn *includeNode) emit(gctx *generationContext) {
 	inn.module.emitSelect(gctx)
 	entry := inn.module.entryName()
-	gctx.newLine()
 	if inn.loadAlways {
+		gctx.emitLoadCheck(inn.module)
+		gctx.newLine()
 		gctx.writef("%s(g, handle)", entry)
 		return
 	}
 
+	gctx.newLine()
 	gctx.writef("if %s != None:", entry)
 	gctx.indentLevel++
 	gctx.newLine()
@@ -183,6 +189,7 @@ type assignmentNode struct {
 	value    starlarkExpr
 	mkValue  *mkparser.MakeString
 	flavor   assignmentFlavor
+	location ErrorLocation
 	isTraced bool
 	previous *assignmentNode
 }
@@ -223,18 +230,6 @@ func (in *ifNode) emit(gctx *generationContext) {
 	}
 
 	gctx.newLine()
-	if bad, ok := in.expr.(*badExpr); ok {
-		gctx.write("# MK2STAR ERROR converting:")
-		gctx.newLine()
-		gctx.writef("#   %s", bad.node.Dump())
-		gctx.newLine()
-		gctx.writef("# %s", bad.message)
-		gctx.newLine()
-		// The init function emits a warning if the conversion was not
-		// fullly successful, so here we (arbitrarily) take the false path.
-		gctx.writef("%sFalse:", ifElif)
-		return
-	}
 	gctx.write(ifElif)
 	in.expr.emit(gctx)
 	gctx.write(":")

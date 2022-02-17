@@ -105,15 +105,12 @@ def init(g, handle):
 PRODUCT_NAME := $(call foo1, bar)
 PRODUCT_NAME := $(call foo0)
 `,
-		expected: `# MK2RBC TRANSLATION ERROR: cannot handle invoking foo1
-# PRODUCT_NAME := $(call foo1, bar)
-# MK2RBC TRANSLATION ERROR: cannot handle invoking foo0
-# PRODUCT_NAME := $(call foo0)
-load("//build/make/core:product_config.rbc", "rblf")
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  rblf.warning("product.mk", "partially successful conversion")
+  rblf.mk2rbc_error("product.mk:2", "cannot handle invoking foo1")
+  rblf.mk2rbc_error("product.mk:3", "cannot handle invoking foo0")
 `,
 	},
 	{
@@ -124,7 +121,7 @@ $(call inherit-product, part.mk)
 ifdef PRODUCT_NAME
 $(call inherit-product, part1.mk)
 else # Comment
-$(call inherit-product, $(LOCAL_PATH)/part1.mk)
+$(call inherit-product, $(LOCAL_PATH)/part.mk)
 endif
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
@@ -135,10 +132,12 @@ def init(g, handle):
   cfg = rblf.cfg(handle)
   rblf.inherit(handle, "part", _part_init)
   if g.get("PRODUCT_NAME") != None:
+    if not _part1_init:
+      rblf.mkerror("product.mk", "Cannot find %s" % (":part1.star"))
     rblf.inherit(handle, "part1", _part1_init)
   else:
     # Comment
-    rblf.inherit(handle, "part1", _part1_init)
+    rblf.inherit(handle, "part", _part_init)
 `,
 	},
 	{
@@ -176,6 +175,8 @@ def init(g, handle):
   cfg = rblf.cfg(handle)
   _part_init(g, handle)
   if g.get("PRODUCT_NAME") != None:
+    if not _part1_init:
+      rblf.mkerror("product.mk", "Cannot find %s" % (":part1.star"))
     _part1_init(g, handle)
   else:
     if _part1_init != None:
@@ -207,15 +208,11 @@ define some-macro
     $(info foo)
 endef
 `,
-		expected: `# MK2RBC TRANSLATION ERROR: define is not supported: some-macro
-# define  some-macro
-#     $(info foo)
-# endef
-load("//build/make/core:product_config.rbc", "rblf")
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  rblf.warning("product.mk", "partially successful conversion")
+  rblf.mk2rbc_error("product.mk:2", "define is not supported: some-macro")
 `,
 	},
 	{
@@ -282,9 +279,7 @@ def init(g, handle):
     # Comment
     pass
   else:
-    # MK2RBC TRANSLATION ERROR: cannot set predefined variable TARGET_COPY_OUT_RECOVERY to "foo", its value should be "recovery"
-    pass
-  rblf.warning("product.mk", "partially successful conversion")
+    rblf.mk2rbc_error("product.mk:5", "cannot set predefined variable TARGET_COPY_OUT_RECOVERY to \"foo\", its value should be \"recovery\"")
 `,
 	},
 	{
@@ -368,6 +363,21 @@ def init(g, handle):
 `,
 	},
 	{
+		desc:   "ifeq with $(NATIVE_COVERAGE)",
+		mkname: "product.mk",
+		in: `
+ifeq ($(NATIVE_COVERAGE),true)
+endif
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  if g.get("NATIVE_COVERAGE", False):
+    pass
+`,
+	},
+	{
 		desc:   "Check filter result",
 		mkname: "product.mk",
 		in: `
@@ -383,6 +393,8 @@ ifneq (,$(filter true, $(v1)$(v2)))
 endif
 ifeq (,$(filter barbet coral%,$(TARGET_PRODUCT)))
 else ifneq (,$(filter barbet%,$(TARGET_PRODUCT)))
+endif
+ifeq (,$(filter-out sunfish_kasan, $(TARGET_PRODUCT)))
 endif
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
@@ -402,6 +414,8 @@ def init(g, handle):
   if not rblf.filter("barbet coral%", g["TARGET_PRODUCT"]):
     pass
   elif rblf.filter("barbet%", g["TARGET_PRODUCT"]):
+    pass
+  if not rblf.filter_out("sunfish_kasan", g["TARGET_PRODUCT"]):
     pass
 `,
 	},
@@ -588,9 +602,9 @@ endif
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  if g.get("TARGET_BOARD_PLATFORM", "") in ["msm8998"]:
+  if rblf.board_platform_in(g, "msm8998"):
     pass
-  elif g.get("TARGET_BOARD_PLATFORM", "") != "copper":
+  elif not rblf.board_platform_is(g, "copper"):
     pass
   elif g.get("TARGET_BOARD_PLATFORM", "") not in g["QCOM_BOARD_PLATFORMS"]:
     pass
@@ -623,14 +637,41 @@ def init(g, handle):
 		desc:   "findstring call",
 		mkname: "product.mk",
 		in: `
+result := $(findstring a,a b c)
+result := $(findstring b,x y z)
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  _result = rblf.findstring("a", "a b c")
+  _result = rblf.findstring("b", "x y z")
+`,
+	},
+	{
+		desc:   "findstring in if statement",
+		mkname: "product.mk",
+		in: `
+ifeq ($(findstring foo,$(PRODUCT_PACKAGES)),)
+endif
 ifneq ($(findstring foo,$(PRODUCT_PACKAGES)),)
+endif
+ifeq ($(findstring foo,$(PRODUCT_PACKAGES)),foo)
+endif
+ifneq ($(findstring foo,$(PRODUCT_PACKAGES)),foo)
 endif
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
+  if (cfg.get("PRODUCT_PACKAGES", [])).find("foo") == -1:
+    pass
   if (cfg.get("PRODUCT_PACKAGES", [])).find("foo") != -1:
+    pass
+  if (cfg.get("PRODUCT_PACKAGES", [])).find("foo") != -1:
+    pass
+  if (cfg.get("PRODUCT_PACKAGES", [])).find("foo") == -1:
     pass
 `,
 	},
@@ -689,6 +730,7 @@ $(call enforce-product-packages-exist,)
 $(call enforce-product-packages-exist, foo)
 $(call require-artifacts-in-path, foo, bar)
 $(call require-artifacts-in-path-relaxed, foo, bar)
+$(call dist-for-goals, goal, from:to)
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
@@ -698,6 +740,7 @@ def init(g, handle):
   rblf.enforce_product_packages_exist("foo")
   rblf.require_artifacts_in_path("foo", "bar")
   rblf.require_artifacts_in_path_relaxed("foo", "bar")
+  rblf.mkdist_for_goals(g, "goal", "from:to")
 `,
 	},
 	{
@@ -857,9 +900,7 @@ def init(g, handle):
   rblf.soong_config_namespace(g, "cvd")
   rblf.soong_config_set(g, "cvd", "launch_configs", "cvd_config_auto.json")
   rblf.soong_config_append(g, "cvd", "grub_config", "grub.cfg")
-  # MK2RBC TRANSLATION ERROR: SOONG_CONFIG_ variables cannot be referenced, use soong_config_get instead: SOONG_CONFIG_cvd_grub_config
-  # x := $(SOONG_CONFIG_cvd_grub_config)
-  rblf.warning("product.mk", "partially successful conversion")
+  rblf.mk2rbc_error("product.mk:7", "SOONG_CONFIG_ variables cannot be referenced, use soong_config_get instead: SOONG_CONFIG_cvd_grub_config")
 `,
 	}, {
 		desc:   "soong namespace accesses",
@@ -1012,7 +1053,7 @@ def init(g, handle):
   }.get("vendor/%s/cfg.mk" % g["MY_PATH"])
   (_varmod, _varmod_init) = _entry if _entry else (None, None)
   if not _varmod_init:
-    rblf.mkerror("cannot")
+    rblf.mkerror("product.mk", "Cannot find %s" % ("vendor/%s/cfg.mk" % g["MY_PATH"]))
   rblf.inherit(handle, _varmod, _varmod_init)
 `,
 	},
@@ -1036,8 +1077,82 @@ def init(g, handle):
   }.get("%s/cfg.mk" % g["MY_PATH"])
   (_varmod, _varmod_init) = _entry if _entry else (None, None)
   if not _varmod_init:
-    rblf.mkerror("cannot")
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
   rblf.inherit(handle, _varmod, _varmod_init)
+`,
+	},
+	{
+		desc:   "Dynamic inherit with duplicated hint",
+		mkname: "product.mk",
+		in: `
+MY_PATH:=foo
+#RBC# include_top vendor/foo1
+$(call inherit-product,$(MY_PATH)/cfg.mk)
+#RBC# include_top vendor/foo1
+$(call inherit-product,$(MY_PATH)/cfg.mk)
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+load("//vendor/foo1:cfg.star|init", _cfg_init = "init")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  g["MY_PATH"] = "foo"
+  #RBC# include_top vendor/foo1
+  _entry = {
+    "vendor/foo1/cfg.mk": ("_cfg", _cfg_init),
+  }.get("%s/cfg.mk" % g["MY_PATH"])
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
+  rblf.inherit(handle, _varmod, _varmod_init)
+  #RBC# include_top vendor/foo1
+  _entry = {
+    "vendor/foo1/cfg.mk": ("_cfg", _cfg_init),
+  }.get("%s/cfg.mk" % g["MY_PATH"])
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
+  rblf.inherit(handle, _varmod, _varmod_init)
+`,
+	},
+	{
+		desc:   "Dynamic inherit path that lacks necessary hint",
+		mkname: "product.mk",
+		in: `
+#RBC# include_top foo
+$(call inherit-product,$(MY_VAR)/font.mk)
+
+#RBC# include_top foo
+
+# There's some space and even this comment between the include_top and the inherit-product
+
+$(call inherit-product,$(MY_VAR)/font.mk)
+
+$(call inherit-product,$(MY_VAR)/font.mk)
+`,
+		expected: `#RBC# include_top foo
+load("//build/make/core:product_config.rbc", "rblf")
+load("//foo:font.star|init", _font_init = "init")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  _entry = {
+    "foo/font.mk": ("_font", _font_init),
+  }.get("%s/font.mk" % g.get("MY_VAR", ""))
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/font.mk" % g.get("MY_VAR", "")))
+  rblf.inherit(handle, _varmod, _varmod_init)
+  #RBC# include_top foo
+  # There's some space and even this comment between the include_top and the inherit-product
+  _entry = {
+    "foo/font.mk": ("_font", _font_init),
+  }.get("%s/font.mk" % g.get("MY_VAR", ""))
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/font.mk" % g.get("MY_VAR", "")))
+  rblf.inherit(handle, _varmod, _varmod_init)
+  rblf.mk2rbc_error("product.mk:11", "inherit-product/include statements must not be prefixed with a variable, or must include a #RBC# include_top comment beforehand giving a root directory to search.")
 `,
 	},
 	{
@@ -1046,15 +1161,11 @@ def init(g, handle):
 		in: `
 foo: foo.c
 	gcc -o $@ $*`,
-		expected: `# MK2RBC TRANSLATION ERROR: unsupported line rule:       foo: foo.c
-#gcc -o $@ $*
-# rule:       foo: foo.c
-# gcc -o $@ $*
-load("//build/make/core:product_config.rbc", "rblf")
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  rblf.warning("product.mk", "partially successful conversion")
+  rblf.mk2rbc_error("product.mk:2", "unsupported line rule:       foo: foo.c\n#gcc -o $@ $*")
 `,
 	},
 	{
@@ -1062,14 +1173,173 @@ def init(g, handle):
 		mkname: "product.mk",
 		in: `
 override FOO:=`,
-		expected: `# MK2RBC TRANSLATION ERROR: cannot handle override directive
-# override FOO :=
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  rblf.mk2rbc_error("product.mk:2", "cannot handle override directive")
+  g["override FOO"] = ""
+`,
+	},
+	{
+		desc:   "Bad expression",
+		mkname: "build/product.mk",
+		in: `
+ifeq (,$(call foobar))
+endif
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  if rblf.mk2rbc_error("build/product.mk:2", "cannot handle invoking foobar"):
+    pass
+`,
+	},
+	{
+		desc:   "if expression",
+		mkname: "product.mk",
+		in: `
+TEST_VAR := foo
+TEST_VAR_LIST := foo
+TEST_VAR_LIST += bar
+TEST_VAR_2 := $(if $(TEST_VAR),bar)
+TEST_VAR_3 := $(if $(TEST_VAR),bar,baz)
+TEST_VAR_3 := $(if $(TEST_VAR),$(TEST_VAR_LIST))
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  g["TEST_VAR"] = "foo"
+  g["TEST_VAR_LIST"] = ["foo"]
+  g["TEST_VAR_LIST"] += ["bar"]
+  g["TEST_VAR_2"] = ("bar" if g["TEST_VAR"] else "")
+  g["TEST_VAR_3"] = ("bar" if g["TEST_VAR"] else "baz")
+  g["TEST_VAR_3"] = (g["TEST_VAR_LIST"] if g["TEST_VAR"] else [])
+`,
+	},
+	{
+		desc:   "substitution references",
+		mkname: "product.mk",
+		in: `
+SOURCES := foo.c bar.c
+OBJECTS := $(SOURCES:.c=.o)
+OBJECTS2 := $(SOURCES:%.c=%.o)
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  g["SOURCES"] = "foo.c bar.c"
+  g["OBJECTS"] = rblf.mkpatsubst("%.c", "%.o", g["SOURCES"])
+  g["OBJECTS2"] = rblf.mkpatsubst("%.c", "%.o", g["SOURCES"])
+`,
+	},
+	{
+		desc:   "foreach expressions",
+		mkname: "product.mk",
+		in: `
+BOOT_KERNEL_MODULES := foo.ko bar.ko
+BOOT_KERNEL_MODULES_FILTER := $(foreach m,$(BOOT_KERNEL_MODULES),%/$(m))
+BOOT_KERNEL_MODULES_LIST := foo.ko
+BOOT_KERNEL_MODULES_LIST += bar.ko
+BOOT_KERNEL_MODULES_FILTER_2 := $(foreach m,$(BOOT_KERNEL_MODULES_LIST),%/$(m))
+
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  g["BOOT_KERNEL_MODULES"] = "foo.ko bar.ko"
+  g["BOOT_KERNEL_MODULES_FILTER"] = ["%%/%s" % m for m in rblf.words(g["BOOT_KERNEL_MODULES"])]
+  g["BOOT_KERNEL_MODULES_LIST"] = ["foo.ko"]
+  g["BOOT_KERNEL_MODULES_LIST"] += ["bar.ko"]
+  g["BOOT_KERNEL_MODULES_FILTER_2"] = ["%%/%s" % m for m in g["BOOT_KERNEL_MODULES_LIST"]]
+`,
+	},
+	{
+		desc:   "List appended to string",
+		mkname: "product.mk",
+		in: `
+NATIVE_BRIDGE_PRODUCT_PACKAGES := \
+    libnative_bridge_vdso.native_bridge \
+    native_bridge_guest_app_process.native_bridge \
+    native_bridge_guest_linker.native_bridge
+
+NATIVE_BRIDGE_MODIFIED_GUEST_LIBS := \
+    libaaudio \
+    libamidi \
+    libandroid \
+    libandroid_runtime
+
+NATIVE_BRIDGE_PRODUCT_PACKAGES += \
+    $(addsuffix .native_bridge,$(NATIVE_BRIDGE_ORIG_GUEST_LIBS))
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  g["NATIVE_BRIDGE_PRODUCT_PACKAGES"] = "libnative_bridge_vdso.native_bridge      native_bridge_guest_app_process.native_bridge      native_bridge_guest_linker.native_bridge"
+  g["NATIVE_BRIDGE_MODIFIED_GUEST_LIBS"] = "libaaudio      libamidi      libandroid      libandroid_runtime"
+  g["NATIVE_BRIDGE_PRODUCT_PACKAGES"] += " " + " ".join(rblf.addsuffix(".native_bridge", g.get("NATIVE_BRIDGE_ORIG_GUEST_LIBS", "")))
+`,
+	},
+	{
+		desc:   "Math functions",
+		mkname: "product.mk",
+		in: `
+# Test the math functions defined in build/make/common/math.mk
+ifeq ($(call math_max,2,5),5)
+endif
+ifeq ($(call math_min,2,5),2)
+endif
+ifeq ($(call math_gt_or_eq,2,5),true)
+endif
+ifeq ($(call math_gt,2,5),true)
+endif
+ifeq ($(call math_lt,2,5),true)
+endif
+ifeq ($(call math_gt_or_eq,2,5),)
+endif
+ifeq ($(call math_gt,2,5),)
+endif
+ifeq ($(call math_lt,2,5),)
+endif
+ifeq ($(call math_gt_or_eq,$(MY_VAR), 5),true)
+endif
+ifeq ($(call math_gt_or_eq,$(MY_VAR),$(MY_OTHER_VAR)),true)
+endif
+ifeq ($(call math_gt_or_eq,100$(MY_VAR),10),true)
+endif
+`,
+		expected: `# Test the math functions defined in build/make/common/math.mk
 load("//build/make/core:product_config.rbc", "rblf")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  g["override FOO"] = ""
-  rblf.warning("product.mk", "partially successful conversion")
+  if max(2, 5) == 5:
+    pass
+  if min(2, 5) == 2:
+    pass
+  if 2 >= 5:
+    pass
+  if 2 > 5:
+    pass
+  if 2 < 5:
+    pass
+  if 2 < 5:
+    pass
+  if 2 <= 5:
+    pass
+  if 2 >= 5:
+    pass
+  if int(g.get("MY_VAR", "")) >= 5:
+    pass
+  if int(g.get("MY_VAR", "")) >= int(g.get("MY_OTHER_VAR", "")):
+    pass
+  if int("100%s" % g.get("MY_VAR", "")) >= 10:
+    pass
 `,
 	},
 }
@@ -1079,6 +1349,7 @@ var known_variables = []struct {
 	class varClass
 	starlarkType
 }{
+	{"NATIVE_COVERAGE", VarClassSoong, starlarkTypeBool},
 	{"PRODUCT_NAME", VarClassConfig, starlarkTypeString},
 	{"PRODUCT_MODEL", VarClassConfig, starlarkTypeString},
 	{"PRODUCT_PACKAGES", VarClassConfig, starlarkTypeList},
@@ -1140,13 +1411,12 @@ func TestGood(t *testing.T) {
 		t.Run(test.desc,
 			func(t *testing.T) {
 				ss, err := Convert(Request{
-					MkFile:             test.mkname,
-					Reader:             bytes.NewBufferString(test.in),
-					RootDir:            ".",
-					OutputSuffix:       ".star",
-					WarnPartialSuccess: true,
-					SourceFS:           fs,
-					MakefileFinder:     &testMakefileFinder{fs: fs},
+					MkFile:         test.mkname,
+					Reader:         bytes.NewBufferString(test.in),
+					RootDir:        ".",
+					OutputSuffix:   ".star",
+					SourceFS:       fs,
+					MakefileFinder: &testMakefileFinder{fs: fs},
 				})
 				if err != nil {
 					t.Error(err)

@@ -153,7 +153,12 @@ func fileExists(path string) (bool, error) {
 	return true, nil
 }
 
-func primaryBuilderInvocation(config Config, name string, output string, specificArgs []string) bootstrap.PrimaryBuilderInvocation {
+func primaryBuilderInvocation(
+	config Config,
+	name string,
+	output string,
+	specificArgs []string,
+	description string) bootstrap.PrimaryBuilderInvocation {
 	commonArgs := make([]string, 0, 0)
 
 	if !config.skipSoongTests {
@@ -161,10 +166,22 @@ func primaryBuilderInvocation(config Config, name string, output string, specifi
 	}
 
 	commonArgs = append(commonArgs, "-l", filepath.Join(config.FileListDir(), "Android.bp.list"))
+	invocationEnv := make(map[string]string)
+	debugMode := os.Getenv("SOONG_DELVE") != ""
 
-	if os.Getenv("SOONG_DELVE") != "" {
+	if debugMode {
 		commonArgs = append(commonArgs, "--delve_listen", os.Getenv("SOONG_DELVE"))
 		commonArgs = append(commonArgs, "--delve_path", shared.ResolveDelveBinary())
+		// GODEBUG=asyncpreemptoff=1 disables the preemption of goroutines. This
+		// is useful because the preemption happens by sending SIGURG to the OS
+		// thread hosting the goroutine in question and each signal results in
+		// work that needs to be done by Delve; it uses ptrace to debug the Go
+		// process and the tracer process must deal with every signal (it is not
+		// possible to selectively ignore SIGURG). This makes debugging slower,
+		// sometimes by an order of magnitude depending on luck.
+		// The original reason for adding async preemption to Go is here:
+		// https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md
+		invocationEnv["GODEBUG"] = "asyncpreemptoff=1"
 	}
 
 	allArgs := make([]string, 0, 0)
@@ -178,9 +195,16 @@ func primaryBuilderInvocation(config Config, name string, output string, specifi
 	allArgs = append(allArgs, "Android.bp")
 
 	return bootstrap.PrimaryBuilderInvocation{
-		Inputs:  []string{"Android.bp"},
-		Outputs: []string{output},
-		Args:    allArgs,
+		Inputs:      []string{"Android.bp"},
+		Outputs:     []string{output},
+		Args:        allArgs,
+		Description: description,
+		// NB: Changing the value of this environment variable will not result in a
+		// rebuild. The bootstrap Ninja file will change, but apparently Ninja does
+		// not consider changing the pool specified in a statement a change that's
+		// worth rebuilding for.
+		Console: os.Getenv("SOONG_UNBUFFERED_OUTPUT") == "1",
+		Env:     invocationEnv,
 	}
 }
 
@@ -232,7 +256,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		config,
 		soongBuildTag,
 		config.SoongNinjaFile(),
-		mainSoongBuildExtraArgs)
+		mainSoongBuildExtraArgs,
+		fmt.Sprintf("analyzing Android.bp files and generating ninja file at %s", config.SoongNinjaFile()),
+	)
 
 	if config.bazelBuildMode() == mixedBuild {
 		// Mixed builds call Bazel from soong_build and they therefore need the
@@ -248,7 +274,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		config.Bp2BuildMarkerFile(),
 		[]string{
 			"--bp2build_marker", config.Bp2BuildMarkerFile(),
-		})
+		},
+		fmt.Sprintf("converting Android.bp files to BUILD files at %s/bp2build", config.SoongOutDir()),
+	)
 
 	jsonModuleGraphInvocation := primaryBuilderInvocation(
 		config,
@@ -256,15 +284,20 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		config.ModuleGraphFile(),
 		[]string{
 			"--module_graph_file", config.ModuleGraphFile(),
-		})
+		},
+		fmt.Sprintf("generating the Soong module graph at %s", config.ModuleGraphFile()),
+	)
 
+	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
 	queryviewInvocation := primaryBuilderInvocation(
 		config,
 		queryviewTag,
 		config.QueryviewMarkerFile(),
 		[]string{
-			"--bazel_queryview_dir", filepath.Join(config.SoongOutDir(), "queryview"),
-		})
+			"--bazel_queryview_dir", queryviewDir,
+		},
+		fmt.Sprintf("generating the Soong module graph as a Bazel workspace at %s", queryviewDir),
+	)
 
 	soongDocsInvocation := primaryBuilderInvocation(
 		config,
@@ -272,7 +305,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		config.SoongDocsHtml(),
 		[]string{
 			"--soong_docs", config.SoongDocsHtml(),
-		})
+		},
+		fmt.Sprintf("generating Soong docs at %s", config.SoongDocsHtml()),
+	)
 
 	globFiles := []string{
 		config.NamedGlobFile(soongBuildTag),
@@ -356,6 +391,7 @@ func runSoong(ctx Context, config Config) {
 	soongBuildEnv.Set("BAZEL_OUTPUT_BASE", filepath.Join(config.BazelOutDir(), "output"))
 	soongBuildEnv.Set("BAZEL_WORKSPACE", absPath(ctx, "."))
 	soongBuildEnv.Set("BAZEL_METRICS_DIR", config.BazelMetricsDir())
+	soongBuildEnv.Set("LOG_DIR", config.LogsDir())
 
 	// For Soong bootstrapping tests
 	if os.Getenv("ALLOW_MISSING_DEPENDENCIES") == "true" {

@@ -15,6 +15,8 @@
 package cc
 
 import (
+	"github.com/google/blueprint/proptools"
+
 	"fmt"
 	"io"
 	"path/filepath"
@@ -280,9 +282,10 @@ func (library *libraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries 
 		library.androidMkWriteExportedFlags(entries)
 		library.androidMkEntriesWriteAdditionalDependenciesForSourceAbiDiff(entries)
 
-		_, _, ext := android.SplitFileExt(entries.OutputFile.Path().Base())
-
-		entries.SetString("LOCAL_BUILT_MODULE_STEM", "$(LOCAL_MODULE)"+ext)
+		if entries.OutputFile.Valid() {
+			_, _, ext := android.SplitFileExt(entries.OutputFile.Path().Base())
+			entries.SetString("LOCAL_BUILT_MODULE_STEM", "$(LOCAL_MODULE)"+ext)
+		}
 
 		if library.coverageOutputFile.Valid() {
 			entries.SetString("LOCAL_PREBUILT_COVERAGE_ARCHIVE", library.coverageOutputFile.String())
@@ -469,7 +472,7 @@ func (installer *baseInstaller) AndroidMkEntries(ctx AndroidMkContext, entries *
 	}
 
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
-		path, file := filepath.Split(installer.path.ToMakePath().String())
+		path, file := filepath.Split(installer.path.String())
 		stem, suffix, _ := android.SplitFileExt(file)
 		entries.SetString("LOCAL_MODULE_SUFFIX", suffix)
 		entries.SetString("LOCAL_MODULE_PATH", path)
@@ -548,7 +551,13 @@ func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entrie
 		c.libraryDecorator.androidMkWriteExportedFlags(entries)
 
 		if c.shared() || c.static() {
-			path, file := filepath.Split(c.path.ToMakePath().String())
+			src := c.path.String()
+			// For static libraries which aren't installed, directly use Src to extract filename.
+			// This is safe: generated snapshot modules have a real path as Src, not a module
+			if c.static() {
+				src = proptools.String(c.properties.Src)
+			}
+			path, file := filepath.Split(src)
 			stem, suffix, ext := android.SplitFileExt(file)
 			entries.SetString("LOCAL_BUILT_MODULE_STEM", "$(LOCAL_MODULE)"+ext)
 			entries.SetString("LOCAL_MODULE_SUFFIX", suffix)

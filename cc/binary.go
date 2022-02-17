@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
 	"android/soong/bazel"
@@ -68,13 +69,14 @@ func RegisterBinaryBuildComponents(ctx android.RegistrationContext) {
 
 // cc_binary produces a binary that is runnable on a device.
 func BinaryFactory() android.Module {
-	module, _ := NewBinary(android.HostAndDeviceSupported)
+	module, _ := newBinary(android.HostAndDeviceSupported, true)
 	return module.Init()
 }
 
 // cc_binary_host produces a binary that is runnable on a host.
 func BinaryHostFactory() android.Module {
-	module, _ := NewBinary(android.HostSupported)
+	module, _ := newBinary(android.HostSupported, true)
+	module.bazelable = true
 	return module.Init()
 }
 
@@ -192,6 +194,10 @@ func (binary *binaryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 // Individual module implementations which comprise a C++ binary should call this function,
 // set some fields on the result, and then call the Init function.
 func NewBinary(hod android.HostOrDeviceSupported) (*Module, *binaryDecorator) {
+	return newBinary(hod, true)
+}
+
+func newBinary(hod android.HostOrDeviceSupported, bazelable bool) (*Module, *binaryDecorator) {
 	module := newModule(hod, android.MultilibFirst)
 	binary := &binaryDecorator{
 		baseLinker:    NewBaseLinker(module.sanitize),
@@ -200,6 +206,7 @@ func NewBinary(hod android.HostOrDeviceSupported) (*Module, *binaryDecorator) {
 	module.compiler = NewBaseCompiler()
 	module.linker = binary
 	module.installer = binary
+	module.bazelable = bazelable
 
 	// Allow module to be added as member of an sdk/module_exports.
 	module.sdkMemberTypes = []android.SdkMemberType{
@@ -344,6 +351,12 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,--no-dynamic-linker")
 	}
 
+	if ctx.Darwin() && deps.DarwinSecondArchOutput.Valid() {
+		fatOutputFile := outputFile
+		outputFile = android.PathForModuleOut(ctx, "pre-fat", fileName)
+		transformDarwinUniversalBinary(ctx, fatOutputFile, outputFile, deps.DarwinSecondArchOutput.Path())
+	}
+
 	builderFlags := flagsToBuilderFlags(flags)
 	stripFlags := flagsToStripFlags(flags)
 	if binary.stripper.NeedsStrip(ctx) {
@@ -388,7 +401,7 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		}
 	}
 
-	var validations android.WritablePaths
+	var validations android.Paths
 
 	// Handle host bionic linker symbols.
 	if ctx.Os() == android.LinuxBionic && !binary.static() {
@@ -411,9 +424,10 @@ func (binary *binaryDecorator) link(ctx ModuleContext,
 		linkerDeps = append(linkerDeps, deps.EarlySharedLibsDeps...)
 		linkerDeps = append(linkerDeps, deps.SharedLibsDeps...)
 		linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
+		linkerDeps = append(linkerDeps, ndkSharedLibDeps(ctx)...)
 	}
 
-	validations = append(validations, objs.tidyFiles...)
+	validations = append(validations, objs.tidyDepFiles...)
 	linkerDeps = append(linkerDeps, flags.LdFlagsDeps...)
 
 	// Register link action.
@@ -543,44 +557,18 @@ func (binary *binaryDecorator) verifyHostBionicLinker(ctx ModuleContext, in, lin
 	})
 }
 
-func init() {
-	android.RegisterBp2BuildMutator("cc_binary", BinaryBp2build)
-	android.RegisterBp2BuildMutator("cc_binary_host", BinaryHostBp2build)
-}
-
-func BinaryBp2build(ctx android.TopDownMutatorContext) {
-	binaryBp2build(ctx, "cc_binary")
-}
-
-func BinaryHostBp2build(ctx android.TopDownMutatorContext) {
-	binaryBp2build(ctx, "cc_binary_host")
-}
-
-func binaryBp2build(ctx android.TopDownMutatorContext, typ string) {
-	m, ok := ctx.Module().(*Module)
-	if !ok {
-		// Not a cc module
-		return
-	}
-	if !m.ConvertWithBp2build(ctx) {
-		return
-	}
-
-	if ctx.ModuleType() != typ {
-		return
-	}
-
-	var compatibleWith bazel.StringListAttribute
-	if typ == "cc_binary_host" {
-		//incompatible with android OS
-		compatibleWith.SetSelectValue(bazel.OsConfigurationAxis, android.Android.Name, []string{"@platforms//:incompatible"})
-		compatibleWith.SetSelectValue(bazel.OsConfigurationAxis, bazel.ConditionsDefaultConfigKey, []string{})
-	}
-
+func binaryBp2build(ctx android.TopDownMutatorContext, m *Module, typ string) {
 	baseAttrs := bp2BuildParseBaseProps(ctx, m)
+	binaryLinkerAttrs := bp2buildBinaryLinkerProps(ctx, m)
+
+	if proptools.BoolDefault(binaryLinkerAttrs.Linkshared, true) {
+		baseAttrs.implementationDynamicDeps.Add(baseAttrs.protoDependency)
+	} else {
+		baseAttrs.implementationDeps.Add(baseAttrs.protoDependency)
+	}
 
 	attrs := &binaryAttributes{
-		binaryLinkerAttrs: bp2buildBinaryLinkerProps(ctx, m),
+		binaryLinkerAttrs: binaryLinkerAttrs,
 
 		Srcs:    baseAttrs.srcs,
 		Srcs_c:  baseAttrs.cSrcs,
@@ -615,16 +603,22 @@ func binaryBp2build(ctx android.TopDownMutatorContext, typ string) {
 			None:                         baseAttrs.stripNone,
 		},
 
-		Target_compatible_with: compatibleWith,
-		Features:               baseAttrs.features,
+		Features: baseAttrs.features,
 	}
 
-	ctx.CreateBazelTargetModule(bazel.BazelTargetModuleProperties{
+	var enabledProperty bazel.BoolAttribute
+	if typ == "cc_binary_host" {
+		falseVal := false
+		enabledProperty.SetSelectValue(bazel.OsConfigurationAxis, android.Android.Name, &falseVal)
+	}
+
+	ctx.CreateBazelTargetModuleWithRestrictions(bazel.BazelTargetModuleProperties{
 		Rule_class:        "cc_binary",
 		Bzl_load_location: "//build/bazel/rules:cc_binary.bzl",
 	},
 		android.CommonAttributes{Name: m.Name()},
-		attrs)
+		attrs,
+		enabledProperty)
 }
 
 // binaryAttributes contains Bazel attributes corresponding to a cc binary
@@ -660,6 +654,4 @@ type binaryAttributes struct {
 	Strip stripAttributes
 
 	Features bazel.StringListAttribute
-
-	Target_compatible_with bazel.StringListAttribute
 }

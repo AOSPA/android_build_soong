@@ -623,7 +623,7 @@ func TestDefaults(t *testing.T) {
 			java_libs: ["myjar"],
 			apps: ["AppFoo"],
 			rros: ["rro"],
-			bpfs: ["bpf"],
+			bpfs: ["bpf", "netd_test"],
 			updatable: false,
 		}
 
@@ -676,6 +676,12 @@ func TestDefaults(t *testing.T) {
 			srcs: ["bpf.c", "bpf2.c"],
 		}
 
+		bpf {
+			name: "netd_test",
+			srcs: ["netd_test.c"],
+			sub_dir: "netd",
+		}
+
 	`)
 	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
 		"etc/myetc",
@@ -685,6 +691,7 @@ func TestDefaults(t *testing.T) {
 		"overlay/blue/rro.apk",
 		"etc/bpf/bpf.o",
 		"etc/bpf/bpf2.o",
+		"etc/bpf/netd/netd_test.o",
 	})
 }
 
@@ -2581,22 +2588,21 @@ func TestFilesInSubDir(t *testing.T) {
 	`)
 
 	generateFsRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("generateFsConfig")
-	dirs := strings.Split(generateFsRule.Args["exec_paths"], " ")
+	cmd := generateFsRule.RuleParams.Command
 
 	// Ensure that the subdirectories are all listed
-	ensureListContains(t, dirs, "etc")
-	ensureListContains(t, dirs, "etc/foo")
-	ensureListContains(t, dirs, "etc/foo/bar")
-	ensureListContains(t, dirs, "lib64")
-	ensureListContains(t, dirs, "lib64/foo")
-	ensureListContains(t, dirs, "lib64/foo/bar")
-	ensureListContains(t, dirs, "lib")
-	ensureListContains(t, dirs, "lib/foo")
-	ensureListContains(t, dirs, "lib/foo/bar")
-
-	ensureListContains(t, dirs, "bin")
-	ensureListContains(t, dirs, "bin/foo")
-	ensureListContains(t, dirs, "bin/foo/bar")
+	ensureContains(t, cmd, "/etc ")
+	ensureContains(t, cmd, "/etc/foo ")
+	ensureContains(t, cmd, "/etc/foo/bar ")
+	ensureContains(t, cmd, "/lib64 ")
+	ensureContains(t, cmd, "/lib64/foo ")
+	ensureContains(t, cmd, "/lib64/foo/bar ")
+	ensureContains(t, cmd, "/lib ")
+	ensureContains(t, cmd, "/lib/foo ")
+	ensureContains(t, cmd, "/lib/foo/bar ")
+	ensureContains(t, cmd, "/bin ")
+	ensureContains(t, cmd, "/bin/foo ")
+	ensureContains(t, cmd, "/bin/foo/bar ")
 }
 
 func TestFilesInSubDirWhenNativeBridgeEnabled(t *testing.T) {
@@ -2658,7 +2664,10 @@ func TestFilesInSubDirWhenNativeBridgeEnabled(t *testing.T) {
 }
 
 func TestVendorApex(t *testing.T) {
-	ctx := testApex(t, `
+	result := android.GroupFixturePreparers(
+		prepareForApexTest,
+		android.FixtureModifyConfig(android.SetKatiEnabledForTests),
+	).RunTestWithBp(t, `
 		apex {
 			name: "myapex",
 			key: "myapex.key",
@@ -2682,24 +2691,24 @@ func TestVendorApex(t *testing.T) {
 		}
 	`)
 
-	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
+	ensureExactContents(t, result.TestContext, "myapex", "android_common_myapex_image", []string{
 		"bin/mybin",
 		"lib64/libfoo.so",
 		// TODO(b/159195575): Add an option to use VNDK libs from VNDK APEX
 		"lib64/libc++.so",
 	})
 
-	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().(*apexBundle)
-	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
+	apexBundle := result.ModuleForTests("myapex", "android_common_myapex_image").Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, result.TestContext, apexBundle)
 	name := apexBundle.BaseModuleName()
 	prefix := "TARGET_"
 	var builder strings.Builder
 	data.Custom(&builder, name, prefix, "", data)
-	androidMk := android.StringRelativeToTop(ctx.Config(), builder.String())
+	androidMk := android.StringRelativeToTop(result.Config, builder.String())
 	installPath := "out/target/product/test_device/vendor/apex"
 	ensureContains(t, androidMk, "LOCAL_MODULE_PATH := "+installPath)
 
-	apexManifestRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexManifestRule")
+	apexManifestRule := result.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexManifestRule")
 	requireNativeLibs := names(apexManifestRule.Args["requireNativeLibs"])
 	ensureListNotContains(t, requireNativeLibs, ":vndk")
 }
@@ -4250,7 +4259,7 @@ func TestApexWithShBinary(t *testing.T) {
 		apex {
 			name: "myapex",
 			key: "myapex.key",
-			binaries: ["myscript"],
+			sh_binaries: ["myscript"],
 			updatable: false,
 		}
 
@@ -7037,11 +7046,81 @@ func testDexpreoptWithApexes(t *testing.T, bp, errmsg string, preparer android.F
 				`, insert))
 			}
 		}),
+		dexpreopt.FixtureSetBootImageProfiles("art/build/boot/boot-image-profile.txt"),
 	).
 		ExtendWithErrorHandler(errorHandler).
 		RunTestWithBp(t, bp)
 
 	return result.TestContext
+}
+
+func TestDuplicateDeapexeresFromPrebuiltApexes(t *testing.T) {
+	preparers := android.GroupFixturePreparers(
+		java.PrepareForTestWithJavaDefaultModules,
+		PrepareForTestWithApexBuildComponents,
+	).
+		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(
+			"Multiple installable prebuilt APEXes provide ambiguous deapexers: com.android.myapex and com.mycompany.android.myapex"))
+
+	bpBase := `
+		apex_set {
+			name: "com.android.myapex",
+			installable: true,
+			exported_bootclasspath_fragments: ["my-bootclasspath-fragment"],
+			set: "myapex.apks",
+		}
+
+		apex_set {
+			name: "com.mycompany.android.myapex",
+			apex_name: "com.android.myapex",
+			installable: true,
+			exported_bootclasspath_fragments: ["my-bootclasspath-fragment"],
+			set: "company-myapex.apks",
+		}
+
+		prebuilt_bootclasspath_fragment {
+			name: "my-bootclasspath-fragment",
+			apex_available: ["com.android.myapex"],
+			%s
+		}
+	`
+
+	t.Run("java_import", func(t *testing.T) {
+		_ = preparers.RunTestWithBp(t, fmt.Sprintf(bpBase, `contents: ["libfoo"]`)+`
+			java_import {
+				name: "libfoo",
+				jars: ["libfoo.jar"],
+				apex_available: ["com.android.myapex"],
+			}
+		`)
+	})
+
+	t.Run("java_sdk_library_import", func(t *testing.T) {
+		_ = preparers.RunTestWithBp(t, fmt.Sprintf(bpBase, `contents: ["libfoo"]`)+`
+			java_sdk_library_import {
+				name: "libfoo",
+				public: {
+					jars: ["libbar.jar"],
+				},
+				apex_available: ["com.android.myapex"],
+			}
+		`)
+	})
+
+	t.Run("prebuilt_bootclasspath_fragment", func(t *testing.T) {
+		_ = preparers.RunTestWithBp(t, fmt.Sprintf(bpBase, `
+			image_name: "art",
+			contents: ["libfoo"],
+		`)+`
+			java_sdk_library_import {
+				name: "libfoo",
+				public: {
+					jars: ["libbar.jar"],
+				},
+				apex_available: ["com.android.myapex"],
+			}
+		`)
+	})
 }
 
 func TestUpdatable_should_set_min_sdk_version(t *testing.T) {
@@ -7065,6 +7144,23 @@ func TestUpdatableDefault_should_set_min_sdk_version(t *testing.T) {
 		apex {
 			name: "myapex",
 			key: "myapex.key",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+}
+
+func TestUpdatable_cannot_be_vendor_apex(t *testing.T) {
+	testApexError(t, `"myapex" .*: updatable: vendor APEXes are not updatable`, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: true,
+			soc_specific: true,
 		}
 
 		apex_key {
@@ -7341,6 +7437,7 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 					apex_available: ["myapex"],
 					sdk_version: "none",
 					system_modules: "none",
+					min_sdk_version: "30",
 				}
 				java_library {
 					name: "nonbcp_lib2",
@@ -7349,9 +7446,11 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 					permitted_packages: ["a.b"],
 					sdk_version: "none",
 					system_modules: "none",
+					min_sdk_version: "30",
 				}
 				apex {
 					name: "myapex",
+					min_sdk_version: "30",
 					key: "myapex.key",
 					java_libs: ["bcp_lib1", "nonbcp_lib2"],
 					updatable: false,
@@ -7364,8 +7463,8 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 			},
 		},
 		{
-			name:          "Bootclasspath apex jar not satisfying allowed module packages.",
-			expectedError: `module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar. Please jarjar or move code around.`,
+			name:          "Bootclasspath apex jar not satisfying allowed module packages on Q.",
+			expectedError: `(?s)module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar with min_sdk < T. Please jarjar or move code around.`,
 			bp: `
 				java_library {
 					name: "bcp_lib1",
@@ -7374,6 +7473,7 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 					permitted_packages: ["foo.bar"],
 					sdk_version: "none",
 					system_modules: "none",
+					min_sdk_version: "29",
 				}
 				java_library {
 					name: "bcp_lib2",
@@ -7382,9 +7482,85 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 					permitted_packages: ["foo.bar", "bar.baz"],
 					sdk_version: "none",
 					system_modules: "none",
+					min_sdk_version: "29",
 				}
 				apex {
 					name: "myapex",
+					min_sdk_version: "29",
+					key: "myapex.key",
+					java_libs: ["bcp_lib1", "bcp_lib2"],
+					updatable: false,
+				}
+			`,
+			bootJars: []string{"bcp_lib1", "bcp_lib2"},
+			modulesPackages: map[string][]string{
+				"myapex": []string{
+					"foo.bar",
+				},
+			},
+		},
+		{
+			name:          "Bootclasspath apex jar not satisfying allowed module packages on R.",
+			expectedError: `(?s)module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar with min_sdk < T. Please jarjar or move code around.`,
+			bp: `
+				java_library {
+					name: "bcp_lib1",
+					srcs: ["lib1/src/*.java"],
+					apex_available: ["myapex"],
+					permitted_packages: ["foo.bar"],
+					sdk_version: "none",
+					system_modules: "none",
+					min_sdk_version: "30",
+				}
+				java_library {
+					name: "bcp_lib2",
+					srcs: ["lib2/src/*.java"],
+					apex_available: ["myapex"],
+					permitted_packages: ["foo.bar", "bar.baz"],
+					sdk_version: "none",
+					system_modules: "none",
+					min_sdk_version: "30",
+				}
+				apex {
+					name: "myapex",
+					min_sdk_version: "30",
+					key: "myapex.key",
+					java_libs: ["bcp_lib1", "bcp_lib2"],
+					updatable: false,
+				}
+			`,
+			bootJars: []string{"bcp_lib1", "bcp_lib2"},
+			modulesPackages: map[string][]string{
+				"myapex": []string{
+					"foo.bar",
+				},
+			},
+		},
+		{
+			name:          "Bootclasspath apex jar >= T not satisfying Q/R/S allowed module packages.",
+			expectedError: "",
+			bp: `
+				java_library {
+					name: "bcp_lib1",
+					srcs: ["lib1/src/*.java"],
+					apex_available: ["myapex"],
+					permitted_packages: ["foo.bar"],
+					sdk_version: "none",
+					system_modules: "none",
+					min_sdk_version: "current",
+				}
+				java_library {
+					name: "bcp_lib2",
+					srcs: ["lib2/src/*.java"],
+					apex_available: ["myapex"],
+					permitted_packages: ["foo.bar", "bar.baz"],
+					sdk_version: "none",
+					system_modules: "none",
+					min_sdk_version: "current",
+				}
+				apex {
+					name: "myapex",
+					min_sdk_version: "current",
 					key: "myapex.key",
 					java_libs: ["bcp_lib1", "bcp_lib2"],
 					updatable: false,
@@ -8334,7 +8510,7 @@ func TestAndroidMk_DexpreoptBuiltInstalledForApex_Prebuilt(t *testing.T) {
 		java_import {
 			name: "foo",
 			jars: ["foo.jar"],
-			installable: true,
+			apex_available: ["myapex"],
 		}
 	`,
 		dexpreopt.FixtureSetApexSystemServerJars("myapex:foo"),
@@ -8390,6 +8566,200 @@ func TestAndroidMk_RequiredModules(t *testing.T) {
 	data.Custom(&builder, apexBundle.BaseModuleName(), "TARGET_", "", data)
 	androidMk := builder.String()
 	ensureContains(t, androidMk, "LOCAL_REQUIRED_MODULES += otherapex")
+}
+
+func TestSdkLibraryCanHaveHigherMinSdkVersion(t *testing.T) {
+	preparer := android.GroupFixturePreparers(
+		PrepareForTestWithApexBuildComponents,
+		prepareForTestWithMyapex,
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.PrepareForTestWithJavaDefaultModules,
+		android.PrepareForTestWithAndroidBuildComponents,
+		dexpreopt.FixtureSetApexBootJars("myapex:mybootclasspathlib"),
+		dexpreopt.FixtureSetApexSystemServerJars("myapex:mysystemserverclasspathlib"),
+	)
+
+	// Test java_sdk_library in bootclasspath_fragment may define higher min_sdk_version than the apex
+	t.Run("bootclasspath_fragment jar has higher min_sdk_version than apex", func(t *testing.T) {
+		preparer.RunTestWithBp(t, `
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				bootclasspath_fragments: ["mybootclasspathfragment"],
+				min_sdk_version: "30",
+				updatable: false,
+			}
+
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+
+			bootclasspath_fragment {
+				name: "mybootclasspathfragment",
+				contents: ["mybootclasspathlib"],
+				apex_available: ["myapex"],
+			}
+
+			java_sdk_library {
+				name: "mybootclasspathlib",
+				srcs: ["mybootclasspathlib.java"],
+				apex_available: ["myapex"],
+				compile_dex: true,
+				unsafe_ignore_missing_latest_api: true,
+				min_sdk_version: "31",
+				static_libs: ["util"],
+			}
+
+			java_library {
+				name: "util",
+                srcs: ["a.java"],
+				apex_available: ["myapex"],
+				min_sdk_version: "31",
+				static_libs: ["another_util"],
+			}
+
+			java_library {
+				name: "another_util",
+                srcs: ["a.java"],
+				min_sdk_version: "31",
+				apex_available: ["myapex"],
+			}
+		`)
+	})
+
+	// Test java_sdk_library in systemserverclasspath_fragment may define higher min_sdk_version than the apex
+	t.Run("systemserverclasspath_fragment jar has higher min_sdk_version than apex", func(t *testing.T) {
+		preparer.RunTestWithBp(t, `
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				systemserverclasspath_fragments: ["mysystemserverclasspathfragment"],
+				min_sdk_version: "30",
+				updatable: false,
+			}
+
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+
+			systemserverclasspath_fragment {
+				name: "mysystemserverclasspathfragment",
+				contents: ["mysystemserverclasspathlib"],
+				apex_available: ["myapex"],
+			}
+
+			java_sdk_library {
+				name: "mysystemserverclasspathlib",
+				srcs: ["mysystemserverclasspathlib.java"],
+				apex_available: ["myapex"],
+				compile_dex: true,
+				min_sdk_version: "32",
+				unsafe_ignore_missing_latest_api: true,
+				static_libs: ["util"],
+			}
+
+			java_library {
+				name: "util",
+                srcs: ["a.java"],
+				apex_available: ["myapex"],
+				min_sdk_version: "31",
+				static_libs: ["another_util"],
+			}
+
+			java_library {
+				name: "another_util",
+                srcs: ["a.java"],
+				min_sdk_version: "31",
+				apex_available: ["myapex"],
+			}
+		`)
+	})
+
+	t.Run("bootclasspath_fragment jar must set min_sdk_version", func(t *testing.T) {
+		preparer.ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "mybootclasspathlib".*must set min_sdk_version`)).
+			RunTestWithBp(t, `
+				apex {
+					name: "myapex",
+					key: "myapex.key",
+					bootclasspath_fragments: ["mybootclasspathfragment"],
+					min_sdk_version: "30",
+					updatable: false,
+				}
+
+				apex_key {
+					name: "myapex.key",
+					public_key: "testkey.avbpubkey",
+					private_key: "testkey.pem",
+				}
+
+				bootclasspath_fragment {
+					name: "mybootclasspathfragment",
+					contents: ["mybootclasspathlib"],
+					apex_available: ["myapex"],
+				}
+
+				java_sdk_library {
+					name: "mybootclasspathlib",
+					srcs: ["mybootclasspathlib.java"],
+					apex_available: ["myapex"],
+					compile_dex: true,
+					unsafe_ignore_missing_latest_api: true,
+				}
+		`)
+	})
+
+	t.Run("systemserverclasspath_fragment jar must set min_sdk_version", func(t *testing.T) {
+		preparer.ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "mysystemserverclasspathlib".*must set min_sdk_version`)).
+			RunTestWithBp(t, `
+				apex {
+					name: "myapex",
+					key: "myapex.key",
+					systemserverclasspath_fragments: ["mysystemserverclasspathfragment"],
+					min_sdk_version: "30",
+					updatable: false,
+				}
+
+				apex_key {
+					name: "myapex.key",
+					public_key: "testkey.avbpubkey",
+					private_key: "testkey.pem",
+				}
+
+				systemserverclasspath_fragment {
+					name: "mysystemserverclasspathfragment",
+					contents: ["mysystemserverclasspathlib"],
+					apex_available: ["myapex"],
+				}
+
+				java_sdk_library {
+					name: "mysystemserverclasspathlib",
+					srcs: ["mysystemserverclasspathlib.java"],
+					apex_available: ["myapex"],
+					compile_dex: true,
+					unsafe_ignore_missing_latest_api: true,
+				}
+		`)
+	})
+}
+
+// Verifies that the APEX depends on all the Make modules in the list.
+func ensureContainsRequiredDeps(t *testing.T, ctx *android.TestContext, moduleName, variant string, deps []string) {
+	a := ctx.ModuleForTests(moduleName, variant).Module().(*apexBundle)
+	for _, dep := range deps {
+		android.AssertStringListContains(t, "", a.requiredDeps, dep)
+	}
+}
+
+// Verifies that the APEX does not depend on any of the Make modules in the list.
+func ensureDoesNotContainRequiredDeps(t *testing.T, ctx *android.TestContext, moduleName, variant string, deps []string) {
+	a := ctx.ModuleForTests(moduleName, variant).Module().(*apexBundle)
+	for _, dep := range deps {
+		android.AssertStringListDoesNotContain(t, "", a.requiredDeps, dep)
+	}
 }
 
 func TestMain(m *testing.M) {

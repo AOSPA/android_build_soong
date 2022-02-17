@@ -72,19 +72,6 @@ func init() {
 }
 
 var (
-	// Create a canned fs config file where all files and directories are
-	// by default set to (uid/gid/mode) = (1000/1000/0644)
-	// TODO(b/113082813) make this configurable using config.fs syntax
-	generateFsConfig = pctx.StaticRule("generateFsConfig", blueprint.RuleParams{
-		Command: `( set -e; echo '/ 1000 1000 0755' ` +
-			`&& for i in ${ro_paths}; do echo "/$$i 1000 1000 0644"; done ` +
-			`&& for i in  ${exec_paths}; do echo "/$$i 0 2000 0755"; done ` +
-			`&& ( tr ' ' '\n' <${out}.apklist | for i in ${apk_paths}; do read apk; echo "/$$i 0 2000 0755"; zipinfo -1 $$apk | sed "s:\(.*\):/$$i/\1 1000 1000 0644:"; done ) ) > ${out}`,
-		Description:    "fs_config ${out}",
-		Rspfile:        "$out.apklist",
-		RspfileContent: "$in",
-	}, "ro_paths", "exec_paths", "apk_paths")
-
 	apexManifestRule = pctx.StaticRule("apexManifestRule", blueprint.RuleParams{
 		Command: `rm -f $out && ${jsonmodify} $in ` +
 			`-a provideNativeLibs ${provideNativeLibs} ` +
@@ -414,18 +401,35 @@ func (a *apexBundle) buildBundleConfig(ctx android.ModuleContext) android.Output
 func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	apexType := a.properties.ApexType
 	suffix := apexType.suffix()
+	apexName := proptools.StringDefault(a.properties.Apex_name, a.BaseModuleName())
 
 	////////////////////////////////////////////////////////////////////////////////////////////
 	// Step 1: copy built files to appropriate directories under the image directory
 
 	imageDir := android.PathForModuleOut(ctx, "image"+suffix)
 
+	installSymbolFiles := !ctx.Config().KatiEnabled() || a.ExportedToMake()
+
+	// b/140136207. When there are overriding APEXes for a VNDK APEX, the symbols file for the overridden
+	// APEX and the overriding APEX will have the same installation paths at /apex/com.android.vndk.v<ver>
+	// as their apexName will be the same. To avoid the path conflicts, skip installing the symbol files
+	// for the overriding VNDK APEXes.
+	if a.vndkApex && len(a.overridableProperties.Overrides) > 0 {
+		installSymbolFiles = false
+	}
+
+	// Avoid creating duplicate build rules for multi-installed APEXes.
+	if proptools.BoolDefault(a.properties.Multi_install_skip_symbol_files, false) {
+		installSymbolFiles = false
+	}
+
 	// TODO(jiyong): use the RuleBuilder
 	var copyCommands []string
 	var implicitInputs []android.Path
+	pathWhenActivated := android.PathForModuleInPartitionInstall(ctx, "apex", apexName)
 	for _, fi := range a.filesInfo {
 		destPath := imageDir.Join(ctx, fi.path()).String()
-
+		var installedPath android.InstallPath
 		// Prepare the destination path
 		destPathDir := filepath.Dir(destPath)
 		if fi.class == appSet {
@@ -442,11 +446,22 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		} else {
 			if fi.class == appSet {
 				copyCommands = append(copyCommands,
-					fmt.Sprintf("unzip -qDD -d %s %s", destPathDir, fi.builtFile.String()))
+					fmt.Sprintf("unzip -qDD -d %s %s", destPathDir,
+						fi.module.(*java.AndroidAppSet).PackedAdditionalOutputs().String()))
+				if installSymbolFiles {
+					installedPath = ctx.InstallFileWithExtraFilesZip(pathWhenActivated.Join(ctx, fi.installDir),
+						fi.stem(), fi.builtFile, fi.module.(*java.AndroidAppSet).PackedAdditionalOutputs())
+				}
 			} else {
 				copyCommands = append(copyCommands, "cp -f "+fi.builtFile.String()+" "+destPath)
+				if installSymbolFiles {
+					installedPath = ctx.InstallFile(pathWhenActivated.Join(ctx, fi.installDir), fi.stem(), fi.builtFile)
+				}
 			}
 			implicitInputs = append(implicitInputs, fi.builtFile)
+			if installSymbolFiles {
+				implicitInputs = append(implicitInputs, installedPath)
+			}
 		}
 
 		// Create additional symlinks pointing the file inside the APEX (if any). Note that
@@ -454,6 +469,10 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		for _, symlinkPath := range fi.symlinkPaths() {
 			symlinkDest := imageDir.Join(ctx, symlinkPath).String()
 			copyCommands = append(copyCommands, "ln -sfn "+filepath.Base(destPath)+" "+symlinkDest)
+			if installSymbolFiles {
+				installedSymlink := ctx.InstallSymlink(pathWhenActivated.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
+				implicitInputs = append(implicitInputs, installedSymlink)
+			}
 		}
 
 		// Copy the test files (if any)
@@ -472,6 +491,11 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		}
 	}
 	implicitInputs = append(implicitInputs, a.manifestPbOut)
+	if installSymbolFiles {
+		installedManifest := ctx.InstallFile(pathWhenActivated, "apex_manifest.pb", a.manifestPbOut)
+		installedKey := ctx.InstallFile(pathWhenActivated, "apex_pubkey", a.publicKeyFile)
+		implicitInputs = append(implicitInputs, installedManifest, installedKey)
+	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////
 	// Step 1.a: Write the list of files in this APEX to a txt file and compare it against
@@ -528,58 +552,14 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	outHostBinDir := ctx.Config().HostToolPath(ctx, "").String()
 	prebuiltSdkToolsBinDir := filepath.Join("prebuilts", "sdk", "tools", runtime.GOOS, "bin")
 
-	// Figure out if need to compress apex.
-	compressionEnabled := ctx.Config().CompressedApex() && proptools.BoolDefault(a.properties.Compressible, false) && !a.testApex && !ctx.Config().UnbundledBuildApps()
+	// Figure out if we need to compress the apex.
+	compressionEnabled := ctx.Config().CompressedApex() && proptools.BoolDefault(a.overridableProperties.Compressible, false) && !a.testApex && !ctx.Config().UnbundledBuildApps()
 	if apexType == imageApex {
+
 		////////////////////////////////////////////////////////////////////////////////////
 		// Step 2: create canned_fs_config which encodes filemode,uid,gid of each files
 		// in this APEX. The file will be used by apexer in later steps.
-		// TODO(jiyong): make this as a function
-		// TODO(jiyong): use the RuleBuilder
-		var readOnlyPaths = []string{"apex_manifest.json", "apex_manifest.pb"}
-		var executablePaths []string // this also includes dirs
-		var extractedAppSetPaths android.Paths
-		var extractedAppSetDirs []string
-		for _, f := range a.filesInfo {
-			pathInApex := f.path()
-			if f.installDir == "bin" || strings.HasPrefix(f.installDir, "bin/") {
-				executablePaths = append(executablePaths, pathInApex)
-				for _, d := range f.dataPaths {
-					readOnlyPaths = append(readOnlyPaths, filepath.Join(f.installDir, d.RelativeInstallPath, d.SrcPath.Rel()))
-				}
-				for _, s := range f.symlinks {
-					executablePaths = append(executablePaths, filepath.Join(f.installDir, s))
-				}
-			} else if f.class == appSet {
-				extractedAppSetPaths = append(extractedAppSetPaths, f.builtFile)
-				extractedAppSetDirs = append(extractedAppSetDirs, f.installDir)
-			} else {
-				readOnlyPaths = append(readOnlyPaths, pathInApex)
-			}
-			dir := f.installDir
-			for !android.InList(dir, executablePaths) && dir != "" {
-				executablePaths = append(executablePaths, dir)
-				dir, _ = filepath.Split(dir) // move up to the parent
-				if len(dir) > 0 {
-					// remove trailing slash
-					dir = dir[:len(dir)-1]
-				}
-			}
-		}
-		sort.Strings(readOnlyPaths)
-		sort.Strings(executablePaths)
-		cannedFsConfig := android.PathForModuleOut(ctx, "canned_fs_config")
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        generateFsConfig,
-			Output:      cannedFsConfig,
-			Description: "generate fs config",
-			Inputs:      extractedAppSetPaths,
-			Args: map[string]string{
-				"ro_paths":   strings.Join(readOnlyPaths, " "),
-				"exec_paths": strings.Join(executablePaths, " "),
-				"apk_paths":  strings.Join(extractedAppSetDirs, " "),
-			},
-		})
+		cannedFsConfig := a.buildCannedFsConfig(ctx)
 		implicitInputs = append(implicitInputs, cannedFsConfig)
 
 		////////////////////////////////////////////////////////////////////////////////////
@@ -840,20 +820,17 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		a.outputFile = signedCompressedOutputFile
 	}
 
+	installSuffix := suffix
+	if a.isCompressed {
+		installSuffix = imageCapexSuffix
+	}
+
 	// Install to $OUT/soong/{target,host}/.../apex.
-	ctx.InstallFile(a.installDir, a.Name()+suffix, a.outputFile)
+	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
+		a.compatSymlinks.Paths()...)
 
 	// installed-files.txt is dist'ed
 	a.installedFilesFile = a.buildInstalledFilesFile(ctx, a.outputFile, imageDir)
-}
-
-// Context "decorator", overriding the InstallBypassMake method to always reply `true`.
-type flattenedApexContext struct {
-	android.ModuleContext
-}
-
-func (c *flattenedApexContext) InstallBypassMake() bool {
-	return true
 }
 
 // buildFlattenedApex creates rules for a flattened APEX. Flattened APEX actually doesn't have a
@@ -861,26 +838,37 @@ func (c *flattenedApexContext) InstallBypassMake() bool {
 // This function creates the installation rules for the files.
 func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 	bundleName := a.Name()
+	installedSymlinks := append(android.InstallPaths(nil), a.compatSymlinks...)
 	if a.installable() {
 		for _, fi := range a.filesInfo {
 			dir := filepath.Join("apex", bundleName, fi.installDir)
-			target := ctx.InstallFile(android.PathForModuleInstall(ctx, dir), fi.stem(), fi.builtFile)
-			for _, sym := range fi.symlinks {
-				ctx.InstallSymlink(android.PathForModuleInstall(ctx, dir), sym, target)
+			installDir := android.PathForModuleInstall(ctx, dir)
+			if a.linkToSystemLib && fi.transitiveDep && fi.availableToPlatform() {
+				// TODO(jiyong): pathOnDevice should come from fi.module, not being calculated here
+				pathOnDevice := filepath.Join("/system", fi.path())
+				installedSymlinks = append(installedSymlinks,
+					ctx.InstallAbsoluteSymlink(installDir, fi.stem(), pathOnDevice))
+			} else {
+				target := ctx.InstallFile(installDir, fi.stem(), fi.builtFile)
+				for _, sym := range fi.symlinks {
+					installedSymlinks = append(installedSymlinks,
+						ctx.InstallSymlink(installDir, sym, target))
+				}
 			}
 		}
+
+		// Create install rules for the files added in GenerateAndroidBuildActions after
+		// buildFlattenedApex is called.  Add the links to system libs (if any) as dependencies
+		// of the apex_manifest.pb file since it is always present.
+		dir := filepath.Join("apex", bundleName)
+		installDir := android.PathForModuleInstall(ctx, dir)
+		ctx.InstallFile(installDir, "apex_manifest.pb", a.manifestPbOut, installedSymlinks.Paths()...)
+		ctx.InstallFile(installDir, "apex_pubkey", a.publicKeyFile)
 	}
 
 	a.fileContexts = a.buildFileContexts(ctx)
 
-	// Temporarily wrap the original `ctx` into a `flattenedApexContext` to have it reply true
-	// to `InstallBypassMake()` (thus making the call `android.PathForModuleInstall` below use
-	// `android.pathForInstallInMakeDir` instead of `android.PathForOutput`) to return the
-	// correct path to the flattened APEX (as its contents is installed by Make, not Soong).
-	// TODO(jiyong): Why do we need to set outputFile for flattened APEX? We don't seem to use
-	// it and it actually points to a path that can never be built. Remove this.
-	factx := flattenedApexContext{ctx}
-	a.outputFile = android.PathForModuleInstall(&factx, "apex", bundleName)
+	a.outputFile = android.PathForModuleInstall(ctx, "apex", bundleName)
 }
 
 // getCertificateAndPrivateKey retrieves the cert and the private key that will be used to sign
@@ -1011,4 +999,66 @@ func (a *apexBundle) buildLintReports(ctx android.ModuleContext) {
 	}
 
 	a.lintReports = java.BuildModuleLintReportZips(ctx, depSetsBuilder.Build())
+}
+
+func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext) android.OutputPath {
+	var readOnlyPaths = []string{"apex_manifest.json", "apex_manifest.pb"}
+	var executablePaths []string // this also includes dirs
+	var appSetDirs []string
+	appSetFiles := make(map[string]android.Path)
+	for _, f := range a.filesInfo {
+		pathInApex := f.path()
+		if f.installDir == "bin" || strings.HasPrefix(f.installDir, "bin/") {
+			executablePaths = append(executablePaths, pathInApex)
+			for _, d := range f.dataPaths {
+				readOnlyPaths = append(readOnlyPaths, filepath.Join(f.installDir, d.RelativeInstallPath, d.SrcPath.Rel()))
+			}
+			for _, s := range f.symlinks {
+				executablePaths = append(executablePaths, filepath.Join(f.installDir, s))
+			}
+		} else if f.class == appSet {
+			appSetDirs = append(appSetDirs, f.installDir)
+			appSetFiles[f.installDir] = f.builtFile
+		} else {
+			readOnlyPaths = append(readOnlyPaths, pathInApex)
+		}
+		dir := f.installDir
+		for !android.InList(dir, executablePaths) && dir != "" {
+			executablePaths = append(executablePaths, dir)
+			dir, _ = filepath.Split(dir) // move up to the parent
+			if len(dir) > 0 {
+				// remove trailing slash
+				dir = dir[:len(dir)-1]
+			}
+		}
+	}
+	sort.Strings(readOnlyPaths)
+	sort.Strings(executablePaths)
+	sort.Strings(appSetDirs)
+
+	cannedFsConfig := android.PathForModuleOut(ctx, "canned_fs_config")
+	builder := android.NewRuleBuilder(pctx, ctx)
+	cmd := builder.Command()
+	cmd.Text("(")
+	cmd.Text("echo '/ 1000 1000 0755';")
+	for _, p := range readOnlyPaths {
+		cmd.Textf("echo '/%s 1000 1000 0644';", p)
+	}
+	for _, p := range executablePaths {
+		cmd.Textf("echo '/%s 0 2000 0755';", p)
+	}
+	for _, dir := range appSetDirs {
+		cmd.Textf("echo '/%s 0 2000 0755';", dir)
+		file := appSetFiles[dir]
+		cmd.Text("zipinfo -1").Input(file).Textf(`| sed "s:\(.*\):/%s/\1 1000 1000 0644:";`, dir)
+	}
+	// Custom fs_config is "appended" to the last so that entries from the file are preferred
+	// over default ones set above.
+	if a.properties.Canned_fs_config != nil {
+		cmd.Text("cat").Input(android.PathForModuleSrc(ctx, *a.properties.Canned_fs_config))
+	}
+	cmd.Text(")").FlagWithOutput("> ", cannedFsConfig)
+	builder.Build("generateFsConfig", fmt.Sprintf("Generating canned fs config for %s", a.BaseModuleName()))
+
+	return cannedFsConfig.OutputPath
 }

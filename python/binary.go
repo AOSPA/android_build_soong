@@ -27,7 +27,6 @@ import (
 
 func init() {
 	registerPythonBinaryComponents(android.InitRegistrationContext)
-	android.RegisterBp2BuildMutator("python_binary_host", PythonBinaryBp2Build)
 }
 
 func registerPythonBinaryComponents(ctx android.RegistrationContext) {
@@ -35,29 +34,19 @@ func registerPythonBinaryComponents(ctx android.RegistrationContext) {
 }
 
 type bazelPythonBinaryAttributes struct {
-	Main           string
+	Main           *string
 	Srcs           bazel.LabelListAttribute
 	Deps           bazel.LabelListAttribute
-	Python_version string
+	Python_version *string
 }
 
-func PythonBinaryBp2Build(ctx android.TopDownMutatorContext) {
-	m, ok := ctx.Module().(*Module)
-	if !ok || !m.ConvertWithBp2build(ctx) {
-		return
-	}
-
-	// a Module can be something other than a python_binary_host
-	if ctx.ModuleType() != "python_binary_host" {
-		return
-	}
-
-	var main string
+func pythonBinaryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
+	var main *string
 	for _, propIntf := range m.GetProperties() {
 		if props, ok := propIntf.(*BinaryProperties); ok {
 			// main is optional.
 			if props.Main != nil {
-				main = *props.Main
+				main = props.Main
 				break
 			}
 		}
@@ -69,13 +58,13 @@ func PythonBinaryBp2Build(ctx android.TopDownMutatorContext) {
 	// under Bionic.
 	py3Enabled := proptools.BoolDefault(m.properties.Version.Py3.Enabled, false)
 	py2Enabled := proptools.BoolDefault(m.properties.Version.Py2.Enabled, false)
-	var python_version string
+	var python_version *string
 	if py3Enabled && py2Enabled {
 		panic(fmt.Errorf(
 			"error for '%s' module: bp2build's python_binary_host converter does not support "+
 				"converting a module that is enabled for both Python 2 and 3 at the same time.", m.Name()))
 	} else if py2Enabled {
-		python_version = "PY2"
+		python_version = &pyVersion2
 	} else {
 		// do nothing, since python_version defaults to PY3.
 	}

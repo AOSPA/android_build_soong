@@ -367,10 +367,6 @@ func (mod *Module) SdkVersion() string {
 	return ""
 }
 
-func (mod *Module) MinSdkVersion() string {
-	return ""
-}
-
 func (mod *Module) AlwaysSdk() bool {
 	return false
 }
@@ -393,6 +389,10 @@ type Deps struct {
 	StaticLibs      []string
 	WholeStaticLibs []string
 	HeaderLibs      []string
+
+	// Used for data dependencies adjacent to tests
+	DataLibs []string
+	DataBins []string
 
 	CrtBegin, CrtEnd string
 }
@@ -578,7 +578,7 @@ func (mod *Module) CrateName() string {
 
 func (mod *Module) CcLibrary() bool {
 	if mod.compiler != nil {
-		if _, ok := mod.compiler.(*libraryDecorator); ok {
+		if _, ok := mod.compiler.(libraryInterface); ok {
 			return true
 		}
 	}
@@ -898,6 +898,9 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		bloaty.MeasureSizeForPaths(ctx, mod.compiler.strippedOutputFilePath(), android.OptionalPathForPath(mod.compiler.unstrippedOutputFilePath()))
 
 		mod.docTimestampFile = mod.compiler.rustdoc(ctx, flags, deps)
+		if mod.docTimestampFile.Valid() {
+			ctx.CheckbuildFile(mod.docTimestampFile.Path())
+		}
 
 		// glob exported headers for snapshot, if BOARD_VNDK_VERSION is current or
 		// RECOVERY_SNAPSHOT_VERSION is current.
@@ -983,6 +986,8 @@ var (
 	procMacroDepTag     = dependencyTag{name: "procMacro", procMacro: true}
 	testPerSrcDepTag    = dependencyTag{name: "rust_unit_tests"}
 	sourceDepTag        = dependencyTag{name: "source"}
+	dataLibDepTag       = dependencyTag{name: "data lib"}
+	dataBinDepTag       = dependencyTag{name: "data bin"}
 )
 
 func IsDylibDepTag(depTag blueprint.DependencyTag) bool {
@@ -1297,10 +1302,6 @@ func (mod *Module) InstallInRecovery() bool {
 	return mod.InRecovery()
 }
 
-func (mod *Module) InstallBypassMake() bool {
-	return true
-}
-
 func linkPathFromFilePath(filepath android.Path) string {
 	return strings.Split(filepath.String(), filepath.Base())[0]
 }
@@ -1429,6 +1430,12 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 	}
 
+	actx.AddVariationDependencies([]blueprint.Variation{
+		{Mutator: "link", Variation: "shared"},
+	}, dataLibDepTag, deps.DataLibs...)
+
+	actx.AddVariationDependencies(nil, dataBinDepTag, deps.DataBins...)
+
 	// proc_macros are compiler plugins, and so we need the host arch variant as a dependendcy.
 	actx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(), procMacroDepTag, deps.ProcMacros...)
 }
@@ -1477,15 +1484,13 @@ func (mod *Module) HostToolPath() android.OptionalPath {
 
 var _ android.ApexModule = (*Module)(nil)
 
-func (mod *Module) minSdkVersion() string {
+func (mod *Module) MinSdkVersion() string {
 	return String(mod.Properties.Min_sdk_version)
 }
 
-var _ android.ApexModule = (*Module)(nil)
-
 // Implements android.ApexModule
 func (mod *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion android.ApiLevel) error {
-	minSdkVersion := mod.minSdkVersion()
+	minSdkVersion := mod.MinSdkVersion()
 	if minSdkVersion == "apex_inherit" {
 		return nil
 	}
@@ -1543,7 +1548,7 @@ func (mod *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Mo
 // Overrides ApexModule.IsInstallabeToApex()
 func (mod *Module) IsInstallableToApex() bool {
 	if mod.compiler != nil {
-		if lib, ok := mod.compiler.(*libraryDecorator); ok && (lib.shared() || lib.dylib()) {
+		if lib, ok := mod.compiler.(libraryInterface); ok && (lib.shared() || lib.dylib()) {
 			return true
 		}
 		if _, ok := mod.compiler.(*binaryDecorator); ok {

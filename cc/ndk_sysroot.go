@@ -82,6 +82,12 @@ func getNdkBaseTimestampFile(ctx android.PathContext) android.WritablePath {
 	return android.PathForOutput(ctx, "ndk_base.timestamp")
 }
 
+// The headers timestamp file depends only on the NDK headers.
+// This is used mainly for .tidy files that do not need any stub libraries.
+func getNdkHeadersTimestampFile(ctx android.PathContext) android.WritablePath {
+	return android.PathForOutput(ctx, "ndk_headers.timestamp")
+}
+
 // The full timestamp file depends on the base timestamp *and* the static
 // libraries.
 func getNdkFullTimestampFile(ctx android.PathContext) android.WritablePath {
@@ -96,6 +102,7 @@ type ndkSingleton struct{}
 
 func (n *ndkSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	var staticLibInstallPaths android.Paths
+	var headerPaths android.Paths
 	var installPaths android.Paths
 	var licensePaths android.Paths
 	ctx.VisitAllModules(func(module android.Module) {
@@ -104,16 +111,19 @@ func (n *ndkSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 		}
 
 		if m, ok := module.(*headerModule); ok {
+			headerPaths = append(headerPaths, m.installPaths...)
 			installPaths = append(installPaths, m.installPaths...)
 			licensePaths = append(licensePaths, m.licensePath)
 		}
 
 		if m, ok := module.(*versionedHeaderModule); ok {
+			headerPaths = append(headerPaths, m.installPaths...)
 			installPaths = append(installPaths, m.installPaths...)
 			licensePaths = append(licensePaths, m.licensePath)
 		}
 
 		if m, ok := module.(*preprocessedHeadersModule); ok {
+			headerPaths = append(headerPaths, m.installPaths...)
 			installPaths = append(installPaths, m.installPaths...)
 			licensePaths = append(licensePaths, m.licensePath)
 		}
@@ -151,6 +161,12 @@ func (n *ndkSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 		Output:     getNdkBaseTimestampFile(ctx),
 		Implicits:  baseDepPaths,
 		Validation: getNdkAbiDiffTimestampFile(ctx),
+	})
+
+	ctx.Build(pctx, android.BuildParams{
+		Rule:      android.Touch,
+		Output:    getNdkHeadersTimestampFile(ctx),
+		Implicits: headerPaths,
 	})
 
 	fullDepPaths := append(staticLibInstallPaths, getNdkBaseTimestampFile(ctx))

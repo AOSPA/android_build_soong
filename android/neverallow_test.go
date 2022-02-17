@@ -15,6 +15,7 @@
 package android
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/google/blueprint"
@@ -55,7 +56,37 @@ var neverallowTests = []struct {
 				}`),
 		},
 		expectedErrors: []string{
-			`module "libother": violates neverallow deps:not_allowed_in_direct_deps`,
+			regexp.QuoteMeta("module \"libother\": violates neverallow requirements. Not allowed:\n\tdep(s): [\"not_allowed_in_direct_deps\"]"),
+		},
+	},
+	{
+		name: "multiple constraints",
+		rules: []Rule{
+			NeverAllow().
+				InDirectDeps("not_allowed_in_direct_deps").
+				In("other").
+				ModuleType("cc_library").
+				NotIn("top").
+				NotModuleType("cc_binary"),
+		},
+		fs: map[string][]byte{
+			"top/Android.bp": []byte(`
+				cc_library {
+					name: "not_allowed_in_direct_deps",
+				}`),
+			"other/Android.bp": []byte(`
+				cc_library {
+					name: "libother",
+					static_libs: ["not_allowed_in_direct_deps"],
+				}`),
+		},
+		expectedErrors: []string{
+			regexp.QuoteMeta(`module "libother": violates neverallow requirements. Not allowed:
+	in dirs: ["other/"]
+	module types: ["cc_library"]
+	dep(s): ["not_allowed_in_direct_deps"]
+	EXCEPT in dirs: ["top/"]
+	EXCEPT module types: ["cc_binary"]`),
 		},
 	},
 
@@ -296,6 +327,48 @@ var neverallowTests = []struct {
 			"Only boot images may be imported as a makefile goal.",
 		},
 	},
+	{
+		name: "min_sdk too low",
+		fs: map[string][]byte{
+			"Android.bp": []byte(`
+				java_library {
+					name: "min_sdk_too_low",
+					min_sdk_version: "30",
+				}`),
+		},
+		rules: []Rule{
+			NeverAllow().WithMatcher("min_sdk_version", LessThanSdkVersion("31")),
+		},
+		expectedErrors: []string{
+			"module \"min_sdk_too_low\": violates neverallow",
+		},
+	},
+	{
+		name: "min_sdk high enough",
+		fs: map[string][]byte{
+			"Android.bp": []byte(`
+				java_library {
+					name: "min_sdk_high_enough",
+					min_sdk_version: "31",
+				}`),
+		},
+		rules: []Rule{
+			NeverAllow().WithMatcher("min_sdk_version", LessThanSdkVersion("31")),
+		},
+	},
+	{
+		name: "current min_sdk high enough",
+		fs: map[string][]byte{
+			"Android.bp": []byte(`
+				java_library {
+					name: "current_min_sdk_high_enough",
+					min_sdk_version: "current",
+				}`),
+		},
+		rules: []Rule{
+			NeverAllow().WithMatcher("min_sdk_version", LessThanSdkVersion("31")),
+		},
+	},
 }
 
 var prepareForNeverAllowTest = GroupFixturePreparers(
@@ -379,9 +452,10 @@ func (p *mockCcLibraryModule) GenerateAndroidBuildActions(ModuleContext) {
 }
 
 type mockJavaLibraryProperties struct {
-	Libs           []string
-	Sdk_version    *string
-	Uncompress_dex *bool
+	Libs            []string
+	Min_sdk_version *string
+	Sdk_version     *string
+	Uncompress_dex  *bool
 }
 
 type mockJavaLibraryModule struct {

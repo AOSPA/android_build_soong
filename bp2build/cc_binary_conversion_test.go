@@ -24,8 +24,7 @@ import (
 )
 
 const (
-	ccBinaryTypePlaceHolder   = "{rule_name}"
-	compatibleWithPlaceHolder = "{target_compatible_with}"
+	ccBinaryTypePlaceHolder = "{rule_name}"
 )
 
 type testBazelTarget struct {
@@ -69,14 +68,14 @@ func runCcBinaryTestCase(t *testing.T, tc ccBinaryBp2buildTestCase) {
 	t.Helper()
 	moduleTypeUnderTest := "cc_binary"
 	testCase := bp2buildTestCase{
-		expectedBazelTargets:               generateBazelTargetsForTest(tc.targets),
-		moduleTypeUnderTest:                moduleTypeUnderTest,
-		moduleTypeUnderTestFactory:         cc.BinaryFactory,
-		moduleTypeUnderTestBp2BuildMutator: cc.BinaryBp2build,
-		description:                        fmt.Sprintf("%s %s", moduleTypeUnderTest, tc.description),
-		blueprint:                          binaryReplacer.Replace(tc.blueprint),
+		expectedBazelTargets:       generateBazelTargetsForTest(tc.targets),
+		moduleTypeUnderTest:        moduleTypeUnderTest,
+		moduleTypeUnderTestFactory: cc.BinaryFactory,
+		description:                fmt.Sprintf("%s %s", moduleTypeUnderTest, tc.description),
+		blueprint:                  binaryReplacer.Replace(tc.blueprint),
 	}
 	t.Run(testCase.description, func(t *testing.T) {
+		t.Helper()
 		runBp2BuildTestCase(t, registerCcBinaryModuleTypes, testCase)
 	})
 }
@@ -84,22 +83,24 @@ func runCcBinaryTestCase(t *testing.T, tc ccBinaryBp2buildTestCase) {
 func runCcHostBinaryTestCase(t *testing.T, tc ccBinaryBp2buildTestCase) {
 	t.Helper()
 	testCase := tc
-	for i, t := range testCase.targets {
-		t.attrs["target_compatible_with"] = `select({
+	for i, tar := range testCase.targets {
+		if tar.typ != "cc_binary" {
+			continue
+		}
+		tar.attrs["target_compatible_with"] = `select({
         "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`
-		testCase.targets[i] = t
+		testCase.targets[i] = tar
 	}
 	moduleTypeUnderTest := "cc_binary_host"
 	t.Run(testCase.description, func(t *testing.T) {
 		runBp2BuildTestCase(t, registerCcBinaryModuleTypes, bp2buildTestCase{
-			expectedBazelTargets:               generateBazelTargetsForTest(testCase.targets),
-			moduleTypeUnderTest:                moduleTypeUnderTest,
-			moduleTypeUnderTestFactory:         cc.BinaryHostFactory,
-			moduleTypeUnderTestBp2BuildMutator: cc.BinaryHostBp2build,
-			description:                        fmt.Sprintf("%s %s", moduleTypeUnderTest, tc.description),
-			blueprint:                          hostBinaryReplacer.Replace(testCase.blueprint),
+			expectedBazelTargets:       generateBazelTargetsForTest(testCase.targets),
+			moduleTypeUnderTest:        moduleTypeUnderTest,
+			moduleTypeUnderTestFactory: cc.BinaryHostFactory,
+			description:                fmt.Sprintf("%s %s", moduleTypeUnderTest, tc.description),
+			blueprint:                  hostBinaryReplacer.Replace(testCase.blueprint),
 		})
 	})
 }
@@ -256,11 +257,13 @@ func TestCcBinaryDoNotDistinguishBetweenDepsAndImplementationDeps(t *testing.T) 
 genrule {
     name: "generated_hdr",
     cmd: "nothing to see here",
+    bazel_module: { bp2build_available: false },
 }
 
 genrule {
     name: "export_generated_hdr",
     cmd: "nothing to see here",
+    bazel_module: { bp2build_available: false },
 }
 
 {rule_name} {
@@ -301,6 +304,7 @@ genrule {
         ":not_explicitly_exported_whole_static_dep",
         ":whole_static_dep",
     ]`,
+				"local_includes": `["."]`,
 			},
 			},
 		},
@@ -447,4 +451,52 @@ func TestCcBinaryPropertiesToFeatures(t *testing.T) {
 			},
 		})
 	}
+}
+
+func TestCcBinarySharedProto(t *testing.T) {
+	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
+		blueprint: soongCcProtoLibraries + `{rule_name} {
+	name: "foo",
+	srcs: ["foo.proto"],
+	proto: {
+		canonical_path_from_root: false,
+	},
+	include_build_directory: false,
+}`,
+		targets: []testBazelTarget{
+			{"proto_library", "foo_proto", attrNameToString{
+				"srcs": `["foo.proto"]`,
+			}}, {"cc_lite_proto_library", "foo_cc_proto_lite", attrNameToString{
+				"deps": `[":foo_proto"]`,
+			}}, {"cc_binary", "foo", attrNameToString{
+				"dynamic_deps":       `[":libprotobuf-cpp-lite"]`,
+				"whole_archive_deps": `[":foo_cc_proto_lite"]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryStaticProto(t *testing.T) {
+	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
+		blueprint: soongCcProtoLibraries + `{rule_name} {
+	name: "foo",
+	srcs: ["foo.proto"],
+	static_executable: true,
+	proto: {
+		canonical_path_from_root: false,
+	},
+	include_build_directory: false,
+}`,
+		targets: []testBazelTarget{
+			{"proto_library", "foo_proto", attrNameToString{
+				"srcs": `["foo.proto"]`,
+			}}, {"cc_lite_proto_library", "foo_cc_proto_lite", attrNameToString{
+				"deps": `[":foo_proto"]`,
+			}}, {"cc_binary", "foo", attrNameToString{
+				"deps":               `[":libprotobuf-cpp-lite"]`,
+				"whole_archive_deps": `[":foo_cc_proto_lite"]`,
+				"linkshared":         `False`,
+			}},
+		},
+	})
 }

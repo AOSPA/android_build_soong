@@ -33,13 +33,13 @@ func registerCcLibrarySharedModuleTypes(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("toolchain_library", cc.ToolchainLibraryFactory)
 	ctx.RegisterModuleType("cc_library_headers", cc.LibraryHeaderFactory)
 	ctx.RegisterModuleType("cc_library_static", cc.LibraryStaticFactory)
+	ctx.RegisterModuleType("cc_library", cc.LibraryFactory)
 }
 
 func runCcLibrarySharedTestCase(t *testing.T, tc bp2buildTestCase) {
 	t.Helper()
 	(&tc).moduleTypeUnderTest = "cc_library_shared"
 	(&tc).moduleTypeUnderTestFactory = cc.LibrarySharedFactory
-	(&tc).moduleTypeUnderTestBp2BuildMutator = cc.CcLibrarySharedBp2Build
 	runBp2BuildTestCase(t, registerCcLibrarySharedModuleTypes, tc)
 }
 
@@ -424,4 +424,73 @@ cc_library_shared {
 `,
 		expectedErr: fmt.Errorf("Android.bp:16:1: module \"foo_shared\": nocrt is not supported for arch variants"),
 	})
+}
+
+func TestCcLibrarySharedProto(t *testing.T) {
+	runCcLibrarySharedTestCase(t, bp2buildTestCase{
+		blueprint: soongCcProtoPreamble + `cc_library_shared {
+	name: "foo",
+	srcs: ["foo.proto"],
+	proto: {
+		canonical_path_from_root: false,
+		export_proto_headers: true,
+	},
+	include_build_directory: false,
+}`,
+		expectedBazelTargets: []string{
+			makeBazelTarget("proto_library", "foo_proto", attrNameToString{
+				"srcs": `["foo.proto"]`,
+			}), makeBazelTarget("cc_lite_proto_library", "foo_cc_proto_lite", attrNameToString{
+				"deps": `[":foo_proto"]`,
+			}), makeBazelTarget("cc_library_shared", "foo", attrNameToString{
+				"dynamic_deps":       `[":libprotobuf-cpp-lite"]`,
+				"whole_archive_deps": `[":foo_cc_proto_lite"]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedUseVersionLib(t *testing.T) {
+	runCcLibrarySharedTestCase(t, bp2buildTestCase{
+		blueprint: soongCcProtoPreamble + `cc_library_shared {
+        name: "foo",
+        use_version_lib: true,
+        include_build_directory: false,
+}`,
+		expectedBazelTargets: []string{
+			makeBazelTarget("cc_library_shared", "foo", attrNameToString{
+				"use_version_lib": "True",
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedStubs(t *testing.T) {
+	runCcLibrarySharedTestCase(t, bp2buildTestCase{
+		description:                "cc_library_shared stubs",
+		moduleTypeUnderTest:        "cc_library_shared",
+		moduleTypeUnderTestFactory: cc.LibrarySharedFactory,
+		dir:                        "foo/bar",
+		filesystem: map[string]string{
+			"foo/bar/Android.bp": `
+cc_library_shared {
+	name: "a",
+	stubs: { symbol_file: "a.map.txt", versions: ["28", "29", "current"] },
+	bazel_module: { bp2build_available: true },
+	include_build_directory: false,
+}
+`,
+		},
+		blueprint: soongCcLibraryPreamble,
+		expectedBazelTargets: []string{makeBazelTarget("cc_library_shared", "a", attrNameToString{
+			"stubs_symbol_file": `"a.map.txt"`,
+			"stubs_versions": `[
+        "28",
+        "29",
+        "current",
+    ]`,
+		}),
+		},
+	},
+	)
 }

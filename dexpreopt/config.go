@@ -49,10 +49,12 @@ type GlobalConfig struct {
 
 	ArtApexJars android.ConfiguredJarList // modules for jars that are in the ART APEX
 
-	SystemServerJars     android.ConfiguredJarList // jars that form the system server
-	SystemServerApps     []string                  // apps that are loaded into system server
-	ApexSystemServerJars android.ConfiguredJarList // jars within apex that are loaded into system server
-	SpeedApps            []string                  // apps that should be speed optimized
+	SystemServerJars               android.ConfiguredJarList // system_server classpath jars on the platform
+	SystemServerApps               []string                  // apps that are loaded into system server
+	ApexSystemServerJars           android.ConfiguredJarList // system_server classpath jars delivered via apex
+	StandaloneSystemServerJars     android.ConfiguredJarList // jars on the platform that system_server loads dynamically using separate classloaders
+	ApexStandaloneSystemServerJars android.ConfiguredJarList // jars delivered via apex that system_server loads dynamically using separate classloaders
+	SpeedApps                      []string                  // apps that should be speed optimized
 
 	BrokenSuboptimalOrderOfSystemServerJars bool // if true, sub-optimal order does not cause a build error
 
@@ -96,6 +98,48 @@ type GlobalConfig struct {
 	// quickly silence build errors. This flag should be used with caution and only as a temporary
 	// measure, as it masks real errors and affects performance.
 	RelaxUsesLibraryCheck bool
+}
+
+var allPlatformSystemServerJarsKey = android.NewOnceKey("allPlatformSystemServerJars")
+
+// Returns all jars on the platform that system_server loads, including those on classpath and those
+// loaded dynamically.
+func (g *GlobalConfig) AllPlatformSystemServerJars(ctx android.PathContext) *android.ConfiguredJarList {
+	return ctx.Config().Once(allPlatformSystemServerJarsKey, func() interface{} {
+		res := g.SystemServerJars.AppendList(&g.StandaloneSystemServerJars)
+		return &res
+	}).(*android.ConfiguredJarList)
+}
+
+var allApexSystemServerJarsKey = android.NewOnceKey("allApexSystemServerJars")
+
+// Returns all jars delivered via apex that system_server loads, including those on classpath and
+// those loaded dynamically.
+func (g *GlobalConfig) AllApexSystemServerJars(ctx android.PathContext) *android.ConfiguredJarList {
+	return ctx.Config().Once(allApexSystemServerJarsKey, func() interface{} {
+		res := g.ApexSystemServerJars.AppendList(&g.ApexStandaloneSystemServerJars)
+		return &res
+	}).(*android.ConfiguredJarList)
+}
+
+var allSystemServerClasspathJarsKey = android.NewOnceKey("allSystemServerClasspathJars")
+
+// Returns all system_server classpath jars.
+func (g *GlobalConfig) AllSystemServerClasspathJars(ctx android.PathContext) *android.ConfiguredJarList {
+	return ctx.Config().Once(allSystemServerClasspathJarsKey, func() interface{} {
+		res := g.SystemServerJars.AppendList(&g.ApexSystemServerJars)
+		return &res
+	}).(*android.ConfiguredJarList)
+}
+
+var allSystemServerJarsKey = android.NewOnceKey("allSystemServerJars")
+
+// Returns all jars that system_server loads.
+func (g *GlobalConfig) AllSystemServerJars(ctx android.PathContext) *android.ConfiguredJarList {
+	return ctx.Config().Once(allSystemServerJarsKey, func() interface{} {
+		res := g.AllPlatformSystemServerJars(ctx).AppendList(g.AllApexSystemServerJars(ctx))
+		return &res
+	}).(*android.ConfiguredJarList)
 }
 
 // GlobalSoongConfig contains the global config that is generated from Soong,
@@ -619,6 +663,8 @@ func GlobalConfigForTests(ctx android.PathContext) *GlobalConfig {
 		SystemServerJars:                   android.EmptyConfiguredJarList(),
 		SystemServerApps:                   nil,
 		ApexSystemServerJars:               android.EmptyConfiguredJarList(),
+		StandaloneSystemServerJars:         android.EmptyConfiguredJarList(),
+		ApexStandaloneSystemServerJars:     android.EmptyConfiguredJarList(),
 		SpeedApps:                          nil,
 		PreoptFlags:                        nil,
 		DefaultCompilerFilter:              "",

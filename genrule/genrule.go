@@ -67,13 +67,6 @@ func RegisterGenruleBuildComponents(ctx android.RegistrationContext) {
 	ctx.FinalDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("genrule_tool_deps", toolDepsMutator).Parallel()
 	})
-
-	android.RegisterBp2BuildMutator("genrule", GenruleBp2Build)
-	android.RegisterBp2BuildMutator("cc_genrule", CcGenruleBp2Build)
-}
-
-func RegisterGenruleBp2BuildDeps(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("genrule_tool_deps", toolDepsMutator)
 }
 
 var (
@@ -112,6 +105,16 @@ type hostToolDependencyTag struct {
 	blueprint.BaseDependencyTag
 	label string
 }
+
+func (t hostToolDependencyTag) AllowDisabledModuleDependency(target android.Module) bool {
+	// Allow depending on a disabled module if it's replaced by a prebuilt
+	// counterpart. We get the prebuilt through android.PrebuiltGetPreferred in
+	// GenerateAndroidBuildActions.
+	return target.IsReplacedByPrebuilt()
+}
+
+var _ android.AllowDisabledModuleDependency = (*hostToolDependencyTag)(nil)
+
 type generatorProperties struct {
 	// The command to run on one or more input files. Cmd supports substitution of a few variables.
 	//
@@ -304,6 +307,12 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			switch tag := ctx.OtherModuleDependencyTag(module).(type) {
 			case hostToolDependencyTag:
 				tool := ctx.OtherModuleName(module)
+				if m, ok := module.(android.Module); ok {
+					// Necessary to retrieve any prebuilt replacement for the tool, since
+					// toolDepsMutator runs too late for the prebuilt mutators to have
+					// replaced the dependency.
+					module = android.PrebuiltGetPreferred(ctx, m)
+				}
 
 				switch t := module.(type) {
 				case android.HostToolProvider:
@@ -832,38 +841,8 @@ type bazelGenruleAttributes struct {
 	Cmd   string
 }
 
-// CcGenruleBp2Build is for cc_genrule.
-func CcGenruleBp2Build(ctx android.TopDownMutatorContext) {
-	m, ok := ctx.Module().(*Module)
-	if !ok || !m.ConvertWithBp2build(ctx) {
-		return
-	}
-
-	if ctx.ModuleType() != "cc_genrule" {
-		// Not a cc_genrule.
-		return
-	}
-
-	genruleBp2Build(ctx)
-}
-
-// GenruleBp2Build is used for genrule.
-func GenruleBp2Build(ctx android.TopDownMutatorContext) {
-	m, ok := ctx.Module().(*Module)
-	if !ok || !m.ConvertWithBp2build(ctx) {
-		return
-	}
-
-	if ctx.ModuleType() != "genrule" {
-		// Not a regular genrule.
-		return
-	}
-
-	genruleBp2Build(ctx)
-}
-
-func genruleBp2Build(ctx android.TopDownMutatorContext) {
-	m, _ := ctx.Module().(*Module)
+// ConvertWithBp2build converts a Soong module -> Bazel target.
+func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	// Bazel only has the "tools" attribute.
 	tools_prop := android.BazelLabelForModuleDeps(ctx, m.properties.Tools)
 	tool_files_prop := android.BazelLabelForModuleSrc(ctx, m.properties.Tool_files)

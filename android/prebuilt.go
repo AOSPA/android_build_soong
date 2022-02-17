@@ -97,7 +97,10 @@ type ConfigVarProperties struct {
 type Prebuilt struct {
 	properties PrebuiltProperties
 
-	srcsSupplier     PrebuiltSrcsSupplier
+	// nil if the prebuilt has no srcs property at all. See InitPrebuiltModuleWithoutSrcs.
+	srcsSupplier PrebuiltSrcsSupplier
+
+	// "-" if the prebuilt has no srcs property at all. See InitPrebuiltModuleWithoutSrcs.
 	srcsPropertyName string
 }
 
@@ -177,6 +180,22 @@ func (p *Prebuilt) UsePrebuilt() bool {
 // Return the src value or nil if it is not available.
 type PrebuiltSrcsSupplier func(ctx BaseModuleContext, prebuilt Module) []string
 
+func initPrebuiltModuleCommon(module PrebuiltInterface) *Prebuilt {
+	p := module.Prebuilt()
+	module.AddProperties(&p.properties)
+	return p
+}
+
+// Initialize the module as a prebuilt module that has no dedicated property that lists its
+// sources. SingleSourcePathFromSupplier should not be called for this module.
+//
+// This is the case e.g. for header modules, which provides the headers in source form
+// regardless whether they are prebuilt or not.
+func InitPrebuiltModuleWithoutSrcs(module PrebuiltInterface) {
+	p := initPrebuiltModuleCommon(module)
+	p.srcsPropertyName = "-"
+}
+
 // Initialize the module as a prebuilt module that uses the provided supplier to access the
 // prebuilt sources of the module.
 //
@@ -190,10 +209,6 @@ type PrebuiltSrcsSupplier func(ctx BaseModuleContext, prebuilt Module) []string
 // The provided property name is used to provide helpful error messages in the event that
 // a problem arises, e.g. calling SingleSourcePath() when more than one source is provided.
 func InitPrebuiltModuleWithSrcSupplier(module PrebuiltInterface, srcsSupplier PrebuiltSrcsSupplier, srcsPropertyName string) {
-	p := module.Prebuilt()
-	module.AddProperties(&p.properties)
-	module.base().customizableProperties = module.GetProperties()
-
 	if srcsSupplier == nil {
 		panic(fmt.Errorf("srcsSupplier must not be nil"))
 	}
@@ -201,6 +216,7 @@ func InitPrebuiltModuleWithSrcSupplier(module PrebuiltInterface, srcsSupplier Pr
 		panic(fmt.Errorf("srcsPropertyName must not be empty"))
 	}
 
+	p := initPrebuiltModuleCommon(module)
 	p.srcsSupplier = srcsSupplier
 	p.srcsPropertyName = srcsPropertyName
 }
@@ -293,6 +309,54 @@ func GetEmbeddedPrebuilt(module Module) *Prebuilt {
 	return nil
 }
 
+// PrebuiltGetPreferred returns the module that is preferred for the given
+// module. That is either the module itself or the prebuilt counterpart that has
+// taken its place. The given module must be a direct dependency of the current
+// context module, and it must be the source module if both source and prebuilt
+// exist.
+//
+// This function is for use on dependencies after PrebuiltPostDepsMutator has
+// run - any dependency that is registered before that will already reference
+// the right module. This function is only safe to call after all mutators that
+// may call CreateVariations, e.g. in GenerateAndroidBuildActions.
+func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
+	if !module.IsReplacedByPrebuilt() {
+		return module
+	}
+	if IsModulePrebuilt(module) {
+		// If we're given a prebuilt then assume there's no source module around.
+		return module
+	}
+
+	sourceModDepFound := false
+	var prebuiltMod Module
+
+	ctx.WalkDeps(func(child, parent Module) bool {
+		if prebuiltMod != nil {
+			return false
+		}
+		if parent == ctx.Module() {
+			// First level: Only recurse if the module is found as a direct dependency.
+			sourceModDepFound = child == module
+			return sourceModDepFound
+		}
+		// Second level: Follow PrebuiltDepTag to the prebuilt.
+		if t := ctx.OtherModuleDependencyTag(child); t == PrebuiltDepTag {
+			prebuiltMod = child
+		}
+		return false
+	})
+
+	if prebuiltMod == nil {
+		if !sourceModDepFound {
+			panic(fmt.Errorf("Failed to find source module as a direct dependency: %s", module))
+		} else {
+			panic(fmt.Errorf("Failed to find prebuilt for source module: %s", module))
+		}
+	}
+	return prebuiltMod
+}
+
 func RegisterPrebuiltsPreArchMutators(ctx RegisterMutatorsContext) {
 	ctx.BottomUp("prebuilt_rename", PrebuiltRenameMutator).Parallel()
 }
@@ -336,7 +400,7 @@ func PrebuiltSourceDepsMutator(ctx BottomUpMutatorContext) {
 func PrebuiltSelectModuleMutator(ctx TopDownMutatorContext) {
 	m := ctx.Module()
 	if p := GetEmbeddedPrebuilt(m); p != nil {
-		if p.srcsSupplier == nil {
+		if p.srcsSupplier == nil && p.srcsPropertyName == "" {
 			panic(fmt.Errorf("prebuilt module did not have InitPrebuiltModule called on it"))
 		}
 		if !p.properties.SourceExists {

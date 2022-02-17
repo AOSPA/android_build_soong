@@ -122,6 +122,14 @@ type CommonProperties struct {
 		Javacflags []string
 	}
 
+	Openjdk11 struct {
+		// List of source files that should only be used when passing -source 1.9 or higher
+		Srcs []string `android:"path"`
+
+		// List of javac flags that should only be used when passing -source 1.9 or higher
+		Javacflags []string
+	}
+
 	// When compiling language level 9+ .java code in packages that are part of
 	// a system module, patch_module names the module that your sources and
 	// dependencies should be patched into. The Android runtime currently
@@ -197,6 +205,10 @@ type DeviceProperties struct {
 	// Defaults to sdk_version if not set. See sdk_version for possible values.
 	Min_sdk_version *string
 
+	// if not blank, set the maximum version of the sdk that the compiled artifacts will run against.
+	// Defaults to empty string "". See sdk_version for possible values.
+	Max_sdk_version *string
+
 	// if not blank, set the targetSdkVersion in the AndroidManifest.xml.
 	// Defaults to sdk_version if not set. See sdk_version for possible values.
 	Target_sdk_version *string
@@ -241,9 +253,6 @@ type DeviceProperties struct {
 	// otherwise provides defaults libraries to add to the bootclasspath.
 	System_modules *string
 
-	// set the name of the output
-	Stem *string
-
 	IsSDKLibrary bool `blueprint:"mutated"`
 
 	// If true, generate the signature file of APK Signing Scheme V4, along side the signed APK file.
@@ -253,6 +262,15 @@ type DeviceProperties struct {
 	// Only for libraries created by a sysprop_library module, SyspropPublicStub is the name of the
 	// public stubs library.
 	SyspropPublicStub string `blueprint:"mutated"`
+}
+
+// Device properties that can be overridden by overriding module (e.g. override_android_app)
+type OverridableDeviceProperties struct {
+	// set the name of the output. If not set, `name` is used.
+	// To override a module with this property set, overriding module might need to set this as well.
+	// Otherwise, both the overridden and the overriding modules will have the same output name, which
+	// can cause the duplicate output error.
+	Stem *string
 }
 
 // Functionality common to Module and Import
@@ -368,6 +386,7 @@ type Module struct {
 	android.DefaultableModuleBase
 	android.ApexModuleBase
 	android.SdkBase
+	android.BazelModuleBase
 
 	// Functionality common to Module and Import.
 	embeddableInModuleAndImport
@@ -375,6 +394,8 @@ type Module struct {
 	properties       CommonProperties
 	protoProperties  android.ProtoProperties
 	deviceProperties DeviceProperties
+
+	overridableDeviceProperties OverridableDeviceProperties
 
 	// jar file containing header classes including static library dependencies, suitable for
 	// inserting into the bootclasspath/classpath of another compile
@@ -460,6 +481,7 @@ type Module struct {
 
 	sdkVersion    android.SdkSpec
 	minSdkVersion android.SdkSpec
+	maxSdkVersion android.SdkSpec
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -510,9 +532,9 @@ func (j *Module) checkPlatformAPI(ctx android.ModuleContext) {
 		usePlatformAPI := proptools.Bool(j.deviceProperties.Platform_apis)
 		sdkVersionSpecified := sc.SdkVersion(ctx).Specified()
 		if usePlatformAPI && sdkVersionSpecified {
-			ctx.PropertyErrorf("platform_apis", "platform_apis must be false when sdk_version is not empty.")
+			ctx.PropertyErrorf("platform_apis", "This module has conflicting settings. sdk_version is not empty, which means this module cannot use platform APIs. However platform_apis is set to true.")
 		} else if !usePlatformAPI && !sdkVersionSpecified {
-			ctx.PropertyErrorf("platform_apis", "platform_apis must be true when sdk_version is empty.")
+			ctx.PropertyErrorf("platform_apis", "This module has conflicting settings. sdk_version is empty, which means that this module is build against platform APIs. However platform_apis is not set to true")
 		}
 
 	}
@@ -530,6 +552,7 @@ func (j *Module) addHostAndDeviceProperties() {
 	j.addHostProperties()
 	j.AddProperties(
 		&j.deviceProperties,
+		&j.overridableDeviceProperties,
 		&j.dexer.dexProperties,
 		&j.dexpreoptProperties,
 		&j.linter.properties,
@@ -615,6 +638,13 @@ func (j *Module) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
 		return android.SdkSpecFrom(ctx, *j.deviceProperties.Min_sdk_version)
 	}
 	return j.SdkVersion(ctx)
+}
+
+func (j *Module) MaxSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	maxSdkVersion := proptools.StringDefault(j.deviceProperties.Max_sdk_version, "")
+	// SdkSpecFrom returns SdkSpecPrivate for this, which may be confusing.
+	// TODO(b/208456999): ideally MaxSdkVersion should be an ApiLevel and not SdkSpec.
+	return android.SdkSpecFrom(ctx, maxSdkVersion)
 }
 
 func (j *Module) MinSdkVersionString() string {
@@ -946,6 +976,10 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	if flags.javaVersion.usesJavaModules() {
 		j.properties.Srcs = append(j.properties.Srcs, j.properties.Openjdk9.Srcs...)
 	}
+	if ctx.Config().TargetsJava11() {
+		j.properties.Srcs = append(j.properties.Srcs, j.properties.Openjdk11.Srcs...)
+	}
+
 	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
 	if hasSrcExt(srcFiles.Strings(), ".proto") {
 		flags = protoFlags(ctx, &j.properties, &j.protoProperties, flags)
@@ -1631,8 +1665,7 @@ func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 }
 
 // Implements android.ApexModule
-func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
+func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion android.ApiLevel) error {
 	sdkSpec := j.MinSdkVersion(ctx)
 	if !sdkSpec.Specified() {
 		return fmt.Errorf("min_sdk_version is not specified")
@@ -1647,7 +1680,7 @@ func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 }
 
 func (j *Module) Stem() string {
-	return proptools.StringDefault(j.deviceProperties.Stem, j.Name())
+	return proptools.StringDefault(j.overridableDeviceProperties.Stem, j.Name())
 }
 
 func (j *Module) JacocoReportClassesFile() android.Path {
@@ -1912,6 +1945,9 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 				sm := module.(SystemModulesProvider)
 				outputDir, outputDeps := sm.OutputDirAndDeps()
 				deps.systemModules = &systemModules{outputDir, outputDeps}
+
+			case instrumentationForTag:
+				ctx.PropertyErrorf("instrumentation_for", "dependency %q of type %q does not provide JavaInfo so is unsuitable for use with this property", ctx.OtherModuleName(module), ctx.OtherModuleType(module))
 			}
 		}
 
@@ -1941,3 +1977,17 @@ type ModuleWithStem interface {
 }
 
 var _ ModuleWithStem = (*Module)(nil)
+
+func (j *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+	switch ctx.ModuleType() {
+	case "java_library", "java_library_host":
+		if lib, ok := ctx.Module().(*Library); ok {
+			javaLibraryBp2Build(ctx, lib)
+		}
+	case "java_binary_host":
+		if binary, ok := ctx.Module().(*Binary); ok {
+			javaBinaryHostBp2Build(ctx, binary)
+		}
+	}
+
+}
