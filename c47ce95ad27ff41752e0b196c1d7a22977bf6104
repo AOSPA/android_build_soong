@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "efe1ed1f_b87dc2e7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000012
+      },
+      "writtenOn": "2022-02-19T07:38:55Z",
+      "side": 1,
+      "message": "good to merge? would be nice to have the boot jars moved back to their respective components.",
+      "revId": "c47ce95ad27ff41752e0b196c1d7a22977bf6104",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
