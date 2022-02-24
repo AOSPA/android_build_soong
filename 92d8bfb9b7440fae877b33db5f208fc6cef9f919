@@ -16,6 +16,23 @@
       "message": "ah yes thanks.. this shit was annoying af.. especially when you fix a missing kernel header and have to nuke this folder manually to get the header copied afterwards..",
       "revId": "92d8bfb9b7440fae877b33db5f208fc6cef9f919",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d63d60f8_11f73919",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000012
+      },
+      "writtenOn": "2022-02-24T13:41:52Z",
+      "side": 1,
+      "message": "Should we use CleanSpec.mk or an equivalent instead?",
+      "revId": "92d8bfb9b7440fae877b33db5f208fc6cef9f919",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
