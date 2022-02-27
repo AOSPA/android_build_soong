@@ -41,6 +41,9 @@ var (
 		"armv8-2a-dotprod": []string{
 			"-march=armv8.2-a+dotprod",
 		},
+		"armv9-0a": []string{
+			"-march=armv9.0-a",
+		},
 	}
 
 	arm64Ldflags = []string{
@@ -54,6 +57,9 @@ var (
 	arm64Cppflags = []string{}
 
 	arm64CpuVariantCflags = map[string][]string{
+		"cortex-a510": []string{
+			"-mcpu=cortex-a510",
+		},
 		"cortex-a53": []string{
 			"-mcpu=cortex-a53",
 		},
@@ -110,6 +116,7 @@ func init() {
 	exportedVars.ExportStringListStaticVariable("Arm64Armv8ABranchProtCflags", arm64ArchVariantCflags["armv8-a-branchprot"])
 	exportedVars.ExportStringListStaticVariable("Arm64Armv82ACflags", arm64ArchVariantCflags["armv8-2a"])
 	exportedVars.ExportStringListStaticVariable("Arm64Armv82ADotprodCflags", arm64ArchVariantCflags["armv8-2a-dotprod"])
+	exportedVars.ExportStringListStaticVariable("Arm64Armv90ACflags", arm64ArchVariantCflags["armv9-0a"])
 
 	exportedVars.ExportStringListStaticVariable("Arm64CortexA53Cflags", arm64CpuVariantCflags["cortex-a53"])
 	exportedVars.ExportStringListStaticVariable("Arm64CortexA55Cflags", arm64CpuVariantCflags["cortex-a55"])
@@ -126,9 +133,11 @@ var (
 		"armv8-a-branchprot": "${config.Arm64Armv8ABranchProtCflags}",
 		"armv8-2a":           "${config.Arm64Armv82ACflags}",
 		"armv8-2a-dotprod":   "${config.Arm64Armv82ADotprodCflags}",
+		"armv9-0a":           "${config.Arm64Armv90ACflags}",
 	}
 
 	arm64CpuVariantCflagsVar = map[string]string{
+		"cortex-a510": "${config.Arm64CortexA510Cflags}",
 		"cortex-a53": "${config.Arm64CortexA53Cflags}",
 		"cortex-a55": "${config.Arm64CortexA55Cflags}",
 		"cortex-a72": "${config.Arm64CortexA53Cflags}",
@@ -142,6 +151,7 @@ var (
 	}
 
 	arm64CpuVariantLdflags = map[string]string{
+		"cortex-a510": "${config.Arm64FixCortexA510Ldflags}",
 		"cortex-a53": "${config.Arm64FixCortexA53Ldflags}",
 		"cortex-a72": "${config.Arm64FixCortexA53Ldflags}",
 		"cortex-a73": "${config.Arm64FixCortexA53Ldflags}",
@@ -214,6 +224,7 @@ func arm64ToolchainFactory(arch android.Arch) Toolchain {
 	case "armv8-a-branchprot":
 	case "armv8-2a":
 	case "armv8-2a-dotprod":
+	case "armv9-0a":
 		// Nothing extra for armv8-a/armv8-2a
 	default:
 		panic(fmt.Sprintf("Unknown ARM architecture version: %q", arch.ArchVariant))
