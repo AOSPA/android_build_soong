@@ -506,6 +506,13 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles and
 	cppflags += " ${config.NoOverrideClangGlobalCflags}"
 	toolingCppflags += " ${config.NoOverrideClangGlobalCflags}"
 
+	if config.SDClang {
+		cflags += " ${config.SDClangFlags}"
+		toolingCflags += " ${config.SDClangFlags}"
+		cppflags += " ${config.SDClangFlags}"
+		toolingCppflags += " ${config.SDClangFlags}"
+	}
+
 	for i, srcFile := range srcFiles {
 		objFile := android.ObjPathWithExt(ctx, subdir, srcFile, "o")
 
