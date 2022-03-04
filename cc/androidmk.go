@@ -260,7 +260,7 @@ func (library *libraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries 
 		entries.Class = "SHARED_LIBRARIES"
 		entries.ExtraEntries = append(entries.ExtraEntries, func(_ android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 			entries.SetString("LOCAL_SOONG_TOC", library.toc().String())
-			if !library.buildStubs() {
+			if !library.buildStubs() && library.unstrippedOutputFile != nil {
 				entries.SetString("LOCAL_SOONG_UNSTRIPPED_BINARY", library.unstrippedOutputFile.String())
 			}
 			if len(library.Properties.Overrides) > 0 {
@@ -458,14 +458,6 @@ func (test *testLibrary) AndroidMkEntries(ctx AndroidMkContext, entries *android
 	ctx.subAndroidMk(entries, test.libraryDecorator)
 }
 
-func (library *toolchainLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
-	entries.Class = "STATIC_LIBRARIES"
-	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
-		_, suffix, _ := android.SplitFileExt(entries.OutputFile.Path().Base())
-		entries.SetString("LOCAL_MODULE_SUFFIX", suffix)
-	})
-}
-
 func (installer *baseInstaller) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	if installer.path == (android.InstallPath{}) {
 		return
@@ -579,10 +571,6 @@ func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entrie
 func (c *snapshotBinaryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.Class = "EXECUTABLES"
 	entries.SubName = c.baseProperties.Androidmk_suffix
-
-	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
-		entries.AddStrings("LOCAL_MODULE_SYMLINKS", c.Properties.Symlinks...)
-	})
 }
 
 func (c *snapshotObjectLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {

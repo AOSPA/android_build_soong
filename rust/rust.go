@@ -149,6 +149,7 @@ type Module struct {
 
 	makeLinkType string
 
+	afdo             *afdo
 	compiler         compiler
 	coverage         *coverage
 	clippy           *clippy
@@ -404,6 +405,7 @@ type PathDeps struct {
 	SharedLibDeps android.Paths
 	StaticLibs    android.Paths
 	ProcMacros    RustLibraries
+	AfdoProfiles  android.Paths
 
 	// depFlags and depLinkFlags are rustc and linker (clang) flags.
 	depFlags     []string
@@ -552,6 +554,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 	module.AddProperties(props...)
 	module.AddProperties(
 		&BaseProperties{},
+		&cc.AfdoProperties{},
 		&cc.VendorProperties{},
 		&BenchmarkProperties{},
 		&BindgenProperties{},
@@ -689,6 +692,9 @@ func (mod *Module) Init() android.Module {
 	mod.AddProperties(&mod.Properties)
 	mod.AddProperties(&mod.VendorProperties)
 
+	if mod.afdo != nil {
+		mod.AddProperties(mod.afdo.props()...)
+	}
 	if mod.compiler != nil {
 		mod.AddProperties(mod.compiler.compilerProps()...)
 	}
@@ -720,6 +726,7 @@ func newBaseModule(hod android.HostOrDeviceSupported, multilib android.Multilib)
 }
 func newModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Module {
 	module := newBaseModule(hod, multilib)
+	module.afdo = &afdo{}
 	module.coverage = &coverage{}
 	module.clippy = &clippy{}
 	module.sanitize = &sanitize{}
@@ -857,6 +864,9 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	// Calculate rustc flags
+	if mod.afdo != nil {
+		flags, deps = mod.afdo.flags(ctx, flags, deps)
+	}
 	if mod.compiler != nil {
 		flags = mod.compiler.compilerFlags(ctx, flags)
 		flags = mod.compiler.cfgFlags(ctx, flags)
@@ -1173,6 +1183,10 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				depPaths.depClangFlags = append(depPaths.depClangFlags, exportedInfo.Flags...)
 				depPaths.depGeneratedHeaders = append(depPaths.depGeneratedHeaders, exportedInfo.GeneratedHeaders...)
 				directStaticLibDeps = append(directStaticLibDeps, ccDep)
+
+				// Record baseLibName for snapshots.
+				mod.Properties.SnapshotStaticLibs = append(mod.Properties.SnapshotStaticLibs, cc.BaseLibName(depName))
+
 				mod.Properties.AndroidMkStaticLibs = append(mod.Properties.AndroidMkStaticLibs, makeLibName)
 			case cc.IsSharedDepTag(depTag):
 				// For the shared lib dependencies, we may link to the stub variant
@@ -1195,7 +1209,6 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 				// Record baseLibName for snapshots.
 				mod.Properties.SnapshotSharedLibs = append(mod.Properties.SnapshotSharedLibs, cc.BaseLibName(depName))
-				mod.Properties.SnapshotStaticLibs = append(mod.Properties.SnapshotStaticLibs, cc.BaseLibName(depName))
 
 				mod.Properties.AndroidMkSharedLibs = append(mod.Properties.AndroidMkSharedLibs, makeLibName)
 				exportDep = true

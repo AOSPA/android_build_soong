@@ -65,10 +65,13 @@ func TestVendorSnapshotCapture(t *testing.T) {
 		nocrt: true,
 	}
 
-	toolchain_library {
+	cc_prebuilt_library_static {
 		name: "libb",
 		vendor_available: true,
-		src: "libb.a",
+		srcs: ["libb.a"],
+		nocrt: true,
+		no_libcrt: true,
+		stl: "none",
 	}
 
 	cc_object {
@@ -738,6 +741,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 				src: "bin",
 			},
 		},
+		symlinks: ["binfoo", "binbar"],
 	}
 
 	vendor_snapshot_binary {
@@ -917,7 +921,21 @@ func TestVendorSnapshotUse(t *testing.T) {
 	ctx.ModuleForTests("libvendor_without_snapshot", sharedVariant).Output("libvendor_without_snapshot.so")
 
 	// bin is installed by bin.vendor_binary.31.arm64
-	ctx.ModuleForTests("bin.vendor_binary.31.arm64", binaryVariant).Output("bin")
+	bin64Module := ctx.ModuleForTests("bin.vendor_binary.31.arm64", binaryVariant)
+	bin64Module.Output("bin")
+
+	// also test symlinks
+	bin64MkEntries := android.AndroidMkEntriesForTest(t, ctx, bin64Module.Module())
+	bin64KatiSymlinks := bin64MkEntries[0].EntryMap["LOCAL_SOONG_INSTALL_SYMLINKS"]
+
+	// Either AndroidMk entries contain symlinks, or symlinks should be installed by Soong
+	for _, symlink := range []string{"binfoo", "binbar"} {
+		if inList(symlink, bin64KatiSymlinks) {
+			continue
+		}
+
+		bin64Module.Output(symlink)
+	}
 
 	// bin32 is installed by bin32.vendor_binary.31.arm64
 	ctx.ModuleForTests("bin32.vendor_binary.31.arm64", binary32Variant).Output("bin32")
@@ -1222,10 +1240,13 @@ func TestRecoverySnapshotCapture(t *testing.T) {
 		nocrt: true,
 	}
 
-	toolchain_library {
+	cc_prebuilt_library_static {
 		name: "libb",
 		recovery_available: true,
-		src: "libb.a",
+		srcs: ["libb.a"],
+		nocrt: true,
+		no_libcrt: true,
+		stl: "none",
 	}
 
 	cc_object {
