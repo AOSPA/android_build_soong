@@ -517,6 +517,9 @@ func runSoong(ctx Context, config Config) {
 	if shouldCollectBuildSoongMetrics(config) && ctx.Metrics != nil {
 		ctx.Metrics.SetSoongBuildMetrics(soongBuildMetrics)
 	}
+	if config.JsonModuleGraph() {
+		distGzipFile(ctx, config, config.ModuleGraphFile(), "soong")
+	}
 }
 
 func runMicrofactory(ctx Context, config Config, name string, pkg string, mapping map[string]string) {
