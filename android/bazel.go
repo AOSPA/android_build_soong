@@ -217,7 +217,6 @@ var (
 		"external/bazelbuild-rules_android":/* recursive = */ true,
 		"external/bazel-skylib":/* recursive = */ true,
 		"external/guava":/* recursive = */ true,
-		"external/error_prone":/* recursive = */ true,
 		"external/jsr305":/* recursive = */ true,
 		"frameworks/ex/common":/* recursive = */ true,
 
@@ -236,6 +235,7 @@ var (
 
 	// Configure modules in these directories to enable bp2build_available: true or false by default.
 	bp2buildDefaultConfig = Bp2BuildConfig{
+		"art/libartpalette":                     Bp2BuildDefaultTrueRecursively,
 		"art/libdexfile":                        Bp2BuildDefaultTrueRecursively,
 		"art/runtime":                           Bp2BuildDefaultTrueRecursively,
 		"art/tools":                             Bp2BuildDefaultTrue,
@@ -292,10 +292,14 @@ var (
 		"external/bouncycastle":                              Bp2BuildDefaultTrue,
 		"external/brotli":                                    Bp2BuildDefaultTrue,
 		"external/conscrypt":                                 Bp2BuildDefaultTrue,
+		"external/error_prone":                               Bp2BuildDefaultTrueRecursively,
 		"external/fmtlib":                                    Bp2BuildDefaultTrueRecursively,
 		"external/google-benchmark":                          Bp2BuildDefaultTrueRecursively,
 		"external/googletest":                                Bp2BuildDefaultTrueRecursively,
 		"external/gwp_asan":                                  Bp2BuildDefaultTrueRecursively,
+		"external/icu":                                       Bp2BuildDefaultTrueRecursively,
+		"external/icu/android_icu4j":                         Bp2BuildDefaultFalse, // java rules incomplete
+		"external/icu/icu4j":                                 Bp2BuildDefaultFalse, // java rules incomplete
 		"external/jemalloc_new":                              Bp2BuildDefaultTrueRecursively,
 		"external/jsoncpp":                                   Bp2BuildDefaultTrueRecursively,
 		"external/libcap":                                    Bp2BuildDefaultTrueRecursively,
@@ -341,6 +345,7 @@ var (
 		"packages/screensavers/Basic":                        Bp2BuildDefaultTrue,
 		"packages/services/Car/tests/SampleRearViewCamera":   Bp2BuildDefaultTrue,
 		"prebuilts/clang/host/linux-x86":                     Bp2BuildDefaultTrueRecursively,
+		"prebuilts/tools/common/m2":                          Bp2BuildDefaultTrue,
 		"system/apex":                                        Bp2BuildDefaultFalse, // TODO(b/207466993): flaky failures
 		"system/apex/proto":                                  Bp2BuildDefaultTrueRecursively,
 		"system/apex/libs":                                   Bp2BuildDefaultTrueRecursively,
@@ -430,8 +435,22 @@ var (
 		"libprotobuf-internal-protos",      // b/210751803, we don't handle path property for filegroups
 		"libprotobuf-internal-python-srcs", // b/210751803, we don't handle path property for filegroups
 		"libprotobuf-java-full",            // b/210751803, we don't handle path property for filegroups
+		"host-libprotobuf-java-full",       // b/210751803, we don't handle path property for filegroups
 		"libprotobuf-java-util-full",       // b/210751803, we don't handle path property for filegroups
-		"conscrypt",                        // b/210751803, we don't handle path property for filegroups
+
+		"conscrypt",          // b/210751803, we don't handle path property for filegroups
+		"conscrypt-for-host", // b/210751803, we don't handle path property for filegroups
+
+		"host-libprotobuf-java-lite",  // b/217236083, java_library cannot have deps without srcs
+		"host-libprotobuf-java-micro", // b/217236083, java_library cannot have deps without srcs
+		"host-libprotobuf-java-nano",  // b/217236083, java_library cannot have deps without srcs
+		"error_prone_core",            // b/217236083, java_library cannot have deps without srcs
+		"bouncycastle-host",           // b/217236083, java_library cannot have deps without srcs
+
+		"apex_manifest_proto_java", // b/215230097, we don't handle .proto files in java_library srcs attribute
+
+		"libc_musl_sysroot_bionic_arch_headers", // b/218405924, depends on soong_zip
+		"libc_musl_sysroot_bionic_headers",      // b/218405924, depends on soong_zip and generates duplicate srcs
 
 		// python protos
 		"libprotobuf-python",                           // contains .proto sources
@@ -469,13 +488,30 @@ var (
 		"libdexfiled", // depends on unconverted modules: dexfile_operator_srcs, libartbased, libartpalette
 
 		// go deps:
-		"apex-protos",               // depends on soong_zip, a go binary
-		"robolectric_tzdata",        // depends on soong_zip, a go binary
-		"host_bionic_linker_asm",    // depends on extract_linker, a go binary.
-		"host_bionic_linker_script", // depends on extract_linker, a go binary.
+		"apex-protos",                                                                                // depends on soong_zip, a go binary
+		"generated_android_icu4j_src_files", "generated_android_icu4j_test_files", "icu4c_test_data", // depends on unconverted modules: soong_zip
+		"host_bionic_linker_asm",         // depends on extract_linker, a go binary.
+		"host_bionic_linker_script",      // depends on extract_linker, a go binary.
+		"robolectric-sqlite4java-native", // depends on soong_zip, a go binary
+		"robolectric_tzdata",             // depends on soong_zip, a go binary
+
+		"android_icu4j_srcgen_binary", // Bazel build error: deps not allowed without srcs; move to runtime_deps
+		"core-icu4j-for-host",         // Bazel build error: deps not allowed without srcs; move to runtime_deps
 
 		// java deps
-		"bin2c_fastdeployagent", // depends on deployagent, a java binary
+		"android_icu4j_srcgen",          // depends on unconverted modules: currysrc
+		"bin2c_fastdeployagent",         // depends on deployagent, a java binary
+		"currysrc",                      // depends on unconverted modules: currysrc_org.eclipse, guavalib, jopt-simple-4.9
+		"robolectric-sqlite4java-0.282", // depends on unconverted modules: robolectric-sqlite4java-import, robolectric-sqlite4java-native
+		"timezone-host",                 // depends on unconverted modules: art.module.api.annotations
+		"truth-host-prebuilt",           // depends on unconverted modules: truth-prebuilt
+		"truth-prebuilt",                // depends on unconverted modules: asm-7.0, guava
+
+		"generated_android_icu4j_resources",      // depends on unconverted modules: android_icu4j_srcgen_binary, soong_zip
+		"generated_android_icu4j_test_resources", // depends on unconverted modules: android_icu4j_srcgen_binary, soong_zip
+
+		"art-script",     // depends on unconverted modules: dalvikvm, dex2oat
+		"dex2oat-script", // depends on unconverted modules: dex2oat
 	}
 
 	// Per-module denylist of cc_library modules to only generate the static
@@ -683,6 +719,7 @@ func GetMainClassInManifest(c Config, filepath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()

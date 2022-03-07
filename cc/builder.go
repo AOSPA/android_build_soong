@@ -754,7 +754,7 @@ func transformObjToStaticLib(ctx android.ModuleContext,
 	}
 	arFlags := ""
 	if !ctx.Darwin() {
-		arFlags += " -format=gnu"
+		arFlags += " --format=gnu"
 	}
 
 	if len(wholeStaticLibs) == 0 {
