@@ -114,6 +114,9 @@ var (
 		// Nested and array designated initialization is nice to have.
 		"-Wno-c99-designator",
 
+		// Many old files still have GNU designator syntax.
+		"-Wno-gnu-designator",
+
 		// Warnings from clang-12
 		"-Wno-gnu-folding-constant",
 
@@ -158,7 +161,6 @@ var (
 		"-Wl,-z,relro",
 		"-Wl,-z,now",
 		"-Wl,--build-id=md5",
-		"-Wl,--warn-shared-textrel",
 		"-Wl,--fatal-warnings",
 		"-Wl,--no-undefined-version",
 		// TODO: Eventually we should link against a libunwind.a with hidden symbols, and then these
