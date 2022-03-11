@@ -108,9 +108,12 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				if len(c.Properties.AndroidMkHeaderLibs) > 0 {
 					entries.AddStrings("LOCAL_HEADER_LIBRARIES", c.Properties.AndroidMkHeaderLibs...)
 				}
-                                if lib, ok := c.compiler.(*libraryDecorator); ok {
-                                       entries.AddStrings("LOCAL_SRC_FILES", lib.baseCompiler.srcsBeforeGen.Strings()...)
-                                }
+				if len(c.Properties.AndroidMkRuntimeLibs) > 0 {
+					entries.AddStrings("LOCAL_RUNTIME_LIBRARIES", c.Properties.AndroidMkRuntimeLibs...)
+				}
+				if lib, ok := c.compiler.(*libraryDecorator); ok {
+					entries.AddStrings("LOCAL_SRC_FILES", lib.baseCompiler.srcsBeforeGen.Strings()...)
+				}
 				entries.SetString("LOCAL_SOONG_LINK_TYPE", c.makeLinkType)
 				if c.UseVndk() {
 					entries.SetBool("LOCAL_USE_VNDK", true)
@@ -413,6 +416,9 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 		}
 
 		entries.SetBoolIfTrue("LOCAL_COMPATIBILITY_PER_TESTCASE_DIRECTORY", Bool(test.Properties.Per_testcase_directory))
+		if len(test.Properties.Data_bins) > 0 {
+			entries.AddStrings("LOCAL_TEST_DATA_BINS", test.Properties.Data_bins...)
+		}
 	})
 
 	AndroidMkWriteTestData(test.data, entries)

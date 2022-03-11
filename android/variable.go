@@ -219,6 +219,7 @@ type productVariables struct {
 	Platform_sdk_version_or_codename          *string  `json:",omitempty"`
 	Platform_sdk_final                        *bool    `json:",omitempty"`
 	Platform_sdk_extension_version            *int     `json:",omitempty"`
+	Platform_base_sdk_extension_version       *int     `json:",omitempty"`
 	Platform_version_active_codenames         []string `json:",omitempty"`
 	Platform_vndk_version                     *string  `json:",omitempty"`
 	Platform_systemsdk_versions               []string `json:",omitempty"`
@@ -407,6 +408,9 @@ type productVariables struct {
 	BoardSepolicyVers       *string `json:",omitempty"`
 	PlatformSepolicyVersion *string `json:",omitempty"`
 	TotSepolicyVersion      *string `json:",omitempty"`
+
+	SystemExtSepolicyPrebuiltApiDir *string `json:",omitempty"`
+	ProductSepolicyPrebuiltApiDir   *string `json:",omitempty"`
 
 	PlatformSepolicyCompatVersions []string `json:",omitempty"`
 
