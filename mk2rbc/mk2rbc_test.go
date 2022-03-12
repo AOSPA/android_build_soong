@@ -389,6 +389,10 @@ ifneq (,$(filter plaf,$(PLATFORM_LIST)))
 endif
 ifeq ($(TARGET_BUILD_VARIANT), $(filter $(TARGET_BUILD_VARIANT), userdebug eng))
 endif
+ifneq (, $(filter $(TARGET_BUILD_VARIANT), userdebug eng))
+endif
+ifneq (,$(filter userdebug eng, $(TARGET_BUILD_VARIANT)))
+endif
 ifneq (,$(filter true, $(v1)$(v2)))
 endif
 ifeq (,$(filter barbet coral%,$(TARGET_PRODUCT)))
@@ -407,7 +411,11 @@ def init(g, handle):
     pass
   if "plaf" in g.get("PLATFORM_LIST", []):
     pass
+  if g["TARGET_BUILD_VARIANT"] == " ".join(rblf.filter(g["TARGET_BUILD_VARIANT"], "userdebug eng")):
+    pass
   if g["TARGET_BUILD_VARIANT"] in ["userdebug", "eng"]:
+    pass
+  if rblf.filter("userdebug eng", g["TARGET_BUILD_VARIANT"]):
     pass
   if rblf.filter("true", "%s%s" % (_v1, _v2)):
     pass
@@ -1119,7 +1127,7 @@ def init(g, handle):
   rblf.inherit(handle, "foo/font", _font_init)
   # There's some space and even this comment between the include_top and the inherit-product
   rblf.inherit(handle, "foo/font", _font_init)
-  rblf.mkwarning("product.mk:11", "Including a path with a non-constant prefix, please convert this to a simple literal to generate cleaner starlark.")
+  rblf.mkwarning("product.mk:11", "Please avoid starting an include path with a variable. See https://source.android.com/setup/build/bazel/product_config/issues/includes for details.")
   _entry = {
     "foo/font.mk": ("foo/font", _font_init),
     "bar/font.mk": ("bar/font", _font1_init),
@@ -1387,7 +1395,6 @@ func TestGood(t *testing.T) {
 				ss, err := Convert(Request{
 					MkFile:         test.mkname,
 					Reader:         bytes.NewBufferString(test.in),
-					RootDir:        ".",
 					OutputSuffix:   ".star",
 					SourceFS:       fs,
 					MakefileFinder: &testMakefileFinder{fs: fs},

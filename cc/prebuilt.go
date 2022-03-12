@@ -16,6 +16,7 @@ package cc
 
 import (
 	"path/filepath"
+	"strings"
 
 	"android/soong/android"
 	"android/soong/bazel"
@@ -188,6 +189,16 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 				TableOfContents: p.tocFile,
 			})
 
+			// TODO(b/220898484): Mainline module sdk prebuilts of stub libraries use a stub
+			// library as their source and must not be installed, but libclang_rt.* libraries
+			// have stubs because they are LLNDK libraries, but use an implementation library
+			// as their source and need to be installed.  This discrepancy should be resolved
+			// without the prefix hack below.
+			if p.hasStubsVariants() && !p.buildStubs() && !ctx.Host() &&
+				!strings.HasPrefix(ctx.baseModuleName(), "libclang_rt.") {
+				ctx.Module().MakeUninstallable()
+			}
+
 			return outputFile
 		}
 	}
@@ -339,7 +350,7 @@ func prebuiltLibraryStaticBp2Build(ctx android.TopDownMutatorContext, module *Mo
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "prebuilt_library_static",
-		Bzl_load_location: "//build/bazel/rules:prebuilt_library_static.bzl",
+		Bzl_load_location: "//build/bazel/rules/cc:prebuilt_library_static.bzl",
 	}
 
 	name := android.RemoveOptionalPrebuiltPrefix(module.Name())
@@ -359,7 +370,7 @@ func prebuiltLibrarySharedBp2Build(ctx android.TopDownMutatorContext, module *Mo
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "prebuilt_library_shared",
-		Bzl_load_location: "//build/bazel/rules:prebuilt_library_shared.bzl",
+		Bzl_load_location: "//build/bazel/rules/cc:prebuilt_library_shared.bzl",
 	}
 
 	name := android.RemoveOptionalPrebuiltPrefix(module.Name())
