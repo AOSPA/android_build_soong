@@ -198,6 +198,7 @@ var (
 		// build/bazel is not recursive. Instead list each subdirectory under
 		// build/bazel explicitly.
 		"build/bazel":/* recursive = */ false,
+		"build/bazel/ci/dist":/* recursive = */ false,
 		"build/bazel/examples/android_app":/* recursive = */ true,
 		"build/bazel/examples/java":/* recursive = */ true,
 		"build/bazel/bazel_skylib":/* recursive = */ true,
@@ -288,6 +289,8 @@ var (
 		"development/samples/WiFiDirectDemo":                 Bp2BuildDefaultTrue,
 		"development/sdk":                                    Bp2BuildDefaultTrueRecursively,
 		"external/arm-optimized-routines":                    Bp2BuildDefaultTrueRecursively,
+		"external/auto/common":                               Bp2BuildDefaultTrueRecursively,
+		"external/auto/service":                              Bp2BuildDefaultTrueRecursively,
 		"external/boringssl":                                 Bp2BuildDefaultTrueRecursively,
 		"external/bouncycastle":                              Bp2BuildDefaultTrue,
 		"external/brotli":                                    Bp2BuildDefaultTrue,
@@ -300,6 +303,7 @@ var (
 		"external/icu":                                       Bp2BuildDefaultTrueRecursively,
 		"external/icu/android_icu4j":                         Bp2BuildDefaultFalse, // java rules incomplete
 		"external/icu/icu4j":                                 Bp2BuildDefaultFalse, // java rules incomplete
+		"external/javapoet":                                  Bp2BuildDefaultTrueRecursively,
 		"external/jemalloc_new":                              Bp2BuildDefaultTrueRecursively,
 		"external/jsoncpp":                                   Bp2BuildDefaultTrueRecursively,
 		"external/libcap":                                    Bp2BuildDefaultTrueRecursively,
@@ -512,6 +516,8 @@ var (
 
 		"art-script",     // depends on unconverted modules: dalvikvm, dex2oat
 		"dex2oat-script", // depends on unconverted modules: dex2oat
+
+		"error_prone_checkerframework_dataflow_nullaway", // TODO(b/219908977): "Error in fail: deps not allowed without srcs; move to runtime_deps?"
 	}
 
 	// Per-module denylist of cc_library modules to only generate the static
@@ -534,6 +540,31 @@ var (
 		"libadb_pairing_connection",
 		"libadb_pairing_connection_static",
 		"libadb_pairing_server", "libadb_pairing_server_static",
+
+		// TODO(b/204811222) support suffix in cc_binary
+		"acvp_modulewrapper",
+		"android.hardware.media.c2@1.0-service-v4l2",
+		"app_process",
+		"bar_test",
+		"bench_cxa_atexit",
+		"bench_noop",
+		"bench_noop_nostl",
+		"bench_noop_static",
+		"boringssl_self_test",
+		"boringssl_self_test_vendor",
+		"bssl",
+		"cavp",
+		"crash_dump",
+		"crasher",
+		"libcxx_test_template",
+		"linker",
+		"memory_replay",
+		"native_bridge_guest_linker",
+		"native_bridge_stub_library_defaults",
+		"noop",
+		"simpleperf_ndk",
+		"toybox-static",
+		"zlib_bench",
 	}
 
 	// Used for quicker lookups

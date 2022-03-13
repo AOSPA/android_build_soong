@@ -416,7 +416,11 @@ type apexBundle struct {
 	mergedNotices android.NoticeOutputs
 
 	// The built APEX file. This is the main product.
+	// Could be .apex or .capex
 	outputFile android.WritablePath
+
+	// The built uncompressed .apex file.
+	outputApexFile android.WritablePath
 
 	// The built APEX file in app bundle format. This file is not directly installed to the
 	// device. For an APEX, multiple app bundles are created each of which is for a specific ABI
@@ -1284,6 +1288,12 @@ func (a *apexBundle) OutputFiles(tag string) (android.Paths, error) {
 	case "", android.DefaultDistTag:
 		// This is the default dist path.
 		return android.Paths{a.outputFile}, nil
+	case imageApexSuffix:
+		// uncompressed one
+		if a.outputApexFile != nil {
+			return android.Paths{a.outputApexFile}, nil
+		}
+		fallthrough
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 	}
@@ -2772,27 +2782,7 @@ func makeApexAvailableBaseline() map[string][]string {
 	// Module separator
 	//
 	m["com.android.media.swcodec"] = []string{
-		"android.hardware.graphics.allocator@2.0",
-		"android.hardware.graphics.allocator@3.0",
-		"android.hardware.graphics.allocator@4.0",
-		"android.hardware.graphics.common@1.0",
-		"android.hardware.graphics.common@1.1",
-		"android.hardware.graphics.common@1.2",
-		"android.hardware.graphics.mapper@2.0",
-		"android.hardware.graphics.mapper@2.1",
-		"android.hardware.graphics.mapper@3.0",
-		"android.hardware.graphics.mapper@4.0",
-		"libLibGuiProperties",
-		"libfmq",
-		"libgrallocusage",
-		"libgui_headers",
-		"libhardware",
-		"libhardware_headers",
-		"libion",
-		"libnativebase_headers",
-		"libnativewindow_headers",
-		"libui",
-		"libui_headers",
+		// empty
 	}
 	//
 	// Module separator
