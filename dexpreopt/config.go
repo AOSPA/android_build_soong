@@ -408,7 +408,6 @@ func dex2oatModuleName(config android.Config) string {
 
 type dex2oatDependencyTag struct {
 	blueprint.BaseDependencyTag
-	android.LicenseAnnotationToolchainDependencyTag
 }
 
 func (d dex2oatDependencyTag) ExcludeFromVisibilityEnforcement() {
