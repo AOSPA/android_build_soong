@@ -1394,7 +1394,7 @@ func isBionic(name string) bool {
 }
 
 func InstallToBootstrap(name string, config android.Config) bool {
-	if name == "libclang_rt.hwasan-aarch64-android" {
+	if name == "libclang_rt.hwasan" {
 		return true
 	}
 	return isBionic(name)

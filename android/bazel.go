@@ -208,6 +208,7 @@ var (
 		"build/bazel/tests":/* recursive = */ true,
 		"build/bazel/platforms":/* recursive = */ true,
 		"build/bazel/product_variables":/* recursive = */ true,
+		"build/bazel/vendor/google":/* recursive = */ true,
 		"build/bazel_common_rules":/* recursive = */ true,
 		// build/make/tools/signapk BUILD file is generated, so build/make/tools is not recursive.
 		"build/make/tools":/* recursive = */ false,
@@ -225,8 +226,10 @@ var (
 		"packages/apps/QuickSearchBox":/* recursive = */ true,
 		"packages/apps/WallpaperPicker":/* recursive = */ false,
 
+		"prebuilts/bundletool":/* recursive = */ true,
 		"prebuilts/gcc":/* recursive = */ true,
 		"prebuilts/build-tools":/* recursive = */ false,
+		"prebuilts/jdk/jdk11":/* recursive = */ false,
 		"prebuilts/sdk":/* recursive = */ false,
 		"prebuilts/sdk/current/extras/app-toolkit":/* recursive = */ false,
 		"prebuilts/sdk/current/support":/* recursive = */ false,
@@ -245,6 +248,7 @@ var (
 		"build/bazel/examples/soong_config_variables":        Bp2BuildDefaultTrueRecursively,
 		"build/bazel/examples/apex/minimal":                  Bp2BuildDefaultTrueRecursively,
 		"build/make/tools/signapk":                           Bp2BuildDefaultTrue,
+		"build/make/target/product/security":                 Bp2BuildDefaultTrue,
 		"build/soong":                                        Bp2BuildDefaultTrue,
 		"build/soong/cc/libbuildversion":                     Bp2BuildDefaultTrue, // Skip tests subdir
 		"build/soong/cc/ndkstubgen":                          Bp2BuildDefaultTrue,
@@ -289,12 +293,14 @@ var (
 		"development/samples/WiFiDirectDemo":                 Bp2BuildDefaultTrue,
 		"development/sdk":                                    Bp2BuildDefaultTrueRecursively,
 		"external/arm-optimized-routines":                    Bp2BuildDefaultTrueRecursively,
+		"external/auto/android-annotation-stubs":             Bp2BuildDefaultTrueRecursively,
 		"external/auto/common":                               Bp2BuildDefaultTrueRecursively,
 		"external/auto/service":                              Bp2BuildDefaultTrueRecursively,
 		"external/boringssl":                                 Bp2BuildDefaultTrueRecursively,
 		"external/bouncycastle":                              Bp2BuildDefaultTrue,
 		"external/brotli":                                    Bp2BuildDefaultTrue,
 		"external/conscrypt":                                 Bp2BuildDefaultTrue,
+		"external/e2fsprogs/lib":                             Bp2BuildDefaultTrueRecursively,
 		"external/error_prone":                               Bp2BuildDefaultTrueRecursively,
 		"external/fmtlib":                                    Bp2BuildDefaultTrueRecursively,
 		"external/google-benchmark":                          Bp2BuildDefaultTrueRecursively,
@@ -325,6 +331,7 @@ var (
 		"external/zstd":                                      Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/media/tests/MediaDump":              Bp2BuildDefaultTrue,
 		"frameworks/base/startop/apps/test":                  Bp2BuildDefaultTrue,
+		"frameworks/base/tests/appwidgets/AppWidgetHostTest": Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/opengl/tests/gl2_cameraeye":       Bp2BuildDefaultTrue,
 		"frameworks/native/opengl/tests/gl2_java":            Bp2BuildDefaultTrue,
@@ -377,6 +384,39 @@ var (
 		"system/unwinding/libunwindstack":                    Bp2BuildDefaultTrueRecursively,
 		"tools/apksig":                                       Bp2BuildDefaultTrue,
 		"tools/platform-compat/java/android/compat":          Bp2BuildDefaultTrueRecursively,
+	}
+
+	// Per-module allowlist to always opt modules in of both bp2build and mixed builds.
+	// These modules are usually in directories with many other modules that are not ready for
+	// conversion.
+	//
+	// A module can either be in this list or its directory allowlisted entirely
+	// in bp2buildDefaultConfig, but not both at the same time.
+	bp2buildModuleAlwaysConvertList = []string{
+		"junit-params-assertj-core",
+
+		//external/avb
+		"avbtool",
+		"libavb",
+		"avb_headers",
+
+		//external/fec
+		"libfec_rs",
+
+		//system/core/libsparse
+		"libsparse",
+
+		//system/extras/ext4_utils
+		"libext4_utils",
+
+		//system/extras/libfec
+		"libfec",
+
+		//system/extras/squashfs_utils
+		"libsquashfs_utils",
+
+		//system/extras/verity/fec
+		"fec",
 	}
 
 	// Per-module denylist to always opt modules out of both bp2build and mixed builds.
@@ -494,10 +534,11 @@ var (
 		// go deps:
 		"apex-protos",                                                                                // depends on soong_zip, a go binary
 		"generated_android_icu4j_src_files", "generated_android_icu4j_test_files", "icu4c_test_data", // depends on unconverted modules: soong_zip
-		"host_bionic_linker_asm",         // depends on extract_linker, a go binary.
-		"host_bionic_linker_script",      // depends on extract_linker, a go binary.
-		"robolectric-sqlite4java-native", // depends on soong_zip, a go binary
-		"robolectric_tzdata",             // depends on soong_zip, a go binary
+		"host_bionic_linker_asm",                                                  // depends on extract_linker, a go binary.
+		"host_bionic_linker_script",                                               // depends on extract_linker, a go binary.
+		"robolectric-sqlite4java-native",                                          // depends on soong_zip, a go binary
+		"robolectric_tzdata",                                                      // depends on soong_zip, a go binary
+		"libc_musl_sysroot_libc++_headers", "libc_musl_sysroot_libc++abi_headers", // depends on soong_zip, zip2zip
 
 		"android_icu4j_srcgen_binary", // Bazel build error: deps not allowed without srcs; move to runtime_deps
 		"core-icu4j-for-host",         // Bazel build error: deps not allowed without srcs; move to runtime_deps
@@ -569,11 +610,16 @@ var (
 
 	// Used for quicker lookups
 	bp2buildModuleDoNotConvert  = map[string]bool{}
+	bp2buildModuleAlwaysConvert = map[string]bool{}
 	bp2buildCcLibraryStaticOnly = map[string]bool{}
 	mixedBuildsDisabled         = map[string]bool{}
 )
 
 func init() {
+	for _, moduleName := range bp2buildModuleAlwaysConvertList {
+		bp2buildModuleAlwaysConvert[moduleName] = true
+	}
+
 	for _, moduleName := range bp2buildModuleDoNotConvertList {
 		bp2buildModuleDoNotConvert[moduleName] = true
 	}
@@ -649,7 +695,14 @@ func (b *BazelModuleBase) ShouldConvertWithBp2build(ctx BazelConversionContext) 
 }
 
 func (b *BazelModuleBase) shouldConvertWithBp2build(ctx BazelConversionContext, module blueprint.Module) bool {
-	if bp2buildModuleDoNotConvert[module.Name()] {
+	moduleNameNoPrefix := RemoveOptionalPrebuiltPrefix(module.Name())
+	alwaysConvert := bp2buildModuleAlwaysConvert[moduleNameNoPrefix]
+
+	if bp2buildModuleDoNotConvert[moduleNameNoPrefix] {
+		if alwaysConvert {
+			ctx.(BaseModuleContext).ModuleErrorf("a module cannot be in bp2buildModuleDoNotConvert" +
+				" and also be in bp2buildModuleAlwaysConvert")
+		}
 		return false
 	}
 
@@ -658,17 +711,29 @@ func (b *BazelModuleBase) shouldConvertWithBp2build(ctx BazelConversionContext, 
 	}
 
 	packagePath := ctx.OtherModuleDir(module)
-	config := ctx.Config().bp2buildPackageConfig
+	if alwaysConvert && ShouldKeepExistingBuildFileForDir(packagePath) {
+		ctx.(BaseModuleContext).ModuleErrorf("A module cannot be in a directory listed in bp2buildKeepExistingBuildFile"+
+			" and also be in bp2buildModuleAlwaysConvert. Directory: '%s'", packagePath)
 
+		return false
+	}
+
+	config := ctx.Config().bp2buildPackageConfig
 	// This is a tristate value: true, false, or unset.
 	propValue := b.bazelProperties.Bazel_module.Bp2build_available
 	if bp2buildDefaultTrueRecursively(packagePath, config) {
+		if alwaysConvert {
+			ctx.(BaseModuleContext).ModuleErrorf("A module cannot be in a directory marked Bp2BuildDefaultTrue"+
+				" or Bp2BuildDefaultTrueRecursively and also be in bp2buildModuleAlwaysConvert. Directory: '%s'",
+				packagePath)
+		}
+
 		// Allow modules to explicitly opt-out.
 		return proptools.BoolDefault(propValue, true)
 	}
 
 	// Allow modules to explicitly opt-in.
-	return proptools.BoolDefault(propValue, false)
+	return proptools.BoolDefault(propValue, alwaysConvert)
 }
 
 // bp2buildDefaultTrueRecursively checks that the package contains a prefix from the

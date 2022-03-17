@@ -69,54 +69,55 @@ const (
 var knownFunctions = map[string]interface {
 	parse(ctx *parseContext, node mkparser.Node, args *mkparser.MakeString) starlarkExpr
 }{
-	"abspath":                             &simpleCallParser{name: baseName + ".abspath", returnType: starlarkTypeString, addGlobals: false},
-	"add_soong_config_namespace":          &simpleCallParser{name: baseName + ".soong_config_namespace", returnType: starlarkTypeVoid, addGlobals: true},
-	"add_soong_config_var_value":          &simpleCallParser{name: baseName + ".soong_config_set", returnType: starlarkTypeVoid, addGlobals: true},
-	soongConfigAssign:                     &simpleCallParser{name: baseName + ".soong_config_set", returnType: starlarkTypeVoid, addGlobals: true},
-	soongConfigAppend:                     &simpleCallParser{name: baseName + ".soong_config_append", returnType: starlarkTypeVoid, addGlobals: true},
-	"soong_config_get":                    &simpleCallParser{name: baseName + ".soong_config_get", returnType: starlarkTypeString, addGlobals: true},
-	"add-to-product-copy-files-if-exists": &simpleCallParser{name: baseName + ".copy_if_exists", returnType: starlarkTypeList, addGlobals: false},
-	"addprefix":                           &simpleCallParser{name: baseName + ".addprefix", returnType: starlarkTypeList, addGlobals: false},
-	"addsuffix":                           &simpleCallParser{name: baseName + ".addsuffix", returnType: starlarkTypeList, addGlobals: false},
-	"copy-files":                          &simpleCallParser{name: baseName + ".copy_files", returnType: starlarkTypeList, addGlobals: false},
-	"dir":                                 &simpleCallParser{name: baseName + ".dir", returnType: starlarkTypeList, addGlobals: false},
-	"dist-for-goals":                      &simpleCallParser{name: baseName + ".mkdist_for_goals", returnType: starlarkTypeVoid, addGlobals: true},
-	"enforce-product-packages-exist":      &simpleCallParser{name: baseName + ".enforce_product_packages_exist", returnType: starlarkTypeVoid, addGlobals: false},
-	"error":                               &makeControlFuncParser{name: baseName + ".mkerror"},
-	"findstring":                          &simpleCallParser{name: baseName + ".findstring", returnType: starlarkTypeInt, addGlobals: false},
-	"find-copy-subdir-files":              &simpleCallParser{name: baseName + ".find_and_copy", returnType: starlarkTypeList, addGlobals: false},
-	"filter":                              &simpleCallParser{name: baseName + ".filter", returnType: starlarkTypeList, addGlobals: false},
-	"filter-out":                          &simpleCallParser{name: baseName + ".filter_out", returnType: starlarkTypeList, addGlobals: false},
-	"firstword":                           &firstOrLastwordCallParser{isLastWord: false},
-	"foreach":                             &foreachCallPaser{},
-	"if":                                  &ifCallParser{},
-	"info":                                &makeControlFuncParser{name: baseName + ".mkinfo"},
-	"is-board-platform":                   &simpleCallParser{name: baseName + ".board_platform_is", returnType: starlarkTypeBool, addGlobals: true},
-	"is-board-platform2":                  &simpleCallParser{name: baseName + ".board_platform_is", returnType: starlarkTypeBool, addGlobals: true},
-	"is-board-platform-in-list":           &simpleCallParser{name: baseName + ".board_platform_in", returnType: starlarkTypeBool, addGlobals: true},
-	"is-board-platform-in-list2":          &simpleCallParser{name: baseName + ".board_platform_in", returnType: starlarkTypeBool, addGlobals: true},
-	"is-product-in-list":                  &isProductInListCallParser{},
-	"is-vendor-board-platform":            &isVendorBoardPlatformCallParser{},
-	"is-vendor-board-qcom":                &isVendorBoardQcomCallParser{},
-	"lastword":                            &firstOrLastwordCallParser{isLastWord: true},
-	"notdir":                              &simpleCallParser{name: baseName + ".notdir", returnType: starlarkTypeString, addGlobals: false},
-	"math_max":                            &mathMaxOrMinCallParser{function: "max"},
-	"math_min":                            &mathMaxOrMinCallParser{function: "min"},
-	"math_gt_or_eq":                       &mathComparisonCallParser{op: ">="},
-	"math_gt":                             &mathComparisonCallParser{op: ">"},
-	"math_lt":                             &mathComparisonCallParser{op: "<"},
-	"my-dir":                              &myDirCallParser{},
-	"patsubst":                            &substCallParser{fname: "patsubst"},
-	"product-copy-files-by-pattern":       &simpleCallParser{name: baseName + ".product_copy_files_by_pattern", returnType: starlarkTypeList, addGlobals: false},
-	"require-artifacts-in-path":           &simpleCallParser{name: baseName + ".require_artifacts_in_path", returnType: starlarkTypeVoid, addGlobals: false},
-	"require-artifacts-in-path-relaxed":   &simpleCallParser{name: baseName + ".require_artifacts_in_path_relaxed", returnType: starlarkTypeVoid, addGlobals: false},
+	"abspath":                              &simpleCallParser{name: baseName + ".abspath", returnType: starlarkTypeString},
+	"add-product-dex-preopt-module-config": &simpleCallParser{name: baseName + ".add_product_dex_preopt_module_config", returnType: starlarkTypeString, addHandle: true},
+	"add_soong_config_namespace":           &simpleCallParser{name: baseName + ".soong_config_namespace", returnType: starlarkTypeVoid, addGlobals: true},
+	"add_soong_config_var_value":           &simpleCallParser{name: baseName + ".soong_config_set", returnType: starlarkTypeVoid, addGlobals: true},
+	soongConfigAssign:                      &simpleCallParser{name: baseName + ".soong_config_set", returnType: starlarkTypeVoid, addGlobals: true},
+	soongConfigAppend:                      &simpleCallParser{name: baseName + ".soong_config_append", returnType: starlarkTypeVoid, addGlobals: true},
+	"soong_config_get":                     &simpleCallParser{name: baseName + ".soong_config_get", returnType: starlarkTypeString, addGlobals: true},
+	"add-to-product-copy-files-if-exists":  &simpleCallParser{name: baseName + ".copy_if_exists", returnType: starlarkTypeList},
+	"addprefix":                            &simpleCallParser{name: baseName + ".addprefix", returnType: starlarkTypeList},
+	"addsuffix":                            &simpleCallParser{name: baseName + ".addsuffix", returnType: starlarkTypeList},
+	"copy-files":                           &simpleCallParser{name: baseName + ".copy_files", returnType: starlarkTypeList},
+	"dir":                                  &simpleCallParser{name: baseName + ".dir", returnType: starlarkTypeList},
+	"dist-for-goals":                       &simpleCallParser{name: baseName + ".mkdist_for_goals", returnType: starlarkTypeVoid, addGlobals: true},
+	"enforce-product-packages-exist":       &simpleCallParser{name: baseName + ".enforce_product_packages_exist", returnType: starlarkTypeVoid},
+	"error":                                &makeControlFuncParser{name: baseName + ".mkerror"},
+	"findstring":                           &simpleCallParser{name: baseName + ".findstring", returnType: starlarkTypeInt},
+	"find-copy-subdir-files":               &simpleCallParser{name: baseName + ".find_and_copy", returnType: starlarkTypeList},
+	"filter":                               &simpleCallParser{name: baseName + ".filter", returnType: starlarkTypeList},
+	"filter-out":                           &simpleCallParser{name: baseName + ".filter_out", returnType: starlarkTypeList},
+	"firstword":                            &firstOrLastwordCallParser{isLastWord: false},
+	"foreach":                              &foreachCallPaser{},
+	"if":                                   &ifCallParser{},
+	"info":                                 &makeControlFuncParser{name: baseName + ".mkinfo"},
+	"is-board-platform":                    &simpleCallParser{name: baseName + ".board_platform_is", returnType: starlarkTypeBool, addGlobals: true},
+	"is-board-platform2":                   &simpleCallParser{name: baseName + ".board_platform_is", returnType: starlarkTypeBool, addGlobals: true},
+	"is-board-platform-in-list":            &simpleCallParser{name: baseName + ".board_platform_in", returnType: starlarkTypeBool, addGlobals: true},
+	"is-board-platform-in-list2":           &simpleCallParser{name: baseName + ".board_platform_in", returnType: starlarkTypeBool, addGlobals: true},
+	"is-product-in-list":                   &isProductInListCallParser{},
+	"is-vendor-board-platform":             &isVendorBoardPlatformCallParser{},
+	"is-vendor-board-qcom":                 &isVendorBoardQcomCallParser{},
+	"lastword":                             &firstOrLastwordCallParser{isLastWord: true},
+	"notdir":                               &simpleCallParser{name: baseName + ".notdir", returnType: starlarkTypeString},
+	"math_max":                             &mathMaxOrMinCallParser{function: "max"},
+	"math_min":                             &mathMaxOrMinCallParser{function: "min"},
+	"math_gt_or_eq":                        &mathComparisonCallParser{op: ">="},
+	"math_gt":                              &mathComparisonCallParser{op: ">"},
+	"math_lt":                              &mathComparisonCallParser{op: "<"},
+	"my-dir":                               &myDirCallParser{},
+	"patsubst":                             &substCallParser{fname: "patsubst"},
+	"product-copy-files-by-pattern":        &simpleCallParser{name: baseName + ".product_copy_files_by_pattern", returnType: starlarkTypeList},
+	"require-artifacts-in-path":            &simpleCallParser{name: baseName + ".require_artifacts_in_path", returnType: starlarkTypeVoid},
+	"require-artifacts-in-path-relaxed":    &simpleCallParser{name: baseName + ".require_artifacts_in_path_relaxed", returnType: starlarkTypeVoid},
 	// TODO(asmundak): remove it once all calls are removed from configuration makefiles. see b/183161002
 	"shell":    &shellCallParser{},
-	"strip":    &simpleCallParser{name: baseName + ".mkstrip", returnType: starlarkTypeString, addGlobals: false},
+	"strip":    &simpleCallParser{name: baseName + ".mkstrip", returnType: starlarkTypeString},
 	"subst":    &substCallParser{fname: "subst"},
 	"warning":  &makeControlFuncParser{name: baseName + ".mkwarning"},
 	"word":     &wordCallParser{},
-	"wildcard": &simpleCallParser{name: baseName + ".expand_wildcard", returnType: starlarkTypeList, addGlobals: false},
+	"wildcard": &simpleCallParser{name: baseName + ".expand_wildcard", returnType: starlarkTypeList},
 }
 
 // These are functions that we don't implement conversions for, but
@@ -430,7 +431,6 @@ func newParseContext(ss *StarlarkScript, nodes []mkparser.Node) *parseContext {
 		{"TARGET_COPY_OUT_RECOVERY", "recovery"},
 		{"TARGET_COPY_OUT_VENDOR_RAMDISK", "vendor_ramdisk"},
 		// TODO(asmundak): to process internal config files, we need the following variables:
-		//    BOARD_CONFIG_VENDOR_PATH
 		//    TARGET_VENDOR
 		//    target_base_product
 		//
@@ -465,17 +465,17 @@ func newParseContext(ss *StarlarkScript, nodes []mkparser.Node) *parseContext {
 	return ctx
 }
 
-func (ctx *parseContext) lastAssignment(name string) *assignmentNode {
+func (ctx *parseContext) lastAssignment(v variable) *assignmentNode {
 	for va := ctx.varAssignments; va != nil; va = va.outer {
-		if v, ok := va.vars[name]; ok {
+		if v, ok := va.vars[v.name()]; ok {
 			return v
 		}
 	}
 	return nil
 }
 
-func (ctx *parseContext) setLastAssignment(name string, asgn *assignmentNode) {
-	ctx.varAssignments.vars[name] = asgn
+func (ctx *parseContext) setLastAssignment(v variable, asgn *assignmentNode) {
+	ctx.varAssignments.vars[v.name()] = asgn
 }
 
 func (ctx *parseContext) pushVarAssignments() {
@@ -532,7 +532,7 @@ func (ctx *parseContext) handleAssignment(a *mkparser.Assignment) []starlarkNode
 	if lhs == nil {
 		return []starlarkNode{ctx.newBadNode(a, "unknown variable %s", name)}
 	}
-	_, isTraced := ctx.tracedVariables[name]
+	_, isTraced := ctx.tracedVariables[lhs.name()]
 	asgn := &assignmentNode{lhs: lhs, mkValue: a.Value, isTraced: isTraced, location: ctx.errorLocation(a)}
 	if lhs.valueType() == starlarkTypeUnknown {
 		// Try to divine variable type from the RHS
@@ -565,8 +565,8 @@ func (ctx *parseContext) handleAssignment(a *mkparser.Assignment) []starlarkNode
 		}
 	}
 
-	asgn.previous = ctx.lastAssignment(name)
-	ctx.setLastAssignment(name, asgn)
+	asgn.previous = ctx.lastAssignment(lhs)
+	ctx.setLastAssignment(lhs, asgn)
 	switch a.Type {
 	case "=", ":=":
 		asgn.flavor = asgnSet
@@ -807,20 +807,16 @@ func (ctx *parseContext) handleSubConfig(
 	if len(matchingPaths) > maxMatchingFiles {
 		return []starlarkNode{ctx.newBadNode(v, "there are >%d files matching the pattern, please rewrite it", maxMatchingFiles)}
 	}
-	if len(matchingPaths) == 1 {
-		res := inheritedStaticModule{ctx.newDependentModule(matchingPaths[0], loadAlways && ctx.ifNestLevel == 0), loadAlways}
-		return []starlarkNode{processModule(res)}
-	} else {
-		needsWarning := pathPattern[0] == "" && len(ctx.includeTops) == 0
-		res := inheritedDynamicModule{*varPath, []*moduleInfo{}, loadAlways, ctx.errorLocation(v), needsWarning}
-		for _, p := range matchingPaths {
-			// A product configuration files discovered dynamically may attempt to inherit
-			// from another one which does not exist in this source tree. Prevent load errors
-			// by always loading the dynamic files as optional.
-			res.candidateModules = append(res.candidateModules, ctx.newDependentModule(p, true))
-		}
-		return []starlarkNode{processModule(res)}
+
+	needsWarning := pathPattern[0] == "" && len(ctx.includeTops) == 0
+	res := inheritedDynamicModule{*varPath, []*moduleInfo{}, loadAlways, ctx.errorLocation(v), needsWarning}
+	for _, p := range matchingPaths {
+		// A product configuration files discovered dynamically may attempt to inherit
+		// from another one which does not exist in this source tree. Prevent load errors
+		// by always loading the dynamic files as optional.
+		res.candidateModules = append(res.candidateModules, ctx.newDependentModule(p, true))
 	}
+	return []starlarkNode{processModule(res)}
 }
 
 func (ctx *parseContext) findMatchingPaths(pattern []string) []string {
@@ -1272,12 +1268,12 @@ func (ctx *parseContext) parseReference(node mkparser.Node, ref *mkparser.MakeSt
 				args: []starlarkExpr{
 					&stringLiteralExpr{literal: substParts[0]},
 					&stringLiteralExpr{literal: substParts[1]},
-					NewVariableRefExpr(v, ctx.lastAssignment(v.name()) != nil),
+					NewVariableRefExpr(v, ctx.lastAssignment(v) != nil),
 				},
 			}
 		}
 		if v := ctx.addVariable(refDump); v != nil {
-			return NewVariableRefExpr(v, ctx.lastAssignment(v.name()) != nil)
+			return NewVariableRefExpr(v, ctx.lastAssignment(v) != nil)
 		}
 		return ctx.newBadExpr(node, "unknown variable %s", refDump)
 	}
@@ -1311,12 +1307,16 @@ type simpleCallParser struct {
 	name       string
 	returnType starlarkType
 	addGlobals bool
+	addHandle  bool
 }
 
 func (p *simpleCallParser) parse(ctx *parseContext, node mkparser.Node, args *mkparser.MakeString) starlarkExpr {
 	expr := &callExpr{name: p.name, returnType: p.returnType}
 	if p.addGlobals {
 		expr.args = append(expr.args, &globalsExpr{})
+	}
+	if p.addHandle {
+		expr.args = append(expr.args, &identifierExpr{name: "handle"})
 	}
 	for _, arg := range args.Split(",") {
 		arg.TrimLeftSpaces()
@@ -1871,9 +1871,7 @@ func BoardLauncher(mainModuleUri string, inputVariablesUri string) string {
 	fmt.Fprintf(&buf, "load(%q, %q)\n", baseUri, baseName)
 	fmt.Fprintf(&buf, "load(%q, \"init\")\n", mainModuleUri)
 	fmt.Fprintf(&buf, "load(%q, input_variables_init = \"init\")\n", inputVariablesUri)
-	fmt.Fprintf(&buf, "globals, cfg, globals_base = %s(init, input_variables_init)\n", cfnBoardMain)
-	fmt.Fprintf(&buf, "# TODO: Some product config variables need to be printed, but most are readonly so we can't just print cfg here.\n")
-	fmt.Fprintf(&buf, "%s((globals, cfg, globals_base))\n", cfnPrintVars)
+	fmt.Fprintf(&buf, "%s(%s(init, input_variables_init))\n", cfnPrintVars, cfnBoardMain)
 	return buf.String()
 }
 

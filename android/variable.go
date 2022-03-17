@@ -345,10 +345,11 @@ type productVariables struct {
 	JavaCoveragePaths        []string `json:",omitempty"`
 	JavaCoverageExcludePaths []string `json:",omitempty"`
 
-	GcovCoverage               *bool    `json:",omitempty"`
-	ClangCoverage              *bool    `json:",omitempty"`
-	NativeCoveragePaths        []string `json:",omitempty"`
-	NativeCoverageExcludePaths []string `json:",omitempty"`
+	GcovCoverage                *bool    `json:",omitempty"`
+	ClangCoverage               *bool    `json:",omitempty"`
+	NativeCoveragePaths         []string `json:",omitempty"`
+	NativeCoverageExcludePaths  []string `json:",omitempty"`
+	ClangCoverageContinuousMode *bool    `json:",omitempty"`
 
 	// Set by NewConfig
 	Native_coverage *bool `json:",omitempty"`
@@ -467,9 +468,10 @@ type productVariables struct {
 
 	ShippingApiLevel *string `json:",omitempty"`
 
-	BuildBrokenEnforceSyspropOwner     bool `json:",omitempty"`
-	BuildBrokenTrebleSyspropNeverallow bool `json:",omitempty"`
-	BuildBrokenVendorPropertyNamespace bool `json:",omitempty"`
+	BuildBrokenEnforceSyspropOwner     bool     `json:",omitempty"`
+	BuildBrokenTrebleSyspropNeverallow bool     `json:",omitempty"`
+	BuildBrokenVendorPropertyNamespace bool     `json:",omitempty"`
+	BuildBrokenInputDirModules         []string `json:",omitempty"`
 
 	BuildDebugfsRestrictionsEnabled bool `json:",omitempty"`
 

@@ -65,6 +65,10 @@ def init(g, handle):
 PRODUCT_NAME := Pixel 3
 PRODUCT_MODEL :=
 local_var = foo
+local-var-with-dashes := bar
+$(warning local-var-with-dashes: $(local-var-with-dashes))
+GLOBAL-VAR-WITH-DASHES := baz
+$(warning GLOBAL-VAR-WITH-DASHES: $(GLOBAL-VAR-WITH-DASHES))
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
@@ -73,6 +77,10 @@ def init(g, handle):
   cfg["PRODUCT_NAME"] = "Pixel 3"
   cfg["PRODUCT_MODEL"] = ""
   _local_var = "foo"
+  _local_var_with_dashes = "bar"
+  rblf.mkwarning("pixel3.mk", "local-var-with-dashes: %s" % _local_var_with_dashes)
+  g["GLOBAL-VAR-WITH-DASHES"] = "baz"
+  rblf.mkwarning("pixel3.mk", "GLOBAL-VAR-WITH-DASHES: %s" % g["GLOBAL-VAR-WITH-DASHES"])
 `,
 	},
 	{
@@ -739,6 +747,7 @@ $(call enforce-product-packages-exist, foo)
 $(call require-artifacts-in-path, foo, bar)
 $(call require-artifacts-in-path-relaxed, foo, bar)
 $(call dist-for-goals, goal, from:to)
+$(call add-product-dex-preopt-module-config,MyModule,disable)
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
@@ -749,6 +758,7 @@ def init(g, handle):
   rblf.require_artifacts_in_path("foo", "bar")
   rblf.require_artifacts_in_path_relaxed("foo", "bar")
   rblf.mkdist_for_goals(g, "goal", "from:to")
+  rblf.add_product_dex_preopt_module_config(handle, "MyModule", "disable")
 `,
 	},
 	{
@@ -983,6 +993,7 @@ endif
 def init(g, handle):
   cfg = rblf.cfg(handle)
   if "hwaddress" not in cfg.get("PRODUCT_PACKAGES", []):
+    rblf.setdefault(handle, "PRODUCT_PACKAGES")
     cfg["PRODUCT_PACKAGES"] = (rblf.mkstrip("%s hwaddress" % " ".join(cfg.get("PRODUCT_PACKAGES", [])))).split()
 `,
 	},
@@ -1079,7 +1090,13 @@ load("//vendor/foo1:cfg.star|init", _cfg_init = "init")
 def init(g, handle):
   cfg = rblf.cfg(handle)
   g["MY_PATH"] = "foo"
-  rblf.inherit(handle, "vendor/foo1/cfg", _cfg_init)
+  _entry = {
+    "vendor/foo1/cfg.mk": ("vendor/foo1/cfg", _cfg_init),
+  }.get("%s/cfg.mk" % g["MY_PATH"])
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
+  rblf.inherit(handle, _varmod, _varmod_init)
 `,
 	},
 	{
@@ -1099,8 +1116,20 @@ load("//vendor/foo1:cfg.star|init", _cfg_init = "init")
 def init(g, handle):
   cfg = rblf.cfg(handle)
   g["MY_PATH"] = "foo"
-  rblf.inherit(handle, "vendor/foo1/cfg", _cfg_init)
-  rblf.inherit(handle, "vendor/foo1/cfg", _cfg_init)
+  _entry = {
+    "vendor/foo1/cfg.mk": ("vendor/foo1/cfg", _cfg_init),
+  }.get("%s/cfg.mk" % g["MY_PATH"])
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
+  rblf.inherit(handle, _varmod, _varmod_init)
+  _entry = {
+    "vendor/foo1/cfg.mk": ("vendor/foo1/cfg", _cfg_init),
+  }.get("%s/cfg.mk" % g["MY_PATH"])
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
+  rblf.inherit(handle, _varmod, _varmod_init)
 `,
 	},
 	{
@@ -1124,9 +1153,21 @@ load("//bar:font.star|init", _font1_init = "init")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  rblf.inherit(handle, "foo/font", _font_init)
+  _entry = {
+    "foo/font.mk": ("foo/font", _font_init),
+  }.get("%s/font.mk" % g.get("MY_VAR", ""))
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/font.mk" % g.get("MY_VAR", "")))
+  rblf.inherit(handle, _varmod, _varmod_init)
   # There's some space and even this comment between the include_top and the inherit-product
-  rblf.inherit(handle, "foo/font", _font_init)
+  _entry = {
+    "foo/font.mk": ("foo/font", _font_init),
+  }.get("%s/font.mk" % g.get("MY_VAR", ""))
+  (_varmod, _varmod_init) = _entry if _entry else (None, None)
+  if not _varmod_init:
+    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/font.mk" % g.get("MY_VAR", "")))
+  rblf.inherit(handle, _varmod, _varmod_init)
   rblf.mkwarning("product.mk:11", "Please avoid starting an include path with a variable. See https://source.android.com/setup/build/bazel/product_config/issues/includes for details.")
   _entry = {
     "foo/font.mk": ("foo/font", _font_init),
@@ -1228,6 +1269,9 @@ BOOT_KERNEL_MODULES_LIST := foo.ko
 BOOT_KERNEL_MODULES_LIST += bar.ko
 BOOT_KERNEL_MODULES_FILTER_2 := $(foreach m,$(BOOT_KERNEL_MODULES_LIST),%/$(m))
 
+FOREACH_WITH_IF := $(foreach module,\
+  $(BOOT_KERNEL_MODULES_LIST),\
+  $(if $(filter $(module),foo.ko),,$(error module "$(module)" has an error!)))
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
@@ -1238,6 +1282,7 @@ def init(g, handle):
   g["BOOT_KERNEL_MODULES_LIST"] = ["foo.ko"]
   g["BOOT_KERNEL_MODULES_LIST"] += ["bar.ko"]
   g["BOOT_KERNEL_MODULES_FILTER_2"] = ["%%/%s" % m for m in g["BOOT_KERNEL_MODULES_LIST"]]
+  g["FOREACH_WITH_IF"] = [("" if rblf.filter(module, "foo.ko") else rblf.mkerror("product.mk", "module \"%s\" has an error!" % module)) for module in g["BOOT_KERNEL_MODULES_LIST"]]
 `,
 	},
 	{

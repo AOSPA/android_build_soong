@@ -481,6 +481,8 @@ type Module struct {
 	sdkVersion    android.SdkSpec
 	minSdkVersion android.SdkSpec
 	maxSdkVersion android.SdkSpec
+
+	sourceExtensions []string
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -862,7 +864,7 @@ func (j *Module) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaB
 		}
 		errorProneFlags = append(errorProneFlags, j.properties.Errorprone.Javacflags...)
 
-		flags.errorProneExtraJavacFlags = "${config.ErrorProneFlags} " +
+		flags.errorProneExtraJavacFlags = "${config.ErrorProneHeapFlags} ${config.ErrorProneFlags} " +
 			"'" + strings.Join(errorProneFlags, " ") + "'"
 		flags.errorProneProcessorPath = classpath(android.PathsForSource(ctx, config.ErrorProneClasspath))
 	}
@@ -982,6 +984,14 @@ func (j *Module) collectJavacFlags(
 	return flags
 }
 
+func (j *Module) AddJSONData(d *map[string]interface{}) {
+	(&j.ModuleBase).AddJSONData(d)
+	(*d)["Java"] = map[string]interface{}{
+		"SourceExtensions": j.sourceExtensions,
+	}
+
+}
+
 func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	j.exportAidlIncludeDirs = android.PathsForModuleSrc(ctx, j.deviceProperties.Aidl.Export_include_dirs)
 
@@ -993,6 +1003,12 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	}
 
 	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
+	j.sourceExtensions = []string{}
+	for _, ext := range []string{".kt", ".proto", ".aidl", ".java", ".logtags"} {
+		if hasSrcExt(srcFiles.Strings(), ext) {
+			j.sourceExtensions = append(j.sourceExtensions, ext)
+		}
+	}
 	if hasSrcExt(srcFiles.Strings(), ".proto") {
 		flags = protoFlags(ctx, &j.properties, &j.protoProperties, flags)
 	}
