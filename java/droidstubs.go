@@ -334,7 +334,11 @@ func (d *Droidstubs) annotationsFlags(ctx android.ModuleContext, cmd *android.Ru
 		// TODO(tnorbye): find owners to fix these warnings when annotation was enabled.
 		cmd.FlagWithArg("--hide ", "HiddenTypedefConstant").
 			FlagWithArg("--hide ", "SuperfluousPrefix").
-			FlagWithArg("--hide ", "AnnotationExtraction")
+			FlagWithArg("--hide ", "AnnotationExtraction").
+			// b/222738070
+			FlagWithArg("--hide ", "BannedThrow").
+			// b/223382732
+			FlagWithArg("--hide ", "ChangedDefault")
 	}
 }
 
@@ -473,7 +477,9 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 		Flag("--format=v2").
 		FlagWithArg("--repeat-errors-max ", "10").
 		FlagWithArg("--hide ", "UnresolvedImport").
-		FlagWithArg("--hide ", "InvalidNullability")
+		FlagWithArg("--hide ", "InvalidNullability").
+		// b/223382732
+		FlagWithArg("--hide ", "ChangedDefault")
 
 	return cmd
 }

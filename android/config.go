@@ -520,7 +520,7 @@ func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir strin
 	}
 
 	if archConfig != nil {
-		androidTargets, err := decodeArchSettings(Android, archConfig)
+		androidTargets, err := decodeAndroidArchSettings(archConfig)
 		if err != nil {
 			return Config{}, err
 		}
@@ -1260,6 +1260,10 @@ func (c *deviceConfig) ClangCoverageEnabled() bool {
 	return Bool(c.config.productVariables.ClangCoverage)
 }
 
+func (c *deviceConfig) ClangCoverageContinuousMode() bool {
+	return Bool(c.config.productVariables.ClangCoverageContinuousMode)
+}
+
 func (c *deviceConfig) GcovCoverageEnabled() bool {
 	return Bool(c.config.productVariables.GcovCoverage)
 }
@@ -1705,6 +1709,10 @@ func (c *deviceConfig) BuildDebugfsRestrictionsEnabled() bool {
 
 func (c *deviceConfig) BuildBrokenVendorPropertyNamespace() bool {
 	return c.config.productVariables.BuildBrokenVendorPropertyNamespace
+}
+
+func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
+	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
 func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {

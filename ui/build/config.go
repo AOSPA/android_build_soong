@@ -35,10 +35,10 @@ import (
 )
 
 const (
-	envConfigDir  = "vendor/google/tools/soong_config"
-	jsonSuffix    = "json"
+	envConfigDir = "vendor/google/tools/soong_config"
+	jsonSuffix   = "json"
 
-	configFetcher = "vendor/google/tools/soong/expconfigfetcher"
+	configFetcher         = "vendor/google/tools/soong/expconfigfetcher"
 	envConfigFetchTimeout = 10 * time.Second
 )
 
@@ -62,6 +62,7 @@ type configImpl struct {
 	jsonModuleGraph bool
 	bp2build        bool
 	queryview       bool
+	reportMkMetrics bool // Collect and report mk2bp migration progress metrics.
 	soongDocs       bool
 	skipConfig      bool
 	skipKati        bool
@@ -155,7 +156,7 @@ func fetchEnvConfig(ctx Context, config *configImpl, envConfigName string) error
 	}
 
 	configExists := false
-	outConfigFilePath := filepath.Join(config.OutDir(), envConfigName + jsonSuffix)
+	outConfigFilePath := filepath.Join(config.OutDir(), envConfigName+jsonSuffix)
 	if _, err := os.Stat(outConfigFilePath); err == nil {
 		configExists = true
 	}
@@ -367,9 +368,13 @@ func NewConfig(ctx Context, args ...string) Config {
 	java8Home := filepath.Join("prebuilts/jdk/jdk8", ret.HostPrebuiltTag())
 	java9Home := filepath.Join("prebuilts/jdk/jdk9", ret.HostPrebuiltTag())
 	java11Home := filepath.Join("prebuilts/jdk/jdk11", ret.HostPrebuiltTag())
+	java17Home := filepath.Join("prebuilts/jdk/jdk17", ret.HostPrebuiltTag())
 	javaHome := func() string {
 		if override, ok := ret.environ.Get("OVERRIDE_ANDROID_JAVA_HOME"); ok {
 			return override
+		}
+		if ret.environ.IsEnvTrue("EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN") {
+			return java17Home
 		}
 		if toolchain11, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN"); ok && toolchain11 != "true" {
 			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN is no longer supported. An OpenJDK 11 toolchain is now the global default.")
@@ -711,6 +716,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.skipConfig = true
 		} else if arg == "--skip-soong-tests" {
 			c.skipSoongTests = true
+		} else if arg == "--mk-metrics" {
+			c.reportMkMetrics = true
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
 				if len(arg) > 2 {
@@ -1379,6 +1386,11 @@ func (c *configImpl) LogsDir() string {
 // where the bazel profiles are located.
 func (c *configImpl) BazelMetricsDir() string {
 	return filepath.Join(c.LogsDir(), "bazel_metrics")
+}
+
+// MkFileMetrics returns the file path for make-related metrics.
+func (c *configImpl) MkMetrics() string {
+	return filepath.Join(c.LogsDir(), "mk_metrics.pb")
 }
 
 func (c *configImpl) SetEmptyNinjaFile(v bool) {
