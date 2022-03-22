@@ -699,7 +699,7 @@ include $(call all-makefiles-under,$(LOCAL_PATH))
 		expected: `
 			android_library {
 				srcs: ["test.java"],
-				resource_dirs: ["res"],
+
 				jacoco: {
 					include_filter: ["foo.*"],
 				},
@@ -1458,7 +1458,7 @@ include $(BUILD_RRO_PACKAGE)
 runtime_resource_overlay {
 	name: "foo",
 	product_specific: true,
-	resource_dirs: ["res"],
+
 	sdk_version: "current",
 	theme: "FooTheme",
 
@@ -1601,6 +1601,47 @@ cc_prebuilt_library_shared {
 	srcs: ["test.c"],
 
 	check_elf_files: false,
+}
+`,
+	},
+	{
+		desc: "Drop default resource and asset dirs from bp",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_ASSET_DIR := $(LOCAL_PATH)/assets
+LOCAL_RESOURCE_DIR := $(LOCAL_PATH)/res
+include $(BUILD_PACKAGE)
+`,
+		expected: `
+android_app {
+		name: "foo",
+
+}
+`,
+	},
+	{
+		desc: "LOCAL_GENERATED_SOURCES",
+		in: `
+include $(CLEAR_VARS)
+LOCAL_MODULE := foo
+LOCAL_SRC_FILES := src1, src2, src3
+LOCAL_GENERATED_SOURCES := gen_src1, gen_src2, gen_src3
+include $(BUILD_PACKAGE)
+		`,
+		expected: `
+android_app {
+	name: "foo",
+	srcs: [
+		"src1,",
+		"src2,",
+		"src3",
+	],
+	generated_sources: [
+		"gen_src1,",
+		"gen_src2,",
+		"gen_src3",
+	],
 }
 `,
 	},

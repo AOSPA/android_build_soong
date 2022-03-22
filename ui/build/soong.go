@@ -284,6 +284,7 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		config.ModuleGraphFile(),
 		[]string{
 			"--module_graph_file", config.ModuleGraphFile(),
+			"--module_actions_file", config.ModuleActionsFile(),
 		},
 		fmt.Sprintf("generating the Soong module graph at %s", config.ModuleGraphFile()),
 	)
@@ -516,6 +517,9 @@ func runSoong(ctx Context, config Config) {
 
 	if shouldCollectBuildSoongMetrics(config) && ctx.Metrics != nil {
 		ctx.Metrics.SetSoongBuildMetrics(soongBuildMetrics)
+	}
+	if config.JsonModuleGraph() {
+		distGzipFile(ctx, config, config.ModuleGraphFile(), "soong")
 	}
 }
 

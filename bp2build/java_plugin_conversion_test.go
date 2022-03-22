@@ -21,44 +21,51 @@ import (
 	"android/soong/java"
 )
 
-func runJavaLibraryHostTestCase(t *testing.T, tc bp2buildTestCase) {
+func runJavaPluginTestCase(t *testing.T, tc bp2buildTestCase) {
 	t.Helper()
-	(&tc).moduleTypeUnderTest = "java_library_host"
-	(&tc).moduleTypeUnderTestFactory = java.LibraryHostFactory
-	runBp2BuildTestCase(t, func(ctx android.RegistrationContext) {}, tc)
+	(&tc).moduleTypeUnderTest = "java_plugin"
+	(&tc).moduleTypeUnderTestFactory = java.PluginFactory
+	runBp2BuildTestCase(t, func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("java_library", java.LibraryFactory)
+	}, tc)
 }
 
-func TestJavaLibraryHost(t *testing.T) {
-	runJavaLibraryHostTestCase(t, bp2buildTestCase{
-		description: "java_library_host with srcs, exclude_srcs and libs",
-		blueprint: `java_library_host {
-    name: "java-lib-host-1",
+func TestJavaPlugin(t *testing.T) {
+	runJavaPluginTestCase(t, bp2buildTestCase{
+		description: "java_plugin with srcs, libs, static_libs",
+		blueprint: `java_plugin {
+    name: "java-plug-1",
     srcs: ["a.java", "b.java"],
-    exclude_srcs: ["b.java"],
-    libs: ["java-lib-host-2"],
+    libs: ["java-lib-1"],
+    static_libs: ["java-lib-2"],
     bazel_module: { bp2build_available: true },
 }
 
-java_library_host {
-    name: "java-lib-host-2",
+java_library {
+    name: "java-lib-1",
+    srcs: ["b.java"],
+    bazel_module: { bp2build_available: false },
+}
+
+java_library {
+    name: "java-lib-2",
     srcs: ["c.java"],
-    bazel_module: { bp2build_available: true },
+    bazel_module: { bp2build_available: false },
 }`,
 		expectedBazelTargets: []string{
-			makeBazelTarget("java_library", "java-lib-host-1", attrNameToString{
-				"srcs": `["a.java"]`,
-				"deps": `[":java-lib-host-2"]`,
+			makeBazelTarget("java_plugin", "java-plug-1", attrNameToString{
 				"target_compatible_with": `select({
         "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
-			}),
-			makeBazelTarget("java_library", "java-lib-host-2", attrNameToString{
-				"srcs": `["c.java"]`,
-				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    })`,
+				"deps": `[
+        ":java-lib-1",
+        ":java-lib-2",
+    ]`,
+				"srcs": `[
+        "a.java",
+        "b.java",
+    ]`,
 			}),
 		},
 	})

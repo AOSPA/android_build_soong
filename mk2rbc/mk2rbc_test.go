@@ -131,7 +131,7 @@ load(":part1.star|init", _part1_init = "init")
 def init(g, handle):
   cfg = rblf.cfg(handle)
   rblf.inherit(handle, "part", _part_init)
-  if g.get("PRODUCT_NAME") != None:
+  if cfg.get("PRODUCT_NAME", ""):
     if not _part1_init:
       rblf.mkerror("product.mk", "Cannot find %s" % (":part1.star"))
     rblf.inherit(handle, "part1", _part1_init)
@@ -174,7 +174,7 @@ load(":part1.star|init", _part1_init = "init")
 def init(g, handle):
   cfg = rblf.cfg(handle)
   _part_init(g, handle)
-  if g.get("PRODUCT_NAME") != None:
+  if cfg.get("PRODUCT_NAME", ""):
     if not _part1_init:
       rblf.mkerror("product.mk", "Cannot find %s" % (":part1.star"))
     _part1_init(g, handle)
@@ -231,7 +231,7 @@ endif
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  if g.get("PRODUCT_NAME") != None:
+  if cfg.get("PRODUCT_NAME", ""):
     cfg["PRODUCT_NAME"] = "gizmo"
   else:
     pass
@@ -275,7 +275,7 @@ endif
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  if g.get("PRODUCT_NAME") != None:
+  if cfg.get("PRODUCT_NAME", ""):
     # Comment
     pass
   else:
@@ -296,7 +296,7 @@ endif
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  if not g.get("PRODUCT_NAME") != None:
+  if not cfg.get("PRODUCT_NAME", ""):
     cfg["PRODUCT_NAME"] = "gizmo1"
   else:
     cfg["PRODUCT_NAME"] = "gizmo2"
@@ -315,9 +315,9 @@ endif
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  if g.get("PRODUCT_NAME") != None:
+  if cfg.get("PRODUCT_NAME", ""):
     cfg["PRODUCT_NAME"] = "gizmo"
-  elif not g.get("PRODUCT_PACKAGES") != None:
+  elif not cfg.get("PRODUCT_PACKAGES", []):
     # Comment
     pass
 `,
@@ -509,11 +509,11 @@ endif
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  if g.get("PRODUCT_NAME") != None:
+  if cfg.get("PRODUCT_NAME", ""):
     cfg["PRODUCT_PACKAGES"] = ["pack-if0"]
-    if g.get("PRODUCT_MODEL") != None:
+    if cfg.get("PRODUCT_MODEL", ""):
       cfg["PRODUCT_PACKAGES"] = ["pack-if-if"]
-    elif g.get("PRODUCT_NAME") != None:
+    elif cfg.get("PRODUCT_NAME", ""):
       cfg["PRODUCT_PACKAGES"] = ["pack-if-elif"]
     else:
       cfg["PRODUCT_PACKAGES"] = ["pack-if-else"]
@@ -1048,8 +1048,8 @@ def init(g, handle):
   cfg = rblf.cfg(handle)
   g["MY_PATH"] = "foo"
   _entry = {
-    "vendor/foo1/cfg.mk": ("_cfg", _cfg_init),
-    "vendor/bar/baz/cfg.mk": ("_cfg1", _cfg1_init),
+    "vendor/foo1/cfg.mk": ("vendor/foo1/cfg", _cfg_init),
+    "vendor/bar/baz/cfg.mk": ("vendor/bar/baz/cfg", _cfg1_init),
   }.get("vendor/%s/cfg.mk" % g["MY_PATH"])
   (_varmod, _varmod_init) = _entry if _entry else (None, None)
   if not _varmod_init:
@@ -1071,14 +1071,7 @@ load("//vendor/foo1:cfg.star|init", _cfg_init = "init")
 def init(g, handle):
   cfg = rblf.cfg(handle)
   g["MY_PATH"] = "foo"
-  #RBC# include_top vendor/foo1
-  _entry = {
-    "vendor/foo1/cfg.mk": ("_cfg", _cfg_init),
-  }.get("%s/cfg.mk" % g["MY_PATH"])
-  (_varmod, _varmod_init) = _entry if _entry else (None, None)
-  if not _varmod_init:
-    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
-  rblf.inherit(handle, _varmod, _varmod_init)
+  rblf.inherit(handle, "vendor/foo1/cfg", _cfg_init)
 `,
 	},
 	{
@@ -1089,6 +1082,7 @@ MY_PATH:=foo
 #RBC# include_top vendor/foo1
 $(call inherit-product,$(MY_PATH)/cfg.mk)
 #RBC# include_top vendor/foo1
+#RBC# include_top vendor/foo1
 $(call inherit-product,$(MY_PATH)/cfg.mk)
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
@@ -1097,26 +1091,12 @@ load("//vendor/foo1:cfg.star|init", _cfg_init = "init")
 def init(g, handle):
   cfg = rblf.cfg(handle)
   g["MY_PATH"] = "foo"
-  #RBC# include_top vendor/foo1
-  _entry = {
-    "vendor/foo1/cfg.mk": ("_cfg", _cfg_init),
-  }.get("%s/cfg.mk" % g["MY_PATH"])
-  (_varmod, _varmod_init) = _entry if _entry else (None, None)
-  if not _varmod_init:
-    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
-  rblf.inherit(handle, _varmod, _varmod_init)
-  #RBC# include_top vendor/foo1
-  _entry = {
-    "vendor/foo1/cfg.mk": ("_cfg", _cfg_init),
-  }.get("%s/cfg.mk" % g["MY_PATH"])
-  (_varmod, _varmod_init) = _entry if _entry else (None, None)
-  if not _varmod_init:
-    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/cfg.mk" % g["MY_PATH"]))
-  rblf.inherit(handle, _varmod, _varmod_init)
+  rblf.inherit(handle, "vendor/foo1/cfg", _cfg_init)
+  rblf.inherit(handle, "vendor/foo1/cfg", _cfg_init)
 `,
 	},
 	{
-		desc:   "Dynamic inherit path that lacks necessary hint",
+		desc:   "Dynamic inherit path that lacks hint",
 		mkname: "product.mk",
 		in: `
 #RBC# include_top foo
@@ -1130,29 +1110,24 @@ $(call inherit-product,$(MY_VAR)/font.mk)
 
 $(call inherit-product,$(MY_VAR)/font.mk)
 `,
-		expected: `#RBC# include_top foo
-load("//build/make/core:product_config.rbc", "rblf")
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
 load("//foo:font.star|init", _font_init = "init")
+load("//bar:font.star|init", _font1_init = "init")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  _entry = {
-    "foo/font.mk": ("_font", _font_init),
-  }.get("%s/font.mk" % g.get("MY_VAR", ""))
-  (_varmod, _varmod_init) = _entry if _entry else (None, None)
-  if not _varmod_init:
-    rblf.mkerror("product.mk", "Cannot find %s" % ("%s/font.mk" % g.get("MY_VAR", "")))
-  rblf.inherit(handle, _varmod, _varmod_init)
-  #RBC# include_top foo
+  rblf.inherit(handle, "foo/font", _font_init)
   # There's some space and even this comment between the include_top and the inherit-product
+  rblf.inherit(handle, "foo/font", _font_init)
+  rblf.mkwarning("product.mk:11", "Including a path with a non-constant prefix, please convert this to a simple literal to generate cleaner starlark.")
   _entry = {
-    "foo/font.mk": ("_font", _font_init),
+    "foo/font.mk": ("foo/font", _font_init),
+    "bar/font.mk": ("bar/font", _font1_init),
   }.get("%s/font.mk" % g.get("MY_VAR", ""))
   (_varmod, _varmod_init) = _entry if _entry else (None, None)
   if not _varmod_init:
     rblf.mkerror("product.mk", "Cannot find %s" % ("%s/font.mk" % g.get("MY_VAR", "")))
   rblf.inherit(handle, _varmod, _varmod_init)
-  rblf.mk2rbc_error("product.mk:11", "inherit-product/include statements must not be prefixed with a variable, or must include a #RBC# include_top comment beforehand giving a root directory to search.")
 `,
 	},
 	{
@@ -1178,7 +1153,6 @@ override FOO:=`,
 def init(g, handle):
   cfg = rblf.cfg(handle)
   rblf.mk2rbc_error("product.mk:2", "cannot handle override directive")
-  g["override FOO"] = ""
 `,
 	},
 	{
