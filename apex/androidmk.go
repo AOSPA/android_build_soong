@@ -309,19 +309,24 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, apexName, mo
 	return moduleNames
 }
 
-func (a *apexBundle) writeRequiredModules(w io.Writer, apexBundleName string) {
+func (a *apexBundle) writeRequiredModules(w io.Writer, moduleNames []string) {
+	if len(moduleNames) > 0 {
+		fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(moduleNames, " "))
+	}
+	if len(a.requiredDeps) > 0 {
+		fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(a.requiredDeps, " "))
+	}
+
 	var required []string
 	var targetRequired []string
 	var hostRequired []string
 	required = append(required, a.RequiredModuleNames()...)
 	targetRequired = append(targetRequired, a.TargetRequiredModuleNames()...)
 	hostRequired = append(hostRequired, a.HostRequiredModuleNames()...)
-	installMapSet := make(map[string]bool) // set of dependency module:location mappings
 	for _, fi := range a.filesInfo {
 		required = append(required, fi.requiredModuleNames...)
 		targetRequired = append(targetRequired, fi.targetRequiredModuleNames...)
 		hostRequired = append(hostRequired, fi.hostRequiredModuleNames...)
-		installMapSet[a.fullModuleName(apexBundleName, &fi)+":"+fi.installDir+"/"+fi.builtFile.Base()] = true
 	}
 
 	if len(required) > 0 {
@@ -332,11 +337,6 @@ func (a *apexBundle) writeRequiredModules(w io.Writer, apexBundleName string) {
 	}
 	if len(hostRequired) > 0 {
 		fmt.Fprintln(w, "LOCAL_HOST_REQUIRED_MODULES +=", strings.Join(hostRequired, " "))
-	}
-	if len(installMapSet) > 0 {
-		var installs []string
-		installs = append(installs, android.SortedStringKeys(installMapSet)...)
-		fmt.Fprintln(w, "LOCAL_LICENSE_INSTALL_MAP +=", strings.Join(installs, " "))
 	}
 }
 
@@ -356,10 +356,7 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
 				fmt.Fprintln(w, "LOCAL_MODULE :=", name+a.suffix)
 				data.Entries.WriteLicenseVariables(w)
-				if len(moduleNames) > 0 {
-					fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES :=", strings.Join(moduleNames, " "))
-				}
-				a.writeRequiredModules(w, name)
+				a.writeRequiredModules(w, moduleNames)
 				fmt.Fprintln(w, "include $(BUILD_PHONY_PACKAGE)")
 
 			} else {
@@ -376,8 +373,10 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				}
 				fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", name+stemSuffix)
 				fmt.Fprintln(w, "LOCAL_UNINSTALLABLE_MODULE :=", !a.installable())
-				fmt.Fprintln(w, "LOCAL_SOONG_INSTALLED_MODULE :=", a.installedFile.String())
-				fmt.Fprintln(w, "LOCAL_SOONG_INSTALL_PAIRS :=", a.outputFile.String()+":"+a.installedFile.String())
+				if a.installable() {
+					fmt.Fprintln(w, "LOCAL_SOONG_INSTALLED_MODULE :=", a.installedFile.String())
+					fmt.Fprintln(w, "LOCAL_SOONG_INSTALL_PAIRS :=", a.outputFile.String()+":"+a.installedFile.String())
+				}
 
 				// Because apex writes .mk with Custom(), we need to write manually some common properties
 				// which are available via data.Entries
@@ -395,13 +394,7 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				if len(a.overridableProperties.Overrides) > 0 {
 					fmt.Fprintln(w, "LOCAL_OVERRIDES_MODULES :=", strings.Join(a.overridableProperties.Overrides, " "))
 				}
-				if len(moduleNames) > 0 {
-					fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(moduleNames, " "))
-				}
-				if len(a.requiredDeps) > 0 {
-					fmt.Fprintln(w, "LOCAL_REQUIRED_MODULES +=", strings.Join(a.requiredDeps, " "))
-				}
-				a.writeRequiredModules(w, name)
+				a.writeRequiredModules(w, moduleNames)
 
 				if a.mergedNotices.Merged.Valid() {
 					fmt.Fprintln(w, "LOCAL_NOTICE_FILE :=", a.mergedNotices.Merged.Path().String())

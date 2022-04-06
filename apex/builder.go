@@ -398,18 +398,8 @@ func (a *apexBundle) buildBundleConfig(ctx android.ModuleContext) android.Output
 }
 
 func markManifestTestOnly(ctx android.ModuleContext, androidManifestFile android.Path) android.Path {
-	return java.ManifestFixer(java.ManifestFixerParams{
-		Ctx:                   ctx,
-		Manifest:              androidManifestFile,
-		SdkContext:            nil,
-		ClassLoaderContexts:   nil,
-		IsLibrary:             false,
-		UseEmbeddedNativeLibs: false,
-		UsesNonSdkApis:        false,
-		UseEmbeddedDex:        false,
-		HasNoCode:             false,
-		TestOnly:              true,
-		LoggingParent:         "",
+	return java.ManifestFixer(ctx, androidManifestFile, java.ManifestFixerParams{
+		TestOnly: true,
 	})
 }
 
@@ -437,7 +427,10 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	// Avoid creating duplicate build rules for multi-installed APEXes.
 	if proptools.BoolDefault(a.properties.Multi_install_skip_symbol_files, false) {
 		installSymbolFiles = false
+
 	}
+	// set of dependency module:location mappings
+	installMapSet := make(map[string]bool)
 
 	// TODO(jiyong): use the RuleBuilder
 	var copyCommands []string
@@ -445,13 +438,14 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	pathWhenActivated := android.PathForModuleInPartitionInstall(ctx, "apex", apexName)
 	for _, fi := range a.filesInfo {
 		destPath := imageDir.Join(ctx, fi.path()).String()
-		var installedPath android.InstallPath
 		// Prepare the destination path
 		destPathDir := filepath.Dir(destPath)
 		if fi.class == appSet {
 			copyCommands = append(copyCommands, "rm -rf "+destPathDir)
 		}
 		copyCommands = append(copyCommands, "mkdir -p "+destPathDir)
+
+		installMapPath := fi.builtFile
 
 		// Copy the built file to the directory. But if the symlink optimization is turned
 		// on, place a symlink to the corresponding file in /system partition instead.
@@ -460,6 +454,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			pathOnDevice := filepath.Join("/system", fi.path())
 			copyCommands = append(copyCommands, "ln -sfn "+pathOnDevice+" "+destPath)
 		} else {
+			var installedPath android.InstallPath
 			if fi.class == appSet {
 				copyCommands = append(copyCommands,
 					fmt.Sprintf("unzip -qDD -d %s %s", destPathDir,
@@ -478,17 +473,19 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			if installSymbolFiles {
 				implicitInputs = append(implicitInputs, installedPath)
 			}
-		}
 
-		// Create additional symlinks pointing the file inside the APEX (if any). Note that
-		// this is independent from the symlink optimization.
-		for _, symlinkPath := range fi.symlinkPaths() {
-			symlinkDest := imageDir.Join(ctx, symlinkPath).String()
-			copyCommands = append(copyCommands, "ln -sfn "+filepath.Base(destPath)+" "+symlinkDest)
-			if installSymbolFiles {
-				installedSymlink := ctx.InstallSymlink(pathWhenActivated.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
-				implicitInputs = append(implicitInputs, installedSymlink)
+			// Create additional symlinks pointing the file inside the APEX (if any). Note that
+			// this is independent from the symlink optimization.
+			for _, symlinkPath := range fi.symlinkPaths() {
+				symlinkDest := imageDir.Join(ctx, symlinkPath).String()
+				copyCommands = append(copyCommands, "ln -sfn "+filepath.Base(destPath)+" "+symlinkDest)
+				if installSymbolFiles {
+					installedSymlink := ctx.InstallSymlink(pathWhenActivated.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
+					implicitInputs = append(implicitInputs, installedSymlink)
+				}
 			}
+
+			installMapPath = installedPath
 		}
 
 		// Copy the test files (if any)
@@ -505,12 +502,20 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			copyCommands = append(copyCommands, "cp -f "+d.SrcPath.String()+" "+dataDest)
 			implicitInputs = append(implicitInputs, d.SrcPath)
 		}
+
+		installMapSet[installMapPath.String()+":"+fi.installDir+"/"+fi.builtFile.Base()] = true
 	}
 	implicitInputs = append(implicitInputs, a.manifestPbOut)
 	if installSymbolFiles {
 		installedManifest := ctx.InstallFile(pathWhenActivated, "apex_manifest.pb", a.manifestPbOut)
 		installedKey := ctx.InstallFile(pathWhenActivated, "apex_pubkey", a.publicKeyFile)
 		implicitInputs = append(implicitInputs, installedManifest, installedKey)
+	}
+
+	if len(installMapSet) > 0 {
+		var installs []string
+		installs = append(installs, android.SortedStringKeys(installMapSet)...)
+		a.SetLicenseInstallMap(installs)
 	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////
@@ -603,6 +608,8 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 
 			implicitInputs = append(implicitInputs, androidManifestFile)
 			optFlags = append(optFlags, "--android_manifest "+androidManifestFile.String())
+		} else if a.testApex {
+			optFlags = append(optFlags, "--test_only")
 		}
 
 		// Determine target/min sdk version from the context
@@ -803,6 +810,9 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		Implicits:   implicits,
 		Args:        args,
 	})
+	if suffix == imageApexSuffix {
+		a.outputApexFile = signedOutputFile
+	}
 	a.outputFile = signedOutputFile
 
 	if ctx.ModuleDir() != "system/apex/apexd/apexd_testdata" && a.testOnlyShouldForceCompression() {
@@ -844,6 +854,10 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	installSuffix := suffix
 	if a.isCompressed {
 		installSuffix = imageCapexSuffix
+	}
+
+	if !a.installable() {
+		a.SkipInstall()
 	}
 
 	// Install to $OUT/soong/{target,host}/.../apex.

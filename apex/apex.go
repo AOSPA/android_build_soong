@@ -108,15 +108,6 @@ type apexBundleProperties struct {
 
 	Multilib apexMultilibProperties
 
-	// List of bootclasspath fragments that are embedded inside this APEX bundle.
-	Bootclasspath_fragments []string
-
-	// List of systemserverclasspath fragments that are embedded inside this APEX bundle.
-	Systemserverclasspath_fragments []string
-
-	// List of java libraries that are embedded inside this APEX bundle.
-	Java_libs []string
-
 	// List of sh binaries that are embedded inside this APEX bundle.
 	Sh_binaries []string
 
@@ -316,6 +307,15 @@ type overridableProperties struct {
 	// List of BPF programs inside this APEX bundle.
 	Bpfs []string
 
+	// List of bootclasspath fragments that are embedded inside this APEX bundle.
+	Bootclasspath_fragments []string
+
+	// List of systemserverclasspath fragments that are embedded inside this APEX bundle.
+	Systemserverclasspath_fragments []string
+
+	// List of java libraries that are embedded inside this APEX bundle.
+	Java_libs []string
+
 	// Names of modules to be overridden. Listed modules can only be other binaries (in Make or
 	// Soong). This does not completely prevent installation of the overridden binaries, but if
 	// both binaries would be installed by default (in PRODUCT_PACKAGES) the other binary will
@@ -416,7 +416,11 @@ type apexBundle struct {
 	mergedNotices android.NoticeOutputs
 
 	// The built APEX file. This is the main product.
+	// Could be .apex or .capex
 	outputFile android.WritablePath
+
+	// The built uncompressed .apex file.
+	outputApexFile android.WritablePath
 
 	// The built APEX file in app bundle format. This file is not directly installed to the
 	// device. For an APEX, multiple app bundles are created each of which is for a specific ABI
@@ -783,9 +787,6 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 	// Common-arch dependencies come next
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
-	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.properties.Bootclasspath_fragments...)
-	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.properties.Systemserverclasspath_fragments...)
-	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
 	ctx.AddFarVariationDependencies(commonVariation, compatConfigTag, a.properties.Compat_configs...)
 
@@ -813,6 +814,9 @@ func (a *apexBundle) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	ctx.AddFarVariationDependencies(commonVariation, androidAppTag, a.overridableProperties.Apps...)
 	ctx.AddFarVariationDependencies(commonVariation, bpfTag, a.overridableProperties.Bpfs...)
 	ctx.AddFarVariationDependencies(commonVariation, rroTag, a.overridableProperties.Rros...)
+	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.overridableProperties.Bootclasspath_fragments...)
+	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.overridableProperties.Systemserverclasspath_fragments...)
+	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.overridableProperties.Java_libs...)
 	if prebuilts := a.overridableProperties.Prebuilts; len(prebuilts) > 0 {
 		// For prebuilt_etc, use the first variant (64 on 64/32bit device, 32 on 32bit device)
 		// regardless of the TARGET_PREFER_* setting. See b/144532908
@@ -1284,6 +1288,12 @@ func (a *apexBundle) OutputFiles(tag string) (android.Paths, error) {
 	case "", android.DefaultDistTag:
 		// This is the default dist path.
 		return android.Paths{a.outputFile}, nil
+	case imageApexSuffix:
+		// uncompressed one
+		if a.outputApexFile != nil {
+			return android.Paths{a.outputApexFile}, nil
+		}
+		fallthrough
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 	}
@@ -1405,7 +1415,7 @@ func (a *apexBundle) AddSanitizerDependencies(ctx android.BottomUpMutatorContext
 		for _, target := range ctx.MultiTargets() {
 			if target.Arch.ArchType.Multilib == "lib64" {
 				addDependenciesForNativeModules(ctx, ApexNativeDependencies{
-					Native_shared_libs: []string{"libclang_rt.hwasan-aarch64-android"},
+					Native_shared_libs: []string{"libclang_rt.hwasan"},
 					Tests:              nil,
 					Jni_libs:           nil,
 					Binaries:           nil,
@@ -1745,6 +1755,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					fi := apexFileForRustLibrary(ctx, r)
 					fi.isJniLib = isJniLib
 					filesInfo = append(filesInfo, fi)
+					return true // track transitive dependencies
 				} else {
 					propertyName := "native_shared_libs"
 					if isJniLib {
@@ -2584,9 +2595,9 @@ func isStaticExecutableAllowed(apex string, exec string) bool {
 
 // Collect information for opening IDE project files in java/jdeps.go.
 func (a *apexBundle) IDEInfo(dpInfo *android.IdeInfo) {
-	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
-	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
-	dpInfo.Deps = append(dpInfo.Deps, a.properties.Systemserverclasspath_fragments...)
+	dpInfo.Deps = append(dpInfo.Deps, a.overridableProperties.Java_libs...)
+	dpInfo.Deps = append(dpInfo.Deps, a.overridableProperties.Bootclasspath_fragments...)
+	dpInfo.Deps = append(dpInfo.Deps, a.overridableProperties.Systemserverclasspath_fragments...)
 	dpInfo.Paths = append(dpInfo.Paths, a.modulePaths...)
 }
 
@@ -2772,27 +2783,7 @@ func makeApexAvailableBaseline() map[string][]string {
 	// Module separator
 	//
 	m["com.android.media.swcodec"] = []string{
-		"android.hardware.graphics.allocator@2.0",
-		"android.hardware.graphics.allocator@3.0",
-		"android.hardware.graphics.allocator@4.0",
-		"android.hardware.graphics.common@1.0",
-		"android.hardware.graphics.common@1.1",
-		"android.hardware.graphics.common@1.2",
-		"android.hardware.graphics.mapper@2.0",
-		"android.hardware.graphics.mapper@2.1",
-		"android.hardware.graphics.mapper@3.0",
-		"android.hardware.graphics.mapper@4.0",
-		"libLibGuiProperties",
-		"libfmq",
-		"libgrallocusage",
-		"libgui_headers",
-		"libhardware",
-		"libhardware_headers",
-		"libion",
-		"libnativebase_headers",
-		"libnativewindow_headers",
-		"libui",
-		"libui_headers",
+		// empty
 	}
 	//
 	// Module separator

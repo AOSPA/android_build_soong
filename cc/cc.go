@@ -512,6 +512,7 @@ type ModuleContextIntf interface {
 	selectedStl() string
 	baseModuleName() string
 	getVndkExtendsModuleName() string
+	isAfdoCompile() bool
 	isPgoCompile() bool
 	isNDKStubLibrary() bool
 	useClangLld(actx ModuleContext) bool
@@ -701,6 +702,15 @@ func (d libraryDependencyTag) shared() bool {
 func (d libraryDependencyTag) static() bool {
 	return d.Kind == staticLibraryDependency
 }
+
+func (d libraryDependencyTag) LicenseAnnotations() []android.LicenseAnnotation {
+	if d.shared() {
+		return []android.LicenseAnnotation{android.LicenseAnnotationSharedDependency}
+	}
+	return nil
+}
+
+var _ android.LicenseAnnotationsDependencyTag = libraryDependencyTag{}
 
 // InstallDepNeeded returns true for shared libraries so that shared library dependencies of
 // binaries or other shared libraries are installed as dependencies.
@@ -1257,6 +1267,13 @@ func (c *Module) IsVndk() bool {
 	return false
 }
 
+func (c *Module) isAfdoCompile() bool {
+	if afdo := c.afdo; afdo != nil {
+		return afdo.Properties.AfdoTarget != nil
+	}
+	return false
+}
+
 func (c *Module) isPgoCompile() bool {
 	if pgo := c.pgo; pgo != nil {
 		return pgo.Properties.PgoCompile
@@ -1377,7 +1394,7 @@ func isBionic(name string) bool {
 }
 
 func InstallToBootstrap(name string, config android.Config) bool {
-	if name == "libclang_rt.hwasan-aarch64-android" {
+	if name == "libclang_rt.hwasan" {
 		return true
 	}
 	return isBionic(name)
@@ -1536,6 +1553,10 @@ func (ctx *moduleContextImpl) IsVndkPrivate() bool {
 
 func (ctx *moduleContextImpl) isVndk() bool {
 	return ctx.mod.IsVndk()
+}
+
+func (ctx *moduleContextImpl) isAfdoCompile() bool {
+	return ctx.mod.isAfdoCompile()
 }
 
 func (ctx *moduleContextImpl) isPgoCompile() bool {
@@ -2122,6 +2143,8 @@ func GetSnapshot(c LinkableInterface, snapshotInfo **SnapshotInfo, actx android.
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "vendor_snapshot")
 		} else if recoverySnapshotVersion := actx.DeviceConfig().RecoverySnapshotVersion(); recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" && c.InRecovery() {
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "recovery_snapshot")
+		} else if ramdiskSnapshotVersion := actx.DeviceConfig().RamdiskSnapshotVersion(); ramdiskSnapshotVersion != "current" && ramdiskSnapshotVersion != "" && c.InRamdisk() {
+			snapshotModule = actx.AddVariationDependencies(nil, nil, "ramdisk_snapshot")
 		}
 		if len(snapshotModule) > 0 && snapshotModule[0] != nil {
 			snapshot := actx.OtherModuleProvider(snapshotModule[0], SnapshotInfoProvider).(SnapshotInfo)
@@ -2166,6 +2189,8 @@ func RewriteLibs(c LinkableInterface, snapshotInfo **SnapshotInfo, actx android.
 		// strip #version suffix out
 		name, _ := StubsLibNameAndVersion(entry)
 		if c.InRecovery() {
+			nonvariantLibs = append(nonvariantLibs, RewriteSnapshotLib(entry, GetSnapshot(c, snapshotInfo, actx).SharedLibs))
+		} else if c.InRamdisk() {
 			nonvariantLibs = append(nonvariantLibs, RewriteSnapshotLib(entry, GetSnapshot(c, snapshotInfo, actx).SharedLibs))
 		} else if c.UseSdk() && inList(name, *getNDKKnownLibs(config)) {
 			variantLibs = append(variantLibs, name+ndkLibrarySuffix)
@@ -2813,6 +2838,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 						// dependency.
 						depPaths.WholeStaticLibsFromPrebuilts = append(depPaths.WholeStaticLibsFromPrebuilts, linkFile.Path())
 					}
+					depPaths.WholeStaticLibsFromPrebuilts = append(depPaths.WholeStaticLibsFromPrebuilts,
+						staticLibraryInfo.WholeStaticLibsFromPrebuilts...)
 				} else {
 					switch libDepTag.Order {
 					case earlyLibraryDependency:

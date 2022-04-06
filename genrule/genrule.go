@@ -103,6 +103,7 @@ type HostToolProvider interface {
 
 type hostToolDependencyTag struct {
 	blueprint.BaseDependencyTag
+	android.LicenseAnnotationToolchainDependencyTag
 	label string
 }
 
@@ -293,7 +294,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if _, exists := locationLabels[label]; !exists {
 			locationLabels[label] = loc
 		} else {
-			ctx.ModuleErrorf("multiple labels for %q, %q and %q",
+			ctx.ModuleErrorf("multiple locations for label %q: %q and %q (do you have duplicate srcs entries?)",
 				label, locationLabels[label], loc)
 		}
 	}
@@ -381,9 +382,12 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		addLocationLabel(toolFile, toolLocation{paths})
 	}
 
+	includeDirInPaths := ctx.DeviceConfig().BuildBrokenInputDir(g.Name())
 	var srcFiles android.Paths
 	for _, in := range g.properties.Srcs {
-		paths, missingDeps := android.PathsAndMissingDepsForModuleSrcExcludes(ctx, []string{in}, g.properties.Exclude_srcs)
+		paths, missingDeps := android.PathsAndMissingDepsRelativeToModuleSourceDir(android.SourceInput{
+			Context: ctx, Paths: []string{in}, ExcludePaths: g.properties.Exclude_srcs, IncludeDirs: includeDirInPaths,
+		})
 		if len(missingDeps) > 0 {
 			if !ctx.Config().AllowMissingDependencies() {
 				panic(fmt.Errorf("should never get here, the missing dependencies %q should have been reported in DepsMutator",
@@ -495,7 +499,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						}
 						return paths[0], nil
 					} else {
-						return reportError("unknown location label %q", label)
+						return reportError("unknown location label %q is not in srcs, out, tools or tool_files.", label)
 					}
 				} else if strings.HasPrefix(name, "locations ") {
 					label := strings.TrimSpace(strings.TrimPrefix(name, "locations "))
@@ -506,7 +510,7 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 						}
 						return strings.Join(paths, " "), nil
 					} else {
-						return reportError("unknown locations label %q", label)
+						return reportError("unknown locations label %q is not in srcs, out, tools or tool_files.", label)
 					}
 				} else {
 					return reportError("unknown variable '$(%s)'", name)

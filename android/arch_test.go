@@ -491,11 +491,9 @@ func TestArchProperties(t *testing.T) {
 			arch: {
 				arm: {
 					a:  ["arm"],
-					armv7_a_neon: { a: ["armv7_a_neon"] },
 				},
 				arm64: {
 					a:  ["arm64"],
-					armv8_a: { a: ["armv8_a"] },
 				},
 				x86: { a:  ["x86"] },
 				x86_64: { a:  ["x86_64"] },
@@ -512,6 +510,7 @@ func TestArchProperties(t *testing.T) {
 				musl: { a:  ["musl"] },
 				linux_bionic: { a:  ["linux_bionic"] },
 				linux: { a:  ["linux"] },
+				host_linux: { a: ["host_linux"] },
 				linux_glibc: { a:  ["linux_glibc"] },
 				linux_musl: { a:  ["linux_musl"] },
 				windows: { a:  ["windows"], enabled: true },
@@ -552,12 +551,12 @@ func TestArchProperties(t *testing.T) {
 				{
 					module:   "foo",
 					variant:  "android_arm64_armv8-a",
-					property: []string{"root", "linux", "bionic", "android", "android64", "arm64", "armv8_a", "lib64", "android_arm64"},
+					property: []string{"root", "linux", "bionic", "android", "android64", "arm64", "lib64", "android_arm64"},
 				},
 				{
 					module:   "foo",
 					variant:  "android_arm_armv7-a-neon",
-					property: []string{"root", "linux", "bionic", "android", "android64", "arm", "armv7_a_neon", "lib32", "android_arm"},
+					property: []string{"root", "linux", "bionic", "android", "android64", "arm", "lib32", "android_arm"},
 				},
 			},
 		},
@@ -568,12 +567,12 @@ func TestArchProperties(t *testing.T) {
 				{
 					module:   "foo",
 					variant:  "linux_glibc_x86_64",
-					property: []string{"root", "host", "linux", "glibc", "linux_glibc", "not_windows", "x86_64", "lib64", "linux_x86_64", "linux_glibc_x86_64"},
+					property: []string{"root", "host", "linux", "host_linux", "glibc", "linux_glibc", "not_windows", "x86_64", "lib64", "linux_x86_64", "linux_glibc_x86_64"},
 				},
 				{
 					module:   "foo",
 					variant:  "linux_glibc_x86",
-					property: []string{"root", "host", "linux", "glibc", "linux_glibc", "not_windows", "x86", "lib32", "linux_x86", "linux_glibc_x86"},
+					property: []string{"root", "host", "linux", "host_linux", "glibc", "linux_glibc", "not_windows", "x86", "lib32", "linux_x86", "linux_glibc_x86"},
 				},
 			},
 		},
@@ -607,12 +606,12 @@ func TestArchProperties(t *testing.T) {
 				{
 					module:   "foo",
 					variant:  "linux_musl_x86_64",
-					property: []string{"root", "host", "linux", "musl", "linux_glibc", "linux_musl", "not_windows", "x86_64", "lib64", "linux_x86_64", "linux_musl_x86_64", "linux_glibc_x86_64"},
+					property: []string{"root", "host", "linux", "host_linux", "musl", "linux_glibc", "linux_musl", "not_windows", "x86_64", "lib64", "linux_x86_64", "linux_musl_x86_64", "linux_glibc_x86_64"},
 				},
 				{
 					module:   "foo",
 					variant:  "linux_musl_x86",
-					property: []string{"root", "host", "linux", "musl", "linux_glibc", "linux_musl", "not_windows", "x86", "lib32", "linux_x86", "linux_musl_x86", "linux_glibc_x86"},
+					property: []string{"root", "host", "linux", "host_linux", "musl", "linux_glibc", "linux_musl", "not_windows", "x86", "lib32", "linux_x86", "linux_musl_x86", "linux_glibc_x86"},
 				},
 			},
 		},

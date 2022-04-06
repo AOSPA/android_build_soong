@@ -38,6 +38,7 @@ import (
 	"android/soong/android/soongconfig"
 	"android/soong/bazel"
 	"android/soong/remoteexec"
+	"android/soong/starlark_fmt"
 )
 
 // Bool re-exports proptools.Bool for the android package.
@@ -286,14 +287,12 @@ func saveToBazelConfigFile(config *productVariables, outDir string) error {
 		}
 	}
 
-	//TODO(b/216168792) should use common function to print Starlark code
-	nonArchVariantProductVariablesJson, err := json.MarshalIndent(&nonArchVariantProductVariables, "", "    ")
+	nonArchVariantProductVariablesJson := starlark_fmt.PrintStringList(nonArchVariantProductVariables, 0)
 	if err != nil {
 		return fmt.Errorf("cannot marshal product variable data: %s", err.Error())
 	}
 
-	//TODO(b/216168792) should use common function to print Starlark code
-	archVariantProductVariablesJson, err := json.MarshalIndent(&archVariantProductVariables, "", "    ")
+	archVariantProductVariablesJson := starlark_fmt.PrintStringList(archVariantProductVariables, 0)
 	if err != nil {
 		return fmt.Errorf("cannot marshal arch variant product variable data: %s", err.Error())
 	}
@@ -351,18 +350,19 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 
 	config := &config{
 		productVariables: productVariables{
-			DeviceName:                        stringPtr("test_device"),
-			Platform_sdk_version:              intPtr(30),
-			Platform_sdk_codename:             stringPtr("S"),
-			Platform_version_active_codenames: []string{"S", "Tiramisu"},
-			DeviceSystemSdkVersions:           []string{"14", "15"},
-			Platform_systemsdk_versions:       []string{"29", "30"},
-			AAPTConfig:                        []string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
-			AAPTPreferredConfig:               stringPtr("xhdpi"),
-			AAPTCharacteristics:               stringPtr("nosdcard"),
-			AAPTPrebuiltDPI:                   []string{"xhdpi", "xxhdpi"},
-			UncompressPrivAppDex:              boolPtr(true),
-			ShippingApiLevel:                  stringPtr("30"),
+			DeviceName:                          stringPtr("test_device"),
+			Platform_sdk_version:                intPtr(30),
+			Platform_sdk_codename:               stringPtr("S"),
+			Platform_base_sdk_extension_version: intPtr(1),
+			Platform_version_active_codenames:   []string{"S", "Tiramisu"},
+			DeviceSystemSdkVersions:             []string{"14", "15"},
+			Platform_systemsdk_versions:         []string{"29", "30"},
+			AAPTConfig:                          []string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
+			AAPTPreferredConfig:                 stringPtr("xhdpi"),
+			AAPTCharacteristics:                 stringPtr("nosdcard"),
+			AAPTPrebuiltDPI:                     []string{"xhdpi", "xxhdpi"},
+			UncompressPrivAppDex:                boolPtr(true),
+			ShippingApiLevel:                    stringPtr("30"),
 		},
 
 		outDir:       buildDir,
@@ -520,7 +520,7 @@ func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir strin
 	}
 
 	if archConfig != nil {
-		androidTargets, err := decodeArchSettings(Android, archConfig)
+		androidTargets, err := decodeAndroidArchSettings(archConfig)
 		if err != nil {
 			return Config{}, err
 		}
@@ -741,6 +741,14 @@ func (c *config) PlatformSdkVersion() ApiLevel {
 
 func (c *config) PlatformSdkCodename() string {
 	return String(c.productVariables.Platform_sdk_codename)
+}
+
+func (c *config) PlatformSdkExtensionVersion() int {
+	return *c.productVariables.Platform_sdk_extension_version
+}
+
+func (c *config) PlatformBaseSdkExtensionVersion() int {
+	return *c.productVariables.Platform_base_sdk_extension_version
 }
 
 func (c *config) PlatformSecurityPatch() string {
@@ -1252,6 +1260,10 @@ func (c *deviceConfig) ClangCoverageEnabled() bool {
 	return Bool(c.config.productVariables.ClangCoverage)
 }
 
+func (c *deviceConfig) ClangCoverageContinuousMode() bool {
+	return Bool(c.config.productVariables.ClangCoverageContinuousMode)
+}
+
 func (c *deviceConfig) GcovCoverageEnabled() bool {
 	return Bool(c.config.productVariables.GcovCoverage)
 }
@@ -1564,6 +1576,18 @@ func (c *deviceConfig) BoardProductPrivatePrebuiltDirs() []string {
 	return c.config.productVariables.BoardProductPrivatePrebuiltDirs
 }
 
+func (c *deviceConfig) SystemExtSepolicyPrebuiltApiDir() string {
+	return String(c.config.productVariables.SystemExtSepolicyPrebuiltApiDir)
+}
+
+func (c *deviceConfig) ProductSepolicyPrebuiltApiDir() string {
+	return String(c.config.productVariables.ProductSepolicyPrebuiltApiDir)
+}
+
+func (c *deviceConfig) IsPartnerTrebleSepolicyTestEnabled() bool {
+	return c.SystemExtSepolicyPrebuiltApiDir() != "" || c.ProductSepolicyPrebuiltApiDir() != ""
+}
+
 func (c *deviceConfig) DirectedVendorSnapshot() bool {
 	return c.config.productVariables.DirectedVendorSnapshot
 }
@@ -1685,6 +1709,10 @@ func (c *deviceConfig) BuildDebugfsRestrictionsEnabled() bool {
 
 func (c *deviceConfig) BuildBrokenVendorPropertyNamespace() bool {
 	return c.config.productVariables.BuildBrokenVendorPropertyNamespace
+}
+
+func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
+	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
 func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
@@ -2038,4 +2066,9 @@ func (c *config) ApexBootJars() ConfiguredJarList {
 
 func (c *config) RBEWrapper() string {
 	return c.GetenvWithDefault("RBE_WRAPPER", remoteexec.DefaultWrapperPath)
+}
+
+// UseHostMusl returns true if the host target has been configured to build against musl libc.
+func (c *config) UseHostMusl() bool {
+	return Bool(c.productVariables.HostMusl)
 }

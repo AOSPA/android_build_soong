@@ -17,6 +17,7 @@ package androidmk
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	mkparser "android/soong/androidmk/parser"
@@ -67,6 +68,8 @@ var rewriteProperties = map[string](func(variableAssignmentContext) error){
 	"LOCAL_PROGUARD_ENABLED":               proguardEnabled,
 	"LOCAL_MODULE_PATH":                    prebuiltModulePath,
 	"LOCAL_REPLACE_PREBUILT_APK_INSTALLED": prebuiltPreprocessed,
+
+	"LOCAL_DISABLE_AUTO_GENERATE_TEST_CONFIG": invert("auto_gen_config"),
 
 	// composite functions
 	"LOCAL_MODULE_TAGS": includeVariableIf(bpVariable{"tags", bpparser.ListType}, not(valueDumpEquals("optional"))),
@@ -621,6 +624,16 @@ func makeBlueprintStringAssignment(file *bpFile, prefix string, suffix string, v
 	return err
 }
 
+// Assigns a given boolean value to a given variable in the result bp file. See
+// setVariable documentation for more information about prefix and name.
+func makeBlueprintBoolAssignment(ctx variableAssignmentContext, prefix, name string, value bool) error {
+	expressionValue, err := stringToBoolValue(strconv.FormatBool(value))
+	if err == nil {
+		err = setVariable(ctx.file, false, prefix, name, expressionValue, true)
+	}
+	return err
+}
+
 // If variable is a literal variable name, return the name, otherwise return ""
 func varLiteralName(variable mkparser.Variable) string {
 	if len(variable.Name.Variables) == 0 {
@@ -645,7 +658,11 @@ func prebuiltModulePath(ctx variableAssignmentContext) error {
 	varname := ""
 	fixed := ""
 	val := ctx.mkvalue
+
 	if len(val.Variables) == 1 && varLiteralName(val.Variables[0]) != "" && len(val.Strings) == 2 && val.Strings[0] == "" {
+		if varLiteralName(val.Variables[0]) == "PRODUCT_OUT" && val.Strings[1] == "/system/priv-app" {
+			return makeBlueprintBoolAssignment(ctx, "", "privileged", true)
+		}
 		fixed = val.Strings[1]
 		varname = val.Variables[0].Name.Strings[0]
 		// TARGET_OUT_OPTIONAL_EXECUTABLES puts the artifact in xbin, which is

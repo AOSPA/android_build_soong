@@ -15,6 +15,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 
 	"android/soong/android"
@@ -36,10 +37,10 @@ var (
 		"": []string{
 			"-march=x86-64",
 		},
+
 		"broadwell": []string{
 			"-march=broadwell",
 		},
-
 		"haswell": []string{
 			"-march=core-avx2",
 		},
@@ -77,14 +78,6 @@ var (
 		"popcnt": []string{"-mpopcnt"},
 		"aes_ni": []string{"-maes"},
 	}
-
-	x86_64DefaultArchVariantFeatures = []string{
-		"ssse3",
-		"sse4",
-		"sse4_1",
-		"sse4_2",
-		"popcnt",
-	}
 )
 
 const (
@@ -92,8 +85,6 @@ const (
 )
 
 func init() {
-	android.RegisterDefaultArchVariantFeatures(android.Android, android.X86_64, x86_64DefaultArchVariantFeatures...)
-	exportedStringListVars.Set("X86_64DefaultArchVariantFeatures", x86_64DefaultArchVariantFeatures)
 
 	pctx.StaticVariable("x86_64GccVersion", x86_64GccVersion)
 
@@ -190,6 +181,11 @@ func (toolchainX86_64) LibclangRuntimeLibraryArch() string {
 }
 
 func x86_64ToolchainFactory(arch android.Arch) Toolchain {
+	// Error now rather than having a confusing Ninja error
+	if _, ok := x86_64ArchVariantCflags[arch.ArchVariant]; !ok {
+		panic(fmt.Sprintf("Unknown x86_64 architecture version: %q", arch.ArchVariant))
+	}
+
 	toolchainCflags := []string{
 		"${config.X86_64ToolchainCflags}",
 		"${config.X86_64" + arch.ArchVariant + "VariantCflags}",

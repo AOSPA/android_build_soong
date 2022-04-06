@@ -227,6 +227,12 @@ type DeviceProperties struct {
 		// whether to generate Binder#GetTransaction name method.
 		Generate_get_transaction_name *bool
 
+		// whether all interfaces should be annotated with required permissions.
+		Enforce_permissions *bool
+
+		// allowlist for interfaces that (temporarily) do not require annotation for permissions.
+		Enforce_permissions_exceptions []string `android:"path"`
+
 		// list of flags that will be passed to the AIDL compiler
 		Flags []string
 	}
@@ -418,7 +424,8 @@ type Module struct {
 	outputFile       android.Path
 	extraOutputFiles android.Paths
 
-	exportAidlIncludeDirs android.Paths
+	exportAidlIncludeDirs     android.Paths
+	ignoredAidlPermissionList android.Paths
 
 	logtagsSrcs android.Paths
 
@@ -474,6 +481,8 @@ type Module struct {
 	sdkVersion    android.SdkSpec
 	minSdkVersion android.SdkSpec
 	maxSdkVersion android.SdkSpec
+
+	sourceExtensions []string
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -772,6 +781,17 @@ func (j *Module) hasSrcExt(ext string) bool {
 	return hasSrcExt(j.properties.Srcs, ext)
 }
 
+func (j *Module) individualAidlFlags(ctx android.ModuleContext, aidlFile android.Path) string {
+	var flags string
+
+	if Bool(j.deviceProperties.Aidl.Enforce_permissions) {
+		if !android.InList(aidlFile.String(), j.ignoredAidlPermissionList.Strings()) {
+			flags = "-Wmissing-permission-annotation -Werror"
+		}
+	}
+	return flags
+}
+
 func (j *Module) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.OptionalPath,
 	aidlIncludeDirs android.Paths) (string, android.Paths) {
 
@@ -814,6 +834,11 @@ func (j *Module) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.Opt
 		flags = append(flags, "--transaction_names")
 	}
 
+	if Bool(j.deviceProperties.Aidl.Enforce_permissions) {
+		exceptions := j.deviceProperties.Aidl.Enforce_permissions_exceptions
+		j.ignoredAidlPermissionList = android.PathsForModuleSrcExcludes(ctx, exceptions, nil)
+	}
+
 	aidlMinSdkVersion := j.MinSdkVersion(ctx).ApiLevel.String()
 	flags = append(flags, "--min_sdk_version="+aidlMinSdkVersion)
 
@@ -839,7 +864,7 @@ func (j *Module) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaB
 		}
 		errorProneFlags = append(errorProneFlags, j.properties.Errorprone.Javacflags...)
 
-		flags.errorProneExtraJavacFlags = "${config.ErrorProneFlags} " +
+		flags.errorProneExtraJavacFlags = "${config.ErrorProneHeapFlags} ${config.ErrorProneFlags} " +
 			"'" + strings.Join(errorProneFlags, " ") + "'"
 		flags.errorProneProcessorPath = classpath(android.PathsForSource(ctx, config.ErrorProneClasspath))
 	}
@@ -959,6 +984,14 @@ func (j *Module) collectJavacFlags(
 	return flags
 }
 
+func (j *Module) AddJSONData(d *map[string]interface{}) {
+	(&j.ModuleBase).AddJSONData(d)
+	(*d)["Java"] = map[string]interface{}{
+		"SourceExtensions": j.sourceExtensions,
+	}
+
+}
+
 func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	j.exportAidlIncludeDirs = android.PathsForModuleSrc(ctx, j.deviceProperties.Aidl.Export_include_dirs)
 
@@ -970,6 +1003,12 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	}
 
 	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
+	j.sourceExtensions = []string{}
+	for _, ext := range []string{".kt", ".proto", ".aidl", ".java", ".logtags"} {
+		if hasSrcExt(srcFiles.Strings(), ext) {
+			j.sourceExtensions = append(j.sourceExtensions, ext)
+		}
+	}
 	if hasSrcExt(srcFiles.Strings(), ".proto") {
 		flags = protoFlags(ctx, &j.properties, &j.protoProperties, flags)
 	}

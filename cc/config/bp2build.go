@@ -22,12 +22,9 @@ import (
 	"strings"
 
 	"android/soong/android"
+	"android/soong/starlark_fmt"
 
 	"github.com/google/blueprint"
-)
-
-const (
-	bazelIndent = 4
 )
 
 type bazelVarExporter interface {
@@ -41,6 +38,8 @@ var (
 	exportedStringListVars     = exportedStringListVariables{}
 	exportedStringVars         = exportedStringVariables{}
 	exportedStringListDictVars = exportedStringListDictVariables{}
+	// Note: these can only contain references to other variables and must be printed last
+	exportedVariableReferenceDictVars = exportedVariableReferenceDictVariables{}
 
 	/// Maps containing variables that are dependent on the build config.
 	exportedConfigDependingVars = exportedConfigDependingVariables{}
@@ -65,27 +64,13 @@ func validateCharacters(s string) string {
 type bazelConstant struct {
 	variableName       string
 	internalDefinition string
+	sortLast           bool
 }
 
 type exportedStringVariables map[string]string
 
 func (m exportedStringVariables) Set(k string, v string) {
 	m[k] = v
-}
-
-func bazelIndention(level int) string {
-	return strings.Repeat(" ", level*bazelIndent)
-}
-
-func printBazelList(items []string, indentLevel int) string {
-	list := make([]string, 0, len(items)+2)
-	list = append(list, "[")
-	innerIndent := bazelIndention(indentLevel + 1)
-	for _, item := range items {
-		list = append(list, fmt.Sprintf(`%s"%s",`, innerIndent, item))
-	}
-	list = append(list, bazelIndention(indentLevel)+"]")
-	return strings.Join(list, "\n")
 }
 
 func (m exportedStringVariables) asBazel(config android.Config,
@@ -139,7 +124,7 @@ func (m exportedStringListVariables) asBazel(config android.Config,
 		// out through a constants struct later.
 		ret = append(ret, bazelConstant{
 			variableName:       k,
-			internalDefinition: printBazelList(expandedVars, 0),
+			internalDefinition: starlark_fmt.PrintStringList(expandedVars, 0),
 		})
 	}
 	return ret
@@ -173,17 +158,6 @@ func (m exportedStringListDictVariables) Set(k string, v map[string][]string) {
 	m[k] = v
 }
 
-func printBazelStringListDict(dict map[string][]string) string {
-	bazelDict := make([]string, 0, len(dict)+2)
-	bazelDict = append(bazelDict, "{")
-	for k, v := range dict {
-		bazelDict = append(bazelDict,
-			fmt.Sprintf(`%s"%s": %s,`, bazelIndention(1), k, printBazelList(v, 1)))
-	}
-	bazelDict = append(bazelDict, "}")
-	return strings.Join(bazelDict, "\n")
-}
-
 // Since dictionaries are not supported in Ninja, we do not expand variables for dictionaries
 func (m exportedStringListDictVariables) asBazel(_ android.Config, _ exportedStringVariables,
 	_ exportedStringListVariables, _ exportedConfigDependingVariables) []bazelConstant {
@@ -191,7 +165,37 @@ func (m exportedStringListDictVariables) asBazel(_ android.Config, _ exportedStr
 	for k, dict := range m {
 		ret = append(ret, bazelConstant{
 			variableName:       k,
-			internalDefinition: printBazelStringListDict(dict),
+			internalDefinition: starlark_fmt.PrintStringListDict(dict, 0),
+		})
+	}
+	return ret
+}
+
+type exportedVariableReferenceDictVariables map[string]map[string]string
+
+func (m exportedVariableReferenceDictVariables) Set(k string, v map[string]string) {
+	m[k] = v
+}
+
+func (m exportedVariableReferenceDictVariables) asBazel(_ android.Config, _ exportedStringVariables,
+	_ exportedStringListVariables, _ exportedConfigDependingVariables) []bazelConstant {
+	ret := make([]bazelConstant, 0, len(m))
+	for n, dict := range m {
+		for k, v := range dict {
+			matches, err := variableReference(v)
+			if err != nil {
+				panic(err)
+			} else if !matches.matches {
+				panic(fmt.Errorf("Expected a variable reference, got %q", v))
+			} else if len(matches.fullVariableReference) != len(v) {
+				panic(fmt.Errorf("Expected only a variable reference, got %q", v))
+			}
+			dict[k] = "_" + matches.variable
+		}
+		ret = append(ret, bazelConstant{
+			variableName:       n,
+			internalDefinition: starlark_fmt.PrintDict(dict, 0),
+			sortLast:           true,
 		})
 	}
 	return ret
@@ -204,7 +208,8 @@ func BazelCcToolchainVars(config android.Config) string {
 		config,
 		exportedStringListDictVars,
 		exportedStringListVars,
-		exportedStringVars)
+		exportedStringVars,
+		exportedVariableReferenceDictVars)
 }
 
 func bazelToolchainVars(config android.Config, vars ...bazelVarExporter) string {
@@ -215,7 +220,12 @@ func bazelToolchainVars(config android.Config, vars ...bazelVarExporter) string 
 		results = append(results, v.asBazel(config, exportedStringVars, exportedStringListVars, exportedConfigDependingVars)...)
 	}
 
-	sort.Slice(results, func(i, j int) bool { return results[i].variableName < results[j].variableName })
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].sortLast != results[j].sortLast {
+			return !results[i].sortLast
+		}
+		return results[i].variableName < results[j].variableName
+	})
 
 	definitions := make([]string, 0, len(results))
 	constants := make([]string, 0, len(results))
@@ -223,7 +233,7 @@ func bazelToolchainVars(config android.Config, vars ...bazelVarExporter) string 
 		definitions = append(definitions,
 			fmt.Sprintf("_%s = %s", b.variableName, b.internalDefinition))
 		constants = append(constants,
-			fmt.Sprintf("%[1]s%[2]s = _%[2]s,", bazelIndention(1), b.variableName))
+			fmt.Sprintf("%[1]s%[2]s = _%[2]s,", starlark_fmt.Indention(1), b.variableName))
 	}
 
 	// Build the exported constants struct.
@@ -236,6 +246,32 @@ func bazelToolchainVars(config android.Config, vars ...bazelVarExporter) string 
 	return ret
 }
 
+type match struct {
+	matches               bool
+	fullVariableReference string
+	variable              string
+}
+
+func variableReference(input string) (match, error) {
+	// e.g. "${ExternalCflags}"
+	r := regexp.MustCompile(`\${(?:config\.)?([a-zA-Z0-9_]+)}`)
+
+	matches := r.FindStringSubmatch(input)
+	if len(matches) == 0 {
+		return match{}, nil
+	}
+	if len(matches) != 2 {
+		return match{}, fmt.Errorf("Expected to only match 1 subexpression in %s, got %d", input, len(matches)-1)
+	}
+	return match{
+		matches:               true,
+		fullVariableReference: matches[0],
+		// Index 1 of FindStringSubmatch contains the subexpression match
+		// (variable name) of the capture group.
+		variable: matches[1],
+	}, nil
+}
+
 // expandVar recursively expand interpolated variables in the exportedVars scope.
 //
 // We're using a string slice to track the seen variables to avoid
@@ -245,8 +281,6 @@ func bazelToolchainVars(config android.Config, vars ...bazelVarExporter) string 
 // interpolation stacks are deep (n > 1).
 func expandVar(config android.Config, toExpand string, stringScope exportedStringVariables,
 	stringListScope exportedStringListVariables, exportedVars exportedConfigDependingVariables) ([]string, error) {
-	// e.g. "${ExternalCflags}"
-	r := regexp.MustCompile(`\${([a-zA-Z0-9_]+)}`)
 
 	// Internal recursive function.
 	var expandVarInternal func(string, map[string]bool) (string, error)
@@ -254,20 +288,18 @@ func expandVar(config android.Config, toExpand string, stringScope exportedStrin
 		var ret string
 		remainingString := toExpand
 		for len(remainingString) > 0 {
-			matches := r.FindStringSubmatch(remainingString)
-			if len(matches) == 0 {
+			matches, err := variableReference(remainingString)
+			if err != nil {
+				panic(err)
+			}
+			if !matches.matches {
 				return ret + remainingString, nil
 			}
-			if len(matches) != 2 {
-				panic(fmt.Errorf("Expected to only match 1 subexpression in %s, got %d", remainingString, len(matches)-1))
-			}
-			matchIndex := strings.Index(remainingString, matches[0])
+			matchIndex := strings.Index(remainingString, matches.fullVariableReference)
 			ret += remainingString[:matchIndex]
-			remainingString = remainingString[matchIndex+len(matches[0]):]
+			remainingString = remainingString[matchIndex+len(matches.fullVariableReference):]
 
-			// Index 1 of FindStringSubmatch contains the subexpression match
-			// (variable name) of the capture group.
-			variable := matches[1]
+			variable := matches.variable
 			// toExpand contains a variable.
 			if _, ok := seenVars[variable]; ok {
 				return ret, fmt.Errorf(
