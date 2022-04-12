@@ -27,6 +27,7 @@ import (
 	cc_config "android/soong/cc/config"
 	"android/soong/fuzz"
 	"android/soong/rust/config"
+	"android/soong/snapshot"
 )
 
 var pctx = android.NewPackageContext("android/soong/rust")
@@ -807,6 +808,13 @@ func (mod *Module) Installable() *bool {
 	return mod.Properties.Installable
 }
 
+func (mod *Module) ProcMacro() bool {
+	if pm, ok := mod.compiler.(procMacroInterface); ok {
+		return pm.ProcMacro()
+	}
+	return false
+}
+
 func (mod *Module) toolchain(ctx android.BaseModuleContext) config.Toolchain {
 	if mod.cachedToolchain == nil {
 		mod.cachedToolchain = config.FindToolchain(ctx.Os(), ctx.Arch())
@@ -921,12 +929,13 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		apexInfo := actx.Provider(android.ApexInfoProvider).(android.ApexInfo)
-		if !proptools.BoolDefault(mod.Installable(), mod.EverInstallable()) {
+		if !proptools.BoolDefault(mod.Installable(), mod.EverInstallable()) && !mod.ProcMacro() {
 			// If the module has been specifically configure to not be installed then
 			// hide from make as otherwise it will break when running inside make as the
 			// output path to install will not be specified. Not all uninstallable
 			// modules can be hidden from make as some are needed for resolving make
-			// side dependencies.
+			// side dependencies. In particular, proc-macros need to be captured in the
+			// host snapshot.
 			mod.HideFromMake()
 		} else if !mod.installable(apexInfo) {
 			mod.SkipInstall()
@@ -1047,7 +1056,7 @@ func (mod *Module) begin(ctx BaseModuleContext) {
 }
 
 func (mod *Module) Prebuilt() *android.Prebuilt {
-	if p, ok := mod.compiler.(*prebuiltLibraryDecorator); ok {
+	if p, ok := mod.compiler.(rustPrebuilt); ok {
 		return p.prebuilt()
 	}
 	return nil
@@ -1502,6 +1511,7 @@ func (mod *Module) disableClippy() {
 }
 
 var _ android.HostToolProvider = (*Module)(nil)
+var _ snapshot.RelativeInstallPath = (*Module)(nil)
 
 func (mod *Module) HostToolPath() android.OptionalPath {
 	if !mod.Host() {
@@ -1509,6 +1519,10 @@ func (mod *Module) HostToolPath() android.OptionalPath {
 	}
 	if binary, ok := mod.compiler.(*binaryDecorator); ok {
 		return android.OptionalPathForPath(binary.baseCompiler.path)
+	} else if pm, ok := mod.compiler.(*procMacroDecorator); ok {
+		// Even though proc-macros aren't strictly "tools", since they target the compiler
+		// and act as compiler plugins, we treat them similarly.
+		return android.OptionalPathForPath(pm.baseCompiler.path)
 	}
 	return android.OptionalPath{}
 }
