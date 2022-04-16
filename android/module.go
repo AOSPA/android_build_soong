@@ -456,6 +456,10 @@ type ModuleContext interface {
 	// GetMissingDependencies returns the list of dependencies that were passed to AddDependencies or related methods,
 	// but do not exist.
 	GetMissingDependencies() []string
+
+	// LicenseMetadataFile returns the path where the license metadata for this module will be
+	// generated.
+	LicenseMetadataFile() Path
 }
 
 type Module interface {
@@ -608,6 +612,12 @@ type Dist struct {
 
 	// A suffix to add to the artifact file name (before any extension).
 	Suffix *string `android:"arch_variant"`
+
+	// If true, then the artifact file will be appended with _<product name>. For
+	// example, if the product is coral and the module is an android_app module
+	// of name foo, then the artifact would be foo_coral.apk. If false, there is
+	// no change to the artifact file name.
+	Append_artifact_with_product *bool `android:"arch_variant"`
 
 	// A string tag to select the OutputFiles associated with the tag.
 	//
@@ -3277,6 +3287,10 @@ func (m *moduleContext) CheckbuildFile(srcPath Path) {
 
 func (m *moduleContext) blueprintModuleContext() blueprint.ModuleContext {
 	return m.bp
+}
+
+func (m *moduleContext) LicenseMetadataFile() Path {
+	return m.module.base().licenseMetadataFile
 }
 
 // SrcIsModule decodes module references in the format ":unqualified-name" or "//namespace:name"

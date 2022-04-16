@@ -254,6 +254,8 @@ def init(g, handle):
 		in: `
 $(warning this is the warning)
 $(warning)
+$(warning # this warning starts with a pound)
+$(warning this warning has a # in the middle)
 $(info this is the info)
 $(error this is the error)
 PRODUCT_NAME:=$(shell echo *)
@@ -264,6 +266,8 @@ def init(g, handle):
   cfg = rblf.cfg(handle)
   rblf.mkwarning("product.mk", "this is the warning")
   rblf.mkwarning("product.mk", "")
+  rblf.mkwarning("product.mk", "# this warning starts with a pound")
+  rblf.mkwarning("product.mk", "this warning has a # in the middle")
   rblf.mkinfo("product.mk", "this is the info")
   rblf.mkerror("product.mk", "this is the error")
   cfg["PRODUCT_NAME"] = rblf.shell("echo *")
@@ -901,6 +905,43 @@ def init(g, handle):
 `,
 	},
 	{
+		desc:   "assigment setdefaults",
+		mkname: "product.mk",
+		in: `
+# All of these should have a setdefault because they're self-referential and not defined before
+PRODUCT_LIST1 = a $(PRODUCT_LIST1)
+PRODUCT_LIST2 ?= a $(PRODUCT_LIST2)
+PRODUCT_LIST3 += a
+
+# Now doing them again should not have a setdefault because they've already been set
+PRODUCT_LIST1 = a $(PRODUCT_LIST1)
+PRODUCT_LIST2 ?= a $(PRODUCT_LIST2)
+PRODUCT_LIST3 += a
+`,
+		expected: `# All of these should have a setdefault because they're self-referential and not defined before
+load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  rblf.setdefault(handle, "PRODUCT_LIST1")
+  cfg["PRODUCT_LIST1"] = (["a"] +
+      cfg.get("PRODUCT_LIST1", []))
+  if cfg.get("PRODUCT_LIST2") == None:
+    rblf.setdefault(handle, "PRODUCT_LIST2")
+    cfg["PRODUCT_LIST2"] = (["a"] +
+        cfg.get("PRODUCT_LIST2", []))
+  rblf.setdefault(handle, "PRODUCT_LIST3")
+  cfg["PRODUCT_LIST3"] += ["a"]
+  # Now doing them again should not have a setdefault because they've already been set
+  cfg["PRODUCT_LIST1"] = (["a"] +
+      cfg["PRODUCT_LIST1"])
+  if cfg.get("PRODUCT_LIST2") == None:
+    cfg["PRODUCT_LIST2"] = (["a"] +
+        cfg["PRODUCT_LIST2"])
+  cfg["PRODUCT_LIST3"] += ["a"]
+`,
+	},
+	{
 		desc:   "soong namespace assignments",
 		mkname: "product.mk",
 		in: `
@@ -1228,7 +1269,7 @@ TEST_VAR_LIST := foo
 TEST_VAR_LIST += bar
 TEST_VAR_2 := $(if $(TEST_VAR),bar)
 TEST_VAR_3 := $(if $(TEST_VAR),bar,baz)
-TEST_VAR_3 := $(if $(TEST_VAR),$(TEST_VAR_LIST))
+TEST_VAR_4 := $(if $(TEST_VAR),$(TEST_VAR_LIST))
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
@@ -1239,7 +1280,7 @@ def init(g, handle):
   g["TEST_VAR_LIST"] += ["bar"]
   g["TEST_VAR_2"] = ("bar" if g["TEST_VAR"] else "")
   g["TEST_VAR_3"] = ("bar" if g["TEST_VAR"] else "baz")
-  g["TEST_VAR_3"] = (g["TEST_VAR_LIST"] if g["TEST_VAR"] else [])
+  g["TEST_VAR_4"] = (g["TEST_VAR_LIST"] if g["TEST_VAR"] else [])
 `,
 	},
 	{
@@ -1367,6 +1408,70 @@ def init(g, handle):
     pass
   if int("100%s" % g.get("MY_VAR", "")) >= 10:
     pass
+`,
+	},
+	{
+		desc:   "Type hints",
+		mkname: "product.mk",
+		in: `
+# Test type hints
+#RBC# type_hint list MY_VAR MY_VAR_2
+# Unsupported type
+#RBC# type_hint bool MY_VAR_3
+# Invalid syntax
+#RBC# type_hint list
+# Duplicated variable
+#RBC# type_hint list MY_VAR_2
+#RBC# type_hint list my-local-var-with-dashes
+#RBC# type_hint string MY_STRING_VAR
+
+MY_VAR := foo
+MY_VAR_UNHINTED := foo
+
+# Vars set after other statements still get the hint
+MY_VAR_2 := foo
+
+# You can't specify a type hint after the first statement
+#RBC# type_hint list MY_VAR_4
+MY_VAR_4 := foo
+
+my-local-var-with-dashes := foo
+
+MY_STRING_VAR := $(wildcard foo/bar.mk)
+`,
+		expected: `# Test type hints
+# Unsupported type
+load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  rblf.mk2rbc_error("product.mk:5", "Invalid type_hint annotation. Only list/string types are accepted, found bool")
+  # Invalid syntax
+  rblf.mk2rbc_error("product.mk:7", "Invalid type_hint annotation: list. Must be a variable type followed by a list of variables of that type")
+  # Duplicated variable
+  rblf.mk2rbc_error("product.mk:9", "Duplicate type hint for variable MY_VAR_2")
+  g["MY_VAR"] = ["foo"]
+  g["MY_VAR_UNHINTED"] = "foo"
+  # Vars set after other statements still get the hint
+  g["MY_VAR_2"] = ["foo"]
+  # You can't specify a type hint after the first statement
+  rblf.mk2rbc_error("product.mk:20", "type_hint annotations must come before the first Makefile statement")
+  g["MY_VAR_4"] = "foo"
+  _my_local_var_with_dashes = ["foo"]
+  g["MY_STRING_VAR"] = " ".join(rblf.expand_wildcard("foo/bar.mk"))
+`,
+	},
+	{
+		desc:   "Set LOCAL_PATH to my-dir",
+		mkname: "product.mk",
+		in: `
+LOCAL_PATH := $(call my-dir)
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  
 `,
 	},
 }
