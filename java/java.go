@@ -2041,6 +2041,10 @@ type javaDependencyLabels struct {
 // and also separates dependencies into dynamic dependencies and static dependencies.
 // Each corresponding Bazel target type, can have a different method for handling
 // dynamic vs. static dependencies, and so these are returned to the calling function.
+type eventLogTagsAttributes struct {
+	Srcs bazel.LabelListAttribute
+}
+
 func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext) (*javaCommonAttributes, *javaDependencyLabels) {
 	var srcs bazel.LabelListAttribute
 	archVariantProps := m.GetArchVariantProperties(ctx, &CommonProperties{})
@@ -2055,20 +2059,48 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 
 	javaSrcPartition := "java"
 	protoSrcPartition := "proto"
+	logtagSrcPartition := "logtag"
 	srcPartitions := bazel.PartitionLabelListAttribute(ctx, &srcs, bazel.LabelPartitions{
-		javaSrcPartition:  bazel.LabelPartition{Extensions: []string{".java"}, Keep_remainder: true},
-		protoSrcPartition: android.ProtoSrcLabelPartition,
+		javaSrcPartition:   bazel.LabelPartition{Extensions: []string{".java"}, Keep_remainder: true},
+		logtagSrcPartition: bazel.LabelPartition{Extensions: []string{".logtags", ".logtag"}},
+		protoSrcPartition:  android.ProtoSrcLabelPartition,
 	})
 
+	javaSrcs := srcPartitions[javaSrcPartition]
+
+	var logtagsSrcs bazel.LabelList
+	if !srcPartitions[logtagSrcPartition].IsEmpty() {
+		logtagsLibName := m.Name() + "_logtags"
+		logtagsSrcs = bazel.MakeLabelList([]bazel.Label{{Label: ":" + logtagsLibName}})
+		ctx.CreateBazelTargetModule(
+			bazel.BazelTargetModuleProperties{
+				Rule_class:        "event_log_tags",
+				Bzl_load_location: "//build/make/tools:event_log_tags.bzl",
+			},
+			android.CommonAttributes{Name: logtagsLibName},
+			&eventLogTagsAttributes{
+				Srcs: srcPartitions[logtagSrcPartition],
+			},
+		)
+	}
+	javaSrcs.Append(bazel.MakeLabelListAttribute(logtagsSrcs))
+
+	var javacopts []string
+	if m.properties.Javacflags != nil {
+		javacopts = append(javacopts, m.properties.Javacflags...)
+	}
+	epEnabled := m.properties.Errorprone.Enabled
+	//TODO(b/227504307) add configuration that depends on RUN_ERROR_PRONE environment variable
+	if Bool(epEnabled) {
+		javacopts = append(javacopts, m.properties.Errorprone.Javacflags...)
+	}
+
 	commonAttrs := &javaCommonAttributes{
-		Srcs: srcPartitions[javaSrcPartition],
+		Srcs: javaSrcs,
 		Plugins: bazel.MakeLabelListAttribute(
 			android.BazelLabelForModuleDeps(ctx, m.properties.Plugins),
 		),
-	}
-
-	if m.properties.Javacflags != nil {
-		commonAttrs.Javacopts = bazel.MakeStringListAttribute(m.properties.Javacflags)
+		Javacopts: bazel.MakeStringListAttribute(javacopts),
 	}
 
 	depLabels := &javaDependencyLabels{}
@@ -2218,8 +2250,16 @@ type bazelJavaImportAttributes struct {
 
 // java_import bp2Build converter.
 func (i *Import) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	//TODO(b/209577426): Support multiple arch variants
-	jars := bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrcExcludes(ctx, i.properties.Jars, []string(nil)))
+	var jars bazel.LabelListAttribute
+	archVariantProps := i.GetArchVariantProperties(ctx, &ImportProperties{})
+	for axis, configToProps := range archVariantProps {
+		for config, _props := range configToProps {
+			if archProps, ok := _props.(*ImportProperties); ok {
+				archJars := android.BazelLabelForModuleSrcExcludes(ctx, archProps.Jars, []string(nil))
+				jars.SetSelectValue(axis, config, archJars)
+			}
+		}
+	}
 
 	attrs := &bazelJavaImportAttributes{
 		Jars: jars,

@@ -171,6 +171,8 @@ type AndroidApp struct {
 	overriddenManifestPackageName string
 
 	android.ApexBundleDepsInfo
+
+	javaApiUsedByOutputFile android.ModuleOutPath
 }
 
 func (a *AndroidApp) IsInstallable() bool {
@@ -279,6 +281,7 @@ func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleCon
 func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.checkAppSdkVersions(ctx)
 	a.generateAndroidBuildActions(ctx)
+	a.generateJavaUsedByApex(ctx)
 }
 
 func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
@@ -591,10 +594,16 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	a.onDeviceDir = android.InstallPathToOnDevicePath(ctx, a.installDir)
 
-	noticeFile := android.PathForModuleOut(ctx, "NOTICE", "NOTICE.html.gz")
-	android.BuildNoticeHtmlOutputFromLicenseMetadata(ctx, noticeFile)
 	if Bool(a.appProperties.Embed_notices) || ctx.Config().IsEnvTrue("ALWAYS_EMBED_NOTICES") {
-		a.aapt.noticeFile = android.OptionalPathForPath(noticeFile)
+		noticeFile := android.PathForModuleOut(ctx, "NOTICE.html.gz")
+		android.BuildNoticeHtmlOutputFromLicenseMetadata(ctx, noticeFile)
+		noticeAssetPath := android.PathForModuleOut(ctx, "NOTICE", "NOTICE.html.gz")
+		builder := android.NewRuleBuilder(pctx, ctx)
+		builder.Command().Text("cp").
+			Input(noticeFile).
+			Output(noticeAssetPath)
+		builder.Build("notice_dir", "Building notice dir")
+		a.aapt.noticeFile = android.OptionalPathForPath(noticeAssetPath)
 	}
 
 	a.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
@@ -637,7 +646,21 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	certificates := processMainCert(a.ModuleBase, a.getCertString(ctx), certificateDeps, ctx)
-	a.certificate = certificates[0]
+
+	// This can be reached with an empty certificate list if AllowMissingDependencies is set
+	// and the certificate property for this module is a module reference to a missing module.
+	if len(certificates) > 0 {
+		a.certificate = certificates[0]
+	} else {
+		if !ctx.Config().AllowMissingDependencies() && len(ctx.GetMissingDependencies()) > 0 {
+			panic("Should only get here if AllowMissingDependencies set and there are missing dependencies")
+		}
+		// Set a certificate to avoid panics later when accessing it.
+		a.certificate = Certificate{
+			Key: android.PathForModuleOut(ctx, "missing.pk8"),
+			Pem: android.PathForModuleOut(ctx, "missing.pem"),
+		}
+	}
 
 	// Build a final signed app package.
 	packageFile := android.PathForModuleOut(ctx, a.installApkName+".apk")

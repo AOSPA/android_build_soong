@@ -30,6 +30,7 @@ func runJavaLibraryTestCaseWithRegistrationCtxFunc(t *testing.T, tc bp2buildTest
 }
 
 func runJavaLibraryTestCase(t *testing.T, tc bp2buildTestCase) {
+	t.Helper()
 	runJavaLibraryTestCaseWithRegistrationCtxFunc(t, tc, func(ctx android.RegistrationContext) {})
 }
 
@@ -155,4 +156,98 @@ java_plugin {
 	}, func(ctx android.RegistrationContext) {
 		ctx.RegisterModuleType("java_plugin", java.PluginFactory)
 	})
+}
+
+func TestJavaLibraryErrorproneJavacflagsEnabledManually(t *testing.T) {
+	runJavaLibraryTestCase(t, bp2buildTestCase{
+		blueprint: `java_library {
+    name: "java-lib-1",
+    srcs: ["a.java"],
+    javacflags: ["-Xsuper-fast"],
+    errorprone: {
+        enabled: true,
+        javacflags: ["-Xep:SpeedLimit:OFF"],
+    },
+}`,
+		expectedBazelTargets: []string{
+			makeBazelTarget("java_library", "java-lib-1", attrNameToString{
+				"javacopts": `[
+        "-Xsuper-fast",
+        "-Xep:SpeedLimit:OFF",
+    ]`,
+				"srcs": `["a.java"]`,
+			}),
+		},
+	})
+}
+
+func TestJavaLibraryErrorproneJavacflagsErrorproneDisabledByDefault(t *testing.T) {
+	runJavaLibraryTestCase(t, bp2buildTestCase{
+		blueprint: `java_library {
+    name: "java-lib-1",
+    srcs: ["a.java"],
+    javacflags: ["-Xsuper-fast"],
+    errorprone: {
+        javacflags: ["-Xep:SpeedLimit:OFF"],
+    },
+}`,
+		expectedBazelTargets: []string{
+			makeBazelTarget("java_library", "java-lib-1", attrNameToString{
+				"javacopts": `["-Xsuper-fast"]`,
+				"srcs":      `["a.java"]`,
+			}),
+		},
+	})
+}
+
+func TestJavaLibraryErrorproneJavacflagsErrorproneDisabledManually(t *testing.T) {
+	runJavaLibraryTestCase(t, bp2buildTestCase{
+		blueprint: `java_library {
+    name: "java-lib-1",
+    srcs: ["a.java"],
+    javacflags: ["-Xsuper-fast"],
+    errorprone: {
+		enabled: false,
+        javacflags: ["-Xep:SpeedLimit:OFF"],
+    },
+}`,
+		expectedBazelTargets: []string{
+			makeBazelTarget("java_library", "java-lib-1", attrNameToString{
+				"javacopts": `["-Xsuper-fast"]`,
+				"srcs":      `["a.java"]`,
+			}),
+		},
+	})
+}
+
+func TestJavaLibraryLogTags(t *testing.T) {
+	runJavaLibraryTestCase(t, bp2buildTestCase{
+		description:                "Java library - logtags creates separate dependency",
+		moduleTypeUnderTest:        "java_library",
+		moduleTypeUnderTestFactory: java.LibraryFactory,
+		blueprint: `java_library {
+        name: "example_lib",
+        srcs: [
+			"a.java",
+			"b.java",
+			"a.logtag",
+			"b.logtag",
+		],
+        bazel_module: { bp2build_available: true },
+}`,
+		expectedBazelTargets: []string{
+			makeBazelTarget("event_log_tags", "example_lib_logtags", attrNameToString{
+				"srcs": `[
+        "a.logtag",
+        "b.logtag",
+    ]`,
+			}),
+			makeBazelTarget("java_library", "example_lib", attrNameToString{
+				"srcs": `[
+        "a.java",
+        "b.java",
+        ":example_lib_logtags",
+    ]`,
+			}),
+		}})
 }
