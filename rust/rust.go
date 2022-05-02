@@ -333,20 +333,6 @@ func (mod *Module) IsVndkSp() bool {
 	return false
 }
 
-func (mod *Module) IsVndkPrebuiltLibrary() bool {
-	// Rust modules do not provide VNDK prebuilts
-	return false
-}
-
-func (mod *Module) IsVendorPublicLibrary() bool {
-	return mod.VendorProperties.IsVendorPublicLibrary
-}
-
-func (mod *Module) SdkAndPlatformVariantVisibleToMake() bool {
-	// Rust modules to not provide Sdk variants
-	return false
-}
-
 func (c *Module) IsVndkPrivate() bool {
 	return false
 }
@@ -856,7 +842,24 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	toolchain := mod.toolchain(ctx)
 	mod.makeLinkType = cc.GetMakeLinkType(actx, mod)
 
-	mod.Properties.SubName = cc.GetSubnameProperty(actx, mod)
+	// Differentiate static libraries that are vendor available
+	if mod.UseVndk() {
+		if mod.InProduct() && !mod.OnlyInProduct() {
+			mod.Properties.SubName += cc.ProductSuffix
+		} else {
+			mod.Properties.SubName += cc.VendorSuffix
+		}
+	} else if mod.InRamdisk() && !mod.OnlyInRamdisk() {
+		mod.Properties.SubName += cc.RamdiskSuffix
+	} else if mod.InVendorRamdisk() && !mod.OnlyInVendorRamdisk() {
+		mod.Properties.SubName += cc.VendorRamdiskSuffix
+	} else if mod.InRecovery() && !mod.OnlyInRecovery() {
+		mod.Properties.SubName += cc.RecoverySuffix
+	}
+
+	if mod.Target().NativeBridge == android.NativeBridgeEnabled {
+		mod.Properties.SubName += cc.NativeBridgeSuffix
+	}
 
 	if !toolchain.Supported() {
 		// This toolchain's unsupported, there's nothing to do for this mod.
