@@ -25,14 +25,17 @@ import (
 	"testing"
 
 	"android/soong/android"
+	"android/soong/android/allowlists"
 	"android/soong/bazel"
 )
 
 var (
 	// A default configuration for tests to not have to specify bp2build_available on top level targets.
-	bp2buildConfig = android.Bp2BuildConfig{
-		android.BP2BUILD_TOPLEVEL: android.Bp2BuildDefaultTrueRecursively,
-	}
+	bp2buildConfig = android.NewBp2BuildAllowlist().SetDefaultConfig(
+		allowlists.Bp2BuildConfig{
+			android.Bp2BuildTopLevel: allowlists.Bp2BuildDefaultTrueRecursively,
+		},
+	)
 
 	buildDir string
 )
@@ -81,8 +84,9 @@ type bp2buildTestCase struct {
 	expectedBazelTargets       []string
 	filesystem                 map[string]string
 	dir                        string
-	expectedErr                error
-	unconvertedDepsMode        unconvertedDepsMode
+	// An error with a string contained within the string of the expected error
+	expectedErr         error
+	unconvertedDepsMode unconvertedDepsMode
 }
 
 func runBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.RegistrationContext), tc bp2buildTestCase) {

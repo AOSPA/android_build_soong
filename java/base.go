@@ -185,12 +185,12 @@ type CommonProperties struct {
 // constructing a new module.
 type DeviceProperties struct {
 	// If not blank, set to the version of the sdk to compile against.
-	// Defaults to compiling against the current platform.
+	// Defaults to private.
 	// Values are of one of the following forms:
-	// 1) numerical API level or "current"
-	// 2) An SDK kind with an API level: "<sdk kind>_<API level>". See
-	// build/soong/android/sdk_version.go for the complete and up to date list of
-	// SDK kinds. If the SDK kind value is empty, it will be set to public.
+	// 1) numerical API level, "current", "none", or "core_platform"
+	// 2) An SDK kind with an API level: "<sdk kind>_<API level>"
+	// See build/soong/android/sdk_version.go for the complete and up to date list of SDK kinds.
+	// If the SDK kind is empty, it will be set to public.
 	Sdk_version *string
 
 	// if not blank, set the minimum version of the sdk that the compiled artifacts will run against.
@@ -207,7 +207,7 @@ type DeviceProperties struct {
 
 	// Whether to compile against the platform APIs instead of an SDK.
 	// If true, then sdk_version must be empty. The value of this field
-	// is ignored when module's type isn't android_app.
+	// is ignored when module's type isn't android_app, android_test, or android_test_helper_app.
 	Platform_apis *bool
 
 	Aidl struct {
@@ -1694,6 +1694,8 @@ func (j *Module) IDEInfo(dpInfo *android.IdeInfo) {
 		dpInfo.Jarjar_rules = append(dpInfo.Jarjar_rules, j.expandJarjarRules.String())
 	}
 	dpInfo.Paths = append(dpInfo.Paths, j.modulePaths...)
+	dpInfo.Static_libs = append(dpInfo.Static_libs, j.properties.Static_libs...)
+	dpInfo.Libs = append(dpInfo.Libs, j.properties.Libs...)
 }
 
 func (j *Module) CompilerDeps() []string {
