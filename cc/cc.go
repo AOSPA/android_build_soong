@@ -1225,17 +1225,6 @@ func (c *Module) IsVendorPublicLibrary() bool {
 	return c.VendorProperties.IsVendorPublicLibrary
 }
 
-func (c *Module) IsVndkPrebuiltLibrary() bool {
-	if _, ok := c.linker.(*vndkPrebuiltLibraryDecorator); ok {
-		return true
-	}
-	return false
-}
-
-func (c *Module) SdkAndPlatformVariantVisibleToMake() bool {
-	return c.Properties.SdkAndPlatformVariantVisibleToMake
-}
-
 func (c *Module) HasLlndkStubs() bool {
 	lib := moduleLibraryInterface(c)
 	return lib != nil && lib.hasLLNDKStubs()
@@ -1721,7 +1710,7 @@ func (c *Module) DataPaths() []android.DataPath {
 	return nil
 }
 
-func getNameSuffixWithVndkVersion(ctx android.ModuleContext, c LinkableInterface) string {
+func (c *Module) getNameSuffixWithVndkVersion(ctx android.ModuleContext) string {
 	// Returns the name suffix for product and vendor variants. If the VNDK version is not
 	// "current", it will append the VNDK version to the name suffix.
 	var vndkVersion string
@@ -1741,19 +1730,19 @@ func getNameSuffixWithVndkVersion(ctx android.ModuleContext, c LinkableInterface
 	if vndkVersion == "current" {
 		vndkVersion = ctx.DeviceConfig().PlatformVndkVersion()
 	}
-	if c.VndkVersion() != vndkVersion && c.VndkVersion() != "" {
+	if c.Properties.VndkVersion != vndkVersion && c.Properties.VndkVersion != "" {
 		// add version suffix only if the module is using different vndk version than the
 		// version in product or vendor partition.
-		nameSuffix += "." + c.VndkVersion()
+		nameSuffix += "." + c.Properties.VndkVersion
 	}
 	return nameSuffix
 }
 
-func GetSubnameProperty(actx android.ModuleContext, c LinkableInterface) string {
-	var subName = ""
+func (c *Module) setSubnameProperty(actx android.ModuleContext) {
+	c.Properties.SubName = ""
 
 	if c.Target().NativeBridge == android.NativeBridgeEnabled {
-		subName += NativeBridgeSuffix
+		c.Properties.SubName += NativeBridgeSuffix
 	}
 
 	llndk := c.IsLlndk()
@@ -1761,27 +1750,25 @@ func GetSubnameProperty(actx android.ModuleContext, c LinkableInterface) string 
 		// .vendor.{version} suffix is added for vendor variant or .product.{version} suffix is
 		// added for product variant only when we have vendor and product variants with core
 		// variant. The suffix is not added for vendor-only or product-only module.
-		subName += getNameSuffixWithVndkVersion(actx, c)
+		c.Properties.SubName += c.getNameSuffixWithVndkVersion(actx)
 	} else if c.IsVendorPublicLibrary() {
-		subName += vendorPublicLibrarySuffix
-	} else if c.IsVndkPrebuiltLibrary() {
+		c.Properties.SubName += vendorPublicLibrarySuffix
+	} else if _, ok := c.linker.(*vndkPrebuiltLibraryDecorator); ok {
 		// .vendor suffix is added for backward compatibility with VNDK snapshot whose names with
 		// such suffixes are already hard-coded in prebuilts/vndk/.../Android.bp.
-		subName += VendorSuffix
+		c.Properties.SubName += VendorSuffix
 	} else if c.InRamdisk() && !c.OnlyInRamdisk() {
-		subName += RamdiskSuffix
+		c.Properties.SubName += RamdiskSuffix
 	} else if c.InVendorRamdisk() && !c.OnlyInVendorRamdisk() {
-		subName += VendorRamdiskSuffix
+		c.Properties.SubName += VendorRamdiskSuffix
 	} else if c.InRecovery() && !c.OnlyInRecovery() {
-		subName += RecoverySuffix
-	} else if c.IsSdkVariant() && (c.SdkAndPlatformVariantVisibleToMake() || c.SplitPerApiLevel()) {
-		subName += sdkSuffix
+		c.Properties.SubName += RecoverySuffix
+	} else if c.IsSdkVariant() && (c.Properties.SdkAndPlatformVariantVisibleToMake || c.SplitPerApiLevel()) {
+		c.Properties.SubName += sdkSuffix
 		if c.SplitPerApiLevel() {
-			subName += "." + c.SdkVersion()
+			c.Properties.SubName += "." + c.SdkVersion()
 		}
 	}
-
-	return subName
 }
 
 // Returns true if Bazel was successfully used for the analysis of this module.
@@ -1819,7 +1806,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		return
 	}
 
-	c.Properties.SubName = GetSubnameProperty(actx, c)
+	c.setSubnameProperty(actx)
 	apexInfo := actx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	if !apexInfo.IsForPlatform() {
 		c.hideApexVariantFromMake = true
