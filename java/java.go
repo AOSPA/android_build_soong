@@ -1725,6 +1725,7 @@ func ImportFactoryHost() android.Module {
 
 	android.InitPrebuiltModule(module, &module.properties.Jars)
 	android.InitApexModule(module)
+	android.InitBazelModule(module)
 	InitJavaModule(module, android.HostSupported)
 	return module
 }
@@ -2023,13 +2024,28 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	}
 }
 
-type javaLibraryAttributes struct {
+type javaCommonAttributes struct {
 	Srcs      bazel.LabelListAttribute
-	Deps      bazel.LabelListAttribute
+	Plugins   bazel.LabelListAttribute
 	Javacopts bazel.StringListAttribute
 }
 
-func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext) *javaLibraryAttributes {
+type javaDependencyLabels struct {
+	// Dependencies which DO NOT contribute to the API visible to upstream dependencies.
+	Deps bazel.LabelListAttribute
+	// Dependencies which DO contribute to the API visible to upstream dependencies.
+	StaticDeps bazel.LabelListAttribute
+}
+
+// convertLibraryAttrsBp2Build converts a few shared attributes from java_* modules
+// and also separates dependencies into dynamic dependencies and static dependencies.
+// Each corresponding Bazel target type, can have a different method for handling
+// dynamic vs. static dependencies, and so these are returned to the calling function.
+type eventLogTagsAttributes struct {
+	Srcs bazel.LabelListAttribute
+}
+
+func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext) (*javaCommonAttributes, *javaDependencyLabels) {
 	var srcs bazel.LabelListAttribute
 	archVariantProps := m.GetArchVariantProperties(ctx, &CommonProperties{})
 	for axis, configToProps := range archVariantProps {
@@ -2043,45 +2059,104 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 
 	javaSrcPartition := "java"
 	protoSrcPartition := "proto"
+	logtagSrcPartition := "logtag"
 	srcPartitions := bazel.PartitionLabelListAttribute(ctx, &srcs, bazel.LabelPartitions{
-		javaSrcPartition:  bazel.LabelPartition{Extensions: []string{".java"}, Keep_remainder: true},
-		protoSrcPartition: android.ProtoSrcLabelPartition,
+		javaSrcPartition:   bazel.LabelPartition{Extensions: []string{".java"}, Keep_remainder: true},
+		logtagSrcPartition: bazel.LabelPartition{Extensions: []string{".logtags", ".logtag"}},
+		protoSrcPartition:  android.ProtoSrcLabelPartition,
 	})
 
-	attrs := &javaLibraryAttributes{
-		Srcs: srcPartitions[javaSrcPartition],
+	javaSrcs := srcPartitions[javaSrcPartition]
+
+	var logtagsSrcs bazel.LabelList
+	if !srcPartitions[logtagSrcPartition].IsEmpty() {
+		logtagsLibName := m.Name() + "_logtags"
+		logtagsSrcs = bazel.MakeLabelList([]bazel.Label{{Label: ":" + logtagsLibName}})
+		ctx.CreateBazelTargetModule(
+			bazel.BazelTargetModuleProperties{
+				Rule_class:        "event_log_tags",
+				Bzl_load_location: "//build/make/tools:event_log_tags.bzl",
+			},
+			android.CommonAttributes{Name: logtagsLibName},
+			&eventLogTagsAttributes{
+				Srcs: srcPartitions[logtagSrcPartition],
+			},
+		)
+	}
+	javaSrcs.Append(bazel.MakeLabelListAttribute(logtagsSrcs))
+
+	var javacopts []string
+	if m.properties.Javacflags != nil {
+		javacopts = append(javacopts, m.properties.Javacflags...)
+	}
+	epEnabled := m.properties.Errorprone.Enabled
+	//TODO(b/227504307) add configuration that depends on RUN_ERROR_PRONE environment variable
+	if Bool(epEnabled) {
+		javacopts = append(javacopts, m.properties.Errorprone.Javacflags...)
 	}
 
-	if m.properties.Javacflags != nil {
-		attrs.Javacopts = bazel.MakeStringListAttribute(m.properties.Javacflags)
+	commonAttrs := &javaCommonAttributes{
+		Srcs: javaSrcs,
+		Plugins: bazel.MakeLabelListAttribute(
+			android.BazelLabelForModuleDeps(ctx, m.properties.Plugins),
+		),
+		Javacopts: bazel.MakeStringListAttribute(javacopts),
 	}
+
+	depLabels := &javaDependencyLabels{}
 
 	var deps bazel.LabelList
-	sdkVersion := m.SdkVersion(ctx)
-	if sdkVersion.Kind == android.SdkPublic && sdkVersion.ApiLevel == android.FutureApiLevel {
-		// TODO(b/220869005) remove forced dependency on current public android.jar
-		deps.Add(&bazel.Label{Label: "//prebuilts/sdk:public_current_android_sdk_java_import"})
-	}
 	if m.properties.Libs != nil {
 		deps.Append(android.BazelLabelForModuleDeps(ctx, m.properties.Libs))
 	}
+
+	var staticDeps bazel.LabelList
 	if m.properties.Static_libs != nil {
-		//TODO(b/217236083) handle static libs similarly to Soong
-		deps.Append(android.BazelLabelForModuleDeps(ctx, m.properties.Static_libs))
+		staticDeps.Append(android.BazelLabelForModuleDeps(ctx, m.properties.Static_libs))
 	}
 
-	protoDeps := bp2buildProto(ctx, &m.Module, srcPartitions[protoSrcPartition])
-	if protoDeps != nil {
-		deps.Add(protoDeps)
-	}
+	protoDepLabel := bp2buildProto(ctx, &m.Module, srcPartitions[protoSrcPartition])
+	// Soong does not differentiate between a java_library and the Bazel equivalent of
+	// a java_proto_library + proto_library pair. Instead, in Soong proto sources are
+	// listed directly in the srcs of a java_library, and the classes produced
+	// by protoc are included directly in the resulting JAR. Thus upstream dependencies
+	// that depend on a java_library with proto sources can link directly to the protobuf API,
+	// and so this should be a static dependency.
+	staticDeps.Add(protoDepLabel)
 
-	attrs.Deps = bazel.MakeLabelListAttribute(deps)
+	depLabels.Deps = bazel.MakeLabelListAttribute(deps)
+	depLabels.StaticDeps = bazel.MakeLabelListAttribute(staticDeps)
 
-	return attrs
+	return commonAttrs, depLabels
+}
+
+type javaLibraryAttributes struct {
+	*javaCommonAttributes
+	Deps    bazel.LabelListAttribute
+	Exports bazel.LabelListAttribute
 }
 
 func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
-	attrs := m.convertLibraryAttrsBp2Build(ctx)
+	commonAttrs, depLabels := m.convertLibraryAttrsBp2Build(ctx)
+
+	deps := depLabels.Deps
+	if !commonAttrs.Srcs.IsEmpty() {
+		deps.Append(depLabels.StaticDeps) // we should only append these if there are sources to use them
+
+		sdkVersion := m.SdkVersion(ctx)
+		if sdkVersion.Kind == android.SdkPublic && sdkVersion.ApiLevel == android.FutureApiLevel {
+			// TODO(b/220869005) remove forced dependency on current public android.jar
+			deps.Add(bazel.MakeLabelAttribute("//prebuilts/sdk:public_current_android_sdk_java_import"))
+		}
+	} else if !depLabels.Deps.IsEmpty() {
+		ctx.ModuleErrorf("Module has direct dependencies but no sources. Bazel will not allow this.")
+	}
+
+	attrs := &javaLibraryAttributes{
+		javaCommonAttributes: commonAttrs,
+		Deps:                 deps,
+		Exports:              depLabels.StaticDeps,
+	}
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "java_library",
@@ -2092,15 +2167,30 @@ func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
 }
 
 type javaBinaryHostAttributes struct {
-	Srcs       bazel.LabelListAttribute
-	Deps       bazel.LabelListAttribute
-	Main_class string
-	Jvm_flags  bazel.StringListAttribute
-	Javacopts  bazel.StringListAttribute
+	*javaCommonAttributes
+	Deps         bazel.LabelListAttribute
+	Runtime_deps bazel.LabelListAttribute
+	Main_class   string
+	Jvm_flags    bazel.StringListAttribute
 }
 
 // JavaBinaryHostBp2Build is for java_binary_host bp2build.
 func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
+	commonAttrs, depLabels := m.convertLibraryAttrsBp2Build(ctx)
+
+	deps := depLabels.Deps
+	deps.Append(depLabels.StaticDeps)
+	if m.binaryProperties.Jni_libs != nil {
+		deps.Append(bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, m.binaryProperties.Jni_libs)))
+	}
+
+	var runtimeDeps bazel.LabelListAttribute
+	if commonAttrs.Srcs.IsEmpty() {
+		// if there are no sources, then the dependencies can only be used at runtime
+		runtimeDeps = deps
+		deps = bazel.LabelListAttribute{}
+	}
+
 	mainClass := ""
 	if m.binaryProperties.Main_class != nil {
 		mainClass = *m.binaryProperties.Main_class
@@ -2112,26 +2202,12 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 		}
 		mainClass = mainClassInManifest
 	}
-	srcs := bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrcExcludes(ctx, m.properties.Srcs, m.properties.Exclude_srcs))
+
 	attrs := &javaBinaryHostAttributes{
-		Srcs:       srcs,
-		Main_class: mainClass,
-	}
-
-	if m.properties.Javacflags != nil {
-		attrs.Javacopts = bazel.MakeStringListAttribute(m.properties.Javacflags)
-	}
-
-	// Attribute deps
-	deps := []string{}
-	if m.properties.Static_libs != nil {
-		deps = append(deps, m.properties.Static_libs...)
-	}
-	if m.binaryProperties.Jni_libs != nil {
-		deps = append(deps, m.binaryProperties.Jni_libs...)
-	}
-	if len(deps) > 0 {
-		attrs.Deps = bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, deps))
+		javaCommonAttributes: commonAttrs,
+		Deps:                 deps,
+		Runtime_deps:         runtimeDeps,
+		Main_class:           mainClass,
 	}
 
 	// Attribute jvm_flags
@@ -2174,8 +2250,16 @@ type bazelJavaImportAttributes struct {
 
 // java_import bp2Build converter.
 func (i *Import) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	//TODO(b/209577426): Support multiple arch variants
-	jars := bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrcExcludes(ctx, i.properties.Jars, []string(nil)))
+	var jars bazel.LabelListAttribute
+	archVariantProps := i.GetArchVariantProperties(ctx, &ImportProperties{})
+	for axis, configToProps := range archVariantProps {
+		for config, _props := range configToProps {
+			if archProps, ok := _props.(*ImportProperties); ok {
+				archJars := android.BazelLabelForModuleSrcExcludes(ctx, archProps.Jars, []string(nil))
+				jars.SetSelectValue(axis, config, archJars)
+			}
+		}
+	}
 
 	attrs := &bazelJavaImportAttributes{
 		Jars: jars,

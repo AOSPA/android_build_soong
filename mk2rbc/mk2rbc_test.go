@@ -197,15 +197,31 @@ def init(g, handle):
 		mkname: "path/product.mk",
 		in: `
 $(call inherit-product, */font.mk)
+$(call inherit-product, $(sort $(wildcard */font.mk)))
+$(call inherit-product, $(wildcard */font.mk))
+
+include */font.mk
+include $(sort $(wildcard */font.mk))
+include $(wildcard */font.mk)
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
-load("//foo:font.star", _font_init = "init")
-load("//bar:font.star", _font1_init = "init")
+load("//bar:font.star", _font_init = "init")
+load("//foo:font.star", _font1_init = "init")
 
 def init(g, handle):
   cfg = rblf.cfg(handle)
-  rblf.inherit(handle, "foo/font", _font_init)
-  rblf.inherit(handle, "bar/font", _font1_init)
+  rblf.inherit(handle, "bar/font", _font_init)
+  rblf.inherit(handle, "foo/font", _font1_init)
+  rblf.inherit(handle, "bar/font", _font_init)
+  rblf.inherit(handle, "foo/font", _font1_init)
+  rblf.inherit(handle, "bar/font", _font_init)
+  rblf.inherit(handle, "foo/font", _font1_init)
+  _font_init(g, handle)
+  _font1_init(g, handle)
+  _font_init(g, handle)
+  _font1_init(g, handle)
+  _font_init(g, handle)
+  _font1_init(g, handle)
 `,
 	},
 	{
@@ -759,8 +775,8 @@ def init(g, handle):
   cfg = rblf.cfg(handle)
   rblf.enforce_product_packages_exist("")
   rblf.enforce_product_packages_exist("foo")
-  rblf.require_artifacts_in_path("foo", "bar")
-  rblf.require_artifacts_in_path_relaxed("foo", "bar")
+  rblf.require_artifacts_in_path(handle, "foo", "bar")
+  rblf.require_artifacts_in_path_relaxed(handle, "foo", "bar")
   rblf.mkdist_for_goals(g, "goal", "from:to")
   rblf.add_product_dex_preopt_module_config(handle, "MyModule", "disable")
 `,
@@ -793,7 +809,7 @@ PRODUCT_COPY_FILES := $(addprefix pfx-,a b c)
 PRODUCT_COPY_FILES := $(addsuffix .sff, a b c)
 PRODUCT_NAME := $(word 1, $(subst ., ,$(TARGET_BOARD_PLATFORM)))
 $(info $(patsubst %.pub,$(PRODUCT_NAME)%,$(PRODUCT_ADB_KEYS)))
-$(info $(dir foo/bar))
+$(info $$(dir foo/bar): $(dir foo/bar))
 $(info $(firstword $(PRODUCT_COPY_FILES)))
 $(info $(lastword $(PRODUCT_COPY_FILES)))
 $(info $(dir $(lastword $(MAKEFILE_LIST))))
@@ -816,7 +832,7 @@ def init(g, handle):
   cfg["PRODUCT_COPY_FILES"] = rblf.addsuffix(".sff", "a b c")
   cfg["PRODUCT_NAME"] = ((g.get("TARGET_BOARD_PLATFORM", "")).replace(".", " ")).split()[0]
   rblf.mkinfo("product.mk", rblf.mkpatsubst("%.pub", "%s%%" % cfg["PRODUCT_NAME"], g.get("PRODUCT_ADB_KEYS", "")))
-  rblf.mkinfo("product.mk", rblf.dir("foo/bar"))
+  rblf.mkinfo("product.mk", "$(dir foo/bar): %s" % rblf.dir("foo/bar"))
   rblf.mkinfo("product.mk", cfg["PRODUCT_COPY_FILES"][0])
   rblf.mkinfo("product.mk", cfg["PRODUCT_COPY_FILES"][-1])
   rblf.mkinfo("product.mk", rblf.dir("product.mk"))
@@ -1022,12 +1038,13 @@ def init(g, handle):
 `,
 	},
 	{
-		desc:   "strip function",
+		desc:   "strip/sort functions",
 		mkname: "product.mk",
 		in: `
 ifeq ($(filter hwaddress,$(PRODUCT_PACKAGES)),)
    PRODUCT_PACKAGES := $(strip $(PRODUCT_PACKAGES) hwaddress)
 endif
+MY_VAR := $(sort b a c)
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
@@ -1036,6 +1053,7 @@ def init(g, handle):
   if "hwaddress" not in cfg.get("PRODUCT_PACKAGES", []):
     rblf.setdefault(handle, "PRODUCT_PACKAGES")
     cfg["PRODUCT_PACKAGES"] = (rblf.mkstrip("%s hwaddress" % " ".join(cfg.get("PRODUCT_PACKAGES", [])))).split()
+  g["MY_VAR"] = rblf.mksort("b a c")
 `,
 	},
 	{
@@ -1313,6 +1331,11 @@ BOOT_KERNEL_MODULES_FILTER_2 := $(foreach m,$(BOOT_KERNEL_MODULES_LIST),%/$(m))
 FOREACH_WITH_IF := $(foreach module,\
   $(BOOT_KERNEL_MODULES_LIST),\
   $(if $(filter $(module),foo.ko),,$(error module "$(module)" has an error!)))
+
+# Same as above, but not assigning it to a variable allows it to be converted to statements
+$(foreach module,\
+  $(BOOT_KERNEL_MODULES_LIST),\
+  $(if $(filter $(module),foo.ko),,$(error module "$(module)" has an error!)))
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 
@@ -1324,6 +1347,10 @@ def init(g, handle):
   g["BOOT_KERNEL_MODULES_LIST"] += ["bar.ko"]
   g["BOOT_KERNEL_MODULES_FILTER_2"] = ["%%/%s" % m for m in g["BOOT_KERNEL_MODULES_LIST"]]
   g["FOREACH_WITH_IF"] = [("" if rblf.filter(module, "foo.ko") else rblf.mkerror("product.mk", "module \"%s\" has an error!" % module)) for module in g["BOOT_KERNEL_MODULES_LIST"]]
+  # Same as above, but not assigning it to a variable allows it to be converted to statements
+  for module in g["BOOT_KERNEL_MODULES_LIST"]:
+    if not rblf.filter(module, "foo.ko"):
+      rblf.mkerror("product.mk", "module \"%s\" has an error!" % module)
 `,
 	},
 	{
@@ -1472,6 +1499,34 @@ LOCAL_PATH := $(call my-dir)
 def init(g, handle):
   cfg = rblf.cfg(handle)
   
+`,
+	},
+	{
+		desc:   "Evals",
+		mkname: "product.mk",
+		in: `
+$(eval)
+$(eval MY_VAR := foo)
+$(eval # This is a test of eval functions)
+$(eval $(TOO_COMPLICATED) := bar)
+$(foreach x,$(MY_LIST_VAR), \
+  $(eval PRODUCT_COPY_FILES += foo/bar/$(x):$(TARGET_COPY_OUT_VENDOR)/etc/$(x)) \
+  $(if $(MY_OTHER_VAR),$(eval PRODUCT_COPY_FILES += $(MY_OTHER_VAR):foo/bar/$(x))) \
+)
+
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  g["MY_VAR"] = "foo"
+  # This is a test of eval functions
+  rblf.mk2rbc_error("product.mk:5", "Eval expression too complex; only assignments and comments are supported")
+  for x in rblf.words(g.get("MY_LIST_VAR", "")):
+    rblf.setdefault(handle, "PRODUCT_COPY_FILES")
+    cfg["PRODUCT_COPY_FILES"] += ("foo/bar/%s:%s/etc/%s" % (x, g.get("TARGET_COPY_OUT_VENDOR", ""), x)).split()
+    if g.get("MY_OTHER_VAR", ""):
+      cfg["PRODUCT_COPY_FILES"] += ("%s:foo/bar/%s" % (g.get("MY_OTHER_VAR", ""), x)).split()
 `,
 	},
 }

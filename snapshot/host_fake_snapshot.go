@@ -123,13 +123,13 @@ func (c *hostFakeSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 		if !apexInfo.IsForPlatform() {
 			return
 		}
-		path := hostBinToolPath(module)
+		path := hostToolPath(module)
 		if path.Valid() && path.String() != "" {
 			outFile := filepath.Join(c.snapshotDir, path.String())
 			if !seen[outFile] {
 				seen[outFile] = true
 				outputs = append(outputs, WriteStringToFileRule(ctx, "", outFile))
-				jsonData = append(jsonData, hostSnapshotFakeJsonFlags{*hostBinJsonDesc(module), false})
+				jsonData = append(jsonData, hostSnapshotFakeJsonFlags{*hostJsonDesc(module), false})
 			}
 		}
 	})

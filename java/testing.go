@@ -54,6 +54,8 @@ var PrepareForTestWithJavaBuildComponents = android.GroupFixturePreparers(
 		"build/soong/java/lint_defaults.txt": nil,
 		// Needed for apps that do not provide their own.
 		"build/make/target/product/security": nil,
+		// Required to generate Java used-by API coverage
+		"build/soong/scripts/gen_java_usedby_apex.sh": nil,
 	}.AddToFixture(),
 )
 
@@ -70,6 +72,10 @@ var PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd = android.GroupFixtu
 		defaultJavaDir + "/framework/aidl": nil,
 		// Needed for various deps defined in GatherRequiredDepsForTest()
 		defaultJavaDir + "/a.java": nil,
+
+		// Needed for R8 rules on apps
+		"build/make/core/proguard.flags":             nil,
+		"build/make/core/proguard_basic_keeps.flags": nil,
 	}.AddToFixture(),
 	// The java default module definitions.
 	android.FixtureAddTextFile(defaultJavaDir+"/Android.bp", gatherRequiredDepsForTest()),

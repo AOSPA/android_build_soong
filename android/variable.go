@@ -433,6 +433,8 @@ type productVariables struct {
 	CertificateOverrides         []string `json:",omitempty"`
 	PackageNameOverrides         []string `json:",omitempty"`
 
+	ApexGlobalMinSdkVersionOverride *string `json:",omitempty"`
+
 	EnforceSystemCertificate          *bool    `json:",omitempty"`
 	EnforceSystemCertificateAllowList []string `json:",omitempty"`
 

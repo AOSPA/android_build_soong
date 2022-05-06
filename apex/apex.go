@@ -19,6 +19,7 @@ package apex
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -414,8 +415,8 @@ type apexBundle struct {
 	// Processed file_contexts files
 	fileContexts android.WritablePath
 
-	// Struct holding the merged notice file paths in different formats
-	mergedNotices android.NoticeOutputs
+	// Path to notice file in html.gz format.
+	htmlGzNotice android.WritablePath
 
 	// The built APEX file. This is the main product.
 	// Could be .apex or .capex
@@ -487,11 +488,10 @@ const (
 // for each of the files in case when the APEX is flattened.
 type apexFile struct {
 	// buildFile is put in the installDir inside the APEX.
-	builtFile   android.Path
-	noticeFiles android.Paths
-	installDir  string
-	customStem  string
-	symlinks    []string // additional symlinks
+	builtFile  android.Path
+	installDir string
+	customStem string
+	symlinks   []string // additional symlinks
 
 	// Info for Android.mk Module name of `module` in AndroidMk. Note the generated AndroidMk
 	// module for apexFile is named something like <AndroidMk module name>.<apex name>[<apex
@@ -528,7 +528,6 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 		module:              module,
 	}
 	if module != nil {
-		ret.noticeFiles = module.NoticeFiles()
 		ret.moduleDir = ctx.OtherModuleDir(module)
 		ret.requiredModuleNames = module.RequiredModuleNames()
 		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
@@ -1658,13 +1657,33 @@ type androidApp interface {
 var _ androidApp = (*java.AndroidApp)(nil)
 var _ androidApp = (*java.AndroidAppImport)(nil)
 
+func sanitizedBuildIdForPath(ctx android.BaseModuleContext) string {
+	buildId := ctx.Config().BuildId()
+
+	// The build ID is used as a suffix for a filename, so ensure that
+	// the set of characters being used are sanitized.
+	// - any word character: [a-zA-Z0-9_]
+	// - dots: .
+	// - dashes: -
+	validRegex := regexp.MustCompile(`^[\w\.\-\_]+$`)
+	if !validRegex.MatchString(buildId) {
+		ctx.ModuleErrorf("Unable to use build id %s as filename suffix, valid characters are [a-z A-Z 0-9 _ . -].", buildId)
+	}
+	return buildId
+}
+
 func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) apexFile {
 	appDir := "app"
 	if aapp.Privileged() {
 		appDir = "priv-app"
 	}
-	dirInApex := filepath.Join(appDir, aapp.InstallApkName())
+
+	// TODO(b/224589412, b/226559955): Ensure that the subdirname is suffixed
+	// so that PackageManager correctly invalidates the existing installed apk
+	// in favour of the new APK-in-APEX.  See bugs for more information.
+	dirInApex := filepath.Join(appDir, aapp.InstallApkName()+"@"+sanitizedBuildIdForPath(ctx))
 	fileToCopy := aapp.OutputFile()
+
 	af := newApexFile(ctx, fileToCopy, aapp.BaseModuleName(), dirInApex, app, aapp)
 	af.jacocoReportClassesFile = aapp.JacocoReportClassesFile()
 	af.lintDepSets = aapp.LintDepSets()
@@ -1897,8 +1916,12 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					if ap.Privileged() {
 						appDir = "priv-app"
 					}
-					af := newApexFile(ctx, ap.OutputFile(), ap.BaseModuleName(),
-						filepath.Join(appDir, ap.BaseModuleName()), appSet, ap)
+					// TODO(b/224589412, b/226559955): Ensure that the dirname is
+					// suffixed so that PackageManager correctly invalidates the
+					// existing installed apk in favour of the new APK-in-APEX.
+					// See bugs for more information.
+					appDirName := filepath.Join(appDir, ap.BaseModuleName()+"@"+sanitizedBuildIdForPath(ctx))
+					af := newApexFile(ctx, ap.OutputFile(), ap.BaseModuleName(), appDirName, appSet, ap)
 					af.certificate = java.PresignedCertificate
 					filesInfo = append(filesInfo, af)
 				} else {
@@ -2452,20 +2475,43 @@ func (a *apexBundle) CheckMinSdkVersion(ctx android.ModuleContext) {
 	android.CheckMinSdkVersion(ctx, minSdkVersion, a.WalkPayloadDeps)
 }
 
+// Returns apex's min_sdk_version string value, honoring overrides
+func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
+	// Only override the minSdkVersion value on Apexes which already specify
+	// a min_sdk_version (it's optional for non-updatable apexes), and that its
+	// min_sdk_version value is lower than the one to override with.
+	overrideMinSdkValue := ctx.DeviceConfig().ApexGlobalMinSdkVersionOverride()
+	overrideApiLevel := minSdkVersionFromValue(ctx, overrideMinSdkValue)
+	originalMinApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
+	isMinSdkSet := a.properties.Min_sdk_version != nil
+	isOverrideValueHigher := overrideApiLevel.CompareTo(originalMinApiLevel) > 0
+	if overrideMinSdkValue != "" && isMinSdkSet && isOverrideValueHigher {
+		return overrideMinSdkValue
+	}
+
+	return proptools.String(a.properties.Min_sdk_version)
+}
+
+// Returns apex's min_sdk_version SdkSpec, honoring overrides
 func (a *apexBundle) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
 	return android.SdkSpec{
 		Kind:     android.SdkNone,
 		ApiLevel: a.minSdkVersion(ctx),
-		Raw:      String(a.properties.Min_sdk_version),
+		Raw:      a.minSdkVersionValue(ctx),
 	}
 }
 
+// Returns apex's min_sdk_version ApiLevel, honoring overrides
 func (a *apexBundle) minSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
-	ver := proptools.String(a.properties.Min_sdk_version)
-	if ver == "" {
+	return minSdkVersionFromValue(ctx, a.minSdkVersionValue(ctx))
+}
+
+// Construct ApiLevel object from min_sdk_version string value
+func minSdkVersionFromValue(ctx android.EarlyModuleContext, value string) android.ApiLevel {
+	if value == "" {
 		return android.NoneApiLevel
 	}
-	apiLevel, err := android.ApiLevelFromUser(ctx, ver)
+	apiLevel, err := android.ApiLevelFromUser(ctx, value)
 	if err != nil {
 		ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
 		return android.NoneApiLevel
@@ -2520,7 +2566,7 @@ func (a *apexBundle) checkStaticLinkingToStubLibraries(ctx android.ModuleContext
 // checkUpdatable enforces APEX and its transitive dep properties to have desired values for updatable APEXes.
 func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
 	if a.Updatable() {
-		if String(a.properties.Min_sdk_version) == "" {
+		if a.minSdkVersionValue(ctx) == "" {
 			ctx.PropertyErrorf("updatable", "updatable APEXes should set min_sdk_version as well")
 		}
 		if a.UsePlatformApis() {
@@ -2733,31 +2779,8 @@ func makeApexAvailableBaseline() map[string][]string {
 	// Module separator
 	//
 	m["com.android.bluetooth"] = []string{
-		"android.hardware.audio.common@5.0",
-		"android.hardware.bluetooth.a2dp@1.0",
-		"android.hardware.bluetooth.audio@2.0",
-		"android.hardware.bluetooth@1.0",
-		"android.hardware.bluetooth@1.1",
-		"android.hardware.graphics.bufferqueue@1.0",
-		"android.hardware.graphics.bufferqueue@2.0",
-		"android.hardware.graphics.common@1.0",
-		"android.hardware.graphics.common@1.1",
-		"android.hardware.graphics.common@1.2",
-		"android.hidl.safe_union@1.0",
-		"android.hidl.token@1.0",
-		"android.hidl.token@1.0-utils",
-		"avrcp-target-service",
-		"avrcp_headers",
 		"bluetooth-protos-lite",
-		"bluetooth.mapsapi",
-		"com.android.vcard",
-		"dnsresolver_aidl_interface-V2-java",
-		"ipmemorystore-aidl-interfaces-V5-java",
-		"ipmemorystore-aidl-interfaces-java",
 		"internal_include_headers",
-		"lib-bt-packets",
-		"lib-bt-packets-avrcp",
-		"lib-bt-packets-base",
 		"libaudio-a2dp-hw-utils",
 		"libaudio-hearing-aid-hw-utils",
 		"libbluetooth",
@@ -2781,25 +2804,6 @@ func makeApexAvailableBaseline() map[string][]string {
 		"libbte",
 		"libbtif",
 		"libchrome",
-		"libevent",
-		"libfmq",
-		"libg722codec",
-		"libgui_headers",
-		"libmodpb64",
-		"libosi",
-		"libstatslog",
-		"libstatssocket",
-		"libtinyxml2",
-		"libudrv-uipc",
-		"libz",
-		"media_plugin_headers",
-		"net-utils-services-common",
-		"netd_aidl_interface-unstable-java",
-		"netd_event_listener_interface-java",
-		"netlink-client",
-		"networkstack-client",
-		"sap-api-java-static",
-		"services.net",
 	}
 	//
 	// Module separator
@@ -3037,21 +3041,19 @@ func makeApexAvailableBaseline() map[string][]string {
 }
 
 func init() {
-	android.AddNeverAllowRules(createApexPermittedPackagesRules(qModulesPackages())...)
-	android.AddNeverAllowRules(createApexPermittedPackagesRules(rModulesPackages())...)
+	android.AddNeverAllowRules(createBcpPermittedPackagesRules(qBcpPackages())...)
+	android.AddNeverAllowRules(createBcpPermittedPackagesRules(rBcpPackages())...)
 }
 
-func createApexPermittedPackagesRules(modules_packages map[string][]string) []android.Rule {
-	rules := make([]android.Rule, 0, len(modules_packages))
-	for module_name, module_packages := range modules_packages {
+func createBcpPermittedPackagesRules(bcpPermittedPackages map[string][]string) []android.Rule {
+	rules := make([]android.Rule, 0, len(bcpPermittedPackages))
+	for jar, permittedPackages := range bcpPermittedPackages {
 		permittedPackagesRule := android.NeverAllow().
-			BootclasspathJar().
-			With("apex_available", module_name).
-			WithMatcher("permitted_packages", android.NotInList(module_packages)).
-			WithMatcher("min_sdk_version", android.LessThanSdkVersion("Tiramisu")).
-			Because("jars that are part of the " + module_name +
-				" module may only use these package prefixes: " + strings.Join(module_packages, ",") +
-				" with min_sdk < T. Please consider the following alternatives:\n" +
+			With("name", jar).
+			WithMatcher("permitted_packages", android.NotInList(permittedPackages)).
+			Because(jar +
+				" bootjar may only use these package prefixes: " + strings.Join(permittedPackages, ",") +
+				". Please consider the following alternatives:\n" +
 				"    1. If the offending code is from a statically linked library, consider " +
 				"removing that dependency and using an alternative already in the " +
 				"bootclasspath, or perhaps a shared library." +
@@ -3059,57 +3061,56 @@ func createApexPermittedPackagesRules(modules_packages map[string][]string) []an
 				"    3. Jarjar the offending code. Please be mindful of the potential system " +
 				"health implications of bundling that code, particularly if the offending jar " +
 				"is part of the bootclasspath.")
+
 		rules = append(rules, permittedPackagesRule)
 	}
 	return rules
 }
 
-// DO NOT EDIT! These are the package prefixes that are exempted from being AOT'ed by ART on Q/R/S.
+// DO NOT EDIT! These are the package prefixes that are exempted from being AOT'ed by ART.
 // Adding code to the bootclasspath in new packages will cause issues on module update.
-func qModulesPackages() map[string][]string {
+func qBcpPackages() map[string][]string {
 	return map[string][]string{
-		"com.android.conscrypt": []string{
+		"conscrypt": []string{
 			"android.net.ssl",
 			"com.android.org.conscrypt",
 		},
-		"com.android.media": []string{
+		"updatable-media": []string{
 			"android.media",
 		},
 	}
 }
 
-// DO NOT EDIT! These are the package prefixes that are exempted from being AOT'ed by ART on R/S.
+// DO NOT EDIT! These are the package prefixes that are exempted from being AOT'ed by ART.
 // Adding code to the bootclasspath in new packages will cause issues on module update.
-func rModulesPackages() map[string][]string {
+func rBcpPackages() map[string][]string {
 	return map[string][]string{
-		"com.android.mediaprovider": []string{
+		"framework-mediaprovider": []string{
 			"android.provider",
 		},
-		"com.android.permission": []string{
+		"framework-permission": []string{
 			"android.permission",
-			//TODO(b/205719989): remove, do not cherry-pick anywhere
-			"android.safetycenter",
 			"android.app.role",
 			"com.android.permission",
 			"com.android.role",
 		},
-		"com.android.sdkext": []string{
+		"framework-sdkextensions": []string{
 			"android.os.ext",
 		},
-		"com.android.os.statsd": []string{
+		"framework-statsd": []string{
 			"android.app",
 			"android.os",
 			"android.util",
 			"com.android.internal.statsd",
 			"com.android.server.stats",
 		},
-		"com.android.wifi": []string{
+		"framework-wifi": []string{
 			"com.android.server.wifi",
 			"com.android.wifi.x",
 			"android.hardware.wifi",
 			"android.net.wifi",
 		},
-		"com.android.tethering": []string{
+		"framework-tethering": []string{
 			"android.net",
 		},
 	}
@@ -3160,6 +3161,8 @@ func (a *apexBundle) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		fileContextsLabelAttribute.SetValue(android.BazelLabelForModuleDepSingle(ctx, *a.properties.File_contexts))
 	}
 
+	// TODO(b/219503907) this would need to be set to a.MinSdkVersionValue(ctx) but
+	// given it's coming via config, we probably don't want to put it in here.
 	var minSdkVersion *string
 	if a.properties.Min_sdk_version != nil {
 		minSdkVersion = a.properties.Min_sdk_version
