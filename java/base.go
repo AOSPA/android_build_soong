@@ -170,6 +170,9 @@ type CommonProperties struct {
 	}
 
 	Instrument bool `blueprint:"mutated"`
+	// If true, then the module supports statically including the jacocoagent
+	// into the library.
+	Supports_static_instrumentation bool `blueprint:"mutated"`
 
 	// List of files to include in the META-INF/services folder of the resulting jar.
 	Services []string `android:"path,arch_variant"`
@@ -605,7 +608,8 @@ func (j *Module) shouldInstrument(ctx android.BaseModuleContext) bool {
 }
 
 func (j *Module) shouldInstrumentStatic(ctx android.BaseModuleContext) bool {
-	return j.shouldInstrument(ctx) &&
+	return j.properties.Supports_static_instrumentation &&
+		j.shouldInstrument(ctx) &&
 		(ctx.Config().IsEnvTrue("EMMA_INSTRUMENT_STATIC") ||
 			ctx.Config().UnbundledBuild())
 }
@@ -1481,11 +1485,11 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	}
 
 	if ctx.Device() {
-		lintSDKVersionString := func(sdkSpec android.SdkSpec) string {
+		lintSDKVersion := func(sdkSpec android.SdkSpec) android.ApiLevel {
 			if v := sdkSpec.ApiLevel; !v.IsPreview() {
-				return v.String()
+				return v
 			} else {
-				return ctx.Config().DefaultAppTargetSdk(ctx).String()
+				return ctx.Config().DefaultAppTargetSdk(ctx)
 			}
 		}
 
@@ -1494,9 +1498,9 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		j.linter.srcJars = srcJars
 		j.linter.classpath = append(append(android.Paths(nil), flags.bootClasspath...), flags.classpath...)
 		j.linter.classes = j.implementationJarFile
-		j.linter.minSdkVersion = lintSDKVersionString(j.MinSdkVersion(ctx))
-		j.linter.targetSdkVersion = lintSDKVersionString(j.TargetSdkVersion(ctx))
-		j.linter.compileSdkVersion = lintSDKVersionString(j.SdkVersion(ctx))
+		j.linter.minSdkVersion = lintSDKVersion(j.MinSdkVersion(ctx))
+		j.linter.targetSdkVersion = lintSDKVersion(j.TargetSdkVersion(ctx))
+		j.linter.compileSdkVersion = lintSDKVersion(j.SdkVersion(ctx))
 		j.linter.compileSdkKind = j.SdkVersion(ctx).Kind
 		j.linter.javaLanguageLevel = flags.javaVersion.String()
 		j.linter.kotlinLanguageLevel = "1.3"
