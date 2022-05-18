@@ -333,20 +333,6 @@ func (mod *Module) IsVndkSp() bool {
 	return false
 }
 
-func (mod *Module) IsVndkPrebuiltLibrary() bool {
-	// Rust modules do not provide VNDK prebuilts
-	return false
-}
-
-func (mod *Module) IsVendorPublicLibrary() bool {
-	return mod.VendorProperties.IsVendorPublicLibrary
-}
-
-func (mod *Module) SdkAndPlatformVariantVisibleToMake() bool {
-	// Rust modules to not provide Sdk variants
-	return false
-}
-
 func (c *Module) IsVndkPrivate() bool {
 	return false
 }
@@ -856,7 +842,24 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	toolchain := mod.toolchain(ctx)
 	mod.makeLinkType = cc.GetMakeLinkType(actx, mod)
 
-	mod.Properties.SubName = cc.GetSubnameProperty(actx, mod)
+	// Differentiate static libraries that are vendor available
+	if mod.UseVndk() {
+		if mod.InProduct() && !mod.OnlyInProduct() {
+			mod.Properties.SubName += cc.ProductSuffix
+		} else {
+			mod.Properties.SubName += cc.VendorSuffix
+		}
+	} else if mod.InRamdisk() && !mod.OnlyInRamdisk() {
+		mod.Properties.SubName += cc.RamdiskSuffix
+	} else if mod.InVendorRamdisk() && !mod.OnlyInVendorRamdisk() {
+		mod.Properties.SubName += cc.VendorRamdiskSuffix
+	} else if mod.InRecovery() && !mod.OnlyInRecovery() {
+		mod.Properties.SubName += cc.RecoverySuffix
+	}
+
+	if mod.Target().NativeBridge == android.NativeBridgeEnabled {
+		mod.Properties.SubName += cc.NativeBridgeSuffix
+	}
 
 	if !toolchain.Supported() {
 		// This toolchain's unsupported, there's nothing to do for this mod.
@@ -1369,13 +1372,12 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 
 	// rlibs
+	rlibDepVariations = append(rlibDepVariations, blueprint.Variation{Mutator: "rust_libraries", Variation: rlibVariation})
 	for _, lib := range deps.Rlibs {
 		depTag := rlibDepTag
 		lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
 
-		actx.AddVariationDependencies(append(rlibDepVariations, []blueprint.Variation{
-			{Mutator: "rust_libraries", Variation: rlibVariation},
-		}...), depTag, lib)
+		actx.AddVariationDependencies(rlibDepVariations, depTag, lib)
 	}
 
 	// dylibs
@@ -1387,21 +1389,25 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	// rustlibs
 	if deps.Rustlibs != nil && !mod.compiler.Disabled() {
 		autoDep := mod.compiler.(autoDeppable).autoDep(ctx)
-		if autoDep.depTag == rlibDepTag {
-			for _, lib := range deps.Rustlibs {
-				depTag := autoDep.depTag
-				lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
-				actx.AddVariationDependencies(append(rlibDepVariations, []blueprint.Variation{
-					{Mutator: "rust_libraries", Variation: autoDep.variation},
-				}...), depTag, lib)
+		for _, lib := range deps.Rustlibs {
+			if autoDep.depTag == rlibDepTag {
+				// Handle the rlib deptag case
+				addRlibDependency(actx, lib, mod, snapshotInfo, rlibDepVariations)
+			} else {
+				// autoDep.depTag is a dylib depTag. Not all rustlibs may be available as a dylib however.
+				// Check for the existence of the dylib deptag variant. Select it if available,
+				// otherwise select the rlib variant.
+				autoDepVariations := append(commonDepVariations,
+					blueprint.Variation{Mutator: "rust_libraries", Variation: autoDep.variation})
+				if actx.OtherModuleDependencyVariantExists(autoDepVariations, lib) {
+					actx.AddVariationDependencies(autoDepVariations, autoDep.depTag, lib)
+				} else {
+					// If there's no dylib dependency available, try to add the rlib dependency instead.
+					addRlibDependency(actx, lib, mod, snapshotInfo, rlibDepVariations)
+				}
 			}
-		} else {
-			actx.AddVariationDependencies(
-				append(commonDepVariations, blueprint.Variation{Mutator: "rust_libraries", Variation: autoDep.variation}),
-				autoDep.depTag, deps.Rustlibs...)
 		}
 	}
-
 	// stdlibs
 	if deps.Stdlibs != nil {
 		if mod.compiler.stdLinkage(ctx) == RlibLinkage {
@@ -1475,6 +1481,12 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	// proc_macros are compiler plugins, and so we need the host arch variant as a dependendcy.
 	actx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(), procMacroDepTag, deps.ProcMacros...)
+}
+
+// addRlibDependency will add an rlib dependency, rewriting to the snapshot library if available.
+func addRlibDependency(actx android.BottomUpMutatorContext, lib string, mod *Module, snapshotInfo *cc.SnapshotInfo, variations []blueprint.Variation) {
+	lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
+	actx.AddVariationDependencies(variations, rlibDepTag, lib)
 }
 
 func BeginMutator(ctx android.BottomUpMutatorContext) {
