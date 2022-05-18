@@ -82,8 +82,8 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 		if minSdkVersion.FinalOrFutureInt() >= 23 {
 			args = append(args, fmt.Sprintf("--extract-native-libs=%v", !params.UseEmbeddedNativeLibs))
 		} else if params.UseEmbeddedNativeLibs {
-			ctx.ModuleErrorf("module attempted to store uncompressed native libraries, but minSdkVersion=%d doesn't support it",
-				minSdkVersion)
+			ctx.ModuleErrorf("module attempted to store uncompressed native libraries, but minSdkVersion=%s doesn't support it",
+				minSdkVersion.String())
 		}
 	}
 
@@ -96,9 +96,9 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 	}
 
 	if params.ClassLoaderContexts != nil {
-		// manifest_fixer should add only the implicit SDK libraries inferred by Soong, not those added
-		// explicitly via `uses_libs`/`optional_uses_libs`.
-		requiredUsesLibs, optionalUsesLibs := params.ClassLoaderContexts.ImplicitUsesLibs()
+		// Libraries propagated via `uses_libs`/`optional_uses_libs` are also added (they may be
+		// propagated from dependencies).
+		requiredUsesLibs, optionalUsesLibs := params.ClassLoaderContexts.UsesLibs()
 
 		for _, usesLib := range requiredUsesLibs {
 			args = append(args, "--uses-library", usesLib)
