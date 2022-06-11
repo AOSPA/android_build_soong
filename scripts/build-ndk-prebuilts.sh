@@ -50,7 +50,8 @@ cat > ${SOONG_OUT}/soong.variables << EOF
 
     "DeviceName": "generic_arm64",
     "HostArch": "x86_64",
-    "Malloc_not_svelte": false,
+    "Malloc_use_scudo": false,
+    "Malloc_not_svelte": true,
     "Safestack": false,
 
     "Ndk_abis": true,
