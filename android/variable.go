@@ -70,13 +70,20 @@ type variableProperties struct {
 			Enabled *bool `android:"arch_variant"`
 		} `android:"arch_variant"`
 
-		Malloc_not_svelte struct {
+		Malloc_use_scudo struct {
 			Cflags              []string `android:"arch_variant"`
 			Shared_libs         []string `android:"arch_variant"`
 			Whole_static_libs   []string `android:"arch_variant"`
 			Exclude_static_libs []string `android:"arch_variant"`
 			Srcs                []string `android:"arch_variant"`
 			Header_libs         []string `android:"arch_variant"`
+		} `android:"arch_variant"`
+
+		Malloc_not_svelte struct {
+			Cflags              []string `android:"arch_variant"`
+			Shared_libs         []string `android:"arch_variant"`
+			Whole_static_libs   []string `android:"arch_variant"`
+			Exclude_static_libs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
 
 		Malloc_zero_contents struct {
@@ -302,6 +309,7 @@ type productVariables struct {
 	Unbundled_build_sdks_from_source *bool    `json:",omitempty"`
 	Always_use_prebuilt_sdks         *bool    `json:",omitempty"`
 	Skip_boot_jars_check             *bool    `json:",omitempty"`
+	Malloc_use_scudo                 *bool    `json:",omitempty"`
 	Malloc_not_svelte                *bool    `json:",omitempty"`
 	Malloc_zero_contents             *bool    `json:",omitempty"`
 	Malloc_pattern_fill_contents     *bool    `json:",omitempty"`
@@ -339,8 +347,6 @@ type productVariables struct {
 	EnableCFI       *bool    `json:",omitempty"`
 	CFIExcludePaths []string `json:",omitempty"`
 	CFIIncludePaths []string `json:",omitempty"`
-
-	DisableScudo *bool `json:",omitempty"`
 
 	MemtagHeapExcludePaths      []string `json:",omitempty"`
 	MemtagHeapAsyncIncludePaths []string `json:",omitempty"`
@@ -564,6 +570,7 @@ func (v *productVariables) SetDefaultConfig() {
 		AAPTCharacteristics: stringPtr("nosdcard"),
 		AAPTPrebuiltDPI:     []string{"xhdpi", "xxhdpi"},
 
+		Malloc_use_scudo:             boolPtr(false),
 		Malloc_not_svelte:            boolPtr(true),
 		Malloc_zero_contents:         boolPtr(true),
 		Malloc_pattern_fill_contents: boolPtr(false),
