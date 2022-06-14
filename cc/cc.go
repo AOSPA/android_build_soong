@@ -48,7 +48,6 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 		ctx.BottomUp("vndk", VndkMutator).Parallel()
 		ctx.BottomUp("link", LinkageMutator).Parallel()
 		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
-		ctx.BottomUp("version_selector", versionSelectorMutator).Parallel()
 		ctx.BottomUp("version", versionMutator).Parallel()
 		ctx.BottomUp("begin", BeginMutator).Parallel()
 		ctx.BottomUp("sysprop_cc", SyspropMutator).Parallel()
@@ -753,6 +752,7 @@ var (
 	runtimeDepTag         = installDependencyTag{name: "runtime lib"}
 	testPerSrcDepTag      = dependencyTag{name: "test_per_src"}
 	stubImplDepTag        = dependencyTag{name: "stub_impl"}
+	JniFuzzLibTag         = dependencyTag{name: "jni_fuzz_lib_tag"}
 )
 
 func IsSharedDepTag(depTag blueprint.DependencyTag) bool {
@@ -1786,7 +1786,7 @@ func (c *Module) maybeGenerateBazelActions(actx android.ModuleContext) bool {
 	bazelActionsUsed := false
 	// Mixed builds mode is disabled for modules outside of device OS.
 	// TODO(b/200841190): Support non-device OS in mixed builds.
-	if c.MixedBuildsEnabled(actx) && c.bazelHandler != nil {
+	if android.MixedBuildsEnabled(actx) && c.bazelHandler != nil {
 		bazelActionsUsed = c.bazelHandler.GenerateBazelBuildActions(actx, bazelModuleLabel)
 	}
 	return bazelActionsUsed
@@ -2115,7 +2115,7 @@ func AddSharedLibDependenciesWithVersions(ctx android.BottomUpMutatorContext, mo
 
 	variations = append([]blueprint.Variation(nil), variations...)
 
-	if version != "" && CanBeOrLinkAgainstVersionVariants(mod) {
+	if version != "" && canBeOrLinkAgainstVersionVariants(mod) {
 		// Version is explicitly specified. i.e. libFoo#30
 		variations = append(variations, blueprint.Variation{Mutator: "version", Variation: version})
 		if tag, ok := depTag.(libraryDependencyTag); ok {
