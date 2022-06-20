@@ -427,7 +427,8 @@ func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
 			name: "libjni",
 			stl: "none",
 			system_shared_libs: [],
-			sdk_version: "29",
+			sdk_version: "current",
+			min_sdk_version: "29",
 		}
 	`
 	fs := map[string][]byte{
@@ -481,12 +482,13 @@ func TestUpdatableApps_ErrorIfJniLibDoesntSupportMinSdkVersion(t *testing.T) {
 			name: "libjni",
 			stl: "none",
 			sdk_version: "current",
+			min_sdk_version: "current",
 		}
 	`
-	testJavaError(t, `"libjni" .*: sdk_version\(current\) is higher than min_sdk_version\(29\)`, bp)
+	testJavaError(t, `"libjni" .*: min_sdk_version\(current\) is higher than min_sdk_version\(29\)`, bp)
 }
 
-func TestUpdatableApps_ErrorIfDepSdkVersionIsHigher(t *testing.T) {
+func TestUpdatableApps_ErrorIfDepMinSdkVersionIsHigher(t *testing.T) {
 	bp := cc.GatherRequiredDepsForTest(android.Android) + `
 		android_app {
 			name: "foo",
@@ -503,6 +505,7 @@ func TestUpdatableApps_ErrorIfDepSdkVersionIsHigher(t *testing.T) {
 			shared_libs: ["libbar"],
 			system_shared_libs: [],
 			sdk_version: "27",
+			min_sdk_version: "27",
 		}
 
 		cc_library {
@@ -510,6 +513,7 @@ func TestUpdatableApps_ErrorIfDepSdkVersionIsHigher(t *testing.T) {
 			stl: "none",
 			system_shared_libs: [],
 			sdk_version: "current",
+			min_sdk_version: "current",
 		}
 	`
 	testJavaError(t, `"libjni" .*: links "libbar" built against newer API version "current"`, bp)
@@ -2038,6 +2042,41 @@ func TestOverrideAndroidAppOverrides(t *testing.T) {
 		// Check if the overrides field values are correctly aggregated.
 		mod := variant.Module().(*AndroidApp)
 		android.AssertDeepEquals(t, "overrides property", expected.overrides, mod.overridableAppProperties.Overrides)
+	}
+}
+
+func TestOverrideAndroidAppWithPrebuilt(t *testing.T) {
+	result := PrepareForTestWithJavaDefaultModules.RunTestWithBp(
+		t, `
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+		}
+
+		override_android_app {
+			name: "bar",
+			base: "foo",
+		}
+
+		android_app_import {
+			name: "bar",
+			prefer: true,
+			apk: "bar.apk",
+			presigned: true,
+		}
+		`)
+
+	// An app that has an override that also has a prebuilt should not be hidden.
+	foo := result.ModuleForTests("foo", "android_common")
+	if foo.Module().IsHideFromMake() {
+		t.Errorf("expected foo to have HideFromMake false")
+	}
+
+	// An override that also has a prebuilt should be hidden.
+	barOverride := result.ModuleForTests("foo", "android_common_bar")
+	if !barOverride.Module().IsHideFromMake() {
+		t.Errorf("expected bar override variant of foo to have HideFromMake true")
 	}
 }
 
