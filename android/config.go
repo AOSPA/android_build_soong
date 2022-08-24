@@ -558,7 +558,7 @@ func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir strin
 	}
 
 	config.BazelContext, err = NewBazelContext(config)
-	config.bp2buildPackageConfig = bp2buildAllowlist
+	config.bp2buildPackageConfig = getBp2BuildAllowList()
 
 	return Config{config}, err
 }
@@ -696,6 +696,10 @@ func (c *config) IsEnvTrue(key string) bool {
 func (c *config) IsEnvFalse(key string) bool {
 	value := c.Getenv(key)
 	return value == "0" || value == "n" || value == "no" || value == "off" || value == "false"
+}
+
+func (c *config) TargetsJava17() bool {
+	return c.IsEnvTrue("EXPERIMENTAL_TARGET_JAVA_VERSION_17")
 }
 
 // EnvDeps returns the environment variables this build depends on. The first
@@ -2103,7 +2107,7 @@ func (c *config) UseHostMusl() bool {
 	return Bool(c.productVariables.HostMusl)
 }
 
-func (c *config) LogMixedBuild(ctx ModuleContext, useBazel bool) {
+func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
 	moduleName := ctx.Module().Name()
 	c.mixedBuildsLock.Lock()
 	defer c.mixedBuildsLock.Unlock()

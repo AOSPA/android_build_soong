@@ -779,6 +779,19 @@ func IsTestPerSrcDepTag(depTag blueprint.DependencyTag) bool {
 	return ok && ccDepTag == testPerSrcDepTag
 }
 
+// bazelHandler is the interface for a helper object related to deferring to Bazel for
+// processing a cc module (during Bazel mixed builds). Individual module types should define
+// their own bazel handler if they support being handled by Bazel.
+type BazelHandler interface {
+	// QueueBazelCall invokes request-queueing functions on the BazelContext
+	//so that these requests are handled when Bazel's cquery is invoked.
+	QueueBazelCall(ctx android.BaseModuleContext, label string)
+
+	// ProcessBazelQueryResponse uses information retrieved from Bazel to set properties
+	// on the current module with given label.
+	ProcessBazelQueryResponse(ctx android.ModuleContext, label string)
+}
+
 // Module contains the properties and members used by all C/C++ module types, and implements
 // the blueprint.Module interface.  It delegates to compiler, linker, and installer interfaces
 // to construct the output file.  Behavior can be customized with a Customizer, or "decorator",
@@ -818,7 +831,7 @@ type Module struct {
 	compiler     compiler
 	linker       linker
 	installer    installer
-	bazelHandler android.BazelHandler
+	bazelHandler BazelHandler
 
 	features []feature
 	stl      *stl
@@ -1771,31 +1784,51 @@ func (c *Module) setSubnameProperty(actx android.ModuleContext) {
 	}
 }
 
-// Returns true if Bazel was successfully used for the analysis of this module.
-func (c *Module) maybeGenerateBazelActions(actx android.ModuleContext) bool {
-	var bazelModuleLabel string
+var _ android.MixedBuildBuildable = (*Module)(nil)
+
+func (c *Module) getBazelModuleLabel(ctx android.BaseModuleContext) string {
 	if c.typ() == fullLibrary && c.static() {
 		// cc_library is a special case in bp2build; two targets are generated -- one for each
 		// of the shared and static variants. The shared variant keeps the module name, but the
 		// static variant uses a different suffixed name.
-		bazelModuleLabel = bazelLabelForStaticModule(actx, c)
-	} else {
-		bazelModuleLabel = c.GetBazelLabel(actx, c)
+		return bazelLabelForStaticModule(ctx, c)
+	}
+	return c.GetBazelLabel(ctx, c)
+}
+
+func (c *Module) QueueBazelCall(ctx android.BaseModuleContext) {
+	c.bazelHandler.QueueBazelCall(ctx, c.getBazelModuleLabel(ctx))
+}
+
+func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
+	return c.bazelHandler != nil
+}
+
+func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
+	bazelModuleLabel := c.getBazelModuleLabel(ctx)
+
+	c.bazelHandler.ProcessBazelQueryResponse(ctx, bazelModuleLabel)
+
+	c.setSubnameProperty(ctx)
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	if !apexInfo.IsForPlatform() {
+		c.hideApexVariantFromMake = true
 	}
 
-	bazelActionsUsed := false
-	// Mixed builds mode is disabled for modules outside of device OS.
-	// TODO(b/200841190): Support non-device OS in mixed builds.
-	if android.MixedBuildsEnabled(actx) && c.bazelHandler != nil {
-		bazelActionsUsed = c.bazelHandler.GenerateBazelBuildActions(actx, bazelModuleLabel)
+	c.makeLinkType = GetMakeLinkType(ctx, c)
+
+	mctx := &moduleContext{
+		ModuleContext: ctx,
+		moduleContextImpl: moduleContextImpl{
+			mod: c,
+		},
 	}
-	return bazelActionsUsed
+	mctx.ctx = mctx
+
+	c.maybeInstall(mctx, apexInfo)
 }
 
 func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
-	// TODO(cparsons): Any logic in this method occurring prior to querying Bazel should be
-	// requested from Bazel instead.
-
 	// Handle the case of a test module split by `test_per_src` mutator.
 	//
 	// The `test_per_src` mutator adds an extra variation named "", depending on all the other
@@ -1821,11 +1854,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		},
 	}
 	ctx.ctx = ctx
-
-	if c.maybeGenerateBazelActions(actx) {
-		c.maybeInstall(ctx, apexInfo)
-		return
-	}
 
 	deps := c.depsToPaths(ctx)
 	if ctx.Failed() {
@@ -2029,12 +2057,6 @@ func (c *Module) deps(ctx DepsContext) Deps {
 	deps.LateSharedLibs = android.LastUniqueStrings(deps.LateSharedLibs)
 	deps.HeaderLibs = android.LastUniqueStrings(deps.HeaderLibs)
 	deps.RuntimeLibs = android.LastUniqueStrings(deps.RuntimeLibs)
-
-	// In Bazel conversion mode, we dependency and build validations will occur in Bazel, so there is
-	// no need to do so in Soong.
-	if ctx.BazelConversionMode() {
-		return deps
-	}
 
 	for _, lib := range deps.ReexportSharedLibHeaders {
 		if !inList(lib, deps.SharedLibs) {

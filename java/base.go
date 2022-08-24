@@ -1020,6 +1020,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		ctx.PropertyErrorf("common_srcs", "common_srcs must be .kt files")
 	}
 
+	nonGeneratedSrcJars := srcFiles.FilterByExt(".srcjar")
 	srcFiles = j.genSources(ctx, srcFiles, flags)
 
 	// Collect javac flags only after computing the full set of srcFiles to
@@ -1492,8 +1493,8 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		}
 
 		j.linter.name = ctx.ModuleName()
-		j.linter.srcs = srcFiles
-		j.linter.srcJars = srcJars
+		j.linter.srcs = append(srcFiles, nonGeneratedSrcJars...)
+		j.linter.srcJars, _ = android.FilterPathList(srcJars, nonGeneratedSrcJars)
 		j.linter.classpath = append(append(android.Paths(nil), flags.bootClasspath...), flags.classpath...)
 		j.linter.classes = j.implementationJarFile
 		j.linter.minSdkVersion = lintSDKVersion(j.MinSdkVersion(ctx))
@@ -1912,6 +1913,9 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case bootClasspathTag:
 				deps.bootClasspath = append(deps.bootClasspath, dep.HeaderJars...)
 			case libTag, instrumentationForTag:
+				if _, ok := module.(*Plugin); ok {
+					ctx.ModuleErrorf("a java_plugin (%s) cannot be used as a libs dependency", otherName)
+				}
 				deps.classpath = append(deps.classpath, dep.HeaderJars...)
 				deps.dexClasspath = append(deps.dexClasspath, dep.HeaderJars...)
 				deps.aidlIncludeDirs = append(deps.aidlIncludeDirs, dep.AidlIncludeDirs...)
@@ -1920,6 +1924,9 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case java9LibTag:
 				deps.java9Classpath = append(deps.java9Classpath, dep.HeaderJars...)
 			case staticLibTag:
+				if _, ok := module.(*Plugin); ok {
+					ctx.ModuleErrorf("a java_plugin (%s) cannot be used as a static_libs dependency", otherName)
+				}
 				deps.classpath = append(deps.classpath, dep.HeaderJars...)
 				deps.staticJars = append(deps.staticJars, dep.ImplementationJars...)
 				deps.staticHeaderJars = append(deps.staticHeaderJars, dep.HeaderJars...)

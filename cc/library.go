@@ -289,7 +289,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 	baseAttributes := bp2BuildParseBaseProps(ctx, m)
 	compilerAttrs := baseAttributes.compilerAttributes
 	linkerAttrs := baseAttributes.linkerAttributes
-	exportedIncludes := bp2BuildParseExportedIncludes(ctx, m, compilerAttrs.includes)
+	exportedIncludes := bp2BuildParseExportedIncludes(ctx, m, &compilerAttrs.includes)
 
 	srcs := compilerAttrs.srcs
 
@@ -643,18 +643,18 @@ type libraryDecorator struct {
 }
 
 type ccLibraryBazelHandler struct {
-	android.BazelHandler
-
 	module *Module
 }
 
+var _ BazelHandler = (*ccLibraryBazelHandler)(nil)
+
 // generateStaticBazelBuildActions constructs the StaticLibraryInfo Soong
 // provider from a Bazel shared library's CcInfo provider.
-func (handler *ccLibraryBazelHandler) generateStaticBazelBuildActions(ctx android.ModuleContext, label string, ccInfo cquery.CcInfo) bool {
+func (handler *ccLibraryBazelHandler) generateStaticBazelBuildActions(ctx android.ModuleContext, label string, ccInfo cquery.CcInfo) {
 	rootStaticArchives := ccInfo.RootStaticArchives
 	if len(rootStaticArchives) != 1 {
 		ctx.ModuleErrorf("expected exactly one root archive file for '%s', but got %s", label, rootStaticArchives)
-		return false
+		return
 	}
 	outputFilePath := android.PathForBazelOut(ctx, rootStaticArchives[0])
 	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
@@ -680,17 +680,17 @@ func (handler *ccLibraryBazelHandler) generateStaticBazelBuildActions(ctx androi
 			Build(),
 	})
 
-	return true
+	return
 }
 
 // generateSharedBazelBuildActions constructs the SharedLibraryInfo Soong
 // provider from a Bazel shared library's CcInfo provider.
-func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx android.ModuleContext, label string, ccInfo cquery.CcInfo) bool {
+func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx android.ModuleContext, label string, ccInfo cquery.CcInfo) {
 	rootDynamicLibraries := ccInfo.RootDynamicLibraries
 
 	if len(rootDynamicLibraries) != 1 {
 		ctx.ModuleErrorf("expected exactly one root dynamic library file for '%s', but got %s", label, rootDynamicLibraries)
-		return false
+		return
 	}
 	outputFilePath := android.PathForBazelOut(ctx, rootDynamicLibraries[0])
 	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
@@ -710,30 +710,27 @@ func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx androi
 		// TODO(b/190524881): Include transitive static libraries in this provider to support
 		// static libraries with deps. The provider key for this is TransitiveStaticLibrariesForOrdering.
 	})
-	return true
 }
 
-func (handler *ccLibraryBazelHandler) GenerateBazelBuildActions(ctx android.ModuleContext, label string) bool {
+func (handler *ccLibraryBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	ccInfo, ok, err := bazelCtx.GetCcInfo(label, android.GetConfigKey(ctx))
+	bazelCtx.QueueBazelRequest(label, cquery.GetCcInfo, android.GetConfigKey(ctx))
+}
+
+func (handler *ccLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
+	bazelCtx := ctx.Config().BazelContext
+	ccInfo, err := bazelCtx.GetCcInfo(label, android.GetConfigKey(ctx))
 	if err != nil {
 		ctx.ModuleErrorf("Error getting Bazel CcInfo: %s", err)
-		return false
-	}
-	if !ok {
-		return ok
+		return
 	}
 
 	if handler.module.static() {
-		if ok := handler.generateStaticBazelBuildActions(ctx, label, ccInfo); !ok {
-			return false
-		}
+		handler.generateStaticBazelBuildActions(ctx, label, ccInfo)
 	} else if handler.module.Shared() {
-		if ok := handler.generateSharedBazelBuildActions(ctx, label, ccInfo); !ok {
-			return false
-		}
+		handler.generateSharedBazelBuildActions(ctx, label, ccInfo)
 	} else {
-		return false
+		ctx.ModuleErrorf("Unhandled bazel case for %s (neither shared nor static!)", ctx.ModuleName())
 	}
 
 	handler.module.linker.(*libraryDecorator).setFlagExporterInfoFromCcInfo(ctx, ccInfo)
@@ -747,7 +744,6 @@ func (handler *ccLibraryBazelHandler) GenerateBazelBuildActions(ctx android.Modu
 		// implementation.
 		i.(*libraryDecorator).collectedSnapshotHeaders = android.Paths{}
 	}
-	return ok
 }
 
 func (library *libraryDecorator) setFlagExporterInfoFromCcInfo(ctx android.ModuleContext, ccInfo cquery.CcInfo) {
@@ -2472,7 +2468,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 	compilerAttrs := baseAttributes.compilerAttributes
 	linkerAttrs := baseAttributes.linkerAttributes
 
-	exportedIncludes := bp2BuildParseExportedIncludes(ctx, module, compilerAttrs.includes)
+	exportedIncludes := bp2BuildParseExportedIncludes(ctx, module, &compilerAttrs.includes)
 
 	// Append shared/static{} stanza properties. These won't be specified on
 	// cc_library_* itself, but may be specified in cc_defaults that this module

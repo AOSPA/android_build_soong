@@ -19,6 +19,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/bazel"
+	"android/soong/bazel/cquery"
 )
 
 //
@@ -37,7 +38,6 @@ var ccObjectSdkMemberType = &librarySdkMemberType{
 		SupportsSdk:  true,
 	},
 	prebuiltModuleType: "cc_prebuilt_object",
-	linkTypes:          nil,
 }
 
 type objectLinker struct {
@@ -46,23 +46,30 @@ type objectLinker struct {
 }
 
 type objectBazelHandler struct {
-	android.BazelHandler
-
 	module *Module
 }
 
-func (handler *objectBazelHandler) GenerateBazelBuildActions(ctx android.ModuleContext, label string) bool {
-	bazelCtx := ctx.Config().BazelContext
-	objPaths, ok := bazelCtx.GetOutputFiles(label, android.GetConfigKey(ctx))
-	if ok {
-		if len(objPaths) != 1 {
-			ctx.ModuleErrorf("expected exactly one object file for '%s', but got %s", label, objPaths)
-			return false
-		}
+var _ BazelHandler = (*objectBazelHandler)(nil)
 
-		handler.module.outputFile = android.OptionalPathForPath(android.PathForBazelOut(ctx, objPaths[0]))
+func (handler *objectBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
+	bazelCtx := ctx.Config().BazelContext
+	bazelCtx.QueueBazelRequest(label, cquery.GetOutputFiles, android.GetConfigKey(ctx))
+}
+
+func (handler *objectBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
+	bazelCtx := ctx.Config().BazelContext
+	objPaths, err := bazelCtx.GetOutputFiles(label, android.GetConfigKey(ctx))
+	if err != nil {
+		ctx.ModuleErrorf(err.Error())
+		return
 	}
-	return ok
+
+	if len(objPaths) != 1 {
+		ctx.ModuleErrorf("expected exactly one object file for '%s', but got %s", label, objPaths)
+		return
+	}
+
+	handler.module.outputFile = android.OptionalPathForPath(android.PathForBazelOut(ctx, objPaths[0]))
 }
 
 type ObjectLinkerProperties struct {
