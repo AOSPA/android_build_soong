@@ -324,7 +324,7 @@ func (binary *Binary) AndroidMkEntries() []android.AndroidMkEntries {
 }
 
 func (app *AndroidApp) AndroidMkEntries() []android.AndroidMkEntries {
-	if app.hideApexVariantFromMake || app.appProperties.HideFromMake {
+	if app.hideApexVariantFromMake || app.IsHideFromMake() {
 		return []android.AndroidMkEntries{android.AndroidMkEntries{
 			Disabled: true,
 		}}
@@ -549,6 +549,9 @@ func (dstubs *Droidstubs) AndroidMkEntries() []android.AndroidMkEntries {
 	outputFile := android.OptionalPathForPath(dstubs.stubsSrcJar)
 	if !outputFile.Valid() {
 		outputFile = android.OptionalPathForPath(dstubs.apiFile)
+	}
+	if !outputFile.Valid() {
+		outputFile = android.OptionalPathForPath(dstubs.apiVersionsXml)
 	}
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "JAVA_LIBRARIES",

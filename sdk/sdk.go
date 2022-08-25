@@ -75,6 +75,8 @@ type sdk struct {
 
 	snapshotFile android.OptionalPath
 
+	infoFile android.OptionalPath
+
 	// The builder, preserved for testing.
 	builderForTests *snapshotBuilder
 }
@@ -191,27 +193,32 @@ func (s *sdk) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 
 		// Generate the snapshot from the member info.
-		p := s.buildSnapshot(ctx, sdkVariants)
-		zip := ctx.InstallFile(android.PathForMainlineSdksInstall(ctx), p.Base(), p)
-		s.snapshotFile = android.OptionalPathForPath(zip)
+		s.buildSnapshot(ctx, sdkVariants)
 	}
 }
 
 func (s *sdk) AndroidMkEntries() []android.AndroidMkEntries {
-	if !s.snapshotFile.Valid() {
+	if !s.snapshotFile.Valid() != !s.infoFile.Valid() {
+		panic("Snapshot (%q) and info file (%q) should both be set or neither should be set.")
+	} else if !s.snapshotFile.Valid() {
 		return []android.AndroidMkEntries{}
 	}
 
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "FAKE",
 		OutputFile: s.snapshotFile,
-		DistFiles:  android.MakeDefaultDistFiles(s.snapshotFile.Path()),
+		DistFiles:  android.MakeDefaultDistFiles(s.snapshotFile.Path(), s.infoFile.Path()),
 		Include:    "$(BUILD_PHONY_PACKAGE)",
 		ExtraFooters: []android.AndroidMkExtraFootersFunc{
 			func(w io.Writer, name, prefix, moduleDir string) {
 				// Allow the sdk to be built by simply passing its name on the command line.
 				fmt.Fprintln(w, ".PHONY:", s.Name())
 				fmt.Fprintln(w, s.Name()+":", s.snapshotFile.String())
+
+				// Allow the sdk info to be built by simply passing its name on the command line.
+				infoTarget := s.Name() + ".info"
+				fmt.Fprintln(w, ".PHONY:", infoTarget)
+				fmt.Fprintln(w, infoTarget+":", s.infoFile.String())
 			},
 		},
 	}}
@@ -274,7 +281,6 @@ var _ android.SdkDependencyContext = (*dependencyContext)(nil)
 func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.BottomUp("SdkMember", memberMutator).Parallel()
 	ctx.TopDown("SdkMember_deps", memberDepsMutator).Parallel()
-	ctx.BottomUp("SdkMemberInterVersion", memberInterVersionMutator).Parallel()
 }
 
 type dependencyTag struct {
@@ -373,22 +379,6 @@ func memberDepsMutator(mctx android.TopDownMutatorContext) {
 				member.MakeMemberOf(mySdkRef)
 			}
 		})
-	}
-}
-
-// Step 3: create dependencies from the unversioned SDK member to snapshot versions
-// of the same member. By having these dependencies, they are mutated for multiple Mainline modules
-// (apex and apk), each of which might want different sdks to be built with. For example, if both
-// apex A and B are referencing libfoo which is a member of sdk 'mysdk', the two APEXes can be
-// built with libfoo.mysdk.11 and libfoo.mysdk.12, respectively depending on which sdk they are
-// using.
-func memberInterVersionMutator(mctx android.BottomUpMutatorContext) {
-	if m, ok := mctx.Module().(android.SdkAware); ok && m.IsInAnySdk() && m.IsVersioned() {
-		if !m.ContainingSdk().Unversioned() {
-			memberName := m.MemberName()
-			tag := sdkMemberVersionedDepTag{member: memberName, version: m.ContainingSdk().Version}
-			mctx.AddReverseDependency(mctx.Module(), tag, memberName)
-		}
 	}
 }
 

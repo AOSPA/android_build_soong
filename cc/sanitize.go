@@ -276,7 +276,7 @@ type SanitizeUserProps struct {
 type SanitizeProperties struct {
 	Sanitize          SanitizeUserProps `android:"arch_variant"`
 	SanitizerEnabled  bool              `blueprint:"mutated"`
-	SanitizeDep       bool              `blueprint:"mutated"`
+	SanitizeDepTypes  []SanitizerType   `blueprint:"mutated"`
 	MinimalRuntimeDep bool              `blueprint:"mutated"`
 	BuiltinsDep       bool              `blueprint:"mutated"`
 	UbsanRuntimeDep   bool              `blueprint:"mutated"`
@@ -981,7 +981,7 @@ func sanitizerDepsMutator(t SanitizerType) func(android.TopDownMutatorContext) {
 				// determine defaultVariation in sanitizerMutator below.
 				// Instead, just mark SanitizeDep to forcefully create cfi variant.
 				enabled = true
-				c.SetSanitizeDep(true)
+				c.SetSanitizeDep(t)
 			}
 			if enabled {
 				isSanitizableDependencyTag := c.SanitizableDepTagChecker()
@@ -996,32 +996,30 @@ func sanitizerDepsMutator(t SanitizerType) func(android.TopDownMutatorContext) {
 							if d.StaticallyLinked() && d.SanitizerSupported(t) {
 								// Rust does not support some of these sanitizers, so we need to check if it's
 								// supported before setting this true.
-								d.SetSanitizeDep(true)
+								d.SetSanitizeDep(t)
 							}
 						} else {
-							d.SetSanitizeDep(true)
+							d.SetSanitizeDep(t)
 						}
 					}
 					return true
 				})
 			}
-		} else if sanitizeable, ok := mctx.Module().(Sanitizeable); ok {
+		} else if jniSanitizeable, ok := mctx.Module().(JniSanitizeable); ok {
 			// If it's a Java module with native dependencies through jni,
 			// set the sanitizer for them
-			if jniSanitizeable, ok := mctx.Module().(JniSanitizeable); ok {
-				if jniSanitizeable.IsSanitizerEnabledForJni(mctx, t.name()) {
-					mctx.VisitDirectDeps(func(child android.Module) {
-						if c, ok := child.(PlatformSanitizeable); ok &&
-							mctx.OtherModuleDependencyTag(child) == JniFuzzLibTag &&
-							c.SanitizePropDefined() &&
-							!c.SanitizeNever() &&
-							!c.IsSanitizerExplicitlyDisabled(t) {
-							c.SetSanitizeDep(true)
-						}
-					})
-				}
+			if jniSanitizeable.IsSanitizerEnabledForJni(mctx, t.name()) {
+				mctx.VisitDirectDeps(func(child android.Module) {
+					if c, ok := child.(PlatformSanitizeable); ok &&
+						mctx.OtherModuleDependencyTag(child) == JniFuzzLibTag &&
+						c.SanitizePropDefined() &&
+						!c.SanitizeNever() &&
+						!c.IsSanitizerExplicitlyDisabled(t) {
+						c.SetSanitizeDep(t)
+					}
+				})
 			}
-
+		} else if sanitizeable, ok := mctx.Module().(Sanitizeable); ok {
 			// If an APEX module includes a lib which is enabled for a sanitizer T, then
 			// the APEX module is also enabled for the same sanitizer type.
 			mctx.VisitDirectDeps(func(child android.Module) {
@@ -1354,8 +1352,14 @@ func (c *Module) IsSanitizerEnabled(t SanitizerType) bool {
 	return c.sanitize.isSanitizerEnabled(t)
 }
 
-func (c *Module) SanitizeDep() bool {
-	return c.sanitize.Properties.SanitizeDep
+func (c *Module) SanitizeDep(t SanitizerType) bool {
+	for _, e := range c.sanitize.Properties.SanitizeDepTypes {
+		if t == e {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (c *Module) StaticallyLinked() bool {
@@ -1374,9 +1378,9 @@ func (c *Module) SetSanitizer(t SanitizerType, b bool) {
 	}
 }
 
-func (c *Module) SetSanitizeDep(b bool) {
-	if c.sanitize != nil {
-		c.sanitize.Properties.SanitizeDep = b
+func (c *Module) SetSanitizeDep(t SanitizerType) {
+	if !c.SanitizeDep(t) {
+		c.sanitize.Properties.SanitizeDepTypes = append(c.sanitize.Properties.SanitizeDepTypes, t)
 	}
 }
 
@@ -1393,7 +1397,7 @@ func sanitizerMutator(t SanitizerType) func(android.BottomUpMutatorContext) {
 			if c.Binary() && c.IsSanitizerEnabled(t) {
 				modules := mctx.CreateVariations(t.variationName())
 				modules[0].(PlatformSanitizeable).SetSanitizer(t, true)
-			} else if c.IsSanitizerEnabled(t) || c.SanitizeDep() {
+			} else if c.IsSanitizerEnabled(t) || c.SanitizeDep(t) {
 				isSanitizerEnabled := c.IsSanitizerEnabled(t)
 				if c.StaticallyLinked() || c.Header() || t == Fuzzer {
 					// Static and header libs are split into non-sanitized and sanitized variants.
@@ -1415,8 +1419,6 @@ func sanitizerMutator(t SanitizerType) func(android.BottomUpMutatorContext) {
 					modules := mctx.CreateVariations("", t.variationName())
 					modules[0].(PlatformSanitizeable).SetSanitizer(t, false)
 					modules[1].(PlatformSanitizeable).SetSanitizer(t, true)
-					modules[0].(PlatformSanitizeable).SetSanitizeDep(false)
-					modules[1].(PlatformSanitizeable).SetSanitizeDep(false)
 
 					if mctx.Device() && t.incompatibleWithCfi() && cfiSupported {
 						// TODO: Make sure that cfi mutator runs "after" any of the sanitizers that
@@ -1449,7 +1451,6 @@ func sanitizerMutator(t SanitizerType) func(android.BottomUpMutatorContext) {
 					// Shared libs are not split. Only the sanitized variant is created.
 					modules := mctx.CreateVariations(t.variationName())
 					modules[0].(PlatformSanitizeable).SetSanitizer(t, true)
-					modules[0].(PlatformSanitizeable).SetSanitizeDep(false)
 
 					// locate the asan libraries under /data/asan
 					if mctx.Device() && t == Asan && isSanitizerEnabled {
@@ -1463,7 +1464,6 @@ func sanitizerMutator(t SanitizerType) func(android.BottomUpMutatorContext) {
 					}
 				}
 			}
-			c.SetSanitizeDep(false)
 		} else if sanitizeable, ok := mctx.Module().(Sanitizeable); ok && sanitizeable.IsSanitizerEnabled(mctx, t.name()) {
 			// APEX and Java fuzz modules fall here
 			sanitizeable.AddSanitizerDependencies(mctx, t.name())
@@ -1566,12 +1566,10 @@ func enableMinimalRuntime(sanitize *sanitize) bool {
 	if !Bool(sanitize.Properties.Sanitize.Address) &&
 		!Bool(sanitize.Properties.Sanitize.Hwaddress) &&
 		!Bool(sanitize.Properties.Sanitize.Fuzzer) &&
-
 		(Bool(sanitize.Properties.Sanitize.Integer_overflow) ||
 			len(sanitize.Properties.Sanitize.Misc_undefined) > 0 ||
 			Bool(sanitize.Properties.Sanitize.Undefined) ||
 			Bool(sanitize.Properties.Sanitize.All_undefined)) &&
-
 		!(Bool(sanitize.Properties.Sanitize.Diag.Integer_overflow) ||
 			Bool(sanitize.Properties.Sanitize.Diag.Cfi) ||
 			Bool(sanitize.Properties.Sanitize.Diag.Undefined) ||

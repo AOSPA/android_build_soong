@@ -351,9 +351,9 @@ var (
 		"-w",
 	}
 
-	CStdVersion               = "gnu99"
+	CStdVersion               = "gnu11"
 	CppStdVersion             = "gnu++17"
-	ExperimentalCStdVersion   = "gnu11"
+	ExperimentalCStdVersion   = "gnu17"
 	ExperimentalCppStdVersion = "gnu++2a"
 
 	SDClang         = false
@@ -362,6 +362,7 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
+	// TODO(b/243545528) Match upstream version
 	ClangDefaultVersion      = "clang-r450784d"
 	ClangDefaultShortVersion = "14.0.6"
 

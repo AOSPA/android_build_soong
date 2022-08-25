@@ -35,17 +35,26 @@ func init() {
 			"bugprone-*",
 			"cert-*",
 			"clang-diagnostic-unused-command-line-argument",
-			"google-*",
+			// Select only google-* checks that do not have thousands of warnings.
+			// Add more such checks when we clean up source code.
+			// "google-build-using-namespace",
+			// "google-default-arguments",
+			// "google-explicit-constructor",
+			// "google-global-names-in-headers",
+			// "google-runtime-int",
+			"google-build-explicit-make-pair",
+			"google-build-namespaces",
+			"google-runtime-operator",
+			"google-upgrade-*",
 			"misc-*",
 			"performance-*",
 			"portability-*",
 			"-bugprone-easily-swappable-parameters",
 			"-bugprone-narrowing-conversions",
-			"-google-readability*",
-			"-google-runtime-references",
 			"-misc-no-recursion",
 			"-misc-non-private-member-variables-in-classes",
 			"-misc-unused-parameters",
+			"-performance-no-int-to-ptr",
 			// the following groups are excluded by -*
 			// -altera-*
 			// -cppcoreguidelines-*
@@ -78,13 +87,10 @@ func init() {
 		return strings.Join([]string{
 			"-*",
 			"clang-diagnostic-unused-command-line-argument",
-			"google*",
-			"-google-build-using-namespace",
-			"-google-default-arguments",
-			"-google-explicit-constructor",
-			"-google-readability*",
-			"-google-runtime-int",
-			"-google-runtime-references",
+			"google-build-explicit-make-pair",
+			"google-build-namespaces",
+			"google-runtime-operator",
+			"google-upgrade-*",
 		}, ",")
 	})
 
@@ -122,6 +128,7 @@ var DefaultLocalTidyChecks = []PathBasedTidyCheck{
 	{"hardware/qcom", tidyExternalVendor},
 	{"vendor/", tidyExternalVendor},
 	{"vendor/google", tidyDefault},
+	{"vendor/google_arc/libs/org.chromium.arc.mojom", tidyExternalVendor},
 	{"vendor/google_devices", tidyExternalVendor},
 }
 
