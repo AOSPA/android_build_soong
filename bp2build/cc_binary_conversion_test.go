@@ -34,10 +34,11 @@ type testBazelTarget struct {
 	attrs attrNameToString
 }
 
-func generateBazelTargetsForTest(targets []testBazelTarget) []string {
+func generateBazelTargetsForTest(targets []testBazelTarget, hod android.HostOrDeviceSupported) []string {
 	ret := make([]string, 0, len(targets))
 	for _, t := range targets {
-		ret = append(ret, makeBazelTarget(t.typ, t.name, t.attrs))
+		attrs := t.attrs.clone()
+		ret = append(ret, makeBazelTargetHostOrDevice(t.typ, t.name, attrs, hod))
 	}
 	return ret
 }
@@ -65,42 +66,33 @@ func runCcBinaryTests(t *testing.T, tc ccBinaryBp2buildTestCase) {
 	runCcHostBinaryTestCase(t, tc)
 }
 
-func runCcBinaryTestCase(t *testing.T, tc ccBinaryBp2buildTestCase) {
+func runCcBinaryTestCase(t *testing.T, testCase ccBinaryBp2buildTestCase) {
 	t.Helper()
 	moduleTypeUnderTest := "cc_binary"
-	testCase := bp2buildTestCase{
-		expectedBazelTargets:       generateBazelTargetsForTest(tc.targets),
-		moduleTypeUnderTest:        moduleTypeUnderTest,
-		moduleTypeUnderTestFactory: cc.BinaryFactory,
-		description:                fmt.Sprintf("%s %s", moduleTypeUnderTest, tc.description),
-		blueprint:                  binaryReplacer.Replace(tc.blueprint),
-	}
-	t.Run(testCase.description, func(t *testing.T) {
+
+	description := fmt.Sprintf("%s %s", moduleTypeUnderTest, testCase.description)
+	t.Run(description, func(t *testing.T) {
 		t.Helper()
-		runBp2BuildTestCase(t, registerCcBinaryModuleTypes, testCase)
+		runBp2BuildTestCase(t, registerCcBinaryModuleTypes, bp2buildTestCase{
+			expectedBazelTargets:       generateBazelTargetsForTest(testCase.targets, android.DeviceSupported),
+			moduleTypeUnderTest:        moduleTypeUnderTest,
+			moduleTypeUnderTestFactory: cc.BinaryFactory,
+			description:                description,
+			blueprint:                  binaryReplacer.Replace(testCase.blueprint),
+		})
 	})
 }
 
-func runCcHostBinaryTestCase(t *testing.T, tc ccBinaryBp2buildTestCase) {
+func runCcHostBinaryTestCase(t *testing.T, testCase ccBinaryBp2buildTestCase) {
 	t.Helper()
-	testCase := tc
-	for i, tar := range testCase.targets {
-		switch tar.typ {
-		case "cc_binary", "proto_library", "cc_lite_proto_library":
-			tar.attrs["target_compatible_with"] = `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    })`
-		}
-		testCase.targets[i] = tar
-	}
 	moduleTypeUnderTest := "cc_binary_host"
-	t.Run(testCase.description, func(t *testing.T) {
+	description := fmt.Sprintf("%s %s", moduleTypeUnderTest, testCase.description)
+	t.Run(description, func(t *testing.T) {
 		runBp2BuildTestCase(t, registerCcBinaryModuleTypes, bp2buildTestCase{
-			expectedBazelTargets:       generateBazelTargetsForTest(testCase.targets),
+			expectedBazelTargets:       generateBazelTargetsForTest(testCase.targets, android.HostSupported),
 			moduleTypeUnderTest:        moduleTypeUnderTest,
 			moduleTypeUnderTestFactory: cc.BinaryHostFactory,
-			description:                fmt.Sprintf("%s %s", moduleTypeUnderTest, tc.description),
+			description:                description,
 			blueprint:                  hostBinaryReplacer.Replace(testCase.blueprint),
 		})
 	})
@@ -501,6 +493,52 @@ func TestCcBinaryStaticProto(t *testing.T) {
 				"deps":               `[":libprotobuf-cpp-lite"]`,
 				"whole_archive_deps": `[":foo_cc_proto_lite"]`,
 				"linkshared":         `False`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryConvertLex(t *testing.T) {
+	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
+		description: `.l and .ll sources converted to .c and .cc`,
+		blueprint: `
+{rule_name} {
+    name: "foo",
+		srcs: ["foo.c", "bar.cc", "foo1.l", "foo2.l", "bar1.ll", "bar2.ll"],
+		lex: { flags: ["--foo_opt", "--bar_opt"] },
+		include_build_directory: false,
+}
+`,
+		targets: []testBazelTarget{
+			{"genlex", "foo_genlex_l", attrNameToString{
+				"srcs": `[
+        "foo1.l",
+        "foo2.l",
+    ]`,
+				"lexopts": `[
+        "--foo_opt",
+        "--bar_opt",
+    ]`,
+			}},
+			{"genlex", "foo_genlex_ll", attrNameToString{
+				"srcs": `[
+        "bar1.ll",
+        "bar2.ll",
+    ]`,
+				"lexopts": `[
+        "--foo_opt",
+        "--bar_opt",
+    ]`,
+			}},
+			{"cc_binary", "foo", attrNameToString{
+				"srcs": `[
+        "bar.cc",
+        ":foo_genlex_ll",
+    ]`,
+				"srcs_c": `[
+        "foo.c",
+        ":foo_genlex_l",
+    ]`,
 			}},
 		},
 	})
