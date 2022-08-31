@@ -1468,7 +1468,7 @@ func (a *apexBundle) EnableSanitizer(sanitizerName string) {
 	}
 }
 
-func (a *apexBundle) IsSanitizerEnabled(ctx android.BaseModuleContext, sanitizerName string) bool {
+func (a *apexBundle) IsSanitizerEnabled(config android.Config, sanitizerName string) bool {
 	if android.InList(sanitizerName, a.properties.SanitizerNames) {
 		return true
 	}
@@ -1476,11 +1476,11 @@ func (a *apexBundle) IsSanitizerEnabled(ctx android.BaseModuleContext, sanitizer
 	// Then follow the global setting
 	globalSanitizerNames := []string{}
 	if a.Host() {
-		globalSanitizerNames = ctx.Config().SanitizeHost()
+		globalSanitizerNames = config.SanitizeHost()
 	} else {
-		arches := ctx.Config().SanitizeDeviceArch()
+		arches := config.SanitizeDeviceArch()
 		if len(arches) == 0 || android.InList(a.Arch().ArchType.Name, arches) {
-			globalSanitizerNames = ctx.Config().SanitizeDevice()
+			globalSanitizerNames = config.SanitizeDevice()
 		}
 	}
 	return android.InList(sanitizerName, globalSanitizerNames)
@@ -2548,6 +2548,11 @@ func (o *OverrideApex) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		if overridableProperties.Package_name != "" {
 			attrs.Package_name = &overridableProperties.Package_name
 		}
+
+		// Logging parent
+		if overridableProperties.Logging_parent != "" {
+			attrs.Logging_parent = &overridableProperties.Logging_parent
+		}
 	}
 
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: o.Name()}, &attrs)
@@ -2873,6 +2878,36 @@ func makeApexAvailableBaseline() map[string][]string {
 	m["com.android.appsearch"] = []string{
 		"icing-java-proto-lite",
 		"libprotobuf-java-lite",
+	}
+	//
+	// Module separator
+	//
+	m["com.android.btservices"] = []string{
+		"bluetooth-protos-lite",
+		"internal_include_headers",
+		"libaudio-a2dp-hw-utils",
+		"libaudio-hearing-aid-hw-utils",
+		"libbluetooth",
+		"libbluetooth-types",
+		"libbluetooth-types-header",
+		"libbluetooth_gd",
+		"libbluetooth_headers",
+		"libbluetooth_jni",
+		"libbt-audio-hal-interface",
+		"libbt-bta",
+		"libbt-common",
+		"libbt-hci",
+		"libbt-platform-protos-lite",
+		"libbt-protos-lite",
+		"libbt-sbc-decoder",
+		"libbt-sbc-encoder",
+		"libbt-stack",
+		"libbt-utils",
+		"libbtcore",
+		"libbtdevice",
+		"libbte",
+		"libbtif",
+		"libchrome",
 	}
 	//
 	// Module separator
@@ -3205,6 +3240,7 @@ type bazelApexBundleAttributes struct {
 	Native_shared_libs_64 bazel.LabelListAttribute
 	Compressible          bazel.BoolAttribute
 	Package_name          *string
+	Logging_parent        *string
 }
 
 type convertedNativeSharedLibs struct {
@@ -3304,6 +3340,11 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		packageName = &a.overridableProperties.Package_name
 	}
 
+	var loggingParent *string
+	if a.overridableProperties.Logging_parent != "" {
+		loggingParent = &a.overridableProperties.Logging_parent
+	}
+
 	attrs := bazelApexBundleAttributes{
 		Manifest:              manifestLabelAttribute,
 		Android_manifest:      androidManifestLabelAttribute,
@@ -3319,6 +3360,7 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		Prebuilts:             prebuiltsLabelListAttribute,
 		Compressible:          compressibleAttribute,
 		Package_name:          packageName,
+		Logging_parent:        loggingParent,
 	}
 
 	props := bazel.BazelTargetModuleProperties{

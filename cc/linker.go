@@ -410,7 +410,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	if ctx.toolchain().Bionic() {
 		// libclang_rt.builtins has to be last on the command line
 		if !Bool(linker.Properties.No_libcrt) && !ctx.header() {
-			deps.LateStaticLibs = append(deps.LateStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
+			deps.UnexportedStaticLibs = append(deps.UnexportedStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
 		}
 
 		if inList("libdl", deps.SharedLibs) {
@@ -433,7 +433,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		}
 	} else if ctx.toolchain().Musl() {
 		if !Bool(linker.Properties.No_libcrt) && !ctx.header() {
-			deps.LateStaticLibs = append(deps.LateStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
+			deps.UnexportedStaticLibs = append(deps.UnexportedStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
 		}
 	}
 
@@ -539,10 +539,6 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 				flags.Global.LdFlags = append(flags.Global.LdFlags, "-lrt")
 			}
 		}
-	}
-
-	if ctx.toolchain().LibclangRuntimeLibraryArch() != "" {
-		flags.Global.LdFlags = append(flags.Global.LdFlags, "-Wl,--exclude-libs="+config.BuiltinsRuntimeLibrary(ctx.toolchain())+".a")
 	}
 
 	CheckBadLinkerFlags(ctx, "ldflags", linker.Properties.Ldflags)
