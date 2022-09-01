@@ -758,11 +758,6 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize=vptr,function")
 		}
 
-		if enableMinimalRuntime(sanitize) {
-			flags.Local.CFlags = append(flags.Local.CFlags, strings.Join(minimalRuntimeFlags, " "))
-			flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,--exclude-libs,"+minimalRuntimeLib)
-		}
-
 		if Bool(sanitize.Properties.Sanitize.Fuzzer) {
 			// When fuzzing, we wish to crash with diagnostics on any bug.
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize-trap=all", "-fno-sanitize-recover=all")
@@ -771,6 +766,12 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		} else {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fsanitize-trap=all", "-ftrap-function=abort")
 		}
+
+		if enableMinimalRuntime(sanitize) {
+			flags.Local.CFlags = append(flags.Local.CFlags, strings.Join(minimalRuntimeFlags, " "))
+			flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,--exclude-libs,"+minimalRuntimeLib)
+		}
+
 		// http://b/119329758, Android core does not boot up with this sanitizer yet.
 		if toDisableImplicitIntegerChange(flags.Local.CFlags) {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize=implicit-integer-sign-change")
@@ -1465,8 +1466,11 @@ func sanitizerMutator(t SanitizerType) func(android.BottomUpMutatorContext) {
 				}
 			}
 		} else if sanitizeable, ok := mctx.Module().(Sanitizeable); ok && sanitizeable.IsSanitizerEnabled(mctx, t.name()) {
-			// APEX and Java fuzz modules fall here
+			// APEX fuzz modules fall here
 			sanitizeable.AddSanitizerDependencies(mctx, t.name())
+			mctx.CreateVariations(t.variationName())
+		} else if _, ok := mctx.Module().(JniSanitizeable); ok {
+			// Java fuzz modules fall here
 			mctx.CreateVariations(t.variationName())
 		} else if c, ok := mctx.Module().(*Module); ok {
 			//TODO: When Rust modules have vendor support, enable this path for PlatformSanitizeable

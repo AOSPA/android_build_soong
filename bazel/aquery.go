@@ -16,6 +16,7 @@ package bazel
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -27,17 +28,21 @@ import (
 	"github.com/google/blueprint/proptools"
 )
 
+type artifactId int
+type depsetId int
+type pathFragmentId int
+
 // artifact contains relevant portions of Bazel's aquery proto, Artifact.
 // Represents a single artifact, whether it's a source file or a derived output file.
 type artifact struct {
-	Id             int
-	PathFragmentId int
+	Id             artifactId
+	PathFragmentId pathFragmentId
 }
 
 type pathFragment struct {
-	Id       int
+	Id       pathFragmentId
 	Label    string
-	ParentId int
+	ParentId pathFragmentId
 }
 
 // KeyValuePair represents Bazel's aquery proto, KeyValuePair.
@@ -63,9 +68,9 @@ type AqueryDepset struct {
 // Represents a data structure containing one or more files. Depsets in Bazel are an efficient
 // data structure for storing large numbers of file paths.
 type depSetOfFiles struct {
-	Id                  int
-	DirectArtifactIds   []int
-	TransitiveDepSetIds []int
+	Id                  depsetId
+	DirectArtifactIds   []artifactId
+	TransitiveDepSetIds []depsetId
 }
 
 // action contains relevant portions of Bazel's aquery proto, Action.
@@ -73,9 +78,9 @@ type depSetOfFiles struct {
 type action struct {
 	Arguments            []string
 	EnvironmentVariables []KeyValuePair
-	InputDepSetIds       []int
+	InputDepSetIds       []depsetId
 	Mnemonic             string
-	OutputIds            []int
+	OutputIds            []artifactId
 	TemplateContent      string
 	Substitutions        []KeyValuePair
 }
@@ -113,20 +118,20 @@ type aqueryArtifactHandler struct {
 	// Maps depset id to AqueryDepset, a representation of depset which is
 	// post-processed for middleman artifact handling, unhandled artifact
 	// dropping, content hashing, etc.
-	depsetIdToAqueryDepset map[int]AqueryDepset
+	depsetIdToAqueryDepset map[depsetId]AqueryDepset
 	// Maps content hash to AqueryDepset.
 	depsetHashToAqueryDepset map[string]AqueryDepset
 
 	// depsetIdToArtifactIdsCache is a memoization of depset flattening, because flattening
 	// may be an expensive operation.
 	depsetHashToArtifactPathsCache map[string][]string
-	// Maps artifact ContentHash to fully expanded path.
-	artifactIdToPath map[int]string
+	// Maps artifact ids to fully expanded paths.
+	artifactIdToPath map[artifactId]string
 }
 
 // The tokens should be substituted with the value specified here, instead of the
 // one returned in 'substitutions' of TemplateExpand action.
-var TemplateActionOverriddenTokens = map[string]string{
+var templateActionOverriddenTokens = map[string]string{
 	// Uses "python3" for %python_binary% instead of the value returned by aquery
 	// which is "py3wrapper.sh". See removePy3wrapperScript.
 	"%python_binary%": "python3",
@@ -138,13 +143,20 @@ var manifestFilePattern = regexp.MustCompile(".*/.+\\.runfiles/MANIFEST$")
 // The file name of py3wrapper.sh, which is used by py_binary targets.
 const py3wrapperFileName = "/py3wrapper.sh"
 
-func newAqueryHandler(aqueryResult actionGraphContainer) (*aqueryArtifactHandler, error) {
-	pathFragments := map[int]pathFragment{}
-	for _, pathFragment := range aqueryResult.PathFragments {
-		pathFragments[pathFragment.Id] = pathFragment
+func indexBy[K comparable, V any](values []V, keyFn func(v V) K) map[K]V {
+	m := map[K]V{}
+	for _, v := range values {
+		m[keyFn(v)] = v
 	}
+	return m
+}
 
-	artifactIdToPath := map[int]string{}
+func newAqueryHandler(aqueryResult actionGraphContainer) (*aqueryArtifactHandler, error) {
+	pathFragments := indexBy(aqueryResult.PathFragments, func(pf pathFragment) pathFragmentId {
+		return pf.Id
+	})
+
+	artifactIdToPath := map[artifactId]string{}
 	for _, artifact := range aqueryResult.Artifacts {
 		artifactPath, err := expandPathFragment(artifact.PathFragmentId, pathFragments)
 		if err != nil {
@@ -158,7 +170,7 @@ func newAqueryHandler(aqueryResult actionGraphContainer) (*aqueryArtifactHandler
 	// if we find a middleman action which has outputs [foo, bar], and output [baz_middleman], then,
 	// for each other action which has input [baz_middleman], we add [foo, bar] to the inputs for
 	// that action instead.
-	middlemanIdToDepsetIds := map[int][]int{}
+	middlemanIdToDepsetIds := map[artifactId][]depsetId{}
 	for _, actionEntry := range aqueryResult.Actions {
 		if actionEntry.Mnemonic == "Middleman" {
 			for _, outputId := range actionEntry.OutputIds {
@@ -167,19 +179,12 @@ func newAqueryHandler(aqueryResult actionGraphContainer) (*aqueryArtifactHandler
 		}
 	}
 
-	// Store all depset IDs to validate all depset links are resolvable.
-	depsetIds := map[int]bool{}
-	for _, depset := range aqueryResult.DepSetOfFiles {
-		depsetIds[depset.Id] = true
-	}
-
-	depsetIdToDepset := map[int]depSetOfFiles{}
-	for _, depset := range aqueryResult.DepSetOfFiles {
-		depsetIdToDepset[depset.Id] = depset
-	}
+	depsetIdToDepset := indexBy(aqueryResult.DepSetOfFiles, func(d depSetOfFiles) depsetId {
+		return d.Id
+	})
 
 	aqueryHandler := aqueryArtifactHandler{
-		depsetIdToAqueryDepset:         map[int]AqueryDepset{},
+		depsetIdToAqueryDepset:         map[depsetId]AqueryDepset{},
 		depsetHashToAqueryDepset:       map[string]AqueryDepset{},
 		depsetHashToArtifactPathsCache: map[string][]string{},
 		artifactIdToPath:               artifactIdToPath,
@@ -198,12 +203,12 @@ func newAqueryHandler(aqueryResult actionGraphContainer) (*aqueryArtifactHandler
 
 // Ensures that the handler's depsetIdToAqueryDepset map contains an entry for the given
 // depset.
-func (a *aqueryArtifactHandler) populateDepsetMaps(depset depSetOfFiles, middlemanIdToDepsetIds map[int][]int, depsetIdToDepset map[int]depSetOfFiles) (AqueryDepset, error) {
+func (a *aqueryArtifactHandler) populateDepsetMaps(depset depSetOfFiles, middlemanIdToDepsetIds map[artifactId][]depsetId, depsetIdToDepset map[depsetId]depSetOfFiles) (AqueryDepset, error) {
 	if aqueryDepset, containsDepset := a.depsetIdToAqueryDepset[depset.Id]; containsDepset {
 		return aqueryDepset, nil
 	}
 	transitiveDepsetIds := depset.TransitiveDepSetIds
-	directArtifactPaths := []string{}
+	var directArtifactPaths []string
 	for _, artifactId := range depset.DirectArtifactIds {
 		path, pathExists := a.artifactIdToPath[artifactId]
 		if !pathExists {
@@ -232,7 +237,7 @@ func (a *aqueryArtifactHandler) populateDepsetMaps(depset depSetOfFiles, middlem
 		}
 	}
 
-	childDepsetHashes := []string{}
+	var childDepsetHashes []string
 	for _, childDepsetId := range transitiveDepsetIds {
 		childDepset, exists := depsetIdToDepset[childDepsetId]
 		if !exists {
@@ -258,8 +263,8 @@ func (a *aqueryArtifactHandler) populateDepsetMaps(depset depSetOfFiles, middlem
 // input paths contained in these depsets.
 // This is a potentially expensive operation, and should not be invoked except
 // for actions which need specialized input handling.
-func (a *aqueryArtifactHandler) getInputPaths(depsetIds []int) ([]string, error) {
-	inputPaths := []string{}
+func (a *aqueryArtifactHandler) getInputPaths(depsetIds []depsetId) ([]string, error) {
+	var inputPaths []string
 
 	for _, inputDepSetId := range depsetIds {
 		depset := a.depsetIdToAqueryDepset[inputDepSetId]
@@ -291,12 +296,12 @@ func (a *aqueryArtifactHandler) artifactPathsFromDepsetHash(depsetHash string) (
 		a.depsetHashToArtifactPathsCache[depsetHash] = result
 		return result, nil
 	} else {
-		return nil, fmt.Errorf("undefined input depset hash %d", depsetHash)
+		return nil, fmt.Errorf("undefined input depset hash %s", depsetHash)
 	}
 }
 
 // AqueryBuildStatements returns a slice of BuildStatements and a slice of AqueryDepset
-// which should be registered (and output  to a ninja file) to correspond with Bazel's
+// which should be registered (and output to a ninja file) to correspond with Bazel's
 // action graph, as described by the given action graph json proto.
 // BuildStatements are one-to-one with actions in the given action graph, and AqueryDepsets
 // are one-to-one with Bazel's depSetOfFiles objects.
@@ -338,7 +343,7 @@ func AqueryBuildStatements(aqueryJsonProto []byte) ([]BuildStatement, []AqueryDe
 	}
 
 	depsetsByHash := map[string]AqueryDepset{}
-	depsets := []AqueryDepset{}
+	var depsets []AqueryDepset
 	for _, aqueryDepset := range aqueryHandler.depsetIdToAqueryDepset {
 		if prevEntry, hasKey := depsetsByHash[aqueryDepset.ContentHash]; hasKey {
 			// Two depsets collide on hash. Ensure that their contents are identical.
@@ -386,15 +391,15 @@ func depsetContentHash(directPaths []string, transitiveDepsetHashes []string) st
 	h := sha256.New()
 	// Use newline as delimiter, as paths cannot contain newline.
 	h.Write([]byte(strings.Join(directPaths, "\n")))
-	h.Write([]byte(strings.Join(transitiveDepsetHashes, "\n")))
-	fullHash := fmt.Sprintf("%016x", h.Sum(nil))
+	h.Write([]byte(strings.Join(transitiveDepsetHashes, "")))
+	fullHash := base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 	return fullHash
 }
 
-func (aqueryHandler *aqueryArtifactHandler) depsetContentHashes(inputDepsetIds []int) ([]string, error) {
-	hashes := []string{}
+func (a *aqueryArtifactHandler) depsetContentHashes(inputDepsetIds []depsetId) ([]string, error) {
+	var hashes []string
 	for _, depsetId := range inputDepsetIds {
-		if aqueryDepset, exists := aqueryHandler.depsetIdToAqueryDepset[depsetId]; !exists {
+		if aqueryDepset, exists := a.depsetIdToAqueryDepset[depsetId]; !exists {
 			return nil, fmt.Errorf("undefined input depsetId %d", depsetId)
 		} else {
 			hashes = append(hashes, aqueryDepset.ContentHash)
@@ -403,13 +408,13 @@ func (aqueryHandler *aqueryArtifactHandler) depsetContentHashes(inputDepsetIds [
 	return hashes, nil
 }
 
-func (aqueryHandler *aqueryArtifactHandler) normalActionBuildStatement(actionEntry action) (BuildStatement, error) {
+func (a *aqueryArtifactHandler) normalActionBuildStatement(actionEntry action) (BuildStatement, error) {
 	command := strings.Join(proptools.ShellEscapeListIncludingSpaces(actionEntry.Arguments), " ")
-	inputDepsetHashes, err := aqueryHandler.depsetContentHashes(actionEntry.InputDepSetIds)
+	inputDepsetHashes, err := a.depsetContentHashes(actionEntry.InputDepSetIds)
 	if err != nil {
 		return BuildStatement{}, err
 	}
-	outputPaths, depfile, err := aqueryHandler.getOutputPaths(actionEntry)
+	outputPaths, depfile, err := a.getOutputPaths(actionEntry)
 	if err != nil {
 		return BuildStatement{}, err
 	}
@@ -425,12 +430,12 @@ func (aqueryHandler *aqueryArtifactHandler) normalActionBuildStatement(actionEnt
 	return buildStatement, nil
 }
 
-func (aqueryHandler *aqueryArtifactHandler) pythonZipperActionBuildStatement(actionEntry action, prevBuildStatements []BuildStatement) (BuildStatement, error) {
-	inputPaths, err := aqueryHandler.getInputPaths(actionEntry.InputDepSetIds)
+func (a *aqueryArtifactHandler) pythonZipperActionBuildStatement(actionEntry action, prevBuildStatements []BuildStatement) (BuildStatement, error) {
+	inputPaths, err := a.getInputPaths(actionEntry.InputDepSetIds)
 	if err != nil {
 		return BuildStatement{}, err
 	}
-	outputPaths, depfile, err := aqueryHandler.getOutputPaths(actionEntry)
+	outputPaths, depfile, err := a.getOutputPaths(actionEntry)
 	if err != nil {
 		return BuildStatement{}, err
 	}
@@ -452,7 +457,7 @@ func (aqueryHandler *aqueryArtifactHandler) pythonZipperActionBuildStatement(act
 	// See go/python-binary-host-mixed-build for more details.
 	pythonZipFilePath := outputPaths[0]
 	pyBinaryFound := false
-	for i, _ := range prevBuildStatements {
+	for i := range prevBuildStatements {
 		if len(prevBuildStatements[i].OutputPaths) == 1 && prevBuildStatements[i].OutputPaths[0]+".zip" == pythonZipFilePath {
 			prevBuildStatements[i].InputPaths = append(prevBuildStatements[i].InputPaths, pythonZipFilePath)
 			pyBinaryFound = true
@@ -473,8 +478,8 @@ func (aqueryHandler *aqueryArtifactHandler) pythonZipperActionBuildStatement(act
 	return buildStatement, nil
 }
 
-func (aqueryHandler *aqueryArtifactHandler) templateExpandActionBuildStatement(actionEntry action) (BuildStatement, error) {
-	outputPaths, depfile, err := aqueryHandler.getOutputPaths(actionEntry)
+func (a *aqueryArtifactHandler) templateExpandActionBuildStatement(actionEntry action) (BuildStatement, error) {
+	outputPaths, depfile, err := a.getOutputPaths(actionEntry)
 	if err != nil {
 		return BuildStatement{}, err
 	}
@@ -489,7 +494,7 @@ func (aqueryHandler *aqueryArtifactHandler) templateExpandActionBuildStatement(a
 	// See go/python-binary-host-mixed-build for more details.
 	command := fmt.Sprintf(`/bin/bash -c 'echo "%[1]s" | sed "s/\\\\n/\\n/g" > %[2]s && chmod a+x %[2]s'`,
 		escapeCommandlineArgument(expandedTemplateContent), outputPaths[0])
-	inputDepsetHashes, err := aqueryHandler.depsetContentHashes(actionEntry.InputDepSetIds)
+	inputDepsetHashes, err := a.depsetContentHashes(actionEntry.InputDepSetIds)
 	if err != nil {
 		return BuildStatement{}, err
 	}
@@ -505,13 +510,13 @@ func (aqueryHandler *aqueryArtifactHandler) templateExpandActionBuildStatement(a
 	return buildStatement, nil
 }
 
-func (aqueryHandler *aqueryArtifactHandler) symlinkActionBuildStatement(actionEntry action) (BuildStatement, error) {
-	outputPaths, depfile, err := aqueryHandler.getOutputPaths(actionEntry)
+func (a *aqueryArtifactHandler) symlinkActionBuildStatement(actionEntry action) (BuildStatement, error) {
+	outputPaths, depfile, err := a.getOutputPaths(actionEntry)
 	if err != nil {
 		return BuildStatement{}, err
 	}
 
-	inputPaths, err := aqueryHandler.getInputPaths(actionEntry.InputDepSetIds)
+	inputPaths, err := a.getInputPaths(actionEntry.InputDepSetIds)
 	if err != nil {
 		return BuildStatement{}, err
 	}
@@ -538,9 +543,9 @@ func (aqueryHandler *aqueryArtifactHandler) symlinkActionBuildStatement(actionEn
 	return buildStatement, nil
 }
 
-func (aqueryHandler *aqueryArtifactHandler) getOutputPaths(actionEntry action) (outputPaths []string, depfile *string, err error) {
+func (a *aqueryArtifactHandler) getOutputPaths(actionEntry action) (outputPaths []string, depfile *string, err error) {
 	for _, outputId := range actionEntry.OutputIds {
-		outputPath, exists := aqueryHandler.artifactIdToPath[outputId]
+		outputPath, exists := a.artifactIdToPath[outputId]
 		if !exists {
 			err = fmt.Errorf("undefined outputId %d", outputId)
 			return
@@ -565,7 +570,7 @@ func expandTemplateContent(actionEntry action) string {
 	replacerString := []string{}
 	for _, pair := range actionEntry.Substitutions {
 		value := pair.Value
-		if val, ok := TemplateActionOverriddenTokens[pair.Key]; ok {
+		if val, ok := templateActionOverriddenTokens[pair.Key]; ok {
 			value = val
 		}
 		replacerString = append(replacerString, pair.Key, value)
@@ -628,7 +633,7 @@ func addCommandForPyBinaryRunfilesDir(oldCommand string, zipperCommandPath, zipF
 }
 
 func isSymlinkAction(a action) bool {
-	return a.Mnemonic == "Symlink" || a.Mnemonic == "SolibSymlink"
+	return a.Mnemonic == "Symlink" || a.Mnemonic == "SolibSymlink" || a.Mnemonic == "ExecutableSymlink"
 }
 
 func isTemplateExpandAction(a action) bool {
@@ -662,8 +667,8 @@ func shouldSkipAction(a action) bool {
 	return false
 }
 
-func expandPathFragment(id int, pathFragmentsMap map[int]pathFragment) (string, error) {
-	labels := []string{}
+func expandPathFragment(id pathFragmentId, pathFragmentsMap map[pathFragmentId]pathFragment) (string, error) {
+	var labels []string
 	currId := id
 	// Only positive IDs are valid for path fragments. An ID of zero indicates a terminal node.
 	for currId > 0 {
