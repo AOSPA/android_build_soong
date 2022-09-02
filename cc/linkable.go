@@ -22,13 +22,6 @@ type PlatformSanitizeable interface {
 	// than left undefined.
 	IsSanitizerExplicitlyDisabled(t SanitizerType) bool
 
-	// SanitizeDep returns true if the module is statically linked into another that is sanitized
-	// with the given sanitizer.
-	SanitizeDep(t SanitizerType) bool
-
-	// SetSanitizeDep marks a module as a static dependency of another module to be sanitized.
-	SetSanitizeDep(t SanitizerType)
-
 	// SetSanitizer enables or disables the specified sanitizer type if it's supported, otherwise this should panic.
 	SetSanitizer(t SanitizerType, b bool)
 
@@ -113,6 +106,9 @@ type LinkableInterface interface {
 	UnstrippedOutputFile() android.Path
 	CoverageFiles() android.Paths
 
+	// CoverageOutputFile returns the output archive of gcno coverage information files.
+	CoverageOutputFile() android.OptionalPath
+
 	NonCcVariants() bool
 
 	SelectedStl() string
@@ -139,6 +135,12 @@ type LinkableInterface interface {
 	InVendor() bool
 
 	UseSdk() bool
+
+	// IsNdk returns true if the library is in the configs known NDK list.
+	IsNdk(config android.Config) bool
+
+	// IsStubs returns true if the this is a stubs library.
+	IsStubs() bool
 
 	// IsLlndk returns true for both LLNDK (public) and LLNDK-private libs.
 	IsLlndk() bool

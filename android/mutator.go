@@ -93,6 +93,7 @@ type RegisterMutatorsContext interface {
 	TopDown(name string, m TopDownMutator) MutatorHandle
 	BottomUp(name string, m BottomUpMutator) MutatorHandle
 	BottomUpBlueprint(name string, m blueprint.BottomUpMutator) MutatorHandle
+	Transition(name string, m TransitionMutator)
 }
 
 type RegisterMutatorFunc func(RegisterMutatorsContext)
@@ -421,6 +422,182 @@ func (x *registerMutatorsContext) BottomUpBlueprint(name string, m blueprint.Bot
 	return mutator
 }
 
+type IncomingTransitionContext interface {
+	// Module returns the target of the dependency edge for which the transition
+	// is being computed
+	Module() Module
+
+	// Config returns the configuration for the build.
+	Config() Config
+}
+
+type OutgoingTransitionContext interface {
+	// Module returns the target of the dependency edge for which the transition
+	// is being computed
+	Module() Module
+
+	// DepTag() Returns the dependency tag through which this dependency is
+	// reached
+	DepTag() blueprint.DependencyTag
+}
+
+// Transition mutators implement a top-down mechanism where a module tells its
+// direct dependencies what variation they should be built in but the dependency
+// has the final say.
+//
+// When implementing a transition mutator, one needs to implement four methods:
+//   - Split() that tells what variations a module has by itself
+//   - OutgoingTransition() where a module tells what it wants from its
+//     dependency
+//   - IncomingTransition() where a module has the final say about its own
+//     variation
+//   - Mutate() that changes the state of a module depending on its variation
+//
+// That the effective variation of module B when depended on by module A is the
+// composition the outgoing transition of module A and the incoming transition
+// of module B.
+//
+// the outgoing transition should not take the properties of the dependency into
+// account, only those of the module that depends on it. For this reason, the
+// dependency is not even passed into it as an argument. Likewise, the incoming
+// transition should not take the properties of the depending module into
+// account and is thus not informed about it. This makes for a nice
+// decomposition of the decision logic.
+//
+// A given transition mutator only affects its own variation; other variations
+// stay unchanged along the dependency edges.
+//
+// Soong makes sure that all modules are created in the desired variations and
+// that dependency edges are set up correctly. This ensures that "missing
+// variation" errors do not happen and allows for more flexible changes in the
+// value of the variation among dependency edges (as oppposed to bottom-up
+// mutators where if module A in variation X depends on module B and module B
+// has that variation X, A must depend on variation X of B)
+//
+// The limited power of the context objects passed to individual mutators
+// methods also makes it more difficult to shoot oneself in the foot. Complete
+// safety is not guaranteed because no one prevents individual transition
+// mutators from mutating modules in illegal ways and for e.g. Split() or
+// Mutate() to run their own visitations of the transitive dependency of the
+// module and both of these are bad ideas, but it's better than no guardrails at
+// all.
+//
+// This model is pretty close to Bazel's configuration transitions. The mapping
+// between concepts in Soong and Bazel is as follows:
+//   - Module == configured target
+//   - Variant == configuration
+//   - Variation name == configuration flag
+//   - Variation == configuration flag value
+//   - Outgoing transition == attribute transition
+//   - Incoming transition == rule transition
+//
+// The Split() method does not have a Bazel equivalent and Bazel split
+// transitions do not have a Soong equivalent.
+//
+// Mutate() does not make sense in Bazel due to the different models of the
+// two systems: when creating new variations, Soong clones the old module and
+// thus some way is needed to change it state whereas Bazel creates each
+// configuration of a given configured target anew.
+type TransitionMutator interface {
+	// Split returns the set of variations that should be created for a module no
+	// matter who depends on it. Used when Make depends on a particular variation
+	// or when the module knows its variations just based on information given to
+	// it in the Blueprint file. This method should not mutate the module it is
+	// called on.
+	Split(ctx BaseModuleContext) []string
+
+	// Called on a module to determine which variation it wants from its direct
+	// dependencies. The dependency itself can override this decision. This method
+	// should not mutate the module itself.
+	OutgoingTransition(ctx OutgoingTransitionContext, sourceVariation string) string
+
+	// Called on a module to determine which variation it should be in based on
+	// the variation modules that depend on it want. This gives the module a final
+	// say about its own variations. This method should not mutate the module
+	// itself.
+	IncomingTransition(ctx IncomingTransitionContext, incomingVariation string) string
+
+	// Called after a module was split into multiple variations on each variation.
+	// It should not split the module any further but adding new dependencies is
+	// fine. Unlike all the other methods on TransitionMutator, this method is
+	// allowed to mutate the module.
+	Mutate(ctx BottomUpMutatorContext, variation string)
+}
+
+type androidTransitionMutator struct {
+	finalPhase          bool
+	bazelConversionMode bool
+	mutator             TransitionMutator
+}
+
+func (a *androidTransitionMutator) Split(ctx blueprint.BaseModuleContext) []string {
+	if m, ok := ctx.Module().(Module); ok {
+		moduleContext := m.base().baseModuleContextFactory(ctx)
+		moduleContext.bazelConversionMode = a.bazelConversionMode
+		return a.mutator.Split(&moduleContext)
+	} else {
+		return []string{""}
+	}
+}
+
+type outgoingTransitionContextImpl struct {
+	bp blueprint.OutgoingTransitionContext
+}
+
+func (c *outgoingTransitionContextImpl) Module() Module {
+	return c.bp.Module().(Module)
+}
+
+func (c *outgoingTransitionContextImpl) DepTag() blueprint.DependencyTag {
+	return c.bp.DepTag()
+}
+
+func (a *androidTransitionMutator) OutgoingTransition(ctx blueprint.OutgoingTransitionContext, sourceVariation string) string {
+	if _, ok := ctx.Module().(Module); ok {
+		return a.mutator.OutgoingTransition(&outgoingTransitionContextImpl{bp: ctx}, sourceVariation)
+	} else {
+		return ""
+	}
+}
+
+type incomingTransitionContextImpl struct {
+	bp blueprint.IncomingTransitionContext
+}
+
+func (c *incomingTransitionContextImpl) Module() Module {
+	return c.bp.Module().(Module)
+}
+
+func (c *incomingTransitionContextImpl) Config() Config {
+	return c.bp.Config().(Config)
+}
+
+func (a *androidTransitionMutator) IncomingTransition(ctx blueprint.IncomingTransitionContext, incomingVariation string) string {
+	if _, ok := ctx.Module().(Module); ok {
+		return a.mutator.IncomingTransition(&incomingTransitionContextImpl{bp: ctx}, incomingVariation)
+	} else {
+		return ""
+	}
+}
+
+func (a *androidTransitionMutator) Mutate(ctx blueprint.BottomUpMutatorContext, variation string) {
+	if am, ok := ctx.Module().(Module); ok {
+		a.mutator.Mutate(bottomUpMutatorContextFactory(ctx, am, a.finalPhase, a.bazelConversionMode), variation)
+	}
+}
+
+func (x *registerMutatorsContext) Transition(name string, m TransitionMutator) {
+	atm := &androidTransitionMutator{
+		finalPhase:          x.finalPhase,
+		bazelConversionMode: x.bazelConversionMode,
+		mutator:             m,
+	}
+	mutator := &mutator{
+		name:              name,
+		transitionMutator: atm}
+	x.mutators = append(x.mutators, mutator)
+}
+
 func (x *registerMutatorsContext) mutatorName(name string) string {
 	if x.bazelConversionMode {
 		return name + "_bp2build"
@@ -456,6 +633,8 @@ func (mutator *mutator) register(ctx *Context) {
 		handle = blueprintCtx.RegisterBottomUpMutator(mutator.name, mutator.bottomUpMutator)
 	} else if mutator.topDownMutator != nil {
 		handle = blueprintCtx.RegisterTopDownMutator(mutator.name, mutator.topDownMutator)
+	} else if mutator.transitionMutator != nil {
+		blueprintCtx.RegisterTransitionMutator(mutator.name, mutator.transitionMutator)
 	}
 	if mutator.parallel {
 		handle.Parallel()

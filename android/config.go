@@ -793,6 +793,10 @@ func (c *config) PlatformVersionLastStable() string {
 	return String(c.productVariables.Platform_version_last_stable)
 }
 
+func (c *config) PlatformVersionKnownCodenames() string {
+	return String(c.productVariables.Platform_version_known_codenames)
+}
+
 func (c *config) MinSupportedSdkVersion() ApiLevel {
 	return uncheckedFinalApiLevel(19)
 }
@@ -1747,6 +1751,10 @@ func (c *deviceConfig) BuildBrokenVendorPropertyNamespace() bool {
 
 func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
+}
+
+func (c *deviceConfig) BuildBrokenDepfile() bool {
+	return Bool(c.config.productVariables.BuildBrokenDepfile)
 }
 
 func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {

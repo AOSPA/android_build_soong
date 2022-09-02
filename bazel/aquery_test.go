@@ -17,6 +17,7 @@ package bazel
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -224,7 +225,7 @@ func TestAqueryMultiArchGenrule(t *testing.T) {
   }]
 }`
 	actualbuildStatements, actualDepsets, _ := AqueryBuildStatements([]byte(inputString))
-	expectedBuildStatements := []BuildStatement{}
+	var expectedBuildStatements []BuildStatement
 	for _, arch := range []string{"arm", "arm64", "x86", "x86_64"} {
 		expectedBuildStatements = append(expectedBuildStatements,
 			BuildStatement{
@@ -235,7 +236,7 @@ func TestAqueryMultiArchGenrule(t *testing.T) {
 					fmt.Sprintf("bazel-out/sourceroot/k8-fastbuild/bin/bionic/libc/syscalls-%s.S", arch),
 				},
 				Env: []KeyValuePair{
-					KeyValuePair{Key: "PATH", Value: "/bin:/usr/bin:/usr/local/bin"},
+					{Key: "PATH", Value: "/bin:/usr/bin:/usr/local/bin"},
 				},
 				Mnemonic: "Genrule",
 			})
@@ -747,7 +748,7 @@ func TestTransitiveInputDepsets(t *testing.T) {
 	actualbuildStatements, actualDepsets, _ := AqueryBuildStatements([]byte(inputString))
 
 	expectedBuildStatements := []BuildStatement{
-		BuildStatement{
+		{
 			Command:     "/bin/bash -c 'touch bazel-out/sourceroot/k8-fastbuild/bin/testpkg/test_out'",
 			OutputPaths: []string{"bazel-out/sourceroot/k8-fastbuild/bin/testpkg/test_out"},
 			Mnemonic:    "Action",
@@ -758,7 +759,7 @@ func TestTransitiveInputDepsets(t *testing.T) {
 	// Inputs for the action are test_{i} from 1 to 20, and test_root. These inputs
 	// are given via a deep depset, but the depset is flattened when returned as a
 	// BuildStatement slice.
-	expectedFlattenedInputs := []string{}
+	var expectedFlattenedInputs []string
 	for i := 1; i < 20; i++ {
 		expectedFlattenedInputs = append(expectedFlattenedInputs, fmt.Sprintf("bazel-out/sourceroot/k8-fastbuild/bin/testpkg/test_%d", i))
 	}
@@ -876,7 +877,7 @@ func flattenDepsets(depsetHashesToFlatten []string, allDepsets []AqueryDepset) [
 	for _, depset := range allDepsets {
 		depsetsByHash[depset.ContentHash] = depset
 	}
-	result := []string{}
+	var result []string
 	for _, depsetId := range depsetHashesToFlatten {
 		result = append(result, flattenDepset(depsetId, depsetsByHash)...)
 	}
@@ -886,7 +887,7 @@ func flattenDepsets(depsetHashesToFlatten []string, allDepsets []AqueryDepset) [
 // Returns the contents of a given depset in post order.
 func flattenDepset(depsetHashToFlatten string, allDepsets map[string]AqueryDepset) []string {
 	depset := allDepsets[depsetHashToFlatten]
-	result := []string{}
+	var result []string
 	for _, depsetId := range depset.TransitiveDepSetHashes {
 		result = append(result, flattenDepset(depsetId, allDepsets)...)
 	}
@@ -897,7 +898,7 @@ func flattenDepset(depsetHashToFlatten string, allDepsets map[string]AqueryDepse
 func assertFlattenedDepsets(t *testing.T, actualDepsets []AqueryDepset, expectedDepsetFiles [][]string) {
 	t.Helper()
 	if len(actualDepsets) != len(expectedDepsetFiles) {
-		t.Errorf("Expected %s depsets, but got %s depsets", expectedDepsetFiles, actualDepsets)
+		t.Errorf("Expected %d depsets, but got %d depsets", len(expectedDepsetFiles), len(actualDepsets))
 	}
 	for i, actualDepset := range actualDepsets {
 		actualFlattenedInputs := flattenDepsets([]string{actualDepset.ContentHash}, actualDepsets)
@@ -958,7 +959,7 @@ func TestSimpleSymlink(t *testing.T) {
 	}
 
 	expectedBuildStatements := []BuildStatement{
-		BuildStatement{
+		{
 			Command: "mkdir -p one/symlink_subdir && " +
 				"rm -f one/symlink_subdir/symlink && " +
 				"ln -sf $PWD/one/file_subdir/file one/symlink_subdir/symlink",
@@ -1022,7 +1023,7 @@ func TestSymlinkQuotesPaths(t *testing.T) {
 	}
 
 	expectedBuildStatements := []BuildStatement{
-		BuildStatement{
+		{
 			Command: "mkdir -p 'one/symlink subdir' && " +
 				"rm -f 'one/symlink subdir/symlink' && " +
 				"ln -sf $PWD/'one/file subdir/file' 'one/symlink subdir/symlink'",
@@ -1154,7 +1155,7 @@ func TestTemplateExpandActionSubstitutions(t *testing.T) {
 	}
 
 	expectedBuildStatements := []BuildStatement{
-		BuildStatement{
+		{
 			Command: "/bin/bash -c 'echo \"Test template substitutions: abcd, python3\" | sed \"s/\\\\\\\\n/\\\\n/g\" > template_file && " +
 				"chmod a+x template_file'",
 			OutputPaths: []string{"template_file"},
@@ -1320,14 +1321,14 @@ func TestPythonZipperActionSuccess(t *testing.T) {
 	}
 
 	expectedBuildStatements := []BuildStatement{
-		BuildStatement{
+		{
 			Command: "/bin/bash -c 'echo \"Test template substitutions: abcd, python3\" | sed \"s/\\\\\\\\n/\\\\n/g\" > python_binary && " +
 				"chmod a+x python_binary'",
 			InputPaths:  []string{"python_binary.zip"},
 			OutputPaths: []string{"python_binary"},
 			Mnemonic:    "TemplateExpand",
 		},
-		BuildStatement{
+		{
 			Command: "../bazel_tools/tools/zip/zipper/zipper cC python_binary.zip __main__.py=bazel-out/k8-fastbuild/bin/python_binary.temp " +
 				"__init__.py= runfiles/__main__/__init__.py= runfiles/__main__/python_binary.py=python_binary.py  && " +
 				"../bazel_tools/tools/zip/zipper/zipper x python_binary.zip -d python_binary.runfiles && ln -sf runfiles/__main__ python_binary.runfiles",
@@ -1484,50 +1485,54 @@ func assertBuildStatements(t *testing.T, expected []BuildStatement, actual []Bui
 			len(expected), len(actual), expected, actual)
 		return
 	}
-ACTUAL_LOOP:
-	for _, actualStatement := range actual {
-		for _, expectedStatement := range expected {
-			if buildStatementEquals(actualStatement, expectedStatement) {
-				continue ACTUAL_LOOP
-			}
+	type compareFn = func(i int, j int) bool
+	byCommand := func(slice []BuildStatement) compareFn {
+		return func(i int, j int) bool {
+			return slice[i].Command < slice[j].Command
 		}
-		t.Errorf("unexpected build statement %#v.\n expected: %#v",
-			actualStatement, expected)
-		return
+	}
+	sort.SliceStable(expected, byCommand(expected))
+	sort.SliceStable(actual, byCommand(actual))
+	for i, actualStatement := range actual {
+		expectedStatement := expected[i]
+		if differingField := buildStatementEquals(actualStatement, expectedStatement); differingField != "" {
+			t.Errorf("%s differs\nunexpected build statement %#v.\nexpected: %#v",
+				differingField, actualStatement, expected)
+			return
+		}
 	}
 }
 
-func buildStatementEquals(first BuildStatement, second BuildStatement) bool {
+func buildStatementEquals(first BuildStatement, second BuildStatement) string {
 	if first.Mnemonic != second.Mnemonic {
-		return false
+		return "Mnemonic"
 	}
 	if first.Command != second.Command {
-		return false
+		return "Command"
 	}
 	// Ordering is significant for environment variables.
 	if !reflect.DeepEqual(first.Env, second.Env) {
-		return false
+		return "Env"
 	}
 	// Ordering is irrelevant for input and output paths, so compare sets.
-	if !reflect.DeepEqual(stringSet(first.InputPaths), stringSet(second.InputPaths)) {
-		return false
+	if !reflect.DeepEqual(sortedStrings(first.InputPaths), sortedStrings(second.InputPaths)) {
+		return "InputPaths"
 	}
-	if !reflect.DeepEqual(stringSet(first.OutputPaths), stringSet(second.OutputPaths)) {
-		return false
+	if !reflect.DeepEqual(sortedStrings(first.OutputPaths), sortedStrings(second.OutputPaths)) {
+		return "OutputPaths"
 	}
-	if !reflect.DeepEqual(stringSet(first.SymlinkPaths), stringSet(second.SymlinkPaths)) {
-		return false
+	if !reflect.DeepEqual(sortedStrings(first.SymlinkPaths), sortedStrings(second.SymlinkPaths)) {
+		return "SymlinkPaths"
 	}
 	if first.Depfile != second.Depfile {
-		return false
+		return "Depfile"
 	}
-	return true
+	return ""
 }
 
-func stringSet(stringSlice []string) map[string]struct{} {
-	stringMap := make(map[string]struct{})
-	for _, s := range stringSlice {
-		stringMap[s] = struct{}{}
-	}
-	return stringMap
+func sortedStrings(stringSlice []string) []string {
+	sorted := make([]string, len(stringSlice))
+	copy(sorted, stringSlice)
+	sort.Strings(sorted)
+	return sorted
 }

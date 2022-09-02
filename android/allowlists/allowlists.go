@@ -210,7 +210,6 @@ var (
 		"system/sepolicy/apex":                               Bp2BuildDefaultTrueRecursively,
 		"system/timezone/apex":                               Bp2BuildDefaultTrueRecursively,
 		"system/timezone/output_data":                        Bp2BuildDefaultTrueRecursively,
-		"system/unwinding/libbacktrace":                      Bp2BuildDefaultTrueRecursively,
 		"system/unwinding/libunwindstack":                    Bp2BuildDefaultTrueRecursively,
 		"tools/apksig":                                       Bp2BuildDefaultTrue,
 		"tools/platform-compat/java/android/compat":          Bp2BuildDefaultTrueRecursively,
@@ -227,12 +226,14 @@ var (
 		"build/bazel/ci/dist":/* recursive = */ false,
 		"build/bazel/examples/android_app":/* recursive = */ true,
 		"build/bazel/examples/java":/* recursive = */ true,
+		"build/bazel/examples/partitions":/* recursive = */ true,
 		"build/bazel/bazel_skylib":/* recursive = */ true,
 		"build/bazel/rules":/* recursive = */ true,
 		"build/bazel/rules_cc":/* recursive = */ true,
 		"build/bazel/scripts":/* recursive = */ true,
 		"build/bazel/tests":/* recursive = */ true,
 		"build/bazel/platforms":/* recursive = */ true,
+		"build/bazel/product_config":/* recursive = */ true,
 		"build/bazel/product_variables":/* recursive = */ true,
 		"build/bazel/vendor/google":/* recursive = */ true,
 		"build/bazel_common_rules":/* recursive = */ true,
@@ -329,6 +330,7 @@ var (
 
 		//system/extras/ext4_utils
 		"libext4_utils",
+		"mke2fs_conf",
 
 		//system/extras/libfec
 		"libfec",
@@ -359,10 +361,10 @@ var (
 		"gen-kotlin-build-file.py",                  // TODO(b/198619163) module has same name as source
 		"libgtest_ndk_c++", "libgtest_main_ndk_c++", // TODO(b/201816222): Requires sdk_version support.
 		"linkerconfig", "mdnsd", // TODO(b/202876379): has arch-variant static_executable
-		"linker",                // TODO(b/228316882): cc_binary uses link_crt
-		"libdebuggerd",          // TODO(b/228314770): support product variable-specific header_libs
-		"versioner",             // TODO(b/228313961):  depends on prebuilt shared library libclang-cpp_host as a shared library, which does not supply expected providers for a shared library
-		"apexer", "apexer_test", // Requires aapt2
+		"linker",       // TODO(b/228316882): cc_binary uses link_crt
+		"libdebuggerd", // TODO(b/228314770): support product variable-specific header_libs
+		"versioner",    // TODO(b/228313961):  depends on prebuilt shared library libclang-cpp_host as a shared library, which does not supply expected providers for a shared library
+		"apexer_test",  // Requires aapt2
 		"apexer_test_host_tools",
 		"host_apex_verifier",
 

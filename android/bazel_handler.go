@@ -21,6 +21,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -111,7 +112,7 @@ type BazelContext interface {
 
 	// Issues commands to Bazel to receive results for all cquery requests
 	// queued in the BazelContext.
-	InvokeBazel() error
+	InvokeBazel(config Config) error
 
 	// Returns true if bazel is enabled for the given configuration.
 	BazelEnabled() bool
@@ -191,7 +192,7 @@ func (m MockBazelContext) GetPythonBinary(label string, cfgKey configKey) (strin
 	return result, nil
 }
 
-func (m MockBazelContext) InvokeBazel() error {
+func (m MockBazelContext) InvokeBazel(config Config) error {
 	panic("unimplemented")
 }
 
@@ -261,7 +262,7 @@ func (n noopBazelContext) GetPythonBinary(label string, cfgKey configKey) (strin
 	panic("unimplemented")
 }
 
-func (n noopBazelContext) InvokeBazel() error {
+func (n noopBazelContext) InvokeBazel(config Config) error {
 	panic("unimplemented")
 }
 
@@ -361,6 +362,7 @@ type bazelCommand struct {
 type mockBazelRunner struct {
 	bazelCommandResults map[bazelCommand]string
 	commands            []bazelCommand
+	extraFlags          []string
 }
 
 func (r *mockBazelRunner) issueBazelCommand(paths *bazelPaths,
@@ -368,6 +370,7 @@ func (r *mockBazelRunner) issueBazelCommand(paths *bazelPaths,
 	command bazelCommand,
 	extraFlags ...string) (string, string, error) {
 	r.commands = append(r.commands, command)
+	r.extraFlags = append(r.extraFlags, strings.Join(extraFlags, " "))
 	if ret, ok := r.bazelCommandResults[command]; ok {
 		return ret, "", nil
 	}
@@ -526,7 +529,7 @@ config_node(name = "%s",
 	configNodesSection := ""
 
 	labelsByConfig := map[string][]string{}
-	for val, _ := range context.requests {
+	for val := range context.requests {
 		labelString := fmt.Sprintf("\"@%s\"", val.label)
 		configString := getConfigString(val)
 		labelsByConfig[configString] = append(labelsByConfig[configString], labelString)
@@ -564,7 +567,7 @@ func indent(original string) string {
 // request type.
 func (context *bazelContext) cqueryStarlarkFileContents() []byte {
 	requestTypeToCqueryIdEntries := map[cqueryRequest][]string{}
-	for val, _ := range context.requests {
+	for val := range context.requests {
 		cqueryId := getCqueryId(val)
 		mapEntryString := fmt.Sprintf("%q : True", cqueryId)
 		requestTypeToCqueryIdEntries[val.requestType] =
@@ -676,7 +679,7 @@ func (p *bazelPaths) outDir() string {
 
 // Issues commands to Bazel to receive results for all cquery requests
 // queued in the BazelContext.
-func (context *bazelContext) InvokeBazel() error {
+func (context *bazelContext) InvokeBazel(config Config) error {
 	context.results = make(map[cqueryKey]string)
 
 	var cqueryOutput string
@@ -759,15 +762,31 @@ func (context *bazelContext) InvokeBazel() error {
 
 	// Issue an aquery command to retrieve action information about the bazel build tree.
 	//
-	// TODO(cparsons): Use --target_pattern_file to avoid command line limits.
 	var aqueryOutput string
+	var coverageFlags []string
+	if Bool(config.productVariables.ClangCoverage) {
+		coverageFlags = append(coverageFlags, "--collect_code_coverage")
+		if len(config.productVariables.NativeCoveragePaths) > 0 ||
+			len(config.productVariables.NativeCoverageExcludePaths) > 0 {
+			includePaths := JoinWithPrefixAndSeparator(config.productVariables.NativeCoveragePaths, "+", ",")
+			excludePaths := JoinWithPrefixAndSeparator(config.productVariables.NativeCoverageExcludePaths, "-", ",")
+			if len(includePaths) > 0 && len(excludePaths) > 0 {
+				includePaths += ","
+			}
+			coverageFlags = append(coverageFlags, fmt.Sprintf(`--instrumentation_filter=%s`,
+				includePaths+excludePaths))
+		}
+	}
+
+	extraFlags := append([]string{"--output=jsonproto"}, coverageFlags...)
+
 	aqueryOutput, _, err = context.issueBazelCommand(
 		context.paths,
 		bazel.AqueryBuildRootRunName,
 		bazelCommand{"aquery", fmt.Sprintf("deps(%s)", buildrootLabel)},
 		// Use jsonproto instead of proto; actual proto parsing would require a dependency on Bazel's
 		// proto sources, which would add a number of unnecessary dependencies.
-		"--output=jsonproto")
+		extraFlags...)
 
 	if err != nil {
 		return err
@@ -852,53 +871,14 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 		})
 	}
 
-	// Register bazel-owned build statements (obtained from the aquery invocation).
+	executionRoot := path.Join(ctx.Config().BazelContext.OutputBase(), "execroot", "__main__")
+	bazelOutDir := path.Join(executionRoot, "bazel-out")
 	for index, buildStatement := range ctx.Config().BazelContext.BuildStatementsToRegister() {
 		if len(buildStatement.Command) < 1 {
 			panic(fmt.Sprintf("unhandled build statement: %v", buildStatement))
 		}
 		rule := NewRuleBuilder(pctx, ctx)
-		cmd := rule.Command()
-
-		// cd into Bazel's execution root, which is the action cwd.
-		cmd.Text(fmt.Sprintf("cd %s/execroot/__main__ &&", ctx.Config().BazelContext.OutputBase()))
-
-		// Remove old outputs, as some actions might not rerun if the outputs are detected.
-		if len(buildStatement.OutputPaths) > 0 {
-			cmd.Text("rm -f")
-			for _, outputPath := range buildStatement.OutputPaths {
-				cmd.Text(outputPath)
-			}
-			cmd.Text("&&")
-		}
-
-		for _, pair := range buildStatement.Env {
-			// Set per-action env variables, if any.
-			cmd.Flag(pair.Key + "=" + pair.Value)
-		}
-
-		// The actual Bazel action.
-		cmd.Text(buildStatement.Command)
-
-		for _, outputPath := range buildStatement.OutputPaths {
-			cmd.ImplicitOutput(PathForBazelOut(ctx, outputPath))
-		}
-		for _, inputPath := range buildStatement.InputPaths {
-			cmd.Implicit(PathForBazelOut(ctx, inputPath))
-		}
-		for _, inputDepsetHash := range buildStatement.InputDepsetHashes {
-			otherDepsetName := bazelDepsetName(inputDepsetHash)
-			cmd.Implicit(PathForPhony(ctx, otherDepsetName))
-		}
-
-		if depfile := buildStatement.Depfile; depfile != nil {
-			cmd.ImplicitDepFile(PathForBazelOut(ctx, *depfile))
-		}
-
-		for _, symlinkPath := range buildStatement.SymlinkPaths {
-			cmd.ImplicitSymlinkOutput(PathForBazelOut(ctx, symlinkPath))
-		}
-
+		createCommand(rule.Command(), buildStatement, executionRoot, bazelOutDir, ctx)
 		// This is required to silence warnings pertaining to unexpected timestamps. Particularly,
 		// some Bazel builtins (such as files in the bazel_tools directory) have far-future
 		// timestamps. Without restat, Ninja would emit warnings that the input files of a
@@ -907,6 +887,58 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 
 		desc := fmt.Sprintf("%s: %s", buildStatement.Mnemonic, buildStatement.OutputPaths)
 		rule.Build(fmt.Sprintf("bazel %d", index), desc)
+	}
+}
+
+// Register bazel-owned build statements (obtained from the aquery invocation).
+func createCommand(cmd *RuleBuilderCommand, buildStatement bazel.BuildStatement, executionRoot string, bazelOutDir string, ctx PathContext) {
+	// executionRoot is the action cwd.
+	cmd.Text(fmt.Sprintf("cd '%s' &&", executionRoot))
+
+	// Remove old outputs, as some actions might not rerun if the outputs are detected.
+	if len(buildStatement.OutputPaths) > 0 {
+		cmd.Text("rm -f")
+		for _, outputPath := range buildStatement.OutputPaths {
+			cmd.Text(outputPath)
+		}
+		cmd.Text("&&")
+	}
+
+	for _, pair := range buildStatement.Env {
+		// Set per-action env variables, if any.
+		cmd.Flag(pair.Key + "=" + pair.Value)
+	}
+
+	// The actual Bazel action.
+	cmd.Text(buildStatement.Command)
+
+	for _, outputPath := range buildStatement.OutputPaths {
+		cmd.ImplicitOutput(PathForBazelOut(ctx, outputPath))
+	}
+	for _, inputPath := range buildStatement.InputPaths {
+		cmd.Implicit(PathForBazelOut(ctx, inputPath))
+	}
+	for _, inputDepsetHash := range buildStatement.InputDepsetHashes {
+		otherDepsetName := bazelDepsetName(inputDepsetHash)
+		cmd.Implicit(PathForPhony(ctx, otherDepsetName))
+	}
+
+	if depfile := buildStatement.Depfile; depfile != nil {
+		// The paths in depfile are relative to `executionRoot`.
+		// Hence, they need to be corrected by replacing "bazel-out"
+		// with the full `bazelOutDir`.
+		// Otherwise, implicit outputs and implicit inputs under "bazel-out/"
+		// would be deemed missing.
+		// (Note: The regexp uses a capture group because the version of sed
+		//  does not support a look-behind pattern.)
+		replacement := fmt.Sprintf(`&& sed -i'' -E 's@(^|\s|")bazel-out/@\1%s/@g' '%s'`,
+			bazelOutDir, *depfile)
+		cmd.Text(replacement)
+		cmd.ImplicitDepFile(PathForBazelOut(ctx, *depfile))
+	}
+
+	for _, symlinkPath := range buildStatement.SymlinkPaths {
+		cmd.ImplicitSymlinkOutput(PathForBazelOut(ctx, symlinkPath))
 	}
 }
 
@@ -920,12 +952,12 @@ func getConfigString(key cqueryKey) string {
 		// Use host platform, which is currently hardcoded to be x86_64.
 		arch = "x86_64"
 	}
-	os := key.configKey.osType.Name
-	if len(os) == 0 || os == "common_os" || os == "linux_glibc" {
+	osName := key.configKey.osType.Name
+	if len(osName) == 0 || osName == "common_os" || osName == "linux_glibc" {
 		// Use host OS, which is currently hardcoded to be linux.
-		os = "linux"
+		osName = "linux"
 	}
-	return arch + "|" + os
+	return arch + "|" + osName
 }
 
 func GetConfigKey(ctx BaseModuleContext) configKey {
