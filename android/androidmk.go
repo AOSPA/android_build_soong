@@ -605,7 +605,7 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 	}
 
 	if len(base.noticeFiles) > 0 {
-		a.SetString("LOCAL_NOTICE_FILE", strings.Join(base.noticeFiles.Strings(), " "))
+		a.AddStrings("LOCAL_NOTICE_FILE", strings.Join(base.noticeFiles.Strings(), " "))
 	}
 
 	if host {
@@ -945,7 +945,10 @@ func shouldSkipAndroidMkProcessing(module *ModuleBase) bool {
 	return !module.Enabled() ||
 		module.commonProperties.HideFromMake ||
 		// Make does not understand LinuxBionic
-		module.Os() == LinuxBionic
+		module.Os() == LinuxBionic ||
+		// Make does not understand LinuxMusl, except when we are building with USE_HOST_MUSL=true
+		// and all host binaries are LinuxMusl
+		(module.Os() == LinuxMusl && module.Target().HostCross)
 }
 
 // A utility func to format LOCAL_TEST_DATA outputs. See the comments on DataPath to understand how

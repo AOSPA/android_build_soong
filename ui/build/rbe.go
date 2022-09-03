@@ -19,7 +19,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
+	"android/soong/remoteexec"
 	"android/soong/ui/metrics"
 )
 
@@ -53,11 +55,12 @@ func rbeCommand(ctx Context, config Config, rbeCmd string) string {
 
 func getRBEVars(ctx Context, config Config) map[string]string {
 	vars := map[string]string{
-		"RBE_log_dir":    config.rbeProxyLogsDir(),
-		"RBE_re_proxy":   config.rbeReproxy(),
-		"RBE_exec_root":  config.rbeExecRoot(),
-		"RBE_output_dir": config.rbeProxyLogsDir(),
+		"RBE_log_dir":       config.rbeProxyLogsDir(),
+		"RBE_re_proxy":      config.rbeReproxy(),
+		"RBE_exec_root":     config.rbeExecRoot(),
+		"RBE_output_dir":    config.rbeProxyLogsDir(),
 		"RBE_proxy_log_dir": config.rbeProxyLogsDir(),
+		"RBE_platform":      "container-image=" + remoteexec.DefaultImage,
 	}
 	if config.StartRBE() {
 		name, err := config.rbeSockAddr(absPath(ctx, config.TempDir()))
@@ -124,6 +127,34 @@ func stopRBE(ctx Context, config Config) {
 		fmt.Fprintln(ctx.Writer, "")
 		fmt.Fprintln(ctx.Writer, fmt.Sprintf("%s", output))
 	}
+}
+
+func prodCredsAuthType(config Config) bool {
+	authVar, val := config.rbeAuth()
+	if strings.Contains(authVar, "use_google_prod_creds") && val != "" && val != "false" {
+		return true
+	}
+	return false
+}
+
+// Check whether proper auth exists for RBE builds run within a
+// Google dev environment.
+func CheckProdCreds(ctx Context, config Config) {
+	if !config.IsGooglerEnvironment() {
+		return
+	}
+	if !config.StubbyExists() && prodCredsAuthType(config) {
+		fmt.Fprintln(ctx.Writer, "")
+		fmt.Fprintln(ctx.Writer, fmt.Sprintf("\033[33mWARNING: %q binary not found in $PATH, follow go/build-fast#opting-out-of-loas-credentials instead for authenticating with RBE.\033[0m", "stubby"))
+		fmt.Fprintln(ctx.Writer, "")
+		return
+	}
+	if config.GoogleProdCredsExist() {
+		return
+	}
+	fmt.Fprintln(ctx.Writer, "")
+	fmt.Fprintln(ctx.Writer, "\033[33mWARNING: Missing LOAS credentials, please run `gcert`. This will result in failing builds in the future, see go/rbe-android-default-announcement.\033[0m")
+	fmt.Fprintln(ctx.Writer, "")
 }
 
 // DumpRBEMetrics creates a metrics protobuf file containing RBE related metrics.

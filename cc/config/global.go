@@ -249,7 +249,6 @@ var (
 		// New warnings to be fixed after clang-r383902.
 		"-Wno-deprecated-copy",                      // http://b/153746672
 		"-Wno-range-loop-construct",                 // http://b/153747076
-		"-Wno-misleading-indentation",               // http://b/153746954
 		"-Wno-zero-as-null-pointer-constant",        // http://b/68236239
 		"-Wno-deprecated-anon-enum-enum-conversion", // http://b/153746485
 		"-Wno-pessimizing-move",                     // http://b/154270751
@@ -319,6 +318,8 @@ var (
 		"-Wno-unused-but-set-parameter",
 		// http://b/215753485
 		"-Wno-bitwise-instead-of-logical",
+		// http://b/232926688
+		"-Wno-misleading-indentation",
 	}
 
 	// Extra cflags for external third-party projects to disable warnings that
@@ -350,6 +351,11 @@ var (
 
 		// http://b/175068488
 		"-Wno-string-concatenation",
+	}
+
+	llvmNextExtraCommonGlobalCflags = []string{
+		"-Wno-unqualified-std-cast-call",
+		"-Wno-deprecated-non-prototype",
 	}
 
 	IllegalFlags = []string{
@@ -443,15 +449,15 @@ func init() {
 			// Default to zero initialization.
 			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
 		}
+		// Workaround for ccache with clang.
+		// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
+		if ctx.Config().IsEnvTrue("USE_CCACHE") {
+			flags = append(flags, "-Wno-unused-command-line-argument")
+		}
 
-		// TODO(b/207393703): Re-enable -Wno-unused-command-line-argument after failures are resolved.
-		/*
-			// Workaround for ccache with clang.
-			// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
-			if ctx.Config().IsEnvTrue("USE_CCACHE") {
-				flags = append(flags, "-Wno-unused-command-line-argument")
-			}
-		*/
+		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
+			flags = append(flags, llvmNextExtraCommonGlobalCflags...)
+		}
 		return strings.Join(flags, " ")
 	})
 
