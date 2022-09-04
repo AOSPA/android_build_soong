@@ -655,7 +655,8 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	prefer32 := os == Windows
 
 	// Determine the multilib selection for this module.
-	multilib, extraMultilib := decodeMultilib(base, os)
+	ignorePrefer32OnDevice := mctx.Config().IgnorePrefer32OnDevice()
+	multilib, extraMultilib := decodeMultilib(base, os, ignorePrefer32OnDevice)
 
 	// Convert the multilib selection into a list of Targets.
 	targets, err := decodeMultilibTargets(multilib, osTargets, prefer32)
@@ -730,7 +731,7 @@ func addTargetProperties(m Module, target Target, multiTargets []Target, primary
 // multilib from the factory's call to InitAndroidArchModule if none was set.  For modules that
 // called InitAndroidMultiTargetsArchModule it always returns "common" for multilib, and returns
 // the actual multilib in extraMultilib.
-func decodeMultilib(base *ModuleBase, os OsType) (multilib, extraMultilib string) {
+func decodeMultilib(base *ModuleBase, os OsType, ignorePrefer32OnDevice bool) (multilib, extraMultilib string) {
 	// First check the "android.compile_multilib" or "host.compile_multilib" properties.
 	switch os.Class {
 	case Device:
@@ -747,6 +748,13 @@ func decodeMultilib(base *ModuleBase, os OsType) (multilib, extraMultilib string
 	// If that wasn't set, use the default multilib set by the factory.
 	if multilib == "" {
 		multilib = base.commonProperties.Default_multilib
+	}
+
+	// If a device is configured with multiple targets, this option
+	// force all device targets that prefer32 to be compiled only as
+	// the first target.
+	if ignorePrefer32OnDevice && os.Class == Device && (multilib == "prefer32" || multilib == "first_prefer32") {
+		multilib = "first"
 	}
 
 	if base.commonProperties.UseTargetVariants {
@@ -1825,7 +1833,9 @@ func getCommonTargets(targets []Target) []Target {
 	for _, t := range targets {
 		if _, found := set[t.Os.String()]; !found {
 			set[t.Os.String()] = true
-			ret = append(ret, commonTargetMap[t.Os.String()])
+			common := commonTargetMap[t.Os.String()]
+			common.HostCross = t.HostCross
+			ret = append(ret, common)
 		}
 	}
 
@@ -1833,20 +1843,23 @@ func getCommonTargets(targets []Target) []Target {
 }
 
 // FirstTarget takes a list of Targets and a list of multilib values and returns a list of Targets
-// that contains zero or one Target for each OsType, selecting the one that matches the earliest
-// filter.
+// that contains zero or one Target for each OsType and HostCross, selecting the one that matches
+// the earliest filter.
 func FirstTarget(targets []Target, filters ...string) []Target {
 	// find the first target from each OS
 	var ret []Target
-	hasHost := false
-	set := make(map[OsType]bool)
+	type osHostCross struct {
+		os        OsType
+		hostCross bool
+	}
+	set := make(map[osHostCross]bool)
 
 	for _, filter := range filters {
 		buildTargets := filterMultilibTargets(targets, filter)
 		for _, t := range buildTargets {
-			if _, found := set[t.Os]; !found {
-				hasHost = hasHost || (t.Os.Class == Host)
-				set[t.Os] = true
+			key := osHostCross{t.Os, t.HostCross}
+			if _, found := set[key]; !found {
+				set[key] = true
 				ret = append(ret, t)
 			}
 		}
