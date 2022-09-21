@@ -267,6 +267,9 @@ type DeviceProperties struct {
 	// Only for libraries created by a sysprop_library module, SyspropPublicStub is the name of the
 	// public stubs library.
 	SyspropPublicStub string `blueprint:"mutated"`
+
+	HiddenAPIPackageProperties
+	HiddenAPIFlagFileProperties
 }
 
 // Device properties that can be overridden by overriding module (e.g. override_android_app)
@@ -564,6 +567,20 @@ func (j *Module) addHostAndDeviceProperties() {
 	)
 }
 
+// provideHiddenAPIPropertyInfo populates a HiddenAPIPropertyInfo from hidden API properties and
+// makes it available through the hiddenAPIPropertyInfoProvider.
+func (j *Module) provideHiddenAPIPropertyInfo(ctx android.ModuleContext) {
+	hiddenAPIInfo := newHiddenAPIPropertyInfo()
+
+	// Populate with flag file paths from the properties.
+	hiddenAPIInfo.extractFlagFilesFromProperties(ctx, &j.deviceProperties.HiddenAPIFlagFileProperties)
+
+	// Populate with package rules from the properties.
+	hiddenAPIInfo.extractPackageRulesFromProperties(&j.deviceProperties.HiddenAPIPackageProperties)
+
+	ctx.SetProvider(hiddenAPIPropertyInfoProvider, hiddenAPIInfo)
+}
+
 func (j *Module) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
 	case "":
@@ -803,7 +820,7 @@ func (j *Module) individualAidlFlags(ctx android.ModuleContext, aidlFile android
 }
 
 func (j *Module) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.OptionalPath,
-	aidlIncludeDirs android.Paths) (string, android.Paths) {
+	aidlIncludeDirs android.Paths, aidlSrcs android.Paths) (string, android.Paths) {
 
 	aidlIncludes := android.PathsForModuleSrc(ctx, j.deviceProperties.Aidl.Local_include_dirs)
 	aidlIncludes = append(aidlIncludes,
@@ -813,6 +830,7 @@ func (j *Module) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.Opt
 
 	var flags []string
 	var deps android.Paths
+	var includeDirs android.Paths
 
 	flags = append(flags, j.deviceProperties.Aidl.Flags...)
 
@@ -820,21 +838,24 @@ func (j *Module) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.Opt
 		flags = append(flags, "-p"+aidlPreprocess.String())
 		deps = append(deps, aidlPreprocess.Path())
 	} else if len(aidlIncludeDirs) > 0 {
-		flags = append(flags, android.JoinWithPrefix(aidlIncludeDirs.Strings(), "-I"))
+		includeDirs = append(includeDirs, aidlIncludeDirs...)
 	}
 
 	if len(j.exportAidlIncludeDirs) > 0 {
-		flags = append(flags, android.JoinWithPrefix(j.exportAidlIncludeDirs.Strings(), "-I"))
+		includeDirs = append(includeDirs, j.exportAidlIncludeDirs...)
 	}
 
 	if len(aidlIncludes) > 0 {
-		flags = append(flags, android.JoinWithPrefix(aidlIncludes.Strings(), "-I"))
+		includeDirs = append(includeDirs, aidlIncludes...)
 	}
 
-	flags = append(flags, "-I"+android.PathForModuleSrc(ctx).String())
+	includeDirs = append(includeDirs, android.PathForModuleSrc(ctx))
 	if src := android.ExistentPathForSource(ctx, ctx.ModuleDir(), "src"); src.Valid() {
-		flags = append(flags, "-I"+src.String())
+		includeDirs = append(includeDirs, src.Path())
 	}
+	flags = append(flags, android.JoinWithPrefix(includeDirs.Strings(), "-I"))
+	// add flags for dirs containing AIDL srcs that haven't been specified yet
+	flags = append(flags, genAidlIncludeFlags(ctx, aidlSrcs, includeDirs))
 
 	if Bool(j.deviceProperties.Aidl.Generate_traces) {
 		flags = append(flags, "-t")
@@ -917,9 +938,6 @@ func (j *Module) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaB
 
 	// systemModules
 	flags.systemModules = deps.systemModules
-
-	// aidl flags.
-	flags.aidlFlags, flags.aidlDeps = j.aidlFlags(ctx, deps.aidlPreprocess, deps.aidlIncludeDirs)
 
 	return flags
 }
@@ -1028,6 +1046,9 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	if len(kotlinCommonSrcFiles.FilterOutByExt(".kt")) > 0 {
 		ctx.PropertyErrorf("common_srcs", "common_srcs must be .kt files")
 	}
+
+	aidlSrcs := srcFiles.FilterByExt(".aidl")
+	flags.aidlFlags, flags.aidlDeps = j.aidlFlags(ctx, deps.aidlPreprocess, deps.aidlIncludeDirs, aidlSrcs)
 
 	nonGeneratedSrcJars := srcFiles.FilterByExt(".srcjar")
 	srcFiles = j.genSources(ctx, srcFiles, flags)
@@ -1178,12 +1199,21 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		}
 	}
 	if len(uniqueSrcFiles) > 0 || len(srcJars) > 0 {
+		hasErrorproneableFiles := false
+		for _, ext := range j.sourceExtensions {
+			if ext != ".proto" && ext != ".aidl" {
+				// Skip running errorprone on pure proto or pure aidl modules. Some modules take a long time to
+				// compile, and it's not useful to have warnings on these generated sources.
+				hasErrorproneableFiles = true
+				break
+			}
+		}
 		var extraJarDeps android.Paths
 		if Bool(j.properties.Errorprone.Enabled) {
 			// If error-prone is enabled, enable errorprone flags on the regular
 			// build.
 			flags = enableErrorproneFlags(flags)
-		} else if ctx.Config().RunErrorProne() && j.properties.Errorprone.Enabled == nil {
+		} else if hasErrorproneableFiles && ctx.Config().RunErrorProne() && j.properties.Errorprone.Enabled == nil {
 			// Otherwise, if the RUN_ERROR_PRONE environment variable is set, create
 			// a new jar file just for compiling with the errorprone compiler to.
 			// This is because we don't want to cause the java files to get completely

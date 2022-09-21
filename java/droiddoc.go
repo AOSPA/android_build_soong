@@ -158,9 +158,7 @@ type DroiddocProperties struct {
 	Compat_config *string `android:"path"`
 }
 
-//
 // Common flags passed down to build rule
-//
 type droiddocBuilderFlags struct {
 	bootClasspathArgs  string
 	classpathArgs      string
@@ -193,9 +191,7 @@ func apiCheckEnabled(ctx android.ModuleContext, apiToCheck ApiToCheck, apiVersio
 	return false
 }
 
-//
 // Javadoc
-//
 type Javadoc struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
@@ -318,7 +314,7 @@ func (j *Javadoc) genSources(ctx android.ModuleContext, srcFiles android.Paths,
 	outSrcFiles := make(android.Paths, 0, len(srcFiles))
 	var aidlSrcs android.Paths
 
-	aidlIncludeFlags := genAidlIncludeFlags(srcFiles)
+	aidlIncludeFlags := genAidlIncludeFlags(ctx, srcFiles, android.Paths{})
 
 	for _, srcFile := range srcFiles {
 		switch srcFile.Ext() {
@@ -548,9 +544,7 @@ func (j *Javadoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	rule.Build("javadoc", "javadoc")
 }
 
-//
 // Droiddoc
-//
 type Droiddoc struct {
 	Javadoc
 
@@ -827,9 +821,7 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	rule.Build("javadoc", desc)
 }
 
-//
 // Exported Droiddoc Directory
-//
 var droiddocTemplateTag = dependencyTag{name: "droiddoc-template"}
 
 type ExportedDroiddocDirProperties struct {
@@ -862,9 +854,7 @@ func (d *ExportedDroiddocDir) GenerateAndroidBuildActions(ctx android.ModuleCont
 	d.deps = android.PathsForModuleSrc(ctx, []string{filepath.Join(path, "**/*")})
 }
 
-//
 // Defaults
-//
 type DocDefaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase

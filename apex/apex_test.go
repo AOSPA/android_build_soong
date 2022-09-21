@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -443,7 +444,6 @@ func TestBasicApex(t *testing.T) {
 			srcs: ["mylib.cpp"],
 			system_shared_libs: [],
 			stl: "none",
-			notice: "custom_notice",
 			static_libs: ["libstatic"],
 			// TODO: remove //apex_available:platform
 			apex_available: [
@@ -467,7 +467,6 @@ func TestBasicApex(t *testing.T) {
 			srcs: ["mylib.cpp"],
 			system_shared_libs: [],
 			stl: "none",
-			notice: "custom_notice_for_static_lib",
 			// TODO: remove //apex_available:platform
 			apex_available: [
 				"//apex_available:platform",
@@ -619,7 +618,7 @@ func TestDefaults(t *testing.T) {
 			java_libs: ["myjar"],
 			apps: ["AppFoo"],
 			rros: ["rro"],
-			bpfs: ["bpf", "netd_test"],
+			bpfs: ["bpf", "netdTest"],
 			updatable: false,
 		}
 
@@ -673,8 +672,8 @@ func TestDefaults(t *testing.T) {
 		}
 
 		bpf {
-			name: "netd_test",
-			srcs: ["netd_test.c"],
+			name: "netdTest",
+			srcs: ["netdTest.c"],
 			sub_dir: "netd",
 		}
 
@@ -687,7 +686,7 @@ func TestDefaults(t *testing.T) {
 		"overlay/blue/rro.apk",
 		"etc/bpf/bpf.o",
 		"etc/bpf/bpf2.o",
-		"etc/bpf/netd/netd_test.o",
+		"etc/bpf/netd/netdTest.o",
 	})
 }
 
@@ -6153,7 +6152,7 @@ func TestOverrideApex(t *testing.T) {
 			name: "override_myapex",
 			base: "myapex",
 			apps: ["override_app"],
-			bpfs: ["override_bpf"],
+			bpfs: ["overrideBpf"],
 			prebuilts: ["override_myetc"],
 			bootclasspath_fragments: ["override_bootclasspath_fragment"],
 			systemserverclasspath_fragments: ["override_systemserverclasspath_fragment"],
@@ -6203,8 +6202,8 @@ func TestOverrideApex(t *testing.T) {
 		}
 
 		bpf {
-			name: "override_bpf",
-			srcs: ["override_bpf.c"],
+			name: "overrideBpf",
+			srcs: ["overrideBpf.c"],
 		}
 
 		prebuilt_etc {
@@ -6307,7 +6306,7 @@ func TestOverrideApex(t *testing.T) {
 	ensureContains(t, copyCmds, "image.apex/app/override_app@TEST.BUILD_ID/override_app.apk")
 
 	ensureNotContains(t, copyCmds, "image.apex/etc/bpf/bpf.o")
-	ensureContains(t, copyCmds, "image.apex/etc/bpf/override_bpf.o")
+	ensureContains(t, copyCmds, "image.apex/etc/bpf/overrideBpf.o")
 
 	ensureNotContains(t, copyCmds, "image.apex/etc/myetc")
 	ensureContains(t, copyCmds, "image.apex/etc/override_myetc")
@@ -6341,7 +6340,7 @@ func TestOverrideApex(t *testing.T) {
 	data.Custom(&builder, name, "TARGET_", "", data)
 	androidMk := builder.String()
 	ensureContains(t, androidMk, "LOCAL_MODULE := override_app.override_myapex")
-	ensureContains(t, androidMk, "LOCAL_MODULE := override_bpf.o.override_myapex")
+	ensureContains(t, androidMk, "LOCAL_MODULE := overrideBpf.o.override_myapex")
 	ensureContains(t, androidMk, "LOCAL_MODULE := apex_manifest.pb.override_myapex")
 	ensureContains(t, androidMk, "LOCAL_MODULE := override_bcplib.override_myapex")
 	ensureContains(t, androidMk, "LOCAL_MODULE := override_systemserverlib.override_myapex")
@@ -9544,6 +9543,63 @@ func TestUpdatableApexEnforcesAppUpdatability(t *testing.T) {
 		myapp := result.ModuleForTests("myapp", "android_common").Module().(*java.AndroidApp)
 		android.AssertBoolEquals(t, testCase.name, testCase.app_is_updatable_expected, myapp.Updatable())
 	}
+}
+
+func TestApexBuildsAgainstApiSurfaceStubLibraries(t *testing.T) {
+	bp := `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			native_shared_libs: ["libfoo"],
+			min_sdk_version: "29",
+		}
+		apex_key {
+			name: "myapex.key",
+		}
+		cc_library {
+			name: "libfoo",
+			shared_libs: ["libc"],
+			apex_available: ["myapex"],
+			min_sdk_version: "29",
+		}
+		cc_api_library {
+			name: "libc",
+			src: "libc.so",
+			min_sdk_version: "29",
+			recovery_available: true,
+		}
+		api_imports {
+			name: "api_imports",
+			shared_libs: [
+				"libc",
+			],
+			header_libs: [],
+		}
+		`
+	result := testApex(t, bp)
+
+	hasDep := func(m android.Module, wantDep android.Module) bool {
+		t.Helper()
+		var found bool
+		result.VisitDirectDeps(m, func(dep blueprint.Module) {
+			if dep == wantDep {
+				found = true
+			}
+		})
+		return found
+	}
+
+	libfooApexVariant := result.ModuleForTests("libfoo", "android_arm64_armv8-a_shared_apex29").Module()
+	libcApexVariant := result.ModuleForTests("libc.apiimport", "android_arm64_armv8-a_shared_apex29").Module()
+
+	android.AssertBoolEquals(t, "apex variant should link against API surface stub libraries", true, hasDep(libfooApexVariant, libcApexVariant))
+
+	// libfoo core variant should be buildable in the same inner tree since
+	// certain mcombo files might build system and apexes in the same inner tree
+	// libfoo core variant should link against source libc
+	libfooCoreVariant := result.ModuleForTests("libfoo", "android_arm64_armv8-a_shared").Module()
+	libcCoreVariant := result.ModuleForTests("libc.apiimport", "android_arm64_armv8-a_shared").Module()
+	android.AssertBoolEquals(t, "core variant should link against source libc", true, hasDep(libfooCoreVariant, libcCoreVariant))
 }
 
 func TestMain(m *testing.M) {

@@ -93,6 +93,7 @@ function create_mock_soong {
   symlink_directory external/go-cmp
   symlink_directory external/golang-protobuf
   symlink_directory external/starlark-go
+  symlink_directory system/tools/aidl
 
   touch "$MOCK_TOP/Android.bp"
 }
@@ -111,7 +112,7 @@ function setup {
 
 # shellcheck disable=SC2120
 function run_soong {
-  build/soong/soong_ui.bash --make-mode --skip-ninja --skip-config --soong-only --skip-soong-tests "$@"
+  USE_RBE=false build/soong/soong_ui.bash --make-mode --skip-ninja --skip-config --soong-only --skip-soong-tests "$@"
 }
 
 function create_mock_bazel {

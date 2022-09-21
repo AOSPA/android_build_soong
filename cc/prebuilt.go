@@ -51,6 +51,9 @@ type prebuiltLinkerProperties struct {
 	// symbols, etc), default true.
 	Check_elf_files *bool
 
+	// if set, add an extra objcopy --prefix-symbols= step
+	Prefix_symbols *string
+
 	// Optionally provide an import library if this is a Windows PE DLL prebuilt.
 	// This is needed only if this library is linked by other modules in build time.
 	// Only makes sense for the Windows target.
@@ -129,6 +132,13 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 		p.libraryDecorator.exportVersioningMacroIfNeeded(ctx)
 
 		in := android.PathForModuleSrc(ctx, srcs[0])
+
+		if String(p.prebuiltLinker.properties.Prefix_symbols) != "" {
+			prefixed := android.PathForModuleOut(ctx, "prefixed", srcs[0])
+			transformBinaryPrefixSymbols(ctx, String(p.prebuiltLinker.properties.Prefix_symbols),
+				in, flagsToBuilderFlags(flags), prefixed)
+			in = prefixed
+		}
 
 		if p.static() {
 			depSet := android.NewDepSetBuilder(android.TOPOLOGICAL).Direct(in).Build()
@@ -348,10 +358,10 @@ type bazelPrebuiltLibraryStaticAttributes struct {
 
 // TODO(b/228623543): The below is not entirely true until the bug is fixed. For now, both targets are always generated
 // Implements bp2build for cc_prebuilt_library modules. This will generate:
-// * Only a prebuilt_library_static if the shared.enabled property is set to false across all variants.
-// * Only a prebuilt_library_shared if the static.enabled property is set to false across all variants
-// * Both a prebuilt_library_static and prebuilt_library_shared if the aforementioned properties are not false across
-//   all variants
+//   - Only a prebuilt_library_static if the shared.enabled property is set to false across all variants.
+//   - Only a prebuilt_library_shared if the static.enabled property is set to false across all variants
+//   - Both a prebuilt_library_static and prebuilt_library_shared if the aforementioned properties are not false across
+//     all variants
 //
 // In all cases, prebuilt_library_static target names will be appended with "_bp2build_cc_library_static".
 func prebuiltLibraryBp2Build(ctx android.TopDownMutatorContext, module *Module) {

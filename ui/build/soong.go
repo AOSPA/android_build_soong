@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"android/soong/ui/metrics"
 	soong_metrics_proto "android/soong/ui/metrics/metrics_proto"
@@ -312,14 +313,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		fmt.Sprintf("generating Soong docs at %s", config.SoongDocsHtml()),
 	)
 
-	globFiles := []string{
-		config.NamedGlobFile(soongBuildTag),
-		config.NamedGlobFile(bp2buildTag),
-		config.NamedGlobFile(jsonModuleGraphTag),
-		config.NamedGlobFile(queryviewTag),
-		config.NamedGlobFile(soongDocsTag),
-	}
-
 	// The glob .ninja files are subninja'd. However, they are generated during
 	// the build itself so we write an empty file if the file does not exist yet
 	// so that the subninja doesn't fail on clean builds
@@ -342,7 +335,7 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		runGoTests:  !config.skipSoongTests,
 		// If we want to debug soong_build, we need to compile it for debugging
 		debugCompilation: os.Getenv("SOONG_DELVE") != "",
-		subninjas:        globFiles,
+		subninjas:        bootstrapGlobFileList(config),
 		primaryBuilderInvocations: []bootstrap.PrimaryBuilderInvocation{
 			mainSoongBuildInvocation,
 			bp2buildInvocation,
@@ -453,6 +446,11 @@ func runSoong(ctx Context, config Config) {
 			"-f", filepath.Join(config.SoongOutDir(), ninjaFile),
 		}
 
+		if extra, ok := config.Environment().Get("SOONG_UI_NINJA_ARGS"); ok {
+			ctx.Printf(`CAUTION: arguments in $SOONG_UI_NINJA_ARGS=%q, e.g. "-n", can make soong_build FAIL or INCORRECT`, extra)
+			ninjaArgs = append(ninjaArgs, strings.Fields(extra)...)
+		}
+
 		ninjaArgs = append(ninjaArgs, targets...)
 		cmd := Command(ctx, config, "soong "+name,
 			config.PrebuiltBuildTool("ninja"), ninjaArgs...)
@@ -515,6 +513,7 @@ func runSoong(ctx Context, config Config) {
 	}
 
 	distGzipFile(ctx, config, config.SoongNinjaFile(), "soong")
+	distFile(ctx, config, config.SoongVarsFile(), "soong")
 
 	if !config.SkipKati() {
 		distGzipFile(ctx, config, config.SoongAndroidMk(), "soong")
@@ -555,7 +554,7 @@ func loadSoongBuildMetrics(ctx Context, config Config) *soong_metrics_proto.Soon
 	buf, err := os.ReadFile(soongBuildMetricsFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		// Soong may not have run during this invocation
-          ctx.Verbosef("Failed to read metrics file, %s: %s", soongBuildMetricsFile, err)
+		ctx.Verbosef("Failed to read metrics file, %s: %s", soongBuildMetricsFile, err)
 		return nil
 	} else if err != nil {
 		ctx.Fatalf("Failed to load %s: %s", soongBuildMetricsFile, err)

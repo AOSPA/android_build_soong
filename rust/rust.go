@@ -33,14 +33,6 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust")
 
 func init() {
-	// Only allow rust modules to be defined for certain projects
-
-	// Temporarily disable allow list
-	/*  android.AddNeverAllowRules(
-		android.NeverAllow().
-			NotIn(append(config.RustAllowedPaths, config.DownstreamRustAllowedPaths...)...).
-			ModuleType(config.RustModuleTypes...))
-	*/
 	android.RegisterModuleType("rust_defaults", defaultsFactory)
 	android.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
@@ -1384,6 +1376,11 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	var commonDepVariations []blueprint.Variation
 	var snapshotInfo *cc.SnapshotInfo
 
+	apiImportInfo := cc.GetApiImports(mod, actx)
+	for idx, lib := range deps.SharedLibs {
+		deps.SharedLibs[idx] = cc.GetReplaceModuleName(lib, apiImportInfo.SharedLibs)
+	}
+
 	if ctx.Os() == android.Android {
 		deps.SharedLibs, _ = cc.RewriteLibs(mod, &snapshotInfo, actx, ctx.Config(), deps.SharedLibs)
 	}
@@ -1404,7 +1401,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	rlibDepVariations = append(rlibDepVariations, blueprint.Variation{Mutator: "rust_libraries", Variation: rlibVariation})
 	for _, lib := range deps.Rlibs {
 		depTag := rlibDepTag
-		lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
+		lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
 
 		actx.AddVariationDependencies(rlibDepVariations, depTag, lib)
 	}
@@ -1442,7 +1439,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		if mod.compiler.stdLinkage(ctx) == RlibLinkage {
 			for _, lib := range deps.Stdlibs {
 				depTag := rlibDepTag
-				lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
+				lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
 
 				actx.AddVariationDependencies(append(commonDepVariations, []blueprint.Variation{{Mutator: "rust_libraries", Variation: "rlib"}}...),
 					depTag, lib)
@@ -1466,7 +1463,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	for _, lib := range deps.WholeStaticLibs {
 		depTag := cc.StaticDepTag(true)
-		lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).StaticLibs)
+		lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).StaticLibs)
 
 		actx.AddVariationDependencies([]blueprint.Variation{
 			{Mutator: "link", Variation: "static"},
@@ -1475,7 +1472,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	for _, lib := range deps.StaticLibs {
 		depTag := cc.StaticDepTag(false)
-		lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).StaticLibs)
+		lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).StaticLibs)
 
 		actx.AddVariationDependencies([]blueprint.Variation{
 			{Mutator: "link", Variation: "static"},
@@ -1487,11 +1484,11 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	crtVariations := cc.GetCrtVariations(ctx, mod)
 	for _, crt := range deps.CrtBegin {
 		actx.AddVariationDependencies(crtVariations, cc.CrtBeginDepTag,
-			cc.RewriteSnapshotLib(crt, cc.GetSnapshot(mod, &snapshotInfo, actx).Objects))
+			cc.GetReplaceModuleName(crt, cc.GetSnapshot(mod, &snapshotInfo, actx).Objects))
 	}
 	for _, crt := range deps.CrtEnd {
 		actx.AddVariationDependencies(crtVariations, cc.CrtEndDepTag,
-			cc.RewriteSnapshotLib(crt, cc.GetSnapshot(mod, &snapshotInfo, actx).Objects))
+			cc.GetReplaceModuleName(crt, cc.GetSnapshot(mod, &snapshotInfo, actx).Objects))
 	}
 
 	if mod.sourceProvider != nil {
@@ -1514,7 +1511,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 // addRlibDependency will add an rlib dependency, rewriting to the snapshot library if available.
 func addRlibDependency(actx android.BottomUpMutatorContext, lib string, mod *Module, snapshotInfo *cc.SnapshotInfo, variations []blueprint.Variation) {
-	lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
+	lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
 	actx.AddVariationDependencies(variations, rlibDepTag, lib)
 }
 
