@@ -192,6 +192,10 @@ type apexBundleProperties struct {
 	// with the tool to sign payload contents.
 	Custom_sign_tool *string
 
+	// Whether this is a dynamic common lib apex, if so the native shared libs will be placed
+	// in a special way that include the digest of the lib file under /lib(64)?
+	Dynamic_common_lib_apex *bool
+
 	// Canonical name of this APEX bundle. Used to determine the path to the
 	// activated APEX on device (i.e. /apex/<apexVariationName>), and used for the
 	// apex mutator variations. For override_apex modules, this is the name of the
@@ -640,7 +644,7 @@ var (
 	fsTag           = &dependencyTag{name: "filesystem", payload: true}
 	bcpfTag         = &dependencyTag{name: "bootclasspathFragment", payload: true, sourceOnly: true, memberType: java.BootclasspathFragmentSdkMemberType}
 	sscpfTag        = &dependencyTag{name: "systemserverclasspathFragment", payload: true, sourceOnly: true, memberType: java.SystemServerClasspathFragmentSdkMemberType}
-	compatConfigTag = &dependencyTag{name: "compatConfig", payload: true, sourceOnly: true}
+	compatConfigTag = &dependencyTag{name: "compatConfig", payload: true, sourceOnly: true, memberType: java.CompatConfigSdkMemberType}
 	javaLibTag      = &dependencyTag{name: "javaLib", payload: true}
 	jniLibTag       = &dependencyTag{name: "jniLib", payload: true}
 	keyTag          = &dependencyTag{name: "key"}
@@ -1472,6 +1476,11 @@ func (a *apexBundle) testOnlyShouldForceCompression() bool {
 	return proptools.Bool(a.properties.Test_only_force_compression)
 }
 
+// See the dynamic_common_lib_apex property
+func (a *apexBundle) dynamic_common_lib_apex() bool {
+	return proptools.BoolDefault(a.properties.Dynamic_common_lib_apex, false)
+}
+
 // These functions are interfacing with cc/sanitizer.go. The entire APEX (along with all of its
 // members) can be sanitized, either forcibly, or by the global configuration. For some of the
 // sanitizers, extra dependencies can be forcibly added as well.
@@ -1857,7 +1866,11 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		a.nativeApisBackedByModuleFile = android.ModuleOutPath(android.PathForBazelOut(ctx, a.Name()+"_backing.txt"))
 		// b/239084755
 		a.javaApisUsedByModuleFile = android.ModuleOutPath(android.PathForBazelOut(ctx, a.Name()+"_using.xml"))
-		a.installedFile = ctx.InstallFile(a.installDir, a.Name()+a.installSuffix(), a.outputFile,
+		installSuffix := imageApexSuffix
+		if a.isCompressed {
+			installSuffix = imageCapexSuffix
+		}
+		a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
 			a.compatSymlinks.Paths()...)
 	default:
 		panic(fmt.Errorf("unexpected apex_type for the ProcessBazelQuery: %v", a.properties.ApexType))
@@ -1878,18 +1891,13 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 }
 
 func (a *apexBundle) setCompression(ctx android.ModuleContext) {
-	a.isCompressed = (a.properties.ApexType == imageApex) &&
-		((ctx.Config().CompressedApex() &&
-			proptools.BoolDefault(a.overridableProperties.Compressible, false) &&
-			!a.testApex && !ctx.Config().UnbundledBuildApps()) ||
-			a.testOnlyShouldForceCompression())
-}
-
-func (a apexBundle) installSuffix() string {
-	if a.isCompressed {
-		return imageCapexSuffix
+	if a.properties.ApexType != imageApex {
+		a.isCompressed = false
+	} else if a.testOnlyShouldForceCompression() {
+		a.isCompressed = true
+	} else {
+		a.isCompressed = ctx.Config().ApexCompressionEnabled() && a.isCompressable()
 	}
-	return imageApexSuffix
 }
 
 func (a *apexBundle) setSystemLibLink(ctx android.ModuleContext) {
@@ -1964,6 +1972,10 @@ func (a *apexBundle) setApexTypeAndSuffix(ctx android.ModuleContext) {
 			a.suffix = flattenedSuffix
 		}
 	}
+}
+
+func (a apexBundle) isCompressable() bool {
+	return proptools.BoolDefault(a.overridableProperties.Compressible, false) && !a.testApex
 }
 
 func (a *apexBundle) commonBuildActions(ctx android.ModuleContext) bool {
@@ -2698,7 +2710,7 @@ func (o *OverrideApex) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 var _ android.ModuleWithMinSdkVersionCheck = (*apexBundle)(nil)
 
-// Entures that min_sdk_version of the included modules are equal or less than the min_sdk_version
+// Ensures that min_sdk_version of the included modules are equal or less than the min_sdk_version
 // of this apexBundle.
 func (a *apexBundle) CheckMinSdkVersion(ctx android.ModuleContext) {
 	if a.testApex || a.vndkApex {

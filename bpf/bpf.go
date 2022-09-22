@@ -17,6 +17,7 @@ package bpf
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"android/soong/android"
@@ -68,12 +69,23 @@ type BpfModule interface {
 }
 
 type BpfProperties struct {
-	Srcs         []string `android:"path"`
-	Cflags       []string
+	// source paths to the files.
+	Srcs []string `android:"path"`
+
+	// additional cflags that should be used to build the bpf variant of
+	// the C/C++ module.
+	Cflags []string
+
+	// directories (relative to the root of the source tree) that will
+	// be added to the include paths using -I.
 	Include_dirs []string
-	Sub_dir      string
-	// If set to true, generate BTF debug info for maps & programs
-	Btf    *bool
+
+	// optional subdirectory under which this module is installed into.
+	Sub_dir string
+
+	// if set to true, generate BTF debug info for maps & programs.
+	Btf *bool
+
 	Vendor *bool
 
 	VendorInternal bool `blueprint:"mutated"`
@@ -154,6 +166,9 @@ func (bpf *bpf) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	srcs := android.PathsForModuleSrc(ctx, bpf.properties.Srcs)
 
 	for _, src := range srcs {
+		if strings.ContainsRune(filepath.Base(src.String()), '_') {
+			ctx.ModuleErrorf("invalid character '_' in source name")
+		}
 		obj := android.ObjPathWithExt(ctx, "unstripped", src, "o")
 
 		ctx.Build(pctx, android.BuildParams{

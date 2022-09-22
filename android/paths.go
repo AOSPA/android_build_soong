@@ -387,20 +387,21 @@ func ExistentPathsForSources(ctx PathContext, paths []string) Paths {
 }
 
 // PathsForModuleSrc returns a Paths{} containing the resolved references in paths:
-// * filepath, relative to local module directory, resolves as a filepath relative to the local
-//   source directory
-// * glob, relative to the local module directory, resolves as filepath(s), relative to the local
-//  source directory.
-// * other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//    or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//    filepath.
+//   - filepath, relative to local module directory, resolves as a filepath relative to the local
+//     source directory
+//   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
+//     source directory.
+//   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
+//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
+//     filepath.
+//
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
 // path_deps mutator.
 // If a requested module is not found as a dependency:
-//   * if ctx.Config().AllowMissingDependencies() is true, this module to be marked as having
+//   - if ctx.Config().AllowMissingDependencies() is true, this module to be marked as having
 //     missing dependencies
-//   * otherwise, a ModuleError is thrown.
+//   - otherwise, a ModuleError is thrown.
 func PathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string) Paths {
 	return PathsForModuleSrcExcludes(ctx, paths, nil)
 }
@@ -414,21 +415,22 @@ type SourceInput struct {
 
 // PathsForModuleSrcExcludes returns a Paths{} containing the resolved references in paths, minus
 // those listed in excludes. Elements of paths and excludes are resolved as:
-// * filepath, relative to local module directory, resolves as a filepath relative to the local
-//   source directory
-// * glob, relative to the local module directory, resolves as filepath(s), relative to the local
-//  source directory. Not valid in excludes.
-// * other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//    or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//    filepath.
+//   - filepath, relative to local module directory, resolves as a filepath relative to the local
+//     source directory
+//   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
+//     source directory. Not valid in excludes.
+//   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
+//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
+//     filepath.
+//
 // excluding the items (similarly resolved
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
 // path_deps mutator.
 // If a requested module is not found as a dependency:
-//   * if ctx.Config().AllowMissingDependencies() is true, this module to be marked as having
+//   - if ctx.Config().AllowMissingDependencies() is true, this module to be marked as having
 //     missing dependencies
-//   * otherwise, a ModuleError is thrown.
+//   - otherwise, a ModuleError is thrown.
 func PathsForModuleSrcExcludes(ctx ModuleMissingDepsPathContext, paths, excludes []string) Paths {
 	return PathsRelativeToModuleSourceDir(SourceInput{
 		Context:      ctx,
@@ -548,13 +550,14 @@ func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string)
 
 // PathsAndMissingDepsForModuleSrcExcludes returns a Paths{} containing the resolved references in
 // paths, minus those listed in excludes. Elements of paths and excludes are resolved as:
-// * filepath, relative to local module directory, resolves as a filepath relative to the local
-//   source directory
-// * glob, relative to the local module directory, resolves as filepath(s), relative to the local
-//  source directory. Not valid in excludes.
-// * other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//    or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//    filepath.
+//   - filepath, relative to local module directory, resolves as a filepath relative to the local
+//     source directory
+//   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
+//     source directory. Not valid in excludes.
+//   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
+//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
+//     filepath.
+//
 // and a list of the module names of missing module dependencies are returned as the second return.
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
@@ -1474,7 +1477,7 @@ func pathForModuleOut(ctx ModuleOutPathContext) OutputPath {
 // PathForVndkRefAbiDump returns an OptionalPath representing the path of the
 // reference abi dump for the given module. This is not guaranteed to be valid.
 func PathForVndkRefAbiDump(ctx ModuleInstallPathContext, version, fileName string,
-	isNdk, isLlndkOrVndk, isGzip bool) OptionalPath {
+	isNdk, isVndk, isGzip bool) OptionalPath {
 
 	currentArchType := ctx.Arch().ArchType
 	primaryArchType := ctx.Config().DevicePrimaryArchType()
@@ -1486,7 +1489,7 @@ func PathForVndkRefAbiDump(ctx ModuleInstallPathContext, version, fileName strin
 	var dirName string
 	if isNdk {
 		dirName = "ndk"
-	} else if isLlndkOrVndk {
+	} else if isVndk {
 		dirName = "vndk"
 	} else {
 		dirName = "platform" // opt-in libs
@@ -1973,6 +1976,18 @@ func PathForTesting(paths ...string) Path {
 		panic(err)
 	}
 	return testPath{basePath{path: p, rel: p}}
+}
+
+func PathForTestingWithRel(path, rel string) Path {
+	p, err := validateSafePath(path, rel)
+	if err != nil {
+		panic(err)
+	}
+	r, err := validatePath(rel)
+	if err != nil {
+		panic(err)
+	}
+	return testPath{basePath{path: p, rel: r}}
 }
 
 // PathsForTesting returns a Path constructed from each element in strs. It should only be used from within tests.

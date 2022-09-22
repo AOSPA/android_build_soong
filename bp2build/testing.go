@@ -53,16 +53,16 @@ func checkError(t *testing.T, errs []error, expectedErr error) bool {
 	return false
 }
 
-func errored(t *testing.T, tc bp2buildTestCase, errs []error) bool {
+func errored(t *testing.T, tc Bp2buildTestCase, errs []error) bool {
 	t.Helper()
-	if tc.expectedErr != nil {
+	if tc.ExpectedErr != nil {
 		// Rely on checkErrors, as this test case is expected to have an error.
 		return false
 	}
 
 	if len(errs) > 0 {
 		for _, err := range errs {
-			t.Errorf("%s: %s", tc.description, err)
+			t.Errorf("%s: %s", tc.Description, err)
 		}
 		return true
 	}
@@ -71,42 +71,42 @@ func errored(t *testing.T, tc bp2buildTestCase, errs []error) bool {
 	return false
 }
 
-func runBp2BuildTestCaseSimple(t *testing.T, tc bp2buildTestCase) {
+func runBp2BuildTestCaseSimple(t *testing.T, tc Bp2buildTestCase) {
 	t.Helper()
-	runBp2BuildTestCase(t, func(ctx android.RegistrationContext) {}, tc)
+	RunBp2BuildTestCase(t, func(ctx android.RegistrationContext) {}, tc)
 }
 
-type bp2buildTestCase struct {
-	description                string
-	moduleTypeUnderTest        string
-	moduleTypeUnderTestFactory android.ModuleFactory
-	blueprint                  string
-	expectedBazelTargets       []string
-	filesystem                 map[string]string
-	dir                        string
+type Bp2buildTestCase struct {
+	Description                string
+	ModuleTypeUnderTest        string
+	ModuleTypeUnderTestFactory android.ModuleFactory
+	Blueprint                  string
+	ExpectedBazelTargets       []string
+	Filesystem                 map[string]string
+	Dir                        string
 	// An error with a string contained within the string of the expected error
-	expectedErr         error
-	unconvertedDepsMode unconvertedDepsMode
+	ExpectedErr         error
+	UnconvertedDepsMode unconvertedDepsMode
 }
 
-func runBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.RegistrationContext), tc bp2buildTestCase) {
+func RunBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.RegistrationContext), tc Bp2buildTestCase) {
 	t.Helper()
 	dir := "."
 	filesystem := make(map[string][]byte)
 	toParse := []string{
 		"Android.bp",
 	}
-	for f, content := range tc.filesystem {
+	for f, content := range tc.Filesystem {
 		if strings.HasSuffix(f, "Android.bp") {
 			toParse = append(toParse, f)
 		}
 		filesystem[f] = []byte(content)
 	}
-	config := android.TestConfig(buildDir, nil, tc.blueprint, filesystem)
+	config := android.TestConfig(buildDir, nil, tc.Blueprint, filesystem)
 	ctx := android.NewTestContext(config)
 
 	registerModuleTypes(ctx)
-	ctx.RegisterModuleType(tc.moduleTypeUnderTest, tc.moduleTypeUnderTestFactory)
+	ctx.RegisterModuleType(tc.ModuleTypeUnderTest, tc.ModuleTypeUnderTestFactory)
 	ctx.RegisterBp2BuildConfig(bp2buildConfig)
 	ctx.RegisterForBazelConversion()
 
@@ -120,35 +120,35 @@ func runBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.Regi
 	}
 
 	parseAndResolveErrs := append(parseErrs, resolveDepsErrs...)
-	if tc.expectedErr != nil && checkError(t, parseAndResolveErrs, tc.expectedErr) {
+	if tc.ExpectedErr != nil && checkError(t, parseAndResolveErrs, tc.ExpectedErr) {
 		return
 	}
 
 	checkDir := dir
-	if tc.dir != "" {
-		checkDir = tc.dir
+	if tc.Dir != "" {
+		checkDir = tc.Dir
 	}
 	codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
-	codegenCtx.unconvertedDepMode = tc.unconvertedDepsMode
+	codegenCtx.unconvertedDepMode = tc.UnconvertedDepsMode
 	bazelTargets, errs := generateBazelTargetsForDir(codegenCtx, checkDir)
-	if tc.expectedErr != nil {
-		if checkError(t, errs, tc.expectedErr) {
+	if tc.ExpectedErr != nil {
+		if checkError(t, errs, tc.ExpectedErr) {
 			return
 		} else {
-			t.Errorf("Expected error: %q, got: %q and %q", tc.expectedErr, errs, parseAndResolveErrs)
+			t.Errorf("Expected error: %q, got: %q and %q", tc.ExpectedErr, errs, parseAndResolveErrs)
 		}
 	} else {
 		android.FailIfErrored(t, errs)
 	}
-	if actualCount, expectedCount := len(bazelTargets), len(tc.expectedBazelTargets); actualCount != expectedCount {
+	if actualCount, expectedCount := len(bazelTargets), len(tc.ExpectedBazelTargets); actualCount != expectedCount {
 		t.Errorf("%s: Expected %d bazel target (%s), got `%d`` (%s)",
-			tc.description, expectedCount, tc.expectedBazelTargets, actualCount, bazelTargets)
+			tc.Description, expectedCount, tc.ExpectedBazelTargets, actualCount, bazelTargets)
 	} else {
 		for i, target := range bazelTargets {
-			if w, g := tc.expectedBazelTargets[i], target.content; w != g {
+			if w, g := tc.ExpectedBazelTargets[i], target.content; w != g {
 				t.Errorf(
 					"%s: Expected generated Bazel target to be `%s`, got `%s`",
-					tc.description, w, g)
+					tc.Description, w, g)
 			}
 		}
 	}
@@ -173,11 +173,12 @@ type customProps struct {
 	Bool_prop     bool
 	Bool_ptr_prop *bool
 	// Ensure that properties tagged `blueprint:mutated` are omitted
-	Int_prop         int `blueprint:"mutated"`
-	Int64_ptr_prop   *int64
-	String_prop      string
-	String_ptr_prop  *string
-	String_list_prop []string
+	Int_prop            int `blueprint:"mutated"`
+	Int64_ptr_prop      *int64
+	String_prop         string
+	String_literal_prop *string `android:"arch_variant"`
+	String_ptr_prop     *string
+	String_list_prop    []string
 
 	Nested_props     nestedProps
 	Nested_props_ptr *nestedProps
@@ -305,23 +306,29 @@ type OtherEmbeddedAttr struct {
 type customBazelModuleAttributes struct {
 	EmbeddedAttr
 	*OtherEmbeddedAttr
-	String_ptr_prop  *string
-	String_list_prop []string
-	Arch_paths       bazel.LabelListAttribute
+	String_literal_prop bazel.StringAttribute
+	String_ptr_prop     *string
+	String_list_prop    []string
+	Arch_paths          bazel.LabelListAttribute
 }
 
 func (m *customModule) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	paths := bazel.LabelListAttribute{}
-
 	if p := m.props.One_to_many_prop; p != nil && *p {
 		customBp2buildOneToMany(ctx, m)
 		return
 	}
 
+	paths := bazel.LabelListAttribute{}
+	strAttr := bazel.StringAttribute{}
 	for axis, configToProps := range m.GetArchVariantProperties(ctx, &customProps{}) {
 		for config, props := range configToProps {
-			if archProps, ok := props.(*customProps); ok && archProps.Arch_paths != nil {
-				paths.SetSelectValue(axis, config, android.BazelLabelForModuleSrcExcludes(ctx, archProps.Arch_paths, archProps.Arch_paths_exclude))
+			if custProps, ok := props.(*customProps); ok {
+				if custProps.Arch_paths != nil {
+					paths.SetSelectValue(axis, config, android.BazelLabelForModuleSrcExcludes(ctx, custProps.Arch_paths, custProps.Arch_paths_exclude))
+				}
+				if custProps.String_literal_prop != nil {
+					strAttr.SetSelectValue(axis, config, custProps.String_literal_prop)
+				}
 			}
 		}
 	}
@@ -329,10 +336,12 @@ func (m *customModule) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	paths.ResolveExcludes()
 
 	attrs := &customBazelModuleAttributes{
-		String_ptr_prop:  m.props.String_ptr_prop,
-		String_list_prop: m.props.String_list_prop,
-		Arch_paths:       paths,
+		String_literal_prop: strAttr,
+		String_ptr_prop:     m.props.String_ptr_prop,
+		String_list_prop:    m.props.String_list_prop,
+		Arch_paths:          paths,
 	}
+
 	attrs.Embedded_attr = m.props.Embedded_prop
 	if m.props.OtherEmbeddedProps != nil {
 		attrs.OtherEmbeddedAttr = &OtherEmbeddedAttr{Other_embedded_attr: m.props.OtherEmbeddedProps.Other_embedded_prop}
@@ -391,10 +400,10 @@ func simpleModuleDoNotConvertBp2build(typ, name string) string {
 }`, typ, name)
 }
 
-type attrNameToString map[string]string
+type AttrNameToString map[string]string
 
-func (a attrNameToString) clone() attrNameToString {
-	newAttrs := make(attrNameToString, len(a))
+func (a AttrNameToString) clone() AttrNameToString {
+	newAttrs := make(AttrNameToString, len(a))
 	for k, v := range a {
 		newAttrs[k] = v
 	}
@@ -403,7 +412,7 @@ func (a attrNameToString) clone() attrNameToString {
 
 // makeBazelTargetNoRestrictions returns bazel target build file definition that can be host or
 // device specific, or independent of host/device.
-func makeBazelTargetHostOrDevice(typ, name string, attrs attrNameToString, hod android.HostOrDeviceSupported) string {
+func makeBazelTargetHostOrDevice(typ, name string, attrs AttrNameToString, hod android.HostOrDeviceSupported) string {
 	if _, ok := attrs["target_compatible_with"]; !ok {
 		switch hod {
 		case android.HostSupported:
@@ -426,15 +435,15 @@ func makeBazelTargetHostOrDevice(typ, name string, attrs attrNameToString, hod a
 )`, typ, strings.Join(attrStrings, "\n"))
 }
 
-// makeBazelTargetNoRestrictions returns bazel target build file definition that does not add a
+// MakeBazelTargetNoRestrictions returns bazel target build file definition that does not add a
 // target_compatible_with.  This is useful for module types like filegroup and genrule that arch not
 // arch variant
-func makeBazelTargetNoRestrictions(typ, name string, attrs attrNameToString) string {
+func MakeBazelTargetNoRestrictions(typ, name string, attrs AttrNameToString) string {
 	return makeBazelTargetHostOrDevice(typ, name, attrs, android.HostAndDeviceDefault)
 }
 
 // makeBazelTargetNoRestrictions returns bazel target build file definition that is device specific
 // as this is the most common default in Soong.
-func makeBazelTarget(typ, name string, attrs attrNameToString) string {
+func makeBazelTarget(typ, name string, attrs AttrNameToString) string {
 	return makeBazelTargetHostOrDevice(typ, name, attrs, android.DeviceSupported)
 }

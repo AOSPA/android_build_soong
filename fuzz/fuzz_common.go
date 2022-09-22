@@ -27,13 +27,21 @@ import (
 	"android/soong/android"
 )
 
-type FuzzType string
+type Lang string
 
 const (
-	Cc   FuzzType = ""
-	Rust FuzzType = "rust"
-	Java FuzzType = "java"
-	AFL  FuzzType = "AFL"
+	Cc   Lang = "cc"
+	Rust Lang = "rust"
+	Java Lang = "java"
+)
+
+type Framework string
+
+const (
+	AFL              Framework = "afl"
+	LibFuzzer        Framework = "libfuzzer"
+	Jazzer           Framework = "jazzer"
+	UnknownFramework Framework = "unknownframework"
 )
 
 var BoolDefault = proptools.BoolDefault
@@ -48,7 +56,6 @@ type FuzzPackager struct {
 	Packages                android.Paths
 	FuzzTargets             map[string]bool
 	SharedLibInstallStrings []string
-	FuzzType                FuzzType
 }
 
 type FileToZip struct {
@@ -106,21 +113,21 @@ type FuzzConfig struct {
 	// A brief description of what the fuzzed code does.
 	Description string `json:"description,omitempty"`
 	// Can this code be triggered remotely or only locally.
-	Remotely_accessible bool `json:"remotely_accessible,omitempty"`
+	Remotely_accessible *bool `json:"remotely_accessible,omitempty"`
 	// Is the fuzzed code host only, i.e. test frameworks or support utilities.
-	Host_only bool `json:"host_only,omitempty"`
+	Host_only *bool `json:"host_only,omitempty"`
 	// Can third party/untrusted apps supply data to fuzzed code.
-	Untrusted_data bool `json:"untrusted_data,omitempty"`
+	Untrusted_data *bool `json:"untrusted_data,omitempty"`
 	// Is the code being fuzzed in a privileged, constrained or any other
 	// context from:
 	// https://source.android.com/security/overview/updates-resources#context_types.
 	Privilege_level PrivilegedLevel `json:"privilege_level,omitempty"`
 	// Can the fuzzed code isolated or can be called by multiple users/processes.
-	Isolated bool `json:"users_isolation,omitempty"`
+	Isolated *bool `json:"users_isolation,omitempty"`
 	// When code was relaeased or will be released.
 	Production_date string `json:"production_date,omitempty"`
 	// Prevents critical service functionality like phone calls, bluetooth, etc.
-	Critical bool `json:"critical,omitempty"`
+	Critical *bool `json:"critical,omitempty"`
 	// Specify whether to enable continuous fuzzing on devices. Defaults to true.
 	Fuzz_on_haiku_device *bool `json:"fuzz_on_haiku_device,omitempty"`
 	// Specify whether to enable continuous fuzzing on host. Defaults to true.
@@ -146,6 +153,12 @@ type FuzzConfig struct {
 	IsJni *bool `json:"is_jni,omitempty"`
 }
 
+type FuzzFrameworks struct {
+	Afl       *bool
+	Libfuzzer *bool
+	Jazzer    *bool
+}
+
 type FuzzProperties struct {
 	// Optional list of seed files to be installed to the fuzz target's output
 	// directory.
@@ -155,6 +168,10 @@ type FuzzProperties struct {
 	Data []string `android:"path"`
 	// Optional dictionary to be installed to the fuzz target's output directory.
 	Dictionary *string `android:"path"`
+	// Define the fuzzing frameworks this fuzz target can be built for. If
+	// empty then the fuzz target will be available to be  built for all fuzz
+	// frameworks available
+	Fuzzing_frameworks *FuzzFrameworks
 	// Config for running the target on fuzzing infrastructure.
 	Fuzz_config *FuzzConfig
 }
@@ -167,6 +184,49 @@ type FuzzPackagedModule struct {
 	Config                android.Path
 	Data                  android.Paths
 	DataIntermediateDir   android.Path
+}
+
+func GetFramework(ctx android.LoadHookContext, lang Lang) Framework {
+	framework := ctx.Config().Getenv("FUZZ_FRAMEWORK")
+
+	if lang == Cc {
+		switch strings.ToLower(framework) {
+		case "":
+			return LibFuzzer
+		case "libfuzzer":
+			return LibFuzzer
+		case "afl":
+			return AFL
+		}
+	} else if lang == Rust {
+		return LibFuzzer
+	} else if lang == Java {
+		return Jazzer
+	}
+
+	ctx.ModuleErrorf(fmt.Sprintf("%s is not a valid fuzzing framework for %s", framework, lang))
+	return UnknownFramework
+}
+
+func IsValidFrameworkForModule(targetFramework Framework, lang Lang, moduleFrameworks *FuzzFrameworks) bool {
+	if targetFramework == UnknownFramework {
+		return false
+	}
+
+	if moduleFrameworks == nil {
+		return true
+	}
+
+	switch targetFramework {
+	case LibFuzzer:
+		return proptools.BoolDefault(moduleFrameworks.Libfuzzer, true)
+	case AFL:
+		return proptools.BoolDefault(moduleFrameworks.Afl, true)
+	case Jazzer:
+		return proptools.BoolDefault(moduleFrameworks.Jazzer, true)
+	default:
+		panic("%s is not supported as a fuzz framework")
+	}
 }
 
 func IsValid(fuzzModule FuzzModule) bool {
@@ -267,7 +327,7 @@ func (f *FuzzConfig) String() string {
 	return string(b)
 }
 
-func (s *FuzzPackager) CreateFuzzPackage(ctx android.SingletonContext, archDirs map[ArchOs][]FileToZip, fuzzType FuzzType, pctx android.PackageContext) {
+func (s *FuzzPackager) CreateFuzzPackage(ctx android.SingletonContext, archDirs map[ArchOs][]FileToZip, fuzzType Lang, pctx android.PackageContext) {
 	var archOsList []ArchOs
 	for archOs := range archDirs {
 		archOsList = append(archOsList, archOs)
@@ -286,9 +346,7 @@ func (s *FuzzPackager) CreateFuzzPackage(ctx android.SingletonContext, archDirs 
 		if fuzzType == Java {
 			zipFileName = "fuzz-java-" + hostOrTarget + "-" + arch + ".zip"
 		}
-		if fuzzType == AFL {
-			zipFileName = "fuzz-afl-" + hostOrTarget + "-" + arch + ".zip"
-		}
+
 		outputFile := android.PathForOutput(ctx, zipFileName)
 
 		s.Packages = append(s.Packages, outputFile)

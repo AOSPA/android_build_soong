@@ -278,7 +278,8 @@ type productVariables struct {
 	AAPTPreferredConfig *string  `json:",omitempty"`
 	AAPTPrebuiltDPI     []string `json:",omitempty"`
 
-	DefaultAppCertificate *string `json:",omitempty"`
+	DefaultAppCertificate           *string `json:",omitempty"`
+	MainlineSepolicyDevCertificates *string `json:",omitempty"`
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 
@@ -747,20 +748,20 @@ func ProductVariableProperties(ctx BazelConversionPathContext) ProductConfigProp
 //
 // If the ProductConfigProperties map contains these items, as parsed from the .bp file:
 //
-// library_linking_strategy: {
-//     prefer_static: {
-//         static_libs: [
-//             "lib_a",
-//             "lib_b",
-//         ],
-//     },
-//     conditions_default: {
-//         shared_libs: [
-//             "lib_a",
-//             "lib_b",
-//         ],
-//     },
-// },
+//	library_linking_strategy: {
+//	    prefer_static: {
+//	        static_libs: [
+//	            "lib_a",
+//	            "lib_b",
+//	        ],
+//	    },
+//	    conditions_default: {
+//	        shared_libs: [
+//	            "lib_a",
+//	            "lib_b",
+//	        ],
+//	    },
+//	},
 //
 // Static_libs {Library_linking_strategy ANDROID prefer_static} [lib_a lib_b]
 // Shared_libs {Library_linking_strategy ANDROID conditions_default} [lib_a lib_b]
@@ -773,13 +774,13 @@ func ProductVariableProperties(ctx BazelConversionPathContext) ProductConfigProp
 // instead of putting lib_a and lib_b directly into dynamic_deps without a
 // select:
 //
-// dynamic_deps = select({
-//     "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [],
-//     "//conditions:default": [
-//         "//foo/bar:lib_a",
-//         "//foo/bar:lib_b",
-//     ],
-// }),
+//	dynamic_deps = select({
+//	    "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [],
+//	    "//conditions:default": [
+//	        "//foo/bar:lib_a",
+//	        "//foo/bar:lib_b",
+//	    ],
+//	}),
 func (props *ProductConfigProperties) zeroValuesForNamespacedVariables() {
 	// A map of product config properties to the zero values of their respective
 	// property value.
