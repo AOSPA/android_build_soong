@@ -270,6 +270,15 @@ type bazelCcLibraryAttributes struct {
 	Features bazel.StringListAttribute
 }
 
+type aidlLibraryAttributes struct {
+	Srcs        bazel.LabelListAttribute
+	Include_dir *string
+}
+
+type ccAidlLibraryAttributes struct {
+	Deps bazel.LabelListAttribute
+}
+
 type stripAttributes struct {
 	Keep_symbols                 bazel.BoolAttribute
 	Keep_symbols_and_debug_frame bazel.BoolAttribute
@@ -398,6 +407,8 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		hasStubs := true
 		sharedTargetAttrs.Has_stubs.SetValue(&hasStubs)
 	}
+
+	sharedTargetAttrs.Suffix = compilerAttrs.suffix
 
 	for axis, configToProps := range m.GetArchVariantProperties(ctx, &LibraryProperties{}) {
 		for config, props := range configToProps {
@@ -1635,13 +1646,48 @@ func (library *libraryDecorator) coverageOutputFilePath() android.OptionalPath {
 	return library.coverageOutputFile
 }
 
+// pathForVndkRefAbiDump returns an OptionalPath representing the path of the
+// reference abi dump for the given module. This is not guaranteed to be valid.
+func pathForVndkRefAbiDump(ctx android.ModuleInstallPathContext, version, fileName string,
+	isNdk, isVndk, isGzip bool) android.OptionalPath {
+
+	currentArchType := ctx.Arch().ArchType
+	primaryArchType := ctx.Config().DevicePrimaryArchType()
+	archName := currentArchType.String()
+	if currentArchType != primaryArchType {
+		archName += "_" + primaryArchType.String()
+	}
+
+	var dirName string
+	if isNdk {
+		dirName = "ndk"
+	} else if isVndk {
+		dirName = "vndk"
+	} else {
+		dirName = "platform" // opt-in libs
+	}
+
+	binderBitness := ctx.DeviceConfig().BinderBitness()
+
+	var ext string
+	if isGzip {
+		ext = ".lsdump.gz"
+	} else {
+		ext = ".lsdump"
+	}
+
+	return android.ExistentPathForSource(ctx, "prebuilts", "abi-dumps", dirName,
+		version, binderBitness, archName, "source-based",
+		fileName+ext)
+}
+
 func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
 	// The logic must be consistent with classifySourceAbiDump.
 	isNdk := ctx.isNdk(ctx.Config())
 	isVndk := ctx.useVndk() && ctx.isVndk()
 
-	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isVndk, false)
-	refAbiDumpGzipFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isVndk, true)
+	refAbiDumpTextFile := pathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isVndk, false)
+	refAbiDumpGzipFile := pathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isVndk, true)
 
 	if refAbiDumpTextFile.Valid() {
 		if refAbiDumpGzipFile.Valid() {
@@ -1658,12 +1704,12 @@ func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.
 	return nil
 }
 
-func prevDumpRefVersion(ctx ModuleContext) string {
+func prevDumpRefVersion(ctx ModuleContext) int {
 	sdkVersionInt := ctx.Config().PlatformSdkVersion().FinalInt()
 	sdkVersionStr := ctx.Config().PlatformSdkVersion().String()
 
 	if ctx.Config().PlatformSdkFinal() {
-		return strconv.Itoa(sdkVersionInt - 1)
+		return sdkVersionInt - 1
 	} else {
 		var dirName string
 
@@ -1679,9 +1725,9 @@ func prevDumpRefVersion(ctx ModuleContext) string {
 		// This situation could be identified by checking the existence of the PLATFORM_SDK_VERION dump directory.
 		refDumpDir := android.ExistentPathForSource(ctx, "prebuilts", "abi-dumps", dirName, sdkVersionStr)
 		if refDumpDir.Valid() {
-			return sdkVersionStr
+			return sdkVersionInt
 		} else {
-			return strconv.Itoa(sdkVersionInt - 1)
+			return sdkVersionInt - 1
 		}
 	}
 }
@@ -1689,7 +1735,7 @@ func prevDumpRefVersion(ctx ModuleContext) string {
 func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objects, fileName string, soFile android.Path) {
 	if library.sabi.shouldCreateSourceAbiDump() {
 		var version string
-		var prevVersion string
+		var prevVersion int
 
 		if ctx.useVndk() {
 			// For modules linking against vndk, follow its vndk version
@@ -1721,12 +1767,13 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 
 		addLsdumpPath(classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
 
-		if prevVersion != "" {
-			prevRefAbiDumpFile := getRefAbiDumpFile(ctx, prevVersion, fileName)
+		// If NDK or PLATFORM library, check against previous version ABI.
+		if !ctx.useVndk() {
+			prevRefAbiDumpFile := getRefAbiDumpFile(ctx, strconv.Itoa(prevVersion), fileName)
 			if prevRefAbiDumpFile != nil {
 				library.prevSAbiDiff = sourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
-					prevRefAbiDumpFile, fileName, prevVersion, exportedHeaderFlags,
-					library.Properties.Header_abi_checker.Diff_flags,
+					prevRefAbiDumpFile, fileName, exportedHeaderFlags,
+					library.Properties.Header_abi_checker.Diff_flags, prevVersion,
 					Bool(library.Properties.Header_abi_checker.Check_all_apis),
 					ctx.IsLlndk(), ctx.isNdk(ctx.Config()), ctx.IsVndkExt(), true)
 			}
@@ -1735,8 +1782,9 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		refAbiDumpFile := getRefAbiDumpFile(ctx, version, fileName)
 		if refAbiDumpFile != nil && !library.isQiifaLibrary {
 			library.sAbiDiff = sourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
-				refAbiDumpFile, fileName, "", exportedHeaderFlags,
+				refAbiDumpFile, fileName, exportedHeaderFlags,
 				library.Properties.Header_abi_checker.Diff_flags,
+				/* unused if not previousVersionDiff */ 0,
 				Bool(library.Properties.Header_abi_checker.Check_all_apis),
 				ctx.IsLlndk(), ctx.isNdk(ctx.Config()), ctx.IsVndkExt(), false)
 		}
@@ -2660,6 +2708,8 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 			},
 
 			Features: baseAttributes.features,
+
+			Suffix: compilerAttrs.suffix,
 		}
 		if compilerAttrs.stubsSymbolFile != nil && len(compilerAttrs.stubsVersions.Value) > 0 {
 			hasStubs := true
@@ -2742,6 +2792,8 @@ type bazelCcLibrarySharedAttributes struct {
 	Has_stubs bazel.BoolAttribute
 
 	Inject_bssl_hash bazel.BoolAttribute
+
+	Suffix bazel.StringAttribute
 }
 
 type bazelCcStubSuiteAttributes struct {
