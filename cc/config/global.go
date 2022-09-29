@@ -136,6 +136,13 @@ var (
 
 	commonGlobalConlyflags = []string{}
 
+	commonGlobalAsflags = []string{
+		"-D__ASSEMBLY__",
+		// TODO(b/235105792): override global -fdebug-default-version=5, it is causing $TMPDIR to
+		// end up in the dwarf data for crtend_so.S.
+		"-fdebug-default-version=4",
+	}
+
 	deviceGlobalCflags = []string{
 		"-ffunction-sections",
 		"-fdata-sections",
@@ -210,7 +217,6 @@ var (
 		"-Werror=int-in-bool-context",
 		"-Werror=int-to-pointer-cast",
 		"-Werror=pointer-to-int-cast",
-		"-Werror=string-compare",
 		"-Werror=xor-used-as-pow",
 		// http://b/161386391 for -Wno-void-pointer-to-enum-cast
 		"-Wno-void-pointer-to-enum-cast",
@@ -243,10 +249,8 @@ var (
 		// New warnings to be fixed after clang-r383902.
 		"-Wno-deprecated-copy",                      // http://b/153746672
 		"-Wno-range-loop-construct",                 // http://b/153747076
-		"-Wno-misleading-indentation",               // http://b/153746954
 		"-Wno-zero-as-null-pointer-constant",        // http://b/68236239
 		"-Wno-deprecated-anon-enum-enum-conversion", // http://b/153746485
-		"-Wno-string-compare",                       // http://b/153764102
 		"-Wno-pessimizing-move",                     // http://b/154270751
 		// New warnings to be fixed after clang-r399163
 		"-Wno-non-c-typedef-for-linkage", // http://b/161304145
@@ -314,6 +318,8 @@ var (
 		"-Wno-unused-but-set-parameter",
 		// http://b/215753485
 		"-Wno-bitwise-instead-of-logical",
+		// http://b/232926688
+		"-Wno-misleading-indentation",
 	}
 
 	// Extra cflags for external third-party projects to disable warnings that
@@ -347,13 +353,18 @@ var (
 		"-Wno-string-concatenation",
 	}
 
+	llvmNextExtraCommonGlobalCflags = []string{
+		"-Wno-unqualified-std-cast-call",
+		"-Wno-deprecated-non-prototype",
+	}
+
 	IllegalFlags = []string{
 		"-w",
 	}
 
-	CStdVersion               = "gnu99"
+	CStdVersion               = "gnu11"
 	CppStdVersion             = "gnu++17"
-	ExperimentalCStdVersion   = "gnu11"
+	ExperimentalCStdVersion   = "gnu17"
 	ExperimentalCppStdVersion = "gnu++2a"
 
 	SDClang         = false
@@ -362,6 +373,7 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
+	// TODO(b/243545528) Match upstream version
 	ClangDefaultVersion      = "clang-r450784d"
 	ClangDefaultShortVersion = "14.0.6"
 
@@ -402,6 +414,7 @@ func init() {
 	}
 
 	exportedVars.ExportStringListStaticVariable("CommonGlobalConlyflags", commonGlobalConlyflags)
+	exportedVars.ExportStringListStaticVariable("CommonGlobalAsflags", commonGlobalAsflags)
 	exportedVars.ExportStringListStaticVariable("DeviceGlobalCppflags", deviceGlobalCppflags)
 	exportedVars.ExportStringListStaticVariable("DeviceGlobalLdflags", deviceGlobalLdflags)
 	exportedVars.ExportStringListStaticVariable("DeviceGlobalLldflags", deviceGlobalLldflags)
@@ -436,15 +449,15 @@ func init() {
 			// Default to zero initialization.
 			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
 		}
+		// Workaround for ccache with clang.
+		// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
+		if ctx.Config().IsEnvTrue("USE_CCACHE") {
+			flags = append(flags, "-Wno-unused-command-line-argument")
+		}
 
-		// TODO(b/207393703): Re-enable -Wno-unused-command-line-argument after failures are resolved.
-		/*
-			// Workaround for ccache with clang.
-			// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
-			if ctx.Config().IsEnvTrue("USE_CCACHE") {
-				flags = append(flags, "-Wno-unused-command-line-argument")
-			}
-		*/
+		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
+			flags = append(flags, llvmNextExtraCommonGlobalCflags...)
+		}
 		return strings.Join(flags, " ")
 	})
 
@@ -461,6 +474,11 @@ func init() {
 	exportedVars.ExportStringListStaticVariable("NoOverrideExternalGlobalCflags", noOverrideExternalGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("CommonGlobalCppflags", commonGlobalCppflags)
 	exportedVars.ExportStringListStaticVariable("ExternalCflags", extraExternalCflags)
+
+	exportedVars.ExportString("CStdVersion", CStdVersion)
+	exportedVars.ExportString("CppStdVersion", CppStdVersion)
+	exportedVars.ExportString("ExperimentalCStdVersion", ExperimentalCStdVersion)
+	exportedVars.ExportString("ExperimentalCppStdVersion", ExperimentalCppStdVersion)
 
 	// Everything in these lists is a crime against abstraction and dependency tracking.
 	// Do not add anything to this list.

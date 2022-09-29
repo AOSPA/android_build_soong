@@ -312,8 +312,12 @@ func addToModuleList(ctx ModuleContext, key android.OnceKey, module string) {
 	getNamedMapForConfig(ctx.Config(), key).Store(module, true)
 }
 
+func useGnuExtensions(gnuExtensions *bool) bool {
+	return proptools.BoolDefault(gnuExtensions, true)
+}
+
 func maybeReplaceGnuToC(gnuExtensions *bool, cStd string, cppStd string) (string, string) {
-	if gnuExtensions != nil && *gnuExtensions == false {
+	if !useGnuExtensions(gnuExtensions) {
 		cStd = gnuToCReplacer.Replace(cStd)
 		cppStd = gnuToCReplacer.Replace(cppStd)
 	}
@@ -475,7 +479,8 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		if version == "" || version == "current" {
 			target += strconv.Itoa(android.FutureApiLevelInt)
 		} else {
-			target += version
+			apiLevel := nativeApiLevelOrPanic(ctx, version)
+			target += apiLevel.String()
 		}
 	}
 
@@ -511,7 +516,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 	}
 
-	flags.Global.AsFlags = append(flags.Global.AsFlags, "-D__ASSEMBLY__")
+	flags.Global.AsFlags = append(flags.Global.AsFlags, "${config.CommonGlobalAsflags}")
 
 	flags.Global.CppFlags = append(flags.Global.CppFlags, tc.Cppflags())
 
@@ -615,10 +620,9 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			addToModuleList(ctx, modulesUsingWnoErrorKey, module)
 		} else if !inList("-Werror", flags.Local.CFlags) && !inList("-Werror", flags.Local.CppFlags) {
 			if warningsAreAllowed(ctx.ModuleDir()) {
-				addToModuleList(ctx, modulesAddedWallKey, module)
-				flags.Local.CFlags = append([]string{"-Wall"}, flags.Local.CFlags...)
+				addToModuleList(ctx, modulesWarningsAllowedKey, module)
 			} else {
-				flags.Local.CFlags = append([]string{"-Wall", "-Werror"}, flags.Local.CFlags...)
+				flags.Local.CFlags = append([]string{"-Werror"}, flags.Local.CFlags...)
 			}
 		}
 	}

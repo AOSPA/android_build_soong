@@ -50,36 +50,18 @@ type JavaFuzzLibrary struct {
 	jniFilePaths       android.Paths
 }
 
-// IsSanitizerEnabled implemented to make JavaFuzzLibrary implement
-// cc.Sanitizeable
-func (j *JavaFuzzLibrary) IsSanitizerEnabled(ctx android.BaseModuleContext, sanitizerName string) bool {
-	for _, s := range j.jniProperties.Sanitizers {
-		if sanitizerName == s {
-			return true
-		}
-	}
-	return false
-}
-
 // IsSanitizerEnabledForJni implemented to make JavaFuzzLibrary implement
 // cc.JniSanitizeable. It returns a bool for whether a cc dependency should be
 // sanitized for the given sanitizer or not.
 func (j *JavaFuzzLibrary) IsSanitizerEnabledForJni(ctx android.BaseModuleContext, sanitizerName string) bool {
-	return j.IsSanitizerEnabled(ctx, sanitizerName)
+	// TODO: once b/231370928 is resolved, please uncomment the loop
+	// 	for _, s := range j.jniProperties.Sanitizers {
+	// 		if sanitizerName == s {
+	// 			return true
+	// 		}
+	// 	}
+	return false
 }
-
-// EnableSanitizer implemented to make JavaFuzzLibrary implement
-// cc.Sanitizeable
-func (j *JavaFuzzLibrary) EnableSanitizer(sanitizerName string) {
-}
-
-// AddSanitizerDependencies implemented to make JavaFuzzLibrary implement
-// cc.Sanitizeable
-func (j *JavaFuzzLibrary) AddSanitizerDependencies(mctx android.BottomUpMutatorContext, sanitizerName string) {
-}
-
-// To verify that JavaFuzzLibrary implements cc.Sanitizeable
-var _ cc.Sanitizeable = (*JavaFuzzLibrary)(nil)
 
 func (j *JavaFuzzLibrary) DepsMutator(mctx android.BottomUpMutatorContext) {
 	if len(j.jniProperties.Jni_libs) > 0 {
@@ -186,6 +168,10 @@ func (s *javaFuzzPackager) GenerateBuildActions(ctx android.SingletonContext) {
 		// Discard non-fuzz targets.
 		javaFuzzModule, ok := module.(*JavaFuzzLibrary)
 		if !ok {
+			return
+		}
+
+		if javaFuzzModule.Target().HostCross {
 			return
 		}
 

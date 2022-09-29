@@ -409,6 +409,11 @@ func (ba BoolAttribute) HasConfigurableValues() bool {
 	return false
 }
 
+// SetValue sets value for the no config axis
+func (ba *BoolAttribute) SetValue(value *bool) {
+	ba.SetSelectValue(NoConfigAxis, "", value)
+}
+
 // SetSelectValue sets value for the given axis/config.
 func (ba *BoolAttribute) SetSelectValue(axis ConfigurationAxis, config string, value *bool) {
 	axis.validateConfig(config)
@@ -650,6 +655,11 @@ func MakeLabelListAttribute(value LabelList) LabelListAttribute {
 		Value:              value,
 		ConfigurableValues: make(configurableLabelLists),
 	}
+}
+
+// MakeSingleLabelListAttribute initializes a LabelListAttribute as a non-arch specific list with 1 element, the given Label.
+func MakeSingleLabelListAttribute(value Label) LabelListAttribute {
+	return MakeLabelListAttribute(MakeLabelList([]Label{value}))
 }
 
 func (lla *LabelListAttribute) SetValue(list LabelList) {

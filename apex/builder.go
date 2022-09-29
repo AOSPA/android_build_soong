@@ -76,11 +76,12 @@ var (
 		Command: `rm -f $out && ${jsonmodify} $in ` +
 			`-a provideNativeLibs ${provideNativeLibs} ` +
 			`-a requireNativeLibs ${requireNativeLibs} ` +
+			`-se version 0 ${default_version} ` +
 			`${opt} ` +
 			`-o $out`,
 		CommandDeps: []string{"${jsonmodify}"},
 		Description: "prepare ${out}",
-	}, "provideNativeLibs", "requireNativeLibs", "opt")
+	}, "provideNativeLibs", "requireNativeLibs", "default_version", "opt")
 
 	stripApexManifestRule = pctx.StaticRule("stripApexManifestRule", blueprint.RuleParams{
 		Command:     `rm -f $out && ${conv_apex_manifest} strip $in -o $out`,
@@ -213,6 +214,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 		Args: map[string]string{
 			"provideNativeLibs": strings.Join(provideNativeLibs, " "),
 			"requireNativeLibs": strings.Join(requireNativeLibs, " "),
+			"default_version":   defaultManifestVersion,
 			"opt":               strings.Join(optCommands, " "),
 		},
 	})
@@ -618,7 +620,12 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 
 		// Create a NOTICE file, and embed it as an asset file in the APEX.
 		a.htmlGzNotice = android.PathForModuleOut(ctx, "NOTICE.html.gz")
-		android.BuildNoticeHtmlOutputFromLicenseMetadata(ctx, a.htmlGzNotice)
+		android.BuildNoticeHtmlOutputFromLicenseMetadata(
+			ctx, a.htmlGzNotice, "", "",
+			[]string{
+				android.PathForModuleInstall(ctx).String() + "/",
+				android.PathForModuleInPartitionInstall(ctx, "apex").String() + "/",
+			})
 		noticeAssetPath := android.PathForModuleOut(ctx, "NOTICE", "NOTICE.html.gz")
 		builder := android.NewRuleBuilder(pctx, ctx)
 		builder.Command().Text("cp").
@@ -799,8 +806,8 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		return
 	}
 
-	if apexType == imageApex && (compressionEnabled || a.testOnlyShouldForceCompression()) {
-		a.isCompressed = true
+	a.setCompression(ctx)
+	if a.isCompressed {
 		unsignedCompressedOutputFile := android.PathForModuleOut(ctx, a.Name()+imageCapexSuffix+".unsigned")
 
 		compressRule := android.NewRuleBuilder(pctx, ctx)
@@ -830,17 +837,12 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		a.outputFile = signedCompressedOutputFile
 	}
 
-	installSuffix := suffix
-	if a.isCompressed {
-		installSuffix = imageCapexSuffix
-	}
-
 	if !a.installable() {
 		a.SkipInstall()
 	}
 
 	// Install to $OUT/soong/{target,host}/.../apex.
-	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
+	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+a.installSuffix(), a.outputFile,
 		a.compatSymlinks.Paths()...)
 
 	// installed-files.txt is dist'ed

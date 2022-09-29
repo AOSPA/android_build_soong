@@ -416,7 +416,7 @@ func modifyTestConfigToSupportArchMutator(testConfig Config) {
 	config.BuildOSTarget = config.Targets[config.BuildOS][0]
 	config.BuildOSCommonTarget = getCommonTargets(config.Targets[config.BuildOS])[0]
 	config.AndroidCommonTarget = getCommonTargets(config.Targets[Android])[0]
-	config.AndroidFirstDeviceTarget = firstTarget(config.Targets[Android], "lib64", "lib32")[0]
+	config.AndroidFirstDeviceTarget = FirstTarget(config.Targets[Android], "lib64", "lib32")[0]
 	config.TestProductVariables.DeviceArch = proptools.StringPtr("arm64")
 	config.TestProductVariables.DeviceArchVariant = proptools.StringPtr("armv8-a")
 	config.TestProductVariables.DeviceSecondaryArch = proptools.StringPtr("arm")
@@ -554,11 +554,11 @@ func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir strin
 	// Compilation targets for Android.
 	if len(config.Targets[Android]) > 0 {
 		config.AndroidCommonTarget = getCommonTargets(config.Targets[Android])[0]
-		config.AndroidFirstDeviceTarget = firstTarget(config.Targets[Android], "lib64", "lib32")[0]
+		config.AndroidFirstDeviceTarget = FirstTarget(config.Targets[Android], "lib64", "lib32")[0]
 	}
 
 	config.BazelContext, err = NewBazelContext(config)
-	config.bp2buildPackageConfig = bp2buildAllowlist
+	config.bp2buildPackageConfig = getBp2BuildAllowList()
 
 	return Config{config}, err
 }
@@ -698,6 +698,10 @@ func (c *config) IsEnvFalse(key string) bool {
 	return value == "0" || value == "n" || value == "no" || value == "off" || value == "false"
 }
 
+func (c *config) TargetsJava17() bool {
+	return c.IsEnvTrue("EXPERIMENTAL_TARGET_JAVA_VERSION_17")
+}
+
 // EnvDeps returns the environment variables this build depends on. The first
 // call to this function blocks future reads from the environment.
 func (c *config) EnvDeps() map[string]string {
@@ -787,6 +791,10 @@ func (c *config) PlatformBaseOS() string {
 
 func (c *config) PlatformVersionLastStable() string {
 	return String(c.productVariables.Platform_version_last_stable)
+}
+
+func (c *config) PlatformVersionKnownCodenames() string {
+	return String(c.productVariables.Platform_version_known_codenames)
 }
 
 func (c *config) MinSupportedSdkVersion() ApiLevel {
@@ -1745,6 +1753,10 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
+func (c *deviceConfig) BuildBrokenDepfile() bool {
+	return Bool(c.config.productVariables.BuildBrokenDepfile)
+}
+
 func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
 	return c.config.productVariables.RequiresInsecureExecmemForSwiftshader
 }
@@ -1767,6 +1779,10 @@ func (c *deviceConfig) SepolicyFreezeTestExtraPrebuiltDirs() []string {
 
 func (c *deviceConfig) GenerateAidlNdkPlatformBackend() bool {
 	return c.config.productVariables.GenerateAidlNdkPlatformBackend
+}
+
+func (c *config) IgnorePrefer32OnDevice() bool {
+	return c.productVariables.IgnorePrefer32OnDevice
 }
 
 // The ConfiguredJarList struct provides methods for handling a list of (apex, jar) pairs.
@@ -2103,7 +2119,7 @@ func (c *config) UseHostMusl() bool {
 	return Bool(c.productVariables.HostMusl)
 }
 
-func (c *config) LogMixedBuild(ctx ModuleContext, useBazel bool) {
+func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
 	moduleName := ctx.Module().Name()
 	c.mixedBuildsLock.Lock()
 	defer c.mixedBuildsLock.Unlock()

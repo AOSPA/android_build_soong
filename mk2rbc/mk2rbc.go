@@ -830,21 +830,13 @@ func (ctx *parseContext) handleSubConfig(
 				pathPattern = append(pathPattern, chunk)
 			}
 		}
-		if pathPattern[0] == "" && len(ctx.includeTops) > 0 {
-			// If pattern starts from the top. restrict it to the directories where
-			// we know inherit-product uses dynamically calculated path.
-			for _, p := range ctx.includeTops {
-				pathPattern[0] = p
-				matchingPaths = append(matchingPaths, ctx.findMatchingPaths(pathPattern)...)
-			}
-		} else {
-			matchingPaths = ctx.findMatchingPaths(pathPattern)
+		if len(pathPattern) == 1 {
+			pathPattern = append(pathPattern, "")
 		}
+		matchingPaths = ctx.findMatchingPaths(pathPattern)
 		needsWarning = pathPattern[0] == "" && len(ctx.includeTops) == 0
 	} else if len(ctx.includeTops) > 0 {
-		for _, p := range ctx.includeTops {
-			matchingPaths = append(matchingPaths, ctx.findMatchingPaths([]string{p, ""})...)
-		}
+		matchingPaths = append(matchingPaths, ctx.findMatchingPaths([]string{"", ""})...)
 	} else {
 		return []starlarkNode{ctx.newBadNode(v, "inherit-product/include argument is too complex")}
 	}
@@ -872,17 +864,31 @@ func (ctx *parseContext) findMatchingPaths(pattern []string) []string {
 	}
 
 	// Create regular expression from the pattern
-	s_regexp := "^" + regexp.QuoteMeta(pattern[0])
+	regexString := "^" + regexp.QuoteMeta(pattern[0])
 	for _, s := range pattern[1:] {
-		s_regexp += ".*" + regexp.QuoteMeta(s)
+		regexString += ".*" + regexp.QuoteMeta(s)
 	}
-	s_regexp += "$"
-	rex := regexp.MustCompile(s_regexp)
+	regexString += "$"
+	rex := regexp.MustCompile(regexString)
+
+	includeTopRegexString := ""
+	if len(ctx.includeTops) > 0 {
+		for i, top := range ctx.includeTops {
+			if i > 0 {
+				includeTopRegexString += "|"
+			}
+			includeTopRegexString += "^" + regexp.QuoteMeta(top)
+		}
+	} else {
+		includeTopRegexString = ".*"
+	}
+
+	includeTopRegex := regexp.MustCompile(includeTopRegexString)
 
 	// Now match
 	var res []string
 	for _, p := range files {
-		if rex.MatchString(p) {
+		if rex.MatchString(p) && includeTopRegex.MatchString(p) {
 			res = append(res, p)
 		}
 	}
@@ -1270,7 +1276,28 @@ func (ctx *parseContext) parseReference(node mkparser.Node, ref *mkparser.MakeSt
 	// Handle only the case where the first (or only) word is constant
 	words := ref.SplitN(" ", 2)
 	if !words[0].Const() {
-		return ctx.newBadExpr(node, "reference is too complex: %s", refDump)
+		if len(words) == 1 {
+			expr := ctx.parseMakeString(node, ref)
+			return &callExpr{
+				object: &identifierExpr{"cfg"},
+				name:   "get",
+				args: []starlarkExpr{
+					expr,
+					&callExpr{
+						object: &identifierExpr{"g"},
+						name:   "get",
+						args: []starlarkExpr{
+							expr,
+							&stringLiteralExpr{literal: ""},
+						},
+						returnType: starlarkTypeUnknown,
+					},
+				},
+				returnType: starlarkTypeUnknown,
+			}
+		} else {
+			return ctx.newBadExpr(node, "reference is too complex: %s", refDump)
+		}
 	}
 
 	if name, _, ok := ctx.maybeParseFunctionCall(node, ref); ok {
@@ -1574,11 +1601,21 @@ func (p *foreachCallParser) parse(ctx *parseContext, node mkparser.Node, args *m
 		}
 	}
 
-	return &foreachExpr{
+	var result starlarkExpr = &foreachExpr{
 		varName: loopVarName,
 		list:    list,
 		action:  action,
 	}
+
+	if action.typ() == starlarkTypeList {
+		result = &callExpr{
+			name:       baseName + ".flatten_2d_list",
+			args:       []starlarkExpr{result},
+			returnType: starlarkTypeList,
+		}
+	}
+
+	return result
 }
 
 func transformNode(node starlarkNode, transformer func(expr starlarkExpr) starlarkExpr) {

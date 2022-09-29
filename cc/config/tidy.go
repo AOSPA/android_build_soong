@@ -19,6 +19,37 @@ import (
 	"strings"
 )
 
+var (
+	// Some clang-tidy checks have bugs or don't work for Android.
+	// They are disabled here, overriding any locally selected checks.
+	globalNoCheckList = []string{
+		// https://b.corp.google.com/issues/153464409
+		// many local projects enable cert-* checks, which
+		// trigger bugprone-reserved-identifier.
+		"-bugprone-reserved-identifier*,-cert-dcl51-cpp,-cert-dcl37-c",
+		// http://b/153757728
+		"-readability-qualified-auto",
+		// http://b/193716442
+		"-bugprone-implicit-widening-of-multiplication-result",
+		// Too many existing functions trigger this rule, and fixing it requires large code
+		// refactoring. The cost of maintaining this tidy rule outweighs the benefit it brings.
+		"-bugprone-easily-swappable-parameters",
+		// http://b/216364337 - TODO: Follow-up after compiler update to
+		// disable or fix individual instances.
+		"-cert-err33-c",
+	}
+
+	// Some clang-tidy checks are included in some tidy_checks_as_errors lists,
+	// but not all warnings are fixed/suppressed yet. These checks are not
+	// disabled in the TidyGlobalNoChecks list, so we can see them and fix/suppress them.
+	globalNoErrorCheckList = []string{
+		// http://b/155034563
+		"-bugprone-signed-char-misuse",
+		// http://b/155034972
+		"-bugprone-branch-clone",
+	}
+)
+
 func init() {
 	// Many clang-tidy checks like altera-*, llvm-*, modernize-*
 	// are not designed for Android source code or creating too
@@ -35,17 +66,26 @@ func init() {
 			"bugprone-*",
 			"cert-*",
 			"clang-diagnostic-unused-command-line-argument",
-			"google-*",
+			// Select only google-* checks that do not have thousands of warnings.
+			// Add more such checks when we clean up source code.
+			// "google-build-using-namespace",
+			// "google-default-arguments",
+			// "google-explicit-constructor",
+			// "google-global-names-in-headers",
+			// "google-runtime-int",
+			"google-build-explicit-make-pair",
+			"google-build-namespaces",
+			"google-runtime-operator",
+			"google-upgrade-*",
 			"misc-*",
 			"performance-*",
 			"portability-*",
 			"-bugprone-easily-swappable-parameters",
 			"-bugprone-narrowing-conversions",
-			"-google-readability*",
-			"-google-runtime-references",
 			"-misc-no-recursion",
 			"-misc-non-private-member-variables-in-classes",
 			"-misc-unused-parameters",
+			"-performance-no-int-to-ptr",
 			// the following groups are excluded by -*
 			// -altera-*
 			// -cppcoreguidelines-*
@@ -78,14 +118,19 @@ func init() {
 		return strings.Join([]string{
 			"-*",
 			"clang-diagnostic-unused-command-line-argument",
-			"google*",
-			"-google-build-using-namespace",
-			"-google-default-arguments",
-			"-google-explicit-constructor",
-			"-google-readability*",
-			"-google-runtime-int",
-			"-google-runtime-references",
+			"google-build-explicit-make-pair",
+			"google-build-namespaces",
+			"google-runtime-operator",
+			"google-upgrade-*",
 		}, ",")
+	})
+
+	pctx.VariableFunc("TidyGlobalNoChecks", func(ctx android.PackageVarContext) string {
+		return strings.Join(globalNoCheckList, ",")
+	})
+
+	pctx.VariableFunc("TidyGlobalNoErrorChecks", func(ctx android.PackageVarContext) string {
+		return strings.Join(globalNoErrorCheckList, ",")
 	})
 
 	// To reduce duplicate warnings from the same header files,
@@ -122,6 +167,7 @@ var DefaultLocalTidyChecks = []PathBasedTidyCheck{
 	{"hardware/qcom", tidyExternalVendor},
 	{"vendor/", tidyExternalVendor},
 	{"vendor/google", tidyDefault},
+	{"vendor/google_arc/libs/org.chromium.arc.mojom", tidyExternalVendor},
 	{"vendor/google_devices", tidyExternalVendor},
 }
 
@@ -143,6 +189,22 @@ func TidyChecksForDir(dir string) string {
 		}
 	}
 	return tidyDefault
+}
+
+// Returns a globally disabled tidy checks, overriding locally selected checks.
+func TidyGlobalNoChecks() string {
+	if len(globalNoCheckList) > 0 {
+		return ",${config.TidyGlobalNoChecks}"
+	}
+	return ""
+}
+
+// Returns a globally allowed/no-error tidy checks, appended to -warnings-as-errors.
+func TidyGlobalNoErrorChecks() string {
+	if len(globalNoErrorCheckList) > 0 {
+		return ",${config.TidyGlobalNoErrorChecks}"
+	}
+	return ""
 }
 
 func TidyFlagsForSrcFile(srcFile android.Path, flags string) string {

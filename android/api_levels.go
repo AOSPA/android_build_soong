@@ -54,6 +54,14 @@ type ApiLevel struct {
 	isPreview bool
 }
 
+func (this ApiLevel) FinalInt() int {
+	if this.IsPreview() {
+		panic("Requested a final int from a non-final ApiLevel")
+	} else {
+		return this.number
+	}
+}
+
 func (this ApiLevel) FinalOrFutureInt() int {
 	if this.IsPreview() {
 		return FutureApiLevelInt
@@ -184,17 +192,9 @@ var FirstNonLibAndroidSupportVersion = uncheckedFinalApiLevel(21)
 // a core-for-system-modules.jar for the module-lib API scope.
 var LastWithoutModuleLibCoreSystemModules = uncheckedFinalApiLevel(31)
 
-// If the `raw` input is the codename of an API level has been finalized, this
-// function returns the API level number associated with that API level. If the
-// input is *not* a finalized codename, the input is returned unmodified.
-//
-// For example, at the time of writing, R has been finalized as API level 30,
-// but S is in development so it has no number assigned. For the following
-// inputs:
-//
-// * "30" -> "30"
-// * "R" -> "30"
-// * "S" -> "S"
+// ReplaceFinalizedCodenames returns the API level number associated with that API level
+// if the `raw` input is the codename of an API level has been finalized.
+// If the input is *not* a finalized codename, the input is returned unmodified.
 func ReplaceFinalizedCodenames(config Config, raw string) string {
 	num, ok := getFinalCodenamesMap(config)[raw]
 	if !ok {

@@ -29,6 +29,8 @@ import (
 const (
 	cSrcPartition     = "c"
 	asSrcPartition    = "as"
+	lSrcPartition     = "l"
+	llSrcPartition    = "ll"
 	cppSrcPartition   = "cpp"
 	protoSrcPartition = "proto"
 )
@@ -53,6 +55,8 @@ type staticOrSharedAttributes struct {
 
 	Enabled bazel.BoolAttribute
 
+	Native_coverage bazel.BoolAttribute
+
 	sdkAttributes
 }
 
@@ -76,6 +80,12 @@ func groupSrcsByExtension(ctx android.BazelConversionPathContext, srcs bazel.Lab
 		protoSrcPartition: android.ProtoSrcLabelPartition,
 		cSrcPartition:     bazel.LabelPartition{Extensions: []string{".c"}, LabelMapper: addSuffixForFilegroup("_c_srcs")},
 		asSrcPartition:    bazel.LabelPartition{Extensions: []string{".s", ".S"}, LabelMapper: addSuffixForFilegroup("_as_srcs")},
+		// TODO(http://b/231968910): If there is ever a filegroup target that
+		// 		contains .l or .ll files we will need to find a way to add a
+		// 		LabelMapper for these that identifies these filegroups and
+		//		converts them appropriately
+		lSrcPartition:  bazel.LabelPartition{Extensions: []string{".l"}},
+		llSrcPartition: bazel.LabelPartition{Extensions: []string{".ll"}},
 		// C++ is the "catch-all" group, and comprises generated sources because we don't
 		// know the language of these sources until the genrule is executed.
 		cppSrcPartition: bazel.LabelPartition{Extensions: []string{".cpp", ".cc", ".cxx", ".mm"}, LabelMapper: addSuffixForFilegroup("_cpp_srcs"), Keep_remainder: true},
@@ -285,6 +295,11 @@ type compilerAttributes struct {
 	cppFlags bazel.StringListAttribute
 	srcs     bazel.LabelListAttribute
 
+	// Lex sources and options
+	lSrcs   bazel.LabelListAttribute
+	llSrcs  bazel.LabelListAttribute
+	lexopts bazel.StringListAttribute
+
 	hdrs bazel.LabelListAttribute
 
 	rtti bazel.BoolAttribute
@@ -361,7 +376,8 @@ func (ca *compilerAttributes) convertStlProps(ctx android.ArchVariantContext, mo
 				return
 			}
 			if ca.stl == nil {
-				ca.stl = stlProps.Stl
+				stl := deduplicateStlInput(*stlProps.Stl)
+				ca.stl = &stl
 			} else if ca.stl != stlProps.Stl {
 				ctx.ModuleErrorf("Unsupported conversion: module with different stl for different variants: %s and %s", *ca.stl, stlProps.Stl)
 			}
@@ -407,6 +423,8 @@ func (ca *compilerAttributes) finalize(ctx android.BazelConversionPathContext, i
 	ca.srcs = partitionedSrcs[cppSrcPartition]
 	ca.cSrcs = partitionedSrcs[cSrcPartition]
 	ca.asSrcs = partitionedSrcs[asSrcPartition]
+	ca.lSrcs = partitionedSrcs[lSrcPartition]
+	ca.llSrcs = partitionedSrcs[llSrcPartition]
 
 	ca.absoluteIncludes.DeduplicateAxesFromBase()
 	ca.localIncludes.DeduplicateAxesFromBase()
@@ -429,32 +447,33 @@ func parseSrcs(ctx android.BazelConversionPathContext, props *BaseCompilerProper
 	return bazel.AppendBazelLabelLists(allSrcsLabelList, generatedSrcsLabelList), anySrcs
 }
 
-func bp2buildResolveCppStdValue(c_std *string, cpp_std *string, gnu_extensions *bool) (*string, *string) {
-	var cStdVal, cppStdVal string
+func bp2buildStdVal(std *string, prefix string, useGnu bool) *string {
+	defaultVal := prefix + "_std_default"
 	// If c{,pp}std properties are not specified, don't generate them in the BUILD file.
 	// Defaults are handled by the toolchain definition.
 	// However, if gnu_extensions is false, then the default gnu-to-c version must be specified.
-	if cpp_std != nil {
-		cppStdVal = parseCppStd(cpp_std)
-	} else if gnu_extensions != nil && !*gnu_extensions {
-		cppStdVal = "c++17"
-	}
-	if c_std != nil {
-		cStdVal = parseCStd(c_std)
-	} else if gnu_extensions != nil && !*gnu_extensions {
-		cStdVal = "c99"
-	}
-
-	cStdVal, cppStdVal = maybeReplaceGnuToC(gnu_extensions, cStdVal, cppStdVal)
-	var c_std_prop, cpp_std_prop *string
-	if cStdVal != "" {
-		c_std_prop = &cStdVal
-	}
-	if cppStdVal != "" {
-		cpp_std_prop = &cppStdVal
+	stdVal := proptools.StringDefault(std, defaultVal)
+	if stdVal == "experimental" || stdVal == defaultVal {
+		if stdVal == "experimental" {
+			stdVal = prefix + "_std_experimental"
+		}
+		if !useGnu {
+			stdVal += "_no_gnu"
+		}
+	} else if !useGnu {
+		stdVal = gnuToCReplacer.Replace(stdVal)
 	}
 
-	return c_std_prop, cpp_std_prop
+	if stdVal == defaultVal {
+		return nil
+	}
+	return &stdVal
+}
+
+func bp2buildResolveCppStdValue(c_std *string, cpp_std *string, gnu_extensions *bool) (*string, *string) {
+	useGnu := useGnuExtensions(gnu_extensions)
+
+	return bp2buildStdVal(c_std, "c", useGnu), bp2buildStdVal(cpp_std, "cpp", useGnu)
 }
 
 // packageFromLabel extracts package from a fully-qualified or relative Label and whether the label
@@ -515,7 +534,9 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 			var allHdrs []string
 			if baseCompilerProps, ok := archVariantCompilerProps[axis][config].(*BaseCompilerProperties); ok {
 				allHdrs = baseCompilerProps.Generated_headers
-
+				if baseCompilerProps.Lex != nil {
+					compilerAttrs.lexopts.SetSelectValue(axis, config, baseCompilerProps.Lex.Flags)
+				}
 				(&compilerAttrs).bp2buildForAxisAndConfig(ctx, axis, config, baseCompilerProps)
 			}
 
@@ -550,9 +571,14 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 			}
 		}
 	}
-
 	compilerAttrs.convertStlProps(ctx, module)
 	(&linkerAttrs).convertStripProps(ctx, module)
+
+	if module.coverage != nil && module.coverage.Properties.Native_coverage != nil &&
+		!Bool(module.coverage.Properties.Native_coverage) {
+		// Native_coverage is arch neutral
+		(&linkerAttrs).features.Append(bazel.MakeStringListAttribute([]string{"-coverage"}))
+	}
 
 	productVariableProps := android.ProductVariableProperties(ctx)
 
@@ -569,6 +595,10 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 	// to the other
 	(&linkerAttrs).wholeArchiveDeps.Add(protoDep.wholeStaticLib)
 	(&linkerAttrs).implementationWholeArchiveDeps.Add(protoDep.implementationWholeStaticLib)
+
+	convertedLSrcs := bp2BuildLex(ctx, module.Name(), compilerAttrs)
+	(&compilerAttrs).srcs.Add(&convertedLSrcs.srcName)
+	(&compilerAttrs).cSrcs.Add(&convertedLSrcs.cSrcName)
 
 	return baseAttributes{
 		compilerAttrs,
@@ -684,6 +714,13 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 		la.additionalLinkerInputs.SetSelectValue(axis, config, bazel.LabelList{Includes: []bazel.Label{label}})
 		linkerFlags = append(linkerFlags, fmt.Sprintf("-Wl,--version-script,$(location %s)", label.Label))
 	}
+
+	if props.Dynamic_list != nil {
+		label := android.BazelLabelForModuleSrcSingle(ctx, *props.Dynamic_list)
+		la.additionalLinkerInputs.SetSelectValue(axis, config, bazel.LabelList{Includes: []bazel.Label{label}})
+		linkerFlags = append(linkerFlags, fmt.Sprintf("-Wl,--dynamic-list,$(location %s)", label.Label))
+	}
+
 	la.linkopts.SetSelectValue(axis, config, linkerFlags)
 	la.useLibcrt.SetSelectValue(axis, config, props.libCrt())
 
@@ -828,22 +865,7 @@ type BazelIncludes struct {
 	SystemIncludes   bazel.StringListAttribute
 }
 
-func bp2BuildParseExportedIncludes(ctx android.BazelConversionPathContext, module *Module, existingIncludes BazelIncludes) BazelIncludes {
-	libraryDecorator := module.linker.(*libraryDecorator)
-	return bp2BuildParseExportedIncludesHelper(ctx, module, libraryDecorator, &existingIncludes)
-}
-
-// Bp2buildParseExportedIncludesForPrebuiltLibrary returns a BazelIncludes with Bazel-ified values
-// to export includes from the underlying module's properties.
-func Bp2BuildParseExportedIncludesForPrebuiltLibrary(ctx android.BazelConversionPathContext, module *Module) BazelIncludes {
-	prebuiltLibraryLinker := module.linker.(*prebuiltLibraryLinker)
-	libraryDecorator := prebuiltLibraryLinker.libraryDecorator
-	return bp2BuildParseExportedIncludesHelper(ctx, module, libraryDecorator, nil)
-}
-
-// bp2BuildParseExportedIncludes creates a string list attribute contains the
-// exported included directories of a module.
-func bp2BuildParseExportedIncludesHelper(ctx android.BazelConversionPathContext, module *Module, libraryDecorator *libraryDecorator, includes *BazelIncludes) BazelIncludes {
+func bp2BuildParseExportedIncludes(ctx android.BazelConversionPathContext, module *Module, includes *BazelIncludes) BazelIncludes {
 	var exported BazelIncludes
 	if includes != nil {
 		exported = *includes

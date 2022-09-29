@@ -661,6 +661,10 @@ type SdkMemberType interface {
 	// an Android.bp file.
 	RequiresBpProperty() bool
 
+	// SupportedBuildReleases returns the string representation of a set of target build releases that
+	// support this member type.
+	SupportedBuildReleases() string
+
 	// UsableWithSdkAndSdkSnapshot returns true if the member type supports the sdk/sdk_snapshot,
 	// false otherwise.
 	UsableWithSdkAndSdkSnapshot() bool
@@ -669,6 +673,13 @@ type SdkMemberType interface {
 	// applicable to modules where HostSupported() is true. If this is true, snapshots will list each
 	// host OS variant explicitly and disable all other host OS'es.
 	IsHostOsDependent() bool
+
+	// SupportedLinkages returns the names of the linkage variants supported by this module.
+	SupportedLinkages() []string
+
+	// ArePrebuiltsRequired returns true if prebuilts are required in the sdk snapshot, false
+	// otherwise.
+	ArePrebuiltsRequired() bool
 
 	// AddDependencies adds dependencies from the SDK module to all the module variants the member
 	// type contributes to the SDK. `names` is the list of module names given in the member type
@@ -733,6 +744,9 @@ type SdkMemberType interface {
 
 	// SupportedTraits returns the set of traits supported by this member type.
 	SupportedTraits() SdkMemberTraitSet
+
+	// Overrides returns whether type overrides other SdkMemberType
+	Overrides(SdkMemberType) bool
 }
 
 var _ sdkRegisterable = (SdkMemberType)(nil)
@@ -756,17 +770,39 @@ type SdkDependencyContext interface {
 type SdkMemberTypeBase struct {
 	PropertyName string
 
+	// Property names that this SdkMemberTypeBase can override, this is useful when a module type is a
+	// superset of another module type.
+	OverridesPropertyNames map[string]bool
+
+	// The names of linkage variants supported by this module.
+	SupportedLinkageNames []string
+
 	// When set to true BpPropertyNotRequired indicates that the member type does not require the
 	// property to be specifiable in an Android.bp file.
 	BpPropertyNotRequired bool
 
-	SupportsSdk     bool
+	// The name of the first targeted build release.
+	//
+	// If not specified then it is assumed to be available on all targeted build releases.
+	SupportedBuildReleaseSpecification string
+
+	// Set to true if this must be usable with the sdk/sdk_snapshot module types. Otherwise, it will
+	// only be usable with module_exports/module_exports_snapshots module types.
+	SupportsSdk bool
+
+	// Set to true if prebuilt host artifacts of this member may be specific to the host OS. Only
+	// applicable to modules where HostSupported() is true.
 	HostOsDependent bool
 
 	// When set to true UseSourceModuleTypeInSnapshot indicates that the member type creates a source
 	// module type in its SdkMemberType.AddPrebuiltModule() method. That prevents the sdk snapshot
 	// code from automatically adding a prefer: true flag.
 	UseSourceModuleTypeInSnapshot bool
+
+	// Set to proptools.BoolPtr(false) if this member does not generate prebuilts but is only provided
+	// to allow the sdk to gather members from this member's dependencies. If not specified then
+	// defaults to true.
+	PrebuiltsRequired *bool
 
 	// The list of supported traits.
 	Traits []SdkMemberTrait
@@ -780,6 +816,10 @@ func (b *SdkMemberTypeBase) RequiresBpProperty() bool {
 	return !b.BpPropertyNotRequired
 }
 
+func (b *SdkMemberTypeBase) SupportedBuildReleases() string {
+	return b.SupportedBuildReleaseSpecification
+}
+
 func (b *SdkMemberTypeBase) UsableWithSdkAndSdkSnapshot() bool {
 	return b.SupportsSdk
 }
@@ -788,12 +828,24 @@ func (b *SdkMemberTypeBase) IsHostOsDependent() bool {
 	return b.HostOsDependent
 }
 
+func (b *SdkMemberTypeBase) ArePrebuiltsRequired() bool {
+	return proptools.BoolDefault(b.PrebuiltsRequired, true)
+}
+
 func (b *SdkMemberTypeBase) UsesSourceModuleTypeInSnapshot() bool {
 	return b.UseSourceModuleTypeInSnapshot
 }
 
 func (b *SdkMemberTypeBase) SupportedTraits() SdkMemberTraitSet {
 	return NewSdkMemberTraitSet(b.Traits)
+}
+
+func (b *SdkMemberTypeBase) Overrides(other SdkMemberType) bool {
+	return b.OverridesPropertyNames[other.SdkPropertyName()]
+}
+
+func (b *SdkMemberTypeBase) SupportedLinkages() []string {
+	return b.SupportedLinkageNames
 }
 
 // registeredModuleExportsMemberTypes is the set of registered SdkMemberTypes for module_exports
@@ -933,6 +985,10 @@ type SdkMemberContext interface {
 
 	// RequiresTrait returns true if this member is expected to provide the specified trait.
 	RequiresTrait(trait SdkMemberTrait) bool
+
+	// IsTargetBuildBeforeTiramisu return true if the target build release for which this snapshot is
+	// being generated is before Tiramisu, i.e. S.
+	IsTargetBuildBeforeTiramisu() bool
 }
 
 // ExportedComponentsInfo contains information about the components that this module exports to an
@@ -961,3 +1017,10 @@ type ExportedComponentsInfo struct {
 }
 
 var ExportedComponentsInfoProvider = blueprint.NewProvider(ExportedComponentsInfo{})
+
+// AdditionalSdkInfo contains additional properties to add to the generated SDK info file.
+type AdditionalSdkInfo struct {
+	Properties map[string]interface{}
+}
+
+var AdditionalSdkInfoProvider = blueprint.NewProvider(AdditionalSdkInfo{})

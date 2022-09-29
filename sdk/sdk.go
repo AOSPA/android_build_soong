@@ -75,6 +75,8 @@ type sdk struct {
 
 	snapshotFile android.OptionalPath
 
+	infoFile android.OptionalPath
+
 	// The builder, preserved for testing.
 	builderForTests *snapshotBuilder
 }
@@ -144,7 +146,7 @@ func newSdkModule(moduleExports bool) *sdk {
 	return s
 }
 
-// sdk_snapshot is a versioned snapshot of an SDK. This is an auto-generated module.
+// sdk_snapshot is a snapshot of an SDK. This is an auto-generated module.
 func SnapshotModuleFactory() android.Module {
 	s := newSdkModule(false)
 	s.properties.Snapshot = true
@@ -191,27 +193,32 @@ func (s *sdk) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 
 		// Generate the snapshot from the member info.
-		p := s.buildSnapshot(ctx, sdkVariants)
-		zip := ctx.InstallFile(android.PathForMainlineSdksInstall(ctx), p.Base(), p)
-		s.snapshotFile = android.OptionalPathForPath(zip)
+		s.buildSnapshot(ctx, sdkVariants)
 	}
 }
 
 func (s *sdk) AndroidMkEntries() []android.AndroidMkEntries {
-	if !s.snapshotFile.Valid() {
+	if !s.snapshotFile.Valid() != !s.infoFile.Valid() {
+		panic("Snapshot (%q) and info file (%q) should both be set or neither should be set.")
+	} else if !s.snapshotFile.Valid() {
 		return []android.AndroidMkEntries{}
 	}
 
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "FAKE",
 		OutputFile: s.snapshotFile,
-		DistFiles:  android.MakeDefaultDistFiles(s.snapshotFile.Path()),
+		DistFiles:  android.MakeDefaultDistFiles(s.snapshotFile.Path(), s.infoFile.Path()),
 		Include:    "$(BUILD_PHONY_PACKAGE)",
 		ExtraFooters: []android.AndroidMkExtraFootersFunc{
 			func(w io.Writer, name, prefix, moduleDir string) {
 				// Allow the sdk to be built by simply passing its name on the command line.
 				fmt.Fprintln(w, ".PHONY:", s.Name())
 				fmt.Fprintln(w, s.Name()+":", s.snapshotFile.String())
+
+				// Allow the sdk info to be built by simply passing its name on the command line.
+				infoTarget := s.Name() + ".info"
+				fmt.Fprintln(w, ".PHONY:", infoTarget)
+				fmt.Fprintln(w, infoTarget+":", s.infoFile.String())
 			},
 		},
 	}}
@@ -274,7 +281,6 @@ var _ android.SdkDependencyContext = (*dependencyContext)(nil)
 func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.BottomUp("SdkMember", memberMutator).Parallel()
 	ctx.TopDown("SdkMember_deps", memberDepsMutator).Parallel()
-	ctx.BottomUp("SdkMemberInterVersion", memberInterVersionMutator).Parallel()
 }
 
 type dependencyTag struct {
@@ -285,38 +291,6 @@ type dependencyTag struct {
 func (t dependencyTag) ExcludeFromApexContents() {}
 
 var _ android.ExcludeFromApexContentsTag = dependencyTag{}
-
-// For dependencies from an in-development version of an SDK member to frozen versions of the same member
-// e.g. libfoo -> libfoo.mysdk.11 and libfoo.mysdk.12
-//
-// The dependency represented by this tag requires that for every APEX variant created for the
-// `from` module that an equivalent APEX variant is created for the 'to' module. This is because an
-// APEX that requires a specific version of an sdk (via the `uses_sdks` property will replace
-// dependencies on the unversioned sdk member with a dependency on the appropriate versioned sdk
-// member. In order for that to work the versioned sdk member needs to have a variant for that APEX.
-// As it is not known at the time that the APEX variants are created which specific APEX variants of
-// a versioned sdk members will be required it is necessary for the versioned sdk members to have
-// variants for any APEX that it could be used within.
-//
-// If the APEX selects a versioned sdk member then it will not have a dependency on the `from`
-// module at all so any dependencies of that module will not affect the APEX. However, if the APEX
-// selects the unversioned sdk member then it must exclude all the versioned sdk members. In no
-// situation would this dependency cause the `to` module to be added to the APEX hence why this tag
-// also excludes the `to` module from being added to the APEX contents.
-type sdkMemberVersionedDepTag struct {
-	dependencyTag
-	member  string
-	version string
-}
-
-func (t sdkMemberVersionedDepTag) AlwaysRequireApexVariant() bool {
-	return true
-}
-
-// Mark this tag so dependencies that use it are excluded from visibility enforcement.
-func (t sdkMemberVersionedDepTag) ExcludeFromVisibilityEnforcement() {}
-
-var _ android.AlwaysRequireApexVariantTag = sdkMemberVersionedDepTag{}
 
 // Step 1: create dependencies from an SDK module to its members.
 func memberMutator(mctx android.BottomUpMutatorContext) {
@@ -373,22 +347,6 @@ func memberDepsMutator(mctx android.TopDownMutatorContext) {
 				member.MakeMemberOf(mySdkRef)
 			}
 		})
-	}
-}
-
-// Step 3: create dependencies from the unversioned SDK member to snapshot versions
-// of the same member. By having these dependencies, they are mutated for multiple Mainline modules
-// (apex and apk), each of which might want different sdks to be built with. For example, if both
-// apex A and B are referencing libfoo which is a member of sdk 'mysdk', the two APEXes can be
-// built with libfoo.mysdk.11 and libfoo.mysdk.12, respectively depending on which sdk they are
-// using.
-func memberInterVersionMutator(mctx android.BottomUpMutatorContext) {
-	if m, ok := mctx.Module().(android.SdkAware); ok && m.IsInAnySdk() && m.IsVersioned() {
-		if !m.ContainingSdk().Unversioned() {
-			memberName := m.MemberName()
-			tag := sdkMemberVersionedDepTag{member: memberName, version: m.ContainingSdk().Version}
-			mctx.AddReverseDependency(mctx.Module(), tag, memberName)
-		}
 	}
 }
 

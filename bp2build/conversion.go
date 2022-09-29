@@ -50,6 +50,7 @@ func convertedModules(convertedModules []string) string {
 }
 
 func CreateBazelFiles(
+	cfg android.Config,
 	ruleShims map[string]RuleShim,
 	buildToTargets map[string]BazelTargets,
 	mode CodegenMode) []BazelFile {
@@ -74,16 +75,19 @@ func CreateBazelFiles(
 		files = append(files, newFile(bazelRulesSubDir, "soong_module.bzl", generateSoongModuleBzl(ruleShims)))
 	}
 
-	files = append(files, createBuildFiles(buildToTargets, mode)...)
+	files = append(files, createBuildFiles(cfg, buildToTargets, mode)...)
 
 	return files
 }
 
-func createBuildFiles(buildToTargets map[string]BazelTargets, mode CodegenMode) []BazelFile {
+func createBuildFiles(cfg android.Config, buildToTargets map[string]BazelTargets, mode CodegenMode) []BazelFile {
 	files := make([]BazelFile, 0, len(buildToTargets))
+	warnNotWriting := cfg.IsEnvTrue("BP2BUILD_VERBOSE")
 	for _, dir := range android.SortedStringKeys(buildToTargets) {
 		if mode == Bp2Build && android.ShouldKeepExistingBuildFileForDir(dir) {
-			fmt.Printf("[bp2build] Not writing generated BUILD file for dir: '%s'\n", dir)
+			if warnNotWriting {
+				fmt.Printf("[bp2build] Not writing generated BUILD file for dir: '%s'\n", dir)
+			}
 			continue
 		}
 		targets := buildToTargets[dir]
@@ -152,6 +156,7 @@ var (
 		"target":     true, // interface prop type is not supported yet.
 		"visibility": true, // Bazel has native visibility semantics. Handle later.
 		"features":   true, // There is already a built-in attribute 'features' which cannot be overridden.
+		"for":        true, // reserved keyword, b/233579439
 	}
 )
 

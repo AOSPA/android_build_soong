@@ -307,7 +307,7 @@ var (
 	// Linux is the OS for the Linux kernel plus the glibc runtime.
 	Linux = newOsType("linux_glibc", Host, false, X86, X86_64)
 	// LinuxMusl is the OS for the Linux kernel plus the musl runtime.
-	LinuxMusl = newOsType("linux_musl", Host, false, X86, X86_64)
+	LinuxMusl = newOsType("linux_musl", Host, false, X86, X86_64, Arm64, Arm)
 	// Darwin is the OS for MacOS/Darwin host machines.
 	Darwin = newOsType("darwin", Host, false, Arm64, X86_64)
 	// LinuxBionic is the OS for the Linux kernel plus the Bionic libc runtime, but without the
@@ -655,7 +655,8 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	prefer32 := os == Windows
 
 	// Determine the multilib selection for this module.
-	multilib, extraMultilib := decodeMultilib(base, os)
+	ignorePrefer32OnDevice := mctx.Config().IgnorePrefer32OnDevice()
+	multilib, extraMultilib := decodeMultilib(base, os, ignorePrefer32OnDevice)
 
 	// Convert the multilib selection into a list of Targets.
 	targets, err := decodeMultilibTargets(multilib, osTargets, prefer32)
@@ -730,7 +731,7 @@ func addTargetProperties(m Module, target Target, multiTargets []Target, primary
 // multilib from the factory's call to InitAndroidArchModule if none was set.  For modules that
 // called InitAndroidMultiTargetsArchModule it always returns "common" for multilib, and returns
 // the actual multilib in extraMultilib.
-func decodeMultilib(base *ModuleBase, os OsType) (multilib, extraMultilib string) {
+func decodeMultilib(base *ModuleBase, os OsType, ignorePrefer32OnDevice bool) (multilib, extraMultilib string) {
 	// First check the "android.compile_multilib" or "host.compile_multilib" properties.
 	switch os.Class {
 	case Device:
@@ -747,6 +748,13 @@ func decodeMultilib(base *ModuleBase, os OsType) (multilib, extraMultilib string
 	// If that wasn't set, use the default multilib set by the factory.
 	if multilib == "" {
 		multilib = base.commonProperties.Default_multilib
+	}
+
+	// If a device is configured with multiple targets, this option
+	// force all device targets that prefer32 to be compiled only as
+	// the first target.
+	if ignorePrefer32OnDevice && os.Class == Device && (multilib == "prefer32" || multilib == "first_prefer32") {
+		multilib = "first"
 	}
 
 	if base.commonProperties.UseTargetVariants {
@@ -1825,28 +1833,33 @@ func getCommonTargets(targets []Target) []Target {
 	for _, t := range targets {
 		if _, found := set[t.Os.String()]; !found {
 			set[t.Os.String()] = true
-			ret = append(ret, commonTargetMap[t.Os.String()])
+			common := commonTargetMap[t.Os.String()]
+			common.HostCross = t.HostCross
+			ret = append(ret, common)
 		}
 	}
 
 	return ret
 }
 
-// firstTarget takes a list of Targets and a list of multilib values and returns a list of Targets
-// that contains zero or one Target for each OsType, selecting the one that matches the earliest
-// filter.
-func firstTarget(targets []Target, filters ...string) []Target {
+// FirstTarget takes a list of Targets and a list of multilib values and returns a list of Targets
+// that contains zero or one Target for each OsType and HostCross, selecting the one that matches
+// the earliest filter.
+func FirstTarget(targets []Target, filters ...string) []Target {
 	// find the first target from each OS
 	var ret []Target
-	hasHost := false
-	set := make(map[OsType]bool)
+	type osHostCross struct {
+		os        OsType
+		hostCross bool
+	}
+	set := make(map[osHostCross]bool)
 
 	for _, filter := range filters {
 		buildTargets := filterMultilibTargets(targets, filter)
 		for _, t := range buildTargets {
-			if _, found := set[t.Os]; !found {
-				hasHost = hasHost || (t.Os.Class == Host)
-				set[t.Os] = true
+			key := osHostCross{t.Os, t.HostCross}
+			if _, found := set[key]; !found {
+				set[key] = true
 				ret = append(ret, t)
 			}
 		}
@@ -1865,9 +1878,9 @@ func decodeMultilibTargets(multilib string, targets []Target, prefer32 bool) ([]
 	case "common_first":
 		buildTargets = getCommonTargets(targets)
 		if prefer32 {
-			buildTargets = append(buildTargets, firstTarget(targets, "lib32", "lib64")...)
+			buildTargets = append(buildTargets, FirstTarget(targets, "lib32", "lib64")...)
 		} else {
-			buildTargets = append(buildTargets, firstTarget(targets, "lib64", "lib32")...)
+			buildTargets = append(buildTargets, FirstTarget(targets, "lib64", "lib32")...)
 		}
 	case "both":
 		if prefer32 {
@@ -1883,12 +1896,12 @@ func decodeMultilibTargets(multilib string, targets []Target, prefer32 bool) ([]
 		buildTargets = filterMultilibTargets(targets, "lib64")
 	case "first":
 		if prefer32 {
-			buildTargets = firstTarget(targets, "lib32", "lib64")
+			buildTargets = FirstTarget(targets, "lib32", "lib64")
 		} else {
-			buildTargets = firstTarget(targets, "lib64", "lib32")
+			buildTargets = FirstTarget(targets, "lib64", "lib32")
 		}
 	case "first_prefer32":
-		buildTargets = firstTarget(targets, "lib32", "lib64")
+		buildTargets = FirstTarget(targets, "lib32", "lib64")
 	case "prefer32":
 		buildTargets = filterMultilibTargets(targets, "lib32")
 		if len(buildTargets) == 0 {
