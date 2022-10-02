@@ -32,7 +32,6 @@ import (
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
-	"github.com/google/blueprint/deptools"
 	"github.com/google/blueprint/microfactory"
 
 	"google.golang.org/protobuf/proto"
@@ -170,9 +169,8 @@ func primaryBuilderInvocation(
 
 	commonArgs = append(commonArgs, "-l", filepath.Join(config.FileListDir(), "Android.bp.list"))
 	invocationEnv := make(map[string]string)
-	debugMode := os.Getenv("SOONG_DELVE") != ""
-
-	if debugMode {
+	if os.Getenv("SOONG_DELVE") != "" {
+		//debug mode
 		commonArgs = append(commonArgs, "--delve_listen", os.Getenv("SOONG_DELVE"))
 		commonArgs = append(commonArgs, "--delve_path", shared.ResolveDelveBinary())
 		// GODEBUG=asyncpreemptoff=1 disables the preemption of goroutines. This
@@ -187,7 +185,7 @@ func primaryBuilderInvocation(
 		invocationEnv["GODEBUG"] = "asyncpreemptoff=1"
 	}
 
-	allArgs := make([]string, 0, 0)
+	var allArgs []string
 	allArgs = append(allArgs, specificArgs...)
 	allArgs = append(allArgs,
 		"--globListDir", name,
@@ -254,6 +252,12 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	if config.EmptyNinjaFile() {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--empty-ninja-file")
 	}
+	if config.bazelProdMode {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--bazel-mode")
+	}
+	if config.bazelDevMode {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--bazel-mode-dev")
+	}
 
 	mainSoongBuildInvocation := primaryBuilderInvocation(
 		config,
@@ -263,7 +267,7 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		fmt.Sprintf("analyzing Android.bp files and generating ninja file at %s", config.SoongNinjaFile()),
 	)
 
-	if config.bazelBuildMode() == mixedBuild {
+	if config.BazelBuildEnabled() {
 		// Mixed builds call Bazel from soong_build and they therefore need the
 		// Bazel workspace to be available. Make that so by adding a dependency on
 		// the bp2build marker file to the action that invokes soong_build .
@@ -344,12 +348,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 			soongDocsInvocation},
 	}
 
-	bootstrapDeps := bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
-	bootstrapDepFile := shared.JoinPath(config.SoongOutDir(), "bootstrap.ninja.d")
-	err := deptools.WriteDepFile(bootstrapDepFile, blueprintArgs.OutFile, bootstrapDeps)
-	if err != nil {
-		ctx.Fatalf("Error writing depfile '%s': %s", bootstrapDepFile, err)
-	}
+	// since `bootstrap.ninja` is regenerated unconditionally, we ignore the deps, i.e. little
+	// reason to write a `bootstrap.ninja.d` file
+	_ = bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
 }
 
 func checkEnvironmentFile(currentEnv *Environment, envFile string) {
@@ -372,9 +373,6 @@ func runSoong(ctx Context, config Config) {
 	// determine whether Soong needs to be re-run since why re-run it if only
 	// unused variables were changed?
 	envFile := filepath.Join(config.SoongOutDir(), availableEnvFile)
-
-	buildMode := config.bazelBuildMode()
-	integratedBp2Build := buildMode == mixedBuild
 
 	// This is done unconditionally, but does not take a measurable amount of time
 	bootstrapBlueprint(ctx, config)
@@ -405,7 +403,7 @@ func runSoong(ctx Context, config Config) {
 
 		checkEnvironmentFile(soongBuildEnv, config.UsedEnvFile(soongBuildTag))
 
-		if integratedBp2Build || config.Bp2Build() {
+		if config.BazelBuildEnabled() || config.Bp2Build() {
 			checkEnvironmentFile(soongBuildEnv, config.UsedEnvFile(bp2buildTag))
 		}
 

@@ -96,7 +96,6 @@ const (
 
 	// Use bazel during analysis of build modules from an allowlist carefully
 	// curated by the build team to be proven stable.
-	// TODO(cparsons): Implement this mode.
 	BazelProdMode
 )
 
@@ -190,7 +189,7 @@ type config struct {
 	mockBpList string
 
 	BuildMode                      SoongBuildMode
-	bp2buildPackageConfig          bp2BuildConversionAllowlist
+	Bp2buildPackageConfig          Bp2BuildConversionAllowlist
 	Bp2buildSoongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions
 
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
@@ -481,17 +480,9 @@ func NewConfig(moduleListFile string, buildMode SoongBuildMode, runGoTests bool,
 		config.AndroidFirstDeviceTarget = FirstTarget(config.Targets[Android], "lib64", "lib32")[0]
 	}
 
-	// Checking USE_BAZEL_ANALYSIS must be done here instead of in the caller, so
-	// that we can invoke IsEnvTrue (which also registers the env var as a
-	// dependency of the build).
-	// TODO(cparsons): Remove this hack once USE_BAZEL_ANALYSIS is removed.
-	if buildMode == AnalysisNoBazel && config.IsEnvTrue("USE_BAZEL_ANALYSIS") {
-		buildMode = BazelDevMode
-	}
-
 	config.BuildMode = buildMode
 	config.BazelContext, err = NewBazelContext(config)
-	config.bp2buildPackageConfig = GetBp2BuildAllowList()
+	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
 
 	return Config{config}, err
 }
@@ -678,9 +669,7 @@ func (c *config) DeviceName() string {
 // DeviceProduct returns the current product target. There could be multiple of
 // these per device type.
 //
-// NOTE: Do not base conditional logic on this value. It may break product
-//
-//	inheritance.
+// NOTE: Do not base conditional logic on this value. It may break product inheritance.
 func (c *config) DeviceProduct() string {
 	return *c.productVariables.DeviceProduct
 }
@@ -1684,6 +1673,10 @@ func (c *deviceConfig) ShippingApiLevel() ApiLevel {
 	}
 	apiLevel, _ := strconv.Atoi(*c.config.productVariables.ShippingApiLevel)
 	return uncheckedFinalApiLevel(apiLevel)
+}
+
+func (c *deviceConfig) BuildBrokenClangProperty() bool {
+	return c.config.productVariables.BuildBrokenClangProperty
 }
 
 func (c *deviceConfig) BuildBrokenEnforceSyspropOwner() bool {

@@ -492,6 +492,7 @@ type ModuleContextIntf interface {
 	static() bool
 	staticBinary() bool
 	testBinary() bool
+	testLibrary() bool
 	header() bool
 	binary() bool
 	object() bool
@@ -1486,6 +1487,10 @@ func (ctx *moduleContextImpl) testBinary() bool {
 	return ctx.mod.testBinary()
 }
 
+func (ctx *moduleContextImpl) testLibrary() bool {
+	return ctx.mod.testLibrary()
+}
+
 func (ctx *moduleContextImpl) header() bool {
 	return ctx.mod.Header()
 }
@@ -1898,6 +1903,8 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	if c.Properties.Clang != nil && *c.Properties.Clang == false {
 		ctx.PropertyErrorf("clang", "false (GCC) is no longer supported")
+	} else if c.Properties.Clang != nil && !ctx.DeviceConfig().BuildBrokenClangProperty() {
+		ctx.PropertyErrorf("clang", "property is deprecated, see Changes.md file")
 	}
 
 	flags := Flags{
@@ -2303,9 +2310,14 @@ func updateDepsWithApiImports(deps Deps, apiImports multitree.ApiImportInfo) Dep
 		deps.RuntimeLibs[idx] = GetReplaceModuleName(lib, apiImports.SharedLibs)
 	}
 
-	for idx, lib := range deps.HeaderLibs {
-		deps.HeaderLibs[idx] = GetReplaceModuleName(lib, apiImports.HeaderLibs)
+	for idx, lib := range deps.SystemSharedLibs {
+		deps.SystemSharedLibs[idx] = GetReplaceModuleName(lib, apiImports.SharedLibs)
 	}
+
+	for idx, lib := range deps.ReexportSharedLibHeaders {
+		deps.ReexportSharedLibHeaders[idx] = GetReplaceModuleName(lib, apiImports.SharedLibs)
+	}
+
 	return deps
 }
 
@@ -2349,9 +2361,14 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 			depTag.reexportFlags = true
 		}
 
+		// Check header lib replacement from API surface first, and then check again with VSDK
+		lib = GetReplaceModuleName(lib, apiImportInfo.HeaderLibs)
 		lib = GetReplaceModuleName(lib, GetSnapshot(c, &snapshotInfo, actx).HeaderLibs)
 
-		if c.IsStubs() {
+		if c.isNDKStubLibrary() {
+			// ndk_headers do not have any variations
+			actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
+		} else if c.IsStubs() && !c.isImportedApiLibrary() {
 			actx.AddFarVariationDependencies(append(ctx.Target().Variations(), c.ImageVariation()),
 				depTag, lib)
 		} else {
@@ -3271,11 +3288,6 @@ func MakeLibName(ctx android.ModuleContext, c LinkableInterface, ccDep LinkableI
 
 			return baseName + snapshotPrebuilt.SnapshotAndroidMkSuffix()
 		}
-
-		// Remove API import suffix if exists
-		if _, ok := ccDepModule.linker.(*apiLibraryDecorator); ok {
-			libName = strings.TrimSuffix(libName, multitree.GetApiImportSuffix())
-		}
 	}
 
 	if ctx.DeviceConfig().VndkUseCoreVariant() && ccDep.IsVndk() && !ccDep.MustUseVendorVariant() &&
@@ -3383,6 +3395,15 @@ func (c *Module) testBinary() bool {
 		testBinary() bool
 	}); ok {
 		return test.testBinary()
+	}
+	return false
+}
+
+func (c *Module) testLibrary() bool {
+	if test, ok := c.linker.(interface {
+		testLibrary() bool
+	}); ok {
+		return test.testLibrary()
 	}
 	return false
 }
@@ -3611,9 +3632,6 @@ func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 	if _, ok := c.linker.(prebuiltLinkerInterface); ok {
 		return nil
 	}
-	if _, ok := c.linker.(*apiLibraryDecorator); ok {
-		return nil
-	}
 
 	minSdkVersion := c.MinSdkVersion()
 	if minSdkVersion == "apex_inherit" {
@@ -3668,13 +3686,25 @@ const (
 	staticLibrary
 	sharedLibrary
 	headerLibrary
+	testBin // testBinary already declared
 )
 
 func (c *Module) typ() moduleType {
-	if c.Binary() {
+	if c.testBinary() {
+		// testBinary is also a binary, so this comes before the c.Binary()
+		// conditional. A testBinary has additional implicit dependencies and
+		// other test-only semantics.
+		return testBin
+	} else if c.Binary() {
 		return binary
 	} else if c.Object() {
 		return object
+	} else if c.testLibrary() {
+		// TODO(b/244431896) properly convert cc_test_library to its own macro. This
+		// will let them add implicit compile deps on gtest, for example.
+		//
+		// For now, treat them as regular shared libraries.
+		return sharedLibrary
 	} else if c.CcLibrary() {
 		static := false
 		shared := false
@@ -3703,7 +3733,11 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	switch c.typ() {
 	case binary:
 		if !prebuilt {
-			binaryBp2build(ctx, c, ctx.ModuleType())
+			binaryBp2build(ctx, c)
+		}
+	case testBin:
+		if !prebuilt {
+			testBinaryBp2build(ctx, c)
 		}
 	case object:
 		if !prebuilt {
@@ -3792,6 +3826,11 @@ func DefaultsFactory(props ...interface{}) android.Module {
 
 func (c *Module) IsSdkVariant() bool {
 	return c.Properties.IsSdkVariant
+}
+
+func (c *Module) isImportedApiLibrary() bool {
+	_, ok := c.linker.(*apiLibraryDecorator)
+	return ok
 }
 
 func kytheExtractAllFactory() android.Singleton {
