@@ -1392,6 +1392,16 @@ func TestCcLibrarystatic_SystemSharedLibUsedAsDep(t *testing.T) {
 		Description: "cc_library_static system_shared_lib empty for linux_bionic variant",
 		Blueprint: soongCcLibraryStaticPreamble +
 			simpleModuleDoNotConvertBp2build("cc_library", "libc") + `
+
+cc_library {
+    name: "libm",
+    stubs: {
+        symbol_file: "libm.map.txt",
+        versions: ["current"],
+    },
+    bazel_module: { bp2build_available: false },
+}
+
 cc_library_static {
     name: "used_in_bionic_oses",
     target: {
@@ -1414,7 +1424,20 @@ cc_library_static {
 cc_library_static {
     name: "keep_for_empty_system_shared_libs",
     shared_libs: ["libc"],
-		system_shared_libs: [],
+    system_shared_libs: [],
+    include_build_directory: false,
+}
+
+cc_library_static {
+    name: "used_with_stubs",
+    shared_libs: ["libm"],
+    include_build_directory: false,
+}
+
+cc_library_static {
+    name: "keep_with_stubs",
+    shared_libs: ["libm"],
+    system_shared_libs: [],
     include_build_directory: false,
 }
 `,
@@ -1424,7 +1447,15 @@ cc_library_static {
 				"implementation_dynamic_deps": `[":libc"]`,
 				"system_dynamic_deps":         `[]`,
 			}),
+			MakeBazelTarget("cc_library_static", "keep_with_stubs", AttrNameToString{
+				"implementation_dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":libm_stub_libs_current"],
+        "//conditions:default": [":libm"],
+    })`,
+				"system_dynamic_deps": `[]`,
+			}),
 			MakeBazelTarget("cc_library_static", "used_in_bionic_oses", AttrNameToString{}),
+			MakeBazelTarget("cc_library_static", "used_with_stubs", AttrNameToString{}),
 		},
 	})
 }
@@ -1454,14 +1485,37 @@ func TestCcLibraryStaticProto(t *testing.T) {
 
 func TestCcLibraryStaticUseVersionLib(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Filesystem: map[string]string{
+			soongCcVersionLibBpPath: soongCcVersionLibBp,
+		},
 		Blueprint: soongCcProtoPreamble + `cc_library_static {
 	name: "foo",
 	use_version_lib: true,
+	static_libs: ["libbuildversion"],
 	include_build_directory: false,
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
-				"use_version_lib": "True",
+				"implementation_whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticUseVersionLibHasDep(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Filesystem: map[string]string{
+			soongCcVersionLibBpPath: soongCcVersionLibBp,
+		},
+		Blueprint: soongCcProtoPreamble + `cc_library_static {
+	name: "foo",
+	use_version_lib: true,
+	whole_static_libs: ["libbuildversion"],
+	include_build_directory: false,
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
 			}),
 		},
 	})

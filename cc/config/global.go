@@ -362,7 +362,12 @@ var (
 		"-Wno-deprecated-non-prototype",
 	}
 
-	llvmNextExtraCommonGlobalCflags = []string{}
+	llvmNextExtraCommonGlobalCflags = []string{
+		// New warnings to be fixed after clang-r468909
+		"-Wno-error=array-parameter",     // http://b/241941550
+		"-Wno-error=deprecated-builtins", // http://b/241601211
+		"-Wno-error=deprecated",          // in external/googletest/googletest
+	}
 
 	IllegalFlags = []string{
 		"-w",
@@ -378,7 +383,7 @@ var (
 	ForceSDClangOff = false
 
 	// prebuilts/clang default settings.
-	ClangDefaultBase         = "prebuilts/clang/host"
+	ClangDefaultBase = "prebuilts/clang/host"
 	// TODO(b/243545528) Match upstream version
 	ClangDefaultVersion      = "clang-r450784d"
 	ClangDefaultShortVersion = "14.0.6"
@@ -388,10 +393,7 @@ var (
 		"device/",
 		"vendor/",
 	}
-
-	// Directories with warnings from Android.mk files.
-	WarningAllowedOldProjects = []string{}
-	QiifaAbiLibraryList       = []string{}
+	QiifaAbiLibraryList = []string{}
 )
 
 // BazelCcToolchainVars generates bzl file content containing variables for
