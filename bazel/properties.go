@@ -309,7 +309,19 @@ func (la *LabelAttribute) Collapse() error {
 	_, containsProductVariables := axisTypes[productVariables]
 	if containsProductVariables {
 		if containsOs || containsArch || containsOsArch {
-			return fmt.Errorf("label attribute could not be collapsed as it has two or more unrelated axes")
+			if containsArch {
+				allProductVariablesAreArchVariant := true
+				for k := range la.ConfigurableValues {
+					if k.configurationType == productVariables && k.outerAxisType != arch {
+						allProductVariablesAreArchVariant = false
+					}
+				}
+				if !allProductVariablesAreArchVariant {
+					return fmt.Errorf("label attribute could not be collapsed as it has two or more unrelated axes")
+				}
+			} else {
+				return fmt.Errorf("label attribute could not be collapsed as it has two or more unrelated axes")
+			}
 		}
 	}
 	if (containsOs && containsArch) || (containsOsArch && (containsOs || containsArch)) {
@@ -708,7 +720,7 @@ func (lla *LabelListAttribute) SetSelectValue(axis ConfigurationAxis, config str
 	switch axis.configurationType {
 	case noConfig:
 		lla.Value = list
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, inApex:
 		if lla.ConfigurableValues == nil {
 			lla.ConfigurableValues = make(configurableLabelLists)
 		}
@@ -724,7 +736,7 @@ func (lla *LabelListAttribute) SelectValue(axis ConfigurationAxis, config string
 	switch axis.configurationType {
 	case noConfig:
 		return lla.Value
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, inApex:
 		return lla.ConfigurableValues[axis][config]
 	default:
 		panic(fmt.Errorf("Unrecognized ConfigurationAxis %s", axis))

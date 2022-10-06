@@ -21,7 +21,7 @@ var genNoticeTests = []struct {
 				}`),
 		},
 		expectedErrors: []string{
-			`unrecognized property "licenses"`,
+			`not supported on "gen_notice" modules`,
 		},
 	},
 	{

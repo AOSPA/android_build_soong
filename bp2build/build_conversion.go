@@ -64,7 +64,16 @@ func (t BazelTarget) Label() string {
 // BazelTargets is a typedef for a slice of BazelTarget objects.
 type BazelTargets []BazelTarget
 
-// sort a list of BazelTargets in-place by name
+func (targets BazelTargets) packageRule() *BazelTarget {
+	for _, target := range targets {
+		if target.ruleClass == "package" {
+			return &target
+		}
+	}
+	return nil
+}
+
+// sort a list of BazelTargets in-place, by name, and by generated/handcrafted types.
 func (targets BazelTargets) sort() {
 	sort.Slice(targets, func(i, j int) bool {
 		return targets[i].name < targets[j].name
@@ -77,7 +86,9 @@ func (targets BazelTargets) sort() {
 func (targets BazelTargets) String() string {
 	var res string
 	for i, target := range targets {
-		res += target.content
+		if target.ruleClass != "package" {
+			res += target.content
+		}
 		if i != len(targets)-1 {
 			res += "\n\n"
 		}
@@ -289,7 +300,9 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 						return
 					}
 				}
-				targets = generateBazelTargets(bpCtx, aModule)
+				var targetErrs []error
+				targets, targetErrs = generateBazelTargets(bpCtx, aModule)
+				errs = append(errs, targetErrs...)
 				for _, t := range targets {
 					// A module can potentially generate more than 1 Bazel
 					// target, each of a different rule class.
@@ -306,7 +319,10 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 				// be mapped cleanly to a bazel label.
 				return
 			}
-			t := generateSoongModuleTarget(bpCtx, m)
+			t, err := generateSoongModuleTarget(bpCtx, m)
+			if err != nil {
+				errs = append(errs, err)
+			}
 			targets = append(targets, t)
 		default:
 			errs = append(errs, fmt.Errorf("Unknown code-generation mode: %s", ctx.Mode()))
@@ -347,12 +363,18 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 	}, errs
 }
 
-func generateBazelTargets(ctx bpToBuildContext, m android.Module) []BazelTarget {
+func generateBazelTargets(ctx bpToBuildContext, m android.Module) ([]BazelTarget, []error) {
 	var targets []BazelTarget
+	var errs []error
 	for _, m := range m.Bp2buildTargets() {
-		targets = append(targets, generateBazelTarget(ctx, m))
+		target, err := generateBazelTarget(ctx, m)
+		if err != nil {
+			errs = append(errs, err)
+			return targets, errs
+		}
+		targets = append(targets, target)
 	}
-	return targets
+	return targets, errs
 }
 
 type bp2buildModule interface {
@@ -363,13 +385,16 @@ type bp2buildModule interface {
 	BazelAttributes() []interface{}
 }
 
-func generateBazelTarget(ctx bpToBuildContext, m bp2buildModule) BazelTarget {
+func generateBazelTarget(ctx bpToBuildContext, m bp2buildModule) (BazelTarget, error) {
 	ruleClass := m.BazelRuleClass()
 	bzlLoadLocation := m.BazelRuleLoadLocation()
 
 	// extract the bazel attributes from the module.
 	attrs := m.BazelAttributes()
-	props := extractModuleProperties(attrs, true)
+	props, err := extractModuleProperties(attrs, true)
+	if err != nil {
+		return BazelTarget{}, err
+	}
 
 	// name is handled in a special manner
 	delete(props.Attrs, "name")
@@ -377,25 +402,26 @@ func generateBazelTarget(ctx bpToBuildContext, m bp2buildModule) BazelTarget {
 	// Return the Bazel target with rule class and attributes, ready to be
 	// code-generated.
 	attributes := propsToAttributes(props.Attrs)
+	var content string
 	targetName := m.TargetName()
+	if targetName != "" {
+		content = fmt.Sprintf(ruleTargetTemplate, ruleClass, targetName, attributes)
+	} else {
+		content = fmt.Sprintf(unnamedRuleTargetTemplate, ruleClass, attributes)
+	}
 	return BazelTarget{
 		name:            targetName,
 		packageName:     m.TargetPackage(),
 		ruleClass:       ruleClass,
 		bzlLoadLocation: bzlLoadLocation,
-		content: fmt.Sprintf(
-			bazelTarget,
-			ruleClass,
-			targetName,
-			attributes,
-		),
-	}
+		content:         content,
+	}, nil
 }
 
 // Convert a module and its deps and props into a Bazel macro/rule
 // representation in the BUILD file.
-func generateSoongModuleTarget(ctx bpToBuildContext, m blueprint.Module) BazelTarget {
-	props := getBuildProperties(ctx, m)
+func generateSoongModuleTarget(ctx bpToBuildContext, m blueprint.Module) (BazelTarget, error) {
+	props, err := getBuildProperties(ctx, m)
 
 	// TODO(b/163018919): DirectDeps can have duplicate (module, variant)
 	// items, if the modules are added using different DependencyTag. Figure
@@ -422,28 +448,28 @@ func generateSoongModuleTarget(ctx bpToBuildContext, m blueprint.Module) BazelTa
 	return BazelTarget{
 		name: targetName,
 		content: fmt.Sprintf(
-			soongModuleTarget,
+			soongModuleTargetTemplate,
 			targetName,
 			ctx.ModuleName(m),
 			canonicalizeModuleType(ctx.ModuleType(m)),
 			ctx.ModuleSubDir(m),
 			depLabelList,
 			attributes),
-	}
+	}, err
 }
 
-func getBuildProperties(ctx bpToBuildContext, m blueprint.Module) BazelAttributes {
+func getBuildProperties(ctx bpToBuildContext, m blueprint.Module) (BazelAttributes, error) {
 	// TODO: this omits properties for blueprint modules (blueprint_go_binary,
 	// bootstrap_go_binary, bootstrap_go_package), which will have to be handled separately.
 	if aModule, ok := m.(android.Module); ok {
 		return extractModuleProperties(aModule.GetProperties(), false)
 	}
 
-	return BazelAttributes{}
+	return BazelAttributes{}, nil
 }
 
 // Generically extract module properties and types into a map, keyed by the module property name.
-func extractModuleProperties(props []interface{}, checkForDuplicateProperties bool) BazelAttributes {
+func extractModuleProperties(props []interface{}, checkForDuplicateProperties bool) (BazelAttributes, error) {
 	ret := map[string]string{}
 
 	// Iterate over this android.Module's property structs.
@@ -456,24 +482,29 @@ func extractModuleProperties(props []interface{}, checkForDuplicateProperties bo
 		// manipulate internal props, if needed.
 		if isStructPtr(propertiesValue.Type()) {
 			structValue := propertiesValue.Elem()
-			for k, v := range extractStructProperties(structValue, 0) {
+			ok, err := extractStructProperties(structValue, 0)
+			if err != nil {
+				return BazelAttributes{}, err
+			}
+			for k, v := range ok {
 				if existing, exists := ret[k]; checkForDuplicateProperties && exists {
-					panic(fmt.Errorf(
+					return BazelAttributes{}, fmt.Errorf(
 						"%s (%v) is present in properties whereas it should be consolidated into a commonAttributes",
-						k, existing))
+						k, existing)
 				}
 				ret[k] = v
 			}
 		} else {
-			panic(fmt.Errorf(
-				"properties must be a pointer to a struct, got %T",
-				propertiesValue.Interface()))
+			return BazelAttributes{},
+				fmt.Errorf(
+					"properties must be a pointer to a struct, got %T",
+					propertiesValue.Interface())
 		}
 	}
 
 	return BazelAttributes{
 		Attrs: ret,
-	}
+	}, nil
 }
 
 func isStructPtr(t reflect.Type) bool {
@@ -531,7 +562,12 @@ func prettyPrint(propertyValue reflect.Value, indent int, emitZeroValues bool) (
 		}
 
 		// Sort and print the struct props by the key.
-		structProps := extractStructProperties(propertyValue, indent)
+		structProps, err := extractStructProperties(propertyValue, indent)
+
+		if err != nil {
+			return "", err
+		}
+
 		if len(structProps) == 0 {
 			return "", nil
 		}
@@ -550,10 +586,12 @@ func prettyPrint(propertyValue reflect.Value, indent int, emitZeroValues bool) (
 // which each property value correctly pretty-printed and indented at the right nest level,
 // since property structs can be nested. In Starlark, nested structs are represented as nested
 // dicts: https://docs.bazel.build/skylark/lib/dict.html
-func extractStructProperties(structValue reflect.Value, indent int) map[string]string {
+func extractStructProperties(structValue reflect.Value, indent int) (map[string]string, error) {
 	if structValue.Kind() != reflect.Struct {
-		panic(fmt.Errorf("Expected a reflect.Struct type, but got %s", structValue.Kind()))
+		return map[string]string{}, fmt.Errorf("Expected a reflect.Struct type, but got %s", structValue.Kind())
 	}
+
+	var err error
 
 	ret := map[string]string{}
 	structType := structValue.Type()
@@ -575,7 +613,10 @@ func extractStructProperties(structValue reflect.Value, indent int) map[string]s
 				fieldValue = fieldValue.Elem()
 			}
 			if fieldValue.Type().Kind() == reflect.Struct {
-				propsToMerge := extractStructProperties(fieldValue, indent)
+				propsToMerge, err := extractStructProperties(fieldValue, indent)
+				if err != nil {
+					return map[string]string{}, err
+				}
 				for prop, value := range propsToMerge {
 					ret[prop] = value
 				}
@@ -584,20 +625,20 @@ func extractStructProperties(structValue reflect.Value, indent int) map[string]s
 		}
 
 		propertyName := proptools.PropertyNameForField(field.Name)
-		prettyPrintedValue, err := prettyPrint(fieldValue, indent+1, false)
+		var prettyPrintedValue string
+		prettyPrintedValue, err = prettyPrint(fieldValue, indent+1, false)
 		if err != nil {
-			panic(
-				fmt.Errorf(
-					"Error while parsing property: %q. %s",
-					propertyName,
-					err))
+			return map[string]string{}, fmt.Errorf(
+				"Error while parsing property: %q. %s",
+				propertyName,
+				err)
 		}
 		if prettyPrintedValue != "" {
 			ret[propertyName] = prettyPrintedValue
 		}
 	}
 
-	return ret
+	return ret, nil
 }
 
 func isZero(value reflect.Value) bool {

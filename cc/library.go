@@ -339,14 +339,15 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Copts:   *compilerAttrs.copts.Clone().Append(sharedAttrs.Copts),
 		Hdrs:    *compilerAttrs.hdrs.Clone().Append(sharedAttrs.Hdrs),
 
-		Deps:                        *linkerAttrs.deps.Clone().Append(sharedAttrs.Deps),
-		Implementation_deps:         *linkerAttrs.implementationDeps.Clone().Append(sharedAttrs.Implementation_deps),
-		Dynamic_deps:                *linkerAttrs.dynamicDeps.Clone().Append(sharedAttrs.Dynamic_deps),
-		Implementation_dynamic_deps: *linkerAttrs.implementationDynamicDeps.Clone().Append(sharedAttrs.Implementation_dynamic_deps),
-		Whole_archive_deps:          *linkerAttrs.wholeArchiveDeps.Clone().Append(sharedAttrs.Whole_archive_deps),
-		System_dynamic_deps:         *linkerAttrs.systemDynamicDeps.Clone().Append(sharedAttrs.System_dynamic_deps),
-		Runtime_deps:                linkerAttrs.runtimeDeps,
-		sdkAttributes:               bp2BuildParseSdkAttributes(m),
+		Deps:                              *linkerAttrs.deps.Clone().Append(sharedAttrs.Deps),
+		Implementation_deps:               *linkerAttrs.implementationDeps.Clone().Append(sharedAttrs.Implementation_deps),
+		Dynamic_deps:                      *linkerAttrs.dynamicDeps.Clone().Append(sharedAttrs.Dynamic_deps),
+		Implementation_dynamic_deps:       *linkerAttrs.implementationDynamicDeps.Clone().Append(sharedAttrs.Implementation_dynamic_deps),
+		Whole_archive_deps:                *linkerAttrs.wholeArchiveDeps.Clone().Append(sharedAttrs.Whole_archive_deps),
+		Implementation_whole_archive_deps: linkerAttrs.implementationWholeArchiveDeps,
+		System_dynamic_deps:               *linkerAttrs.systemDynamicDeps.Clone().Append(sharedAttrs.System_dynamic_deps),
+		Runtime_deps:                      linkerAttrs.runtimeDeps,
+		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
 	}
 
 	staticTargetAttrs := &bazelCcLibraryStaticAttributes{
@@ -366,7 +367,6 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Stl:                      compilerAttrs.stl,
 		Cpp_std:                  compilerAttrs.cppStd,
 		C_std:                    compilerAttrs.cStd,
-		Use_version_lib:          linkerAttrs.useVersionLib,
 
 		Features: baseAttributes.features,
 	}
@@ -2652,8 +2652,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		attrs = &bazelCcLibraryStaticAttributes{
 			staticOrSharedAttributes: commonAttrs,
 
-			Use_libcrt:      linkerAttrs.useLibcrt,
-			Use_version_lib: linkerAttrs.useVersionLib,
+			Use_libcrt: linkerAttrs.useLibcrt,
 
 			Rtti:    compilerAttrs.rtti,
 			Stl:     compilerAttrs.stl,

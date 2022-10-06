@@ -716,8 +716,6 @@ func (b *BootclasspathFragmentModule) configuredJars(ctx android.ModuleContext) 
 	// This is an exception to support end-to-end test for SdkExtensions, until such support exists.
 	if android.InList("test_framework-sdkextensions", possibleUpdatableModules) {
 		jars = jars.Append("com.android.sdkext", "test_framework-sdkextensions")
-	} else if android.InList("AddNewActivity", possibleUpdatableModules) {
-		jars = jars.Append("test_com.android.cts.frameworkresapkplits", "AddNewActivity")
 	} else if android.InList("test_framework-apexd", possibleUpdatableModules) {
 		jars = jars.Append("com.android.apex.test_package", "test_framework-apexd")
 	} else if global.ApexBootJars.Len() != 0 && !android.IsModuleInVersionedSdk(ctx.Module()) {
@@ -840,22 +838,7 @@ func (b *BootclasspathFragmentModule) createHiddenAPIFlagInput(ctx android.Modul
 
 // isTestFragment returns true if the current module is a test bootclasspath_fragment.
 func (b *BootclasspathFragmentModule) isTestFragment() bool {
-	if b.testFragment {
-		return true
-	}
-
-	// TODO(b/194063708): Once test fragments all use bootclasspath_fragment_test
-	// Some temporary exceptions until all test fragments use the
-	// bootclasspath_fragment_test module type.
-	name := b.BaseModuleName()
-	if strings.HasPrefix(name, "test_") {
-		return true
-	}
-	if name == "apex.apexd_test_bootclasspath-fragment" {
-		return true
-	}
-
-	return false
+	return b.testFragment
 }
 
 // produceHiddenAPIOutput produces the hidden API all-flags.csv file (and supporting files)
