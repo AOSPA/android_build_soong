@@ -63,7 +63,7 @@ var (
 	}
 
 	cfiCflags = []string{"-flto", "-fsanitize-cfi-cross-dso",
-		"-fsanitize-blacklist=external/compiler-rt/lib/cfi/cfi_blocklist.txt"}
+		"-fsanitize-ignorelist=external/compiler-rt/lib/cfi/cfi_blocklist.txt"}
 	// -flto and -fvisibility are required by clang when -fsanitize=cfi is
 	// used, but have no effect on assembly files
 	cfiAsflags = []string{"-flto", "-fvisibility=default"}
@@ -71,7 +71,7 @@ var (
 		"-Wl,-plugin-opt,O1"}
 	cfiExportsMapPath = "build/soong/cc/config/cfi_exports.map"
 
-	intOverflowCflags = []string{"-fsanitize-blacklist=build/soong/cc/config/integer_overflow_blocklist.txt"}
+	intOverflowCflags = []string{"-fsanitize-ignorelist=build/soong/cc/config/integer_overflow_blocklist.txt"}
 
 	minimalRuntimeFlags = []string{"-fsanitize-minimal-runtime", "-fno-sanitize-trap=integer,undefined",
 		"-fno-sanitize-recover=integer,undefined"}
@@ -282,7 +282,7 @@ type SanitizeUserProps struct {
 	// the first one
 	Recover []string
 
-	// value to pass to -fsanitize-blacklist
+	// value to pass to -fsanitize-ignorelist
 	Blocklist *string
 }
 
@@ -817,8 +817,7 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize=implicit-integer-sign-change")
 		}
 		// http://b/171275751, Android doesn't build with this sanitizer yet.
-		// KEYSTONE(I31a5c1934a7faae000833f849a7c022b0e45a6f4,b/178857879)
-		if toDisableUnsignedShiftBaseChange(flags.Local.CFlags) && !flags.Sdclang {
+		if toDisableUnsignedShiftBaseChange(flags.Local.CFlags) {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize=unsigned-shift-base")
 		}
 	}
@@ -840,7 +839,7 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 	blocklist := android.OptionalPathForModuleSrc(ctx, sanitize.Properties.Sanitize.Blocklist)
 	if blocklist.Valid() {
-		flags.Local.CFlags = append(flags.Local.CFlags, "-fsanitize-blacklist="+blocklist.String())
+		flags.Local.CFlags = append(flags.Local.CFlags, "-fsanitize-ignorelist="+blocklist.String())
 		flags.CFlagsDeps = append(flags.CFlagsDeps, blocklist.Path())
 	}
 
