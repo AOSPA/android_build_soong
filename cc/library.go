@@ -276,7 +276,8 @@ type aidlLibraryAttributes struct {
 }
 
 type ccAidlLibraryAttributes struct {
-	Deps bazel.LabelListAttribute
+	Deps                        bazel.LabelListAttribute
+	Implementation_dynamic_deps bazel.LabelListAttribute
 }
 
 type stripAttributes struct {
@@ -441,6 +442,10 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		android.CommonAttributes{Name: m.Name()},
 		sharedTargetAttrs, sharedAttrs.Enabled)
 
+	createStubsBazelTargetIfNeeded(ctx, m, compilerAttrs, exportedIncludes, baseAttributes)
+}
+
+func createStubsBazelTargetIfNeeded(ctx android.TopDownMutatorContext, m *Module, compilerAttrs compilerAttributes, exportedIncludes BazelIncludes, baseAttributes baseAttributes) {
 	if compilerAttrs.stubsSymbolFile != nil && len(compilerAttrs.stubsVersions.Value) > 0 {
 		stubSuitesProps := bazel.BazelTargetModuleProperties{
 			Rule_class:        "cc_stub_suite",
@@ -2722,6 +2727,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		modType = "cc_library_static"
 	} else {
 		modType = "cc_library_shared"
+		createStubsBazelTargetIfNeeded(ctx, module, compilerAttrs, exportedIncludes, baseAttributes)
 	}
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        modType,

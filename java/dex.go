@@ -63,6 +63,8 @@ type DexProperties struct {
 		// classes referenced by the app manifest.  Defaults to false.
 		No_aapt_flags *bool
 
+		Shrink_resources *bool
+
 		// Flags to pass to proguard.
 		Proguard_flags []string
 
@@ -198,6 +200,16 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 		flags = append(flags,
 			"--debug",
 			"--verbose")
+	}
+
+	// Supplying the platform build flag disables various features like API modeling and desugaring.
+	// For targets with a stable min SDK version (i.e., when the min SDK is both explicitly specified
+	// and managed+versioned), we suppress this flag to ensure portability.
+	// Note: Targets with a min SDK kind of core_platform (e.g., framework.jar) or unspecified (e.g.,
+	// services.jar), are not classified as stable, which is WAI.
+	// TODO(b/232073181): Expand to additional min SDK cases after validation.
+	if !minSdkVersion.Stable() {
+		flags = append(flags, "--android-platform-build")
 	}
 
 	effectiveVersion, err := minSdkVersion.EffectiveVersion(ctx)

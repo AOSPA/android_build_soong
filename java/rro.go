@@ -142,11 +142,11 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 		aaptLinkFlags = append(aaptLinkFlags,
 			"--rename-overlay-target-package "+*r.overridableProperties.Target_package_name)
 	}
-	r.aapt.buildActions(ctx, r, nil, nil, aaptLinkFlags...)
+	r.aapt.buildActions(ctx, r, nil, nil, false, aaptLinkFlags...)
 
 	// Sign the built package
 	_, _, certificates := collectAppDeps(ctx, r, false, false)
-	certificates = processMainCert(r.ModuleBase, String(r.properties.Certificate), certificates, ctx)
+	r.certificate, certificates = processMainCert(r.ModuleBase, String(r.properties.Certificate), certificates, ctx)
 	signed := android.PathForModuleOut(ctx, "signed", r.Name()+".apk")
 	var lineageFile android.Path
 	if lineage := String(r.properties.Lineage); lineage != "" {
@@ -156,7 +156,6 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 	rotationMinSdkVersion := String(r.properties.RotationMinSdkVersion)
 
 	SignAppPackage(ctx, signed, r.aapt.exportPackage, certificates, nil, lineageFile, rotationMinSdkVersion)
-	r.certificate = certificates[0]
 
 	r.outputFile = signed
 	partition := rroPartition(ctx)

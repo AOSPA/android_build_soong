@@ -476,6 +476,8 @@ type productVariables struct {
 
 	ShippingApiLevel *string `json:",omitempty"`
 
+	BuildBrokenClangAsFlags            bool     `json:",omitempty"`
+	BuildBrokenClangCFlags             bool     `json:",omitempty"`
 	BuildBrokenDepfile                 *bool    `json:",omitempty"`
 	BuildBrokenEnforceSyspropOwner     bool     `json:",omitempty"`
 	BuildBrokenTrebleSyspropNeverallow bool     `json:",omitempty"`

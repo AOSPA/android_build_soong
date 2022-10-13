@@ -7241,6 +7241,11 @@ func TestAppSetBundle(t *testing.T) {
 	ensureMatches(t, copyCmds[0], "^rm -rf .*/app/AppSet@TEST.BUILD_ID$")
 	ensureMatches(t, copyCmds[1], "^mkdir -p .*/app/AppSet@TEST.BUILD_ID$")
 	ensureMatches(t, copyCmds[2], "^unzip .*-d .*/app/AppSet@TEST.BUILD_ID .*/AppSet.zip$")
+
+	// Ensure that canned_fs_config has an entry for the app set zip file
+	generateFsRule := mod.Rule("generateFsConfig")
+	cmd := generateFsRule.RuleParams.Command
+	ensureContains(t, cmd, "AppSet.zip")
 }
 
 func TestAppSetBundlePrebuilt(t *testing.T) {
@@ -7269,6 +7274,28 @@ func TestAppSetBundlePrebuilt(t *testing.T) {
 	copiedApex := m.Output("out/soong/.intermediates/myapex/android_common_myapex/foo_v2.apex")
 
 	android.AssertStringEquals(t, "myapex input", extractorOutput, copiedApex.Input.String())
+}
+
+func TestApexSetApksModuleAssignment(t *testing.T) {
+	ctx := testApex(t, `
+		apex_set {
+			name: "myapex",
+			set: ":myapex_apks_file",
+		}
+
+		filegroup {
+			name: "myapex_apks_file",
+			srcs: ["myapex.apks"],
+		}
+	`)
+
+	m := ctx.ModuleForTests("myapex.apex.extractor", "android_common")
+
+	// Check that the extractor produces the correct apks file from the input module
+	extractorOutput := "out/soong/.intermediates/myapex.apex.extractor/android_common/extracted/myapex.apks"
+	extractedApex := m.Output(extractorOutput)
+
+	android.AssertArrayString(t, "extractor input", []string{"myapex.apks"}, extractedApex.Inputs.Strings())
 }
 
 func testNoUpdatableJarsInBootImage(t *testing.T, errmsg string, preparer android.FixturePreparer, fragments ...java.ApexVariantReference) {

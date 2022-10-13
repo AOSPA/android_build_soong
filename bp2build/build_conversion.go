@@ -242,6 +242,7 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 	// Simple metrics tracking for bp2build
 	metrics := CodegenMetrics{
 		ruleClassCount:           make(map[string]uint64),
+		convertedModulePathMap:   make(map[string]string),
 		convertedModuleTypeCount: make(map[string]uint64),
 		totalModuleTypeCount:     make(map[string]uint64),
 	}
@@ -272,20 +273,21 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 				// target in a BUILD file, we don't autoconvert them.
 
 				// Log the module.
-				metrics.AddConvertedModule(m, moduleType, Handcrafted)
+				metrics.AddConvertedModule(m, moduleType, dir, Handcrafted)
 			} else if aModule, ok := m.(android.Module); ok && aModule.IsConvertedByBp2build() {
 				// Handle modules converted to generated targets.
 
 				// Log the module.
-				metrics.AddConvertedModule(aModule, moduleType, Generated)
+				metrics.AddConvertedModule(aModule, moduleType, dir, Generated)
 
 				// Handle modules with unconverted deps. By default, emit a warning.
 				if unconvertedDeps := aModule.GetUnconvertedBp2buildDeps(); len(unconvertedDeps) > 0 {
 					msg := fmt.Sprintf("%s %s:%s depends on unconverted modules: %s",
 						moduleType, bpCtx.ModuleDir(m), m.Name(), strings.Join(unconvertedDeps, ", "))
-					if ctx.unconvertedDepMode == warnUnconvertedDeps {
+					switch ctx.unconvertedDepMode {
+					case warnUnconvertedDeps:
 						metrics.moduleWithUnconvertedDepsMsgs = append(metrics.moduleWithUnconvertedDepsMsgs, msg)
-					} else if ctx.unconvertedDepMode == errorModulesUnconvertedDeps {
+					case errorModulesUnconvertedDeps:
 						errs = append(errs, fmt.Errorf(msg))
 						return
 					}
@@ -293,9 +295,10 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 				if unconvertedDeps := aModule.GetMissingBp2buildDeps(); len(unconvertedDeps) > 0 {
 					msg := fmt.Sprintf("%s %s:%s depends on missing modules: %s",
 						moduleType, bpCtx.ModuleDir(m), m.Name(), strings.Join(unconvertedDeps, ", "))
-					if ctx.unconvertedDepMode == warnUnconvertedDeps {
+					switch ctx.unconvertedDepMode {
+					case warnUnconvertedDeps:
 						metrics.moduleWithMissingDepsMsgs = append(metrics.moduleWithMissingDepsMsgs, msg)
-					} else if ctx.unconvertedDepMode == errorModulesUnconvertedDeps {
+					case errorModulesUnconvertedDeps:
 						errs = append(errs, fmt.Errorf(msg))
 						return
 					}
@@ -348,7 +351,7 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 		// TODO(b/198619163): We should change this to export_files(glob(["**/*"])) instead, but doing that causes these errors:
 		// "Error in exports_files: generated label '//external/avb:avbtool' conflicts with existing py_binary rule"
 		// So we need to solve all the "target ... is both a rule and a file" warnings first.
-		for dir, _ := range dirs {
+		for dir := range dirs {
 			buildFileToTargets[dir] = append(buildFileToTargets[dir], BazelTarget{
 				name:      "bp2build_all_srcs",
 				content:   `filegroup(name = "bp2build_all_srcs", srcs = glob(["**/*"]))`,
