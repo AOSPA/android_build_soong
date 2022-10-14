@@ -74,6 +74,26 @@ type SdkAware interface {
 	sdkAwareWithoutModule
 }
 
+// minApiLevelForSdkSnapshot provides access to the min_sdk_version for MinApiLevelForSdkSnapshot
+type minApiLevelForSdkSnapshot interface {
+	MinSdkVersion(ctx EarlyModuleContext) SdkSpec
+}
+
+// MinApiLevelForSdkSnapshot returns the ApiLevel of the min_sdk_version of the supplied module.
+//
+// If the module does not provide a min_sdk_version then it defaults to 1.
+func MinApiLevelForSdkSnapshot(ctx EarlyModuleContext, module Module) ApiLevel {
+	minApiLevel := NoneApiLevel
+	if m, ok := module.(minApiLevelForSdkSnapshot); ok {
+		minApiLevel = m.MinSdkVersion(ctx).ApiLevel
+	}
+	if minApiLevel == NoneApiLevel {
+		// The default min API level is 1.
+		minApiLevel = uncheckedFinalApiLevel(1)
+	}
+	return minApiLevel
+}
+
 // SdkRef refers to a version of an SDK
 type SdkRef struct {
 	Name    string
@@ -715,8 +735,13 @@ type SdkMemberType interface {
 	//   have common values. Those fields are cleared and the common value added to the common
 	//   properties.
 	//
-	//   A field annotated with a tag of `sdk:"keep"` will be treated as if it
-	//   was not capitalized, i.e. not optimized for common values.
+	//   A field annotated with a tag of `sdk:"ignore"` will be treated as if it
+	//   was not capitalized, i.e. ignored and not optimized for common values.
+	//
+	//   A field annotated with a tag of `sdk:"keep"` will not be cleared even if the value is common
+	//   across multiple structs. Common values will still be copied into the common property struct.
+	//   So, if the same value is placed in all structs populated from variants that value would be
+	//   copied into all common property structs and so be available in every instance.
 	//
 	//   A field annotated with a tag of `android:"arch_variant"` will be allowed to have
 	//   values that differ by arch, fields not tagged as such must have common values across
@@ -903,18 +928,18 @@ type SdkMemberPropertiesBase struct {
 	// the locations of any of their prebuilt files in the snapshot by os type to prevent them
 	// from colliding. See OsPrefix().
 	//
-	// This property is the same for all variants of a member and so would be optimized away
-	// if it was not explicitly kept.
-	Os_count int `sdk:"keep"`
+	// Ignore this property during optimization. This is needed because this property is the same for
+	// all variants of a member and so would be optimized away if it was not ignored.
+	Os_count int `sdk:"ignore"`
 
 	// The os type for which these properties refer.
 	//
 	// Provided to allow a member to differentiate between os types in the locations of their
 	// prebuilt files when it supports more than one os type.
 	//
-	// This property is the same for all os type specific variants of a member and so would be
-	// optimized away if it was not explicitly kept.
-	Os OsType `sdk:"keep"`
+	// Ignore this property during optimization. This is needed because this property is the same for
+	// all variants of a member and so would be optimized away if it was not ignored.
+	Os OsType `sdk:"ignore"`
 
 	// The setting to use for the compile_multilib property.
 	Compile_multilib string `android:"arch_variant"`

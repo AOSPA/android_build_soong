@@ -28,14 +28,15 @@ import (
 )
 
 const (
-	cSrcPartition     = "c"
-	asSrcPartition    = "as"
-	asmSrcPartition   = "asm"
-	lSrcPartition     = "l"
-	llSrcPartition    = "ll"
-	cppSrcPartition   = "cpp"
-	protoSrcPartition = "proto"
-	aidlSrcPartition  = "aidl"
+	cSrcPartition       = "c"
+	asSrcPartition      = "as"
+	asmSrcPartition     = "asm"
+	lSrcPartition       = "l"
+	llSrcPartition      = "ll"
+	cppSrcPartition     = "cpp"
+	protoSrcPartition   = "proto"
+	aidlSrcPartition    = "aidl"
+	syspropSrcPartition = "sysprop"
 
 	stubsSuffix = "_stub_libs_current"
 )
@@ -104,7 +105,8 @@ func groupSrcsByExtension(ctx android.BazelConversionPathContext, srcs bazel.Lab
 		llSrcPartition: bazel.LabelPartition{Extensions: []string{".ll"}},
 		// C++ is the "catch-all" group, and comprises generated sources because we don't
 		// know the language of these sources until the genrule is executed.
-		cppSrcPartition: bazel.LabelPartition{Extensions: []string{".cpp", ".cc", ".cxx", ".mm"}, LabelMapper: addSuffixForFilegroup("_cpp_srcs"), Keep_remainder: true},
+		cppSrcPartition:     bazel.LabelPartition{Extensions: []string{".cpp", ".cc", ".cxx", ".mm"}, LabelMapper: addSuffixForFilegroup("_cpp_srcs"), Keep_remainder: true},
+		syspropSrcPartition: bazel.LabelPartition{Extensions: []string{".sysprop"}},
 	}
 
 	return bazel.PartitionLabelListAttribute(ctx, &srcs, labels)
@@ -320,6 +322,9 @@ type compilerAttributes struct {
 	llSrcs  bazel.LabelListAttribute
 	lexopts bazel.StringListAttribute
 
+	// Sysprop sources
+	syspropSrcs bazel.LabelListAttribute
+
 	hdrs bazel.LabelListAttribute
 
 	rtti bazel.BoolAttribute
@@ -482,6 +487,7 @@ func (ca *compilerAttributes) finalize(ctx android.BazelConversionPathContext, i
 	ca.asmSrcs = partitionedSrcs[asmSrcPartition]
 	ca.lSrcs = partitionedSrcs[lSrcPartition]
 	ca.llSrcs = partitionedSrcs[llSrcPartition]
+	ca.syspropSrcs = partitionedSrcs[syspropSrcPartition]
 
 	ca.absoluteIncludes.DeduplicateAxesFromBase()
 	ca.localIncludes.DeduplicateAxesFromBase()
@@ -719,7 +725,7 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 	(&linkerAttrs).wholeArchiveDeps.Add(protoDep.wholeStaticLib)
 	(&linkerAttrs).implementationWholeArchiveDeps.Add(protoDep.implementationWholeStaticLib)
 
-	aidlDep := bp2buildCcAidlLibrary(ctx, module, compilerAttrs.aidlSrcs)
+	aidlDep := bp2buildCcAidlLibrary(ctx, module, compilerAttrs.aidlSrcs, linkerAttrs)
 	if aidlDep != nil {
 		if lib, ok := module.linker.(*libraryDecorator); ok {
 			if proptools.Bool(lib.Properties.Aidl.Export_aidl_headers) {
@@ -733,6 +739,10 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 	convertedLSrcs := bp2BuildLex(ctx, module.Name(), compilerAttrs)
 	(&compilerAttrs).srcs.Add(&convertedLSrcs.srcName)
 	(&compilerAttrs).cSrcs.Add(&convertedLSrcs.cSrcName)
+
+	if !compilerAttrs.syspropSrcs.IsEmpty() {
+		(&linkerAttrs).wholeArchiveDeps.Add(bp2buildCcSysprop(ctx, module.Name(), module.Properties.Min_sdk_version, compilerAttrs.syspropSrcs))
+	}
 
 	features := compilerAttrs.features.Clone().Append(linkerAttrs.features)
 	features.DeduplicateAxesFromBase()
@@ -750,6 +760,7 @@ func bp2buildCcAidlLibrary(
 	ctx android.Bp2buildMutatorContext,
 	m *Module,
 	aidlLabelList bazel.LabelListAttribute,
+	linkerAttrs linkerAttributes,
 ) *bazel.LabelAttribute {
 	if !aidlLabelList.IsEmpty() {
 		aidlLibs, aidlSrcs := aidlLabelList.Partition(func(src bazel.Label) bool {
@@ -777,6 +788,16 @@ func bp2buildCcAidlLibrary(
 
 		if !aidlLibs.IsEmpty() {
 			ccAidlLibrarylabel := m.Name() + "_cc_aidl_library"
+			// Since cc_aidl_library only needs the dynamic deps (aka shared libs) from the parent cc library for compiling,
+			// we err on the side of not re-exporting the headers of the dynamic deps from cc_aidl_lirary
+			// because the parent cc library already has all the dynamic deps
+			implementationDynamicDeps := bazel.MakeLabelListAttribute(
+				bazel.AppendBazelLabelLists(
+					linkerAttrs.dynamicDeps.Value,
+					linkerAttrs.implementationDynamicDeps.Value,
+				),
+			)
+
 			ctx.CreateBazelTargetModule(
 				bazel.BazelTargetModuleProperties{
 					Rule_class:        "cc_aidl_library",
@@ -784,7 +805,8 @@ func bp2buildCcAidlLibrary(
 				},
 				android.CommonAttributes{Name: ccAidlLibrarylabel},
 				&ccAidlLibraryAttributes{
-					Deps: aidlLibs,
+					Deps:                        aidlLibs,
+					Implementation_dynamic_deps: implementationDynamicDeps,
 				},
 			)
 			label := &bazel.LabelAttribute{
@@ -1009,18 +1031,20 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 			axisFeatures = append(axisFeatures, "-static_flag")
 		}
 	}
+	additionalLinkerInputs := bazel.LabelList{}
 	if props.Version_script != nil {
 		label := android.BazelLabelForModuleSrcSingle(ctx, *props.Version_script)
-		la.additionalLinkerInputs.SetSelectValue(axis, config, bazel.LabelList{Includes: []bazel.Label{label}})
+		additionalLinkerInputs.Add(&label)
 		linkerFlags = append(linkerFlags, fmt.Sprintf("-Wl,--version-script,$(location %s)", label.Label))
 	}
 
 	if props.Dynamic_list != nil {
 		label := android.BazelLabelForModuleSrcSingle(ctx, *props.Dynamic_list)
-		la.additionalLinkerInputs.SetSelectValue(axis, config, bazel.LabelList{Includes: []bazel.Label{label}})
+		additionalLinkerInputs.Add(&label)
 		linkerFlags = append(linkerFlags, fmt.Sprintf("-Wl,--dynamic-list,$(location %s)", label.Label))
 	}
 
+	la.additionalLinkerInputs.SetSelectValue(axis, config, additionalLinkerInputs)
 	la.linkopts.SetSelectValue(axis, config, parseCommandLineFlags(linkerFlags, false, filterOutClangUnknownCflags))
 	la.useLibcrt.SetSelectValue(axis, config, props.libCrt())
 
@@ -1208,10 +1232,14 @@ func bp2BuildParseExportedIncludes(ctx android.BazelConversionPathContext, modul
 	return exported
 }
 
+func BazelLabelNameForStaticModule(baseLabel string) string {
+	return baseLabel + "_bp2build_cc_library_static"
+}
+
 func bazelLabelForStaticModule(ctx android.BazelConversionPathContext, m blueprint.Module) string {
 	label := android.BazelModuleLabel(ctx, m)
 	if ccModule, ok := m.(*Module); ok && ccModule.typ() == fullLibrary && !android.GetBp2BuildAllowList().GenerateCcLibraryStaticOnly(m.Name()) {
-		label += "_bp2build_cc_library_static"
+		return BazelLabelNameForStaticModule(label)
 	}
 	return label
 }

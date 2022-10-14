@@ -103,6 +103,15 @@ type appProperties struct {
 	PreventInstall    bool `blueprint:"mutated"`
 	IsCoverageVariant bool `blueprint:"mutated"`
 
+	// It can be set to test the behaviour of default target sdk version.
+	// Only required when updatable: false. It is an error if updatable: true and this is false.
+	Enforce_default_target_sdk_version *bool
+
+	// If set, the targetSdkVersion for the target is set to the latest default API level.
+	// This would be by default false, unless updatable: true or
+	// enforce_default_target_sdk_version: true in which case this defaults to true.
+	EnforceDefaultTargetSdkVersion bool `blueprint:"mutated"`
+
 	// Whether this app is considered mainline updatable or not. When set to true, this will enforce
 	// additional rules to make sure an app can safely be updated. Default is false.
 	// Prefer using other specific properties if build behaviour must be changed; avoid using this
@@ -298,6 +307,18 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 		} else {
 			ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
 		}
+
+		if !BoolDefault(a.appProperties.Enforce_default_target_sdk_version, true) {
+			ctx.PropertyErrorf("enforce_default_target_sdk_version", "Updatable apps must enforce default target sdk version")
+		}
+		// TODO(b/227460469) after all the modules removes the target sdk version, throw an error if the target sdk version is explicitly set.
+		if a.deviceProperties.Target_sdk_version == nil {
+			a.SetEnforceDefaultTargetSdkVersion(true)
+		}
+	}
+
+	if Bool(a.appProperties.Enforce_default_target_sdk_version) {
+		a.SetEnforceDefaultTargetSdkVersion(true)
 	}
 
 	a.checkPlatformAPI(ctx)
@@ -429,7 +450,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 		a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
 	}
 	a.aapt.buildActions(ctx, android.SdkContext(a), a.classLoaderContexts,
-		a.usesLibraryProperties.Exclude_uses_libs, aaptLinkFlags...)
+		a.usesLibraryProperties.Exclude_uses_libs, a.enforceDefaultTargetSdkVersion(), aaptLinkFlags...)
 
 	// apps manifests are handled by aapt, don't let Module see them
 	a.properties.Manifest = nil
@@ -528,7 +549,8 @@ func (a *AndroidApp) JNISymbolsInstalls(installPath string) android.RuleBuilderI
 
 // Reads and prepends a main cert from the default cert dir if it hasn't been set already, i.e. it
 // isn't a cert module reference. Also checks and enforces system cert restriction if applicable.
-func processMainCert(m android.ModuleBase, certPropValue string, certificates []Certificate, ctx android.ModuleContext) []Certificate {
+func processMainCert(m android.ModuleBase, certPropValue string, certificates []Certificate,
+	ctx android.ModuleContext) (mainCertificate Certificate, allCertificates []Certificate) {
 	if android.SrcIsModule(certPropValue) == "" {
 		var mainCert Certificate
 		if certPropValue != "" {
@@ -560,7 +582,22 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		}
 	}
 
-	return certificates
+	if len(certificates) > 0 {
+		mainCertificate = certificates[0]
+	} else {
+		// This can be reached with an empty certificate list if AllowMissingDependencies is set
+		// and the certificate property for this module is a module reference to a missing module.
+		if !ctx.Config().AllowMissingDependencies() && len(ctx.GetMissingDependencies()) > 0 {
+			panic("Should only get here if AllowMissingDependencies set and there are missing dependencies")
+		}
+		// Set a certificate to avoid panics later when accessing it.
+		mainCertificate = Certificate{
+			Key: android.PathForModuleOut(ctx, "missing.pk8"),
+			Pem: android.PathForModuleOut(ctx, "missing.pem"),
+		}
+	}
+
+	return mainCertificate, certificates
 }
 
 func (a *AndroidApp) InstallApkName() string {
@@ -634,29 +671,14 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	dexJarFile := a.dexBuildActions(ctx)
 
-	jniLibs, prebuiltJniPackages, certificateDeps := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
+	jniLibs, prebuiltJniPackages, certificates := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
 	jniJarFile := a.jniBuildActions(jniLibs, prebuiltJniPackages, ctx)
 
 	if ctx.Failed() {
 		return
 	}
 
-	certificates := processMainCert(a.ModuleBase, a.getCertString(ctx), certificateDeps, ctx)
-
-	// This can be reached with an empty certificate list if AllowMissingDependencies is set
-	// and the certificate property for this module is a module reference to a missing module.
-	if len(certificates) > 0 {
-		a.certificate = certificates[0]
-	} else {
-		if !ctx.Config().AllowMissingDependencies() && len(ctx.GetMissingDependencies()) > 0 {
-			panic("Should only get here if AllowMissingDependencies set and there are missing dependencies")
-		}
-		// Set a certificate to avoid panics later when accessing it.
-		a.certificate = Certificate{
-			Key: android.PathForModuleOut(ctx, "missing.pk8"),
-			Pem: android.PathForModuleOut(ctx, "missing.pem"),
-		}
-	}
+	a.certificate, certificates = processMainCert(a.ModuleBase, a.getCertString(ctx), certificates, ctx)
 
 	// Build a final signed app package.
 	packageFile := android.PathForModuleOut(ctx, a.installApkName+".apk")
@@ -669,10 +691,9 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	if lineage := String(a.overridableAppProperties.Lineage); lineage != "" {
 		lineageFile = android.PathForModuleSrc(ctx, lineage)
 	}
-
 	rotationMinSdkVersion := String(a.overridableAppProperties.RotationMinSdkVersion)
 
-	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion)
+	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion, Bool(a.dexProperties.Optimize.Shrink_resources))
 	a.outputFile = packageFile
 	if v4SigningRequested {
 		a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
@@ -701,7 +722,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		if v4SigningRequested {
 			v4SignatureFile = android.PathForModuleOut(ctx, a.installApkName+"_"+split.suffix+".apk.idsig")
 		}
-		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion)
+		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion, false)
 		a.extraOutputFiles = append(a.extraOutputFiles, packageFile)
 		if v4SigningRequested {
 			a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
@@ -918,6 +939,14 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 	})
 
 	a.ApexBundleDepsInfo.BuildDepsInfoLists(ctx, a.MinSdkVersion(ctx).String(), depsInfo)
+}
+
+func (a *AndroidApp) enforceDefaultTargetSdkVersion() bool {
+	return a.appProperties.EnforceDefaultTargetSdkVersion
+}
+
+func (a *AndroidApp) SetEnforceDefaultTargetSdkVersion(val bool) {
+	a.appProperties.EnforceDefaultTargetSdkVersion = val
 }
 
 func (a *AndroidApp) Updatable() bool {
