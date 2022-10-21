@@ -1,4 +1,4 @@
-// Copyright 2019 Google Inc. All rights reserved.
+// Copyright 2022 Google Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,35 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package android
+package java
 
 import (
-	"io/ioutil"
-	"os"
+	"runtime"
 	"testing"
+
+	"android/soong/android"
 )
 
-var buildDir string
-
-func setUp() {
-	var err error
-	buildDir, err = ioutil.TempDir("", "android_test")
-	if err != nil {
-		panic(err)
-	}
-}
-
-func tearDown() {
-	os.RemoveAll(buildDir)
-}
-
-func TestMain(m *testing.M) {
-	run := func() int {
-		setUp()
-		defer tearDown()
-
-		return m.Run()
+func TestBootImageConfig(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skipf("Skipping as boot image config test is only supported on linux not %s", runtime.GOOS)
 	}
 
-	os.Exit(run())
+	result := android.GroupFixturePreparers(
+		PrepareForBootImageConfigTest,
+	).RunTest(t)
+
+	CheckArtBootImageConfig(t, result)
+	CheckFrameworkBootImageConfig(t, result)
 }

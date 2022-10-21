@@ -169,12 +169,20 @@ func maybePartitionExportedAndImplementationsDepsExcludes(ctx android.BazelConve
 	}
 }
 
+func bp2BuildPropParseHelper(ctx android.ArchVariantContext, module *Module, propsType interface{}, parseFunc func(axis bazel.ConfigurationAxis, config string, props interface{})) {
+	for axis, configToProps := range module.GetArchVariantProperties(ctx, propsType) {
+		for config, props := range configToProps {
+			parseFunc(axis, config, props)
+		}
+	}
+}
+
 // Parses properties common to static and shared libraries. Also used for prebuilt libraries.
 func bp2buildParseStaticOrSharedProps(ctx android.BazelConversionPathContext, module *Module, lib *libraryDecorator, isStatic bool) staticOrSharedAttributes {
 	attrs := staticOrSharedAttributes{}
 
 	setAttrs := func(axis bazel.ConfigurationAxis, config string, props StaticOrSharedProperties) {
-		attrs.Copts.SetSelectValue(axis, config, parseCommandLineFlags(props.Cflags, true, filterOutStdFlag))
+		attrs.Copts.SetSelectValue(axis, config, parseCommandLineFlags(props.Cflags, filterOutStdFlag))
 		attrs.Srcs.SetSelectValue(axis, config, android.BazelLabelForModuleSrc(ctx, props.Srcs))
 		attrs.System_dynamic_deps.SetSelectValue(axis, config, bazelLabelForSharedDeps(ctx, props.System_shared_libs))
 
@@ -227,32 +235,30 @@ type prebuiltAttributes struct {
 	Enabled bazel.BoolAttribute
 }
 
+func parseSrc(ctx android.BazelConversionPathContext, srcLabelAttribute *bazel.LabelAttribute, axis bazel.ConfigurationAxis, config string, srcs []string) {
+	srcFileError := func() {
+		ctx.ModuleErrorf("parseSrc: Expected at most one source file for %s %s\n", axis, config)
+	}
+	if len(srcs) > 1 {
+		srcFileError()
+		return
+	} else if len(srcs) == 0 {
+		return
+	}
+	if srcLabelAttribute.SelectValue(axis, config) != nil {
+		srcFileError()
+		return
+	}
+	srcLabelAttribute.SetSelectValue(axis, config, android.BazelLabelForModuleSrcSingle(ctx, srcs[0]))
+}
+
 // NOTE: Used outside of Soong repo project, in the clangprebuilts.go bootstrap_go_package
 func Bp2BuildParsePrebuiltLibraryProps(ctx android.BazelConversionPathContext, module *Module, isStatic bool) prebuiltAttributes {
-	manySourceFileError := func(axis bazel.ConfigurationAxis, config string) {
-		ctx.ModuleErrorf("Bp2BuildParsePrebuiltLibraryProps: Expected at most one source file for %s %s\n", axis, config)
-	}
+
 	var srcLabelAttribute bazel.LabelAttribute
-
-	parseSrcs := func(ctx android.BazelConversionPathContext, axis bazel.ConfigurationAxis, config string, srcs []string) {
-		if len(srcs) > 1 {
-			manySourceFileError(axis, config)
-			return
-		} else if len(srcs) == 0 {
-			return
-		}
-		if srcLabelAttribute.SelectValue(axis, config) != nil {
-			manySourceFileError(axis, config)
-			return
-		}
-
-		src := android.BazelLabelForModuleSrcSingle(ctx, srcs[0])
-		srcLabelAttribute.SetSelectValue(axis, config, src)
-	}
-
 	bp2BuildPropParseHelper(ctx, module, &prebuiltLinkerProperties{}, func(axis bazel.ConfigurationAxis, config string, props interface{}) {
 		if prebuiltLinkerProperties, ok := props.(*prebuiltLinkerProperties); ok {
-			parseSrcs(ctx, axis, config, prebuiltLinkerProperties.Srcs)
+			parseSrc(ctx, &srcLabelAttribute, axis, config, prebuiltLinkerProperties.Srcs)
 		}
 	})
 
@@ -261,7 +267,7 @@ func Bp2BuildParsePrebuiltLibraryProps(ctx android.BazelConversionPathContext, m
 		if props.Enabled != nil {
 			enabledLabelAttribute.SetSelectValue(axis, config, props.Enabled)
 		}
-		parseSrcs(ctx, axis, config, props.Srcs)
+		parseSrc(ctx, &srcLabelAttribute, axis, config, props.Srcs)
 	}
 
 	if isStatic {
@@ -284,11 +290,16 @@ func Bp2BuildParsePrebuiltLibraryProps(ctx android.BazelConversionPathContext, m
 	}
 }
 
-func bp2BuildPropParseHelper(ctx android.ArchVariantContext, module *Module, propsType interface{}, parseFunc func(axis bazel.ConfigurationAxis, config string, props interface{})) {
-	for axis, configToProps := range module.GetArchVariantProperties(ctx, propsType) {
-		for config, props := range configToProps {
-			parseFunc(axis, config, props)
+func bp2BuildParsePrebuiltBinaryProps(ctx android.BazelConversionPathContext, module *Module) prebuiltAttributes {
+	var srcLabelAttribute bazel.LabelAttribute
+	bp2BuildPropParseHelper(ctx, module, &prebuiltLinkerProperties{}, func(axis bazel.ConfigurationAxis, config string, props interface{}) {
+		if props, ok := props.(*prebuiltLinkerProperties); ok {
+			parseSrc(ctx, &srcLabelAttribute, axis, config, props.Srcs)
 		}
+	})
+
+	return prebuiltAttributes{
+		Src: srcLabelAttribute,
 	}
 }
 
@@ -365,7 +376,7 @@ func filterOutClangUnknownCflags(flag string) bool {
 	return false
 }
 
-func parseCommandLineFlags(soongFlags []string, noCoptsTokenization bool, filterOut ...filterOutFn) []string {
+func parseCommandLineFlags(soongFlags []string, filterOut ...filterOutFn) []string {
 	var result []string
 	for _, flag := range soongFlags {
 		skipFlag := false
@@ -380,15 +391,7 @@ func parseCommandLineFlags(soongFlags []string, noCoptsTokenization bool, filter
 		// Soong's cflags can contain spaces, like `-include header.h`. For
 		// Bazel's copts, split them up to be compatible with the
 		// no_copts_tokenization feature.
-		if noCoptsTokenization {
-			result = append(result, strings.Split(flag, " ")...)
-		} else {
-			// Soong's Version Script and Dynamic List Properties are added as flags
-			// to Bazel's linkopts using "($location label)" syntax.
-			// Splitting on spaces would separate this into two different flags
-			// "($ location" and "label)"
-			result = append(result, flag)
-		}
+		result = append(result, strings.Split(flag, " ")...)
 	}
 	return result
 }
@@ -422,10 +425,10 @@ func (ca *compilerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversi
 	// overridden. In Bazel we always allow overriding, via flags; however, this can cause
 	// incompatibilities, so we remove "-std=" flags from Cflag properties while leaving it in other
 	// cases.
-	ca.copts.SetSelectValue(axis, config, parseCommandLineFlags(props.Cflags, true, filterOutStdFlag, filterOutClangUnknownCflags))
-	ca.asFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Asflags, true, nil))
-	ca.conlyFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Conlyflags, true, filterOutClangUnknownCflags))
-	ca.cppFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Cppflags, true, filterOutClangUnknownCflags))
+	ca.copts.SetSelectValue(axis, config, parseCommandLineFlags(props.Cflags, filterOutStdFlag, filterOutClangUnknownCflags))
+	ca.asFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Asflags, nil))
+	ca.conlyFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Conlyflags, filterOutClangUnknownCflags))
+	ca.cppFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Cppflags, filterOutClangUnknownCflags))
 	ca.rtti.SetSelectValue(axis, config, props.Rtti)
 }
 
@@ -1031,6 +1034,11 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 			axisFeatures = append(axisFeatures, "-static_flag")
 		}
 	}
+
+	// This must happen before the addition of flags for Version Script and
+	// Dynamic List, as these flags must be split on spaces and those must not
+	linkerFlags = parseCommandLineFlags(linkerFlags, filterOutClangUnknownCflags)
+
 	additionalLinkerInputs := bazel.LabelList{}
 	if props.Version_script != nil {
 		label := android.BazelLabelForModuleSrcSingle(ctx, *props.Version_script)
@@ -1045,7 +1053,7 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 	}
 
 	la.additionalLinkerInputs.SetSelectValue(axis, config, additionalLinkerInputs)
-	la.linkopts.SetSelectValue(axis, config, parseCommandLineFlags(linkerFlags, false, filterOutClangUnknownCflags))
+	la.linkopts.SetSelectValue(axis, config, linkerFlags)
 	la.useLibcrt.SetSelectValue(axis, config, props.libCrt())
 
 	// it's very unlikely for nocrt to be arch variant, so bp2build doesn't support it.

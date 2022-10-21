@@ -500,6 +500,9 @@ type ApexFileProperties struct {
 		Arm64 struct {
 			Src *string `android:"path"`
 		}
+		Riscv64 struct {
+			Src *string `android:"path"`
+		}
 		X86 struct {
 			Src *string `android:"path"`
 		}
@@ -527,6 +530,8 @@ func (p *ApexFileProperties) prebuiltApexSelector(ctx android.BaseModuleContext,
 		src = String(p.Arch.Arm.Src)
 	case android.Arm64:
 		src = String(p.Arch.Arm64.Src)
+	case android.Riscv64:
+		src = String(p.Arch.Riscv64.Src)
 	case android.X86:
 		src = String(p.Arch.X86.Src)
 	case android.X86_64:
@@ -537,7 +542,11 @@ func (p *ApexFileProperties) prebuiltApexSelector(ctx android.BaseModuleContext,
 	}
 
 	if src == "" {
-		ctx.OtherModuleErrorf(prebuilt, "prebuilt_apex does not support %q", multiTargets[0].Arch.String())
+		if ctx.Config().AllowMissingDependencies() {
+			ctx.AddMissingDependencies([]string{ctx.OtherModuleName(prebuilt)})
+		} else {
+			ctx.OtherModuleErrorf(prebuilt, "prebuilt_apex does not support %q", multiTargets[0].Arch.String())
+		}
 		// Drop through to return an empty string as the src (instead of nil) to avoid the prebuilt
 		// logic from reporting a more general, less useful message.
 	}

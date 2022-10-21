@@ -623,6 +623,10 @@ type xref interface {
 	XrefCcFiles() android.Paths
 }
 
+type overridable interface {
+	overriddenModules() []string
+}
+
 type libraryDependencyKind int
 
 const (
@@ -3346,6 +3350,11 @@ func (c *Module) OutputFiles(tag string) (android.Paths, error) {
 			return android.Paths{c.outputFile.Path()}, nil
 		}
 		return android.Paths{}, nil
+	case "unstripped":
+		if c.linker != nil {
+			return android.PathsIfNonNil(c.linker.unstrippedOutputFilePath()), nil
+		}
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 	}
@@ -3653,6 +3662,13 @@ func (c *Module) UniqueApexVariations() bool {
 	return c.UseVndk() && c.IsVndk()
 }
 
+func (c *Module) overriddenModules() []string {
+	if o, ok := c.linker.(overridable); ok {
+		return o.overriddenModules()
+	}
+	return nil
+}
+
 var _ snapshot.RelativeInstallPath = (*Module)(nil)
 
 type moduleType int
@@ -3714,7 +3730,9 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	prebuilt := c.IsPrebuilt()
 	switch c.typ() {
 	case binary:
-		if !prebuilt {
+		if prebuilt {
+			prebuiltBinaryBp2Build(ctx, c)
+		} else {
 			binaryBp2build(ctx, c)
 		}
 	case testBin:
@@ -3745,6 +3763,24 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		} else {
 			sharedOrStaticLibraryBp2Build(ctx, c, false)
 		}
+	}
+}
+
+var _ android.ApiProvider = (*Module)(nil)
+
+func (c *Module) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
+	if c.IsPrebuilt() {
+		return
+	}
+	switch c.typ() {
+	case fullLibrary:
+		apiContributionBp2Build(ctx, c)
+	case sharedLibrary:
+		apiContributionBp2Build(ctx, c)
+	case headerLibrary:
+		// Aggressively generate api targets for all header modules
+		// This is necessary since the header module does not know if it is a dep of API surface stub library
+		apiLibraryHeadersBp2Build(ctx, c)
 	case ndkLibrary:
 		ndkLibraryBp2build(ctx, c)
 	}
@@ -3835,6 +3871,15 @@ func (ks *kytheExtractAllSingleton) GenerateBuildActions(ctx android.SingletonCo
 	if len(xrefTargets) > 0 {
 		ctx.Phony("xref_cxx", xrefTargets...)
 	}
+}
+
+func (c *Module) Partition() string {
+	if p, ok := c.installer.(interface {
+		getPartition() string
+	}); ok {
+		return p.getPartition()
+	}
+	return ""
 }
 
 var Bool = proptools.Bool

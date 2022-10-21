@@ -23,6 +23,7 @@ import (
 	"android/soong/android"
 	"android/soong/java/config"
 	"android/soong/tradefed"
+
 	"github.com/google/blueprint/proptools"
 )
 
@@ -166,12 +167,19 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		instrumentedApp.implementationAndResourcesJar,
 	}
 
-	for _, dep := range ctx.GetDirectDepsWithTag(libTag) {
+	handleLibDeps := func(dep android.Module) {
 		m := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
 		r.libs = append(r.libs, ctx.OtherModuleName(dep))
 		if !android.InList(ctx.OtherModuleName(dep), config.FrameworkLibraries) {
 			combinedJarJars = append(combinedJarJars, m.ImplementationAndResourcesJars...)
 		}
+	}
+
+	for _, dep := range ctx.GetDirectDepsWithTag(libTag) {
+		handleLibDeps(dep)
+	}
+	for _, dep := range ctx.GetDirectDepsWithTag(sdkLibTag) {
+		handleLibDeps(dep)
 	}
 
 	r.combinedJar = android.PathForModuleOut(ctx, "robolectric_combined", r.outputFile.Base())
@@ -180,9 +188,9 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 
 	// TODO: this could all be removed if tradefed was used as the test runner, it will find everything
 	// annotated as a test and run it.
-	for _, src := range r.compiledJavaSrcs {
+	for _, src := range r.uniqueSrcFiles {
 		s := src.Rel()
-		if !strings.HasSuffix(s, "Test.java") {
+		if !strings.HasSuffix(s, "Test.java") && !strings.HasSuffix(s, "Test.kt") {
 			continue
 		} else if strings.HasSuffix(s, "/BaseRobolectricTest.java") {
 			continue

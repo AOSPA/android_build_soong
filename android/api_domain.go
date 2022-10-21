@@ -67,16 +67,15 @@ func ApiDomainFactory() Module {
 	m := &apiDomain{}
 	m.AddProperties(&m.properties)
 	InitAndroidArchModule(m, DeviceSupported, MultilibBoth)
-	InitBazelModule(m)
 	return m
 }
 
 func (a *apiDomain) DepsMutator(ctx BottomUpMutatorContext) {
 	for _, cc := range a.properties.Cc_api_contributions {
 		// Use FarVariationDependencies since the variants of api_domain is a subset of the variants of the dependency cc module
-		// Creating a dependency on the first variant is ok since this is a no-op in Soong
+		// Creating a dependency on the first variant that matches (os,arch) is ok since this is a no-op in Soong
 		// The primary function of this dependency is to create a connected graph in the corresponding bp2build workspace
-		ctx.AddFarVariationDependencies([]blueprint.Variation{}, nil, cc)
+		ctx.AddFarVariationDependencies(ctx.Target().Variations(), nil, cc)
 	}
 }
 
@@ -108,7 +107,9 @@ type bazelApiDomainAttributes struct {
 	Cc_api_contributions bazel.LabelListAttribute
 }
 
-func (a *apiDomain) ConvertWithBp2build(ctx TopDownMutatorContext) {
+var _ ApiProvider = (*apiDomain)(nil)
+
+func (a *apiDomain) ConvertWithApiBp2build(ctx TopDownMutatorContext) {
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "api_domain",
 		Bzl_load_location: "//build/bazel/rules/apis:api_domain.bzl",

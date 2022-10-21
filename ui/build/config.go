@@ -71,6 +71,7 @@ type configImpl struct {
 	checkbuild      bool
 	dist            bool
 	jsonModuleGraph bool
+	apiBp2build     bool // Generate BUILD files for Soong modules that contribute APIs
 	bp2build        bool
 	queryview       bool
 	reportMkMetrics bool // Collect and report mk2bp migration progress metrics.
@@ -387,13 +388,13 @@ func NewConfig(ctx Context, args ...string) Config {
 		if override, ok := ret.environ.Get("OVERRIDE_ANDROID_JAVA_HOME"); ok {
 			return override
 		}
-		if ret.environ.IsEnvTrue("EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN") {
-			return java17Home
-		}
 		if toolchain11, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN"); ok && toolchain11 != "true" {
 			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN is no longer supported. An OpenJDK 11 toolchain is now the global default.")
 		}
-		return java11Home
+		if toolchain17, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN"); ok && toolchain17 != "true" {
+			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN is no longer supported. An OpenJDK 17 toolchain is now the global default.")
+		}
+		return java17Home
 	}()
 	absJavaHome := absPath(ctx, javaHome)
 
@@ -756,6 +757,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.jsonModuleGraph = true
 		} else if arg == "bp2build" {
 			c.bp2build = true
+		} else if arg == "api_bp2build" {
+			c.apiBp2build = true
 		} else if arg == "queryview" {
 			c.queryview = true
 		} else if arg == "soong_docs" {
@@ -833,7 +836,7 @@ func (c *configImpl) SoongBuildInvocationNeeded() bool {
 		return true
 	}
 
-	if !c.JsonModuleGraph() && !c.Bp2Build() && !c.Queryview() && !c.SoongDocs() {
+	if !c.JsonModuleGraph() && !c.Bp2Build() && !c.Queryview() && !c.SoongDocs() && !c.ApiBp2build() {
 		// Command line was empty, the default Ninja target is built
 		return true
 	}
@@ -916,6 +919,10 @@ func (c *configImpl) QueryviewMarkerFile() string {
 	return shared.JoinPath(c.SoongOutDir(), "queryview.marker")
 }
 
+func (c *configImpl) ApiBp2buildMarkerFile() string {
+	return shared.JoinPath(c.SoongOutDir(), "api_bp2build.marker")
+}
+
 func (c *configImpl) ModuleGraphFile() string {
 	return shared.JoinPath(c.SoongOutDir(), "module-graph.json")
 }
@@ -955,6 +962,10 @@ func (c *configImpl) JsonModuleGraph() bool {
 
 func (c *configImpl) Bp2Build() bool {
 	return c.bp2build
+}
+
+func (c *configImpl) ApiBp2build() bool {
+	return c.apiBp2build
 }
 
 func (c *configImpl) Queryview() bool {
