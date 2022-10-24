@@ -133,6 +133,7 @@ var (
 		"external/jemalloc_new":                  Bp2BuildDefaultTrueRecursively,
 		"external/jsoncpp":                       Bp2BuildDefaultTrueRecursively,
 		"external/junit":                         Bp2BuildDefaultTrueRecursively,
+		"external/libaom":                        Bp2BuildDefaultTrueRecursively,
 		"external/libavc":                        Bp2BuildDefaultTrueRecursively,
 		"external/libcap":                        Bp2BuildDefaultTrueRecursively,
 		"external/libcxx":                        Bp2BuildDefaultTrueRecursively,
@@ -167,6 +168,7 @@ var (
 
 		"frameworks/av":                                      Bp2BuildDefaultTrue,
 		"frameworks/av/media/codecs":                         Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/codec2/components/aom":          Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/liberror":                       Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/services/minijail":                    Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/module/minijail":                Bp2BuildDefaultTrueRecursively,
@@ -178,15 +180,17 @@ var (
 		"frameworks/base/tools/aapt2":                        Bp2BuildDefaultTrue,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/arect":                       Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/libs/gui":                         Bp2BuildDefaultTrue,
 		"frameworks/native/libs/math":                        Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/nativebase":                  Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/libs/vr":                          Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/opengl/tests/gl2_cameraeye":       Bp2BuildDefaultTrue,
 		"frameworks/native/opengl/tests/gl2_java":            Bp2BuildDefaultTrue,
 		"frameworks/native/opengl/tests/testLatency":         Bp2BuildDefaultTrue,
 		"frameworks/native/opengl/tests/testPauseResume":     Bp2BuildDefaultTrue,
 		"frameworks/native/opengl/tests/testViewport":        Bp2BuildDefaultTrue,
 		"frameworks/native/services/batteryservice":          Bp2BuildDefaultTrue,
-		"frameworks/proto_logging/stats/stats_log_api_gen":   Bp2BuildDefaultTrueRecursively,
+		"frameworks/proto_logging/stats":                     Bp2BuildDefaultTrueRecursively,
 
 		"hardware/interfaces":                          Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/aidl":              Bp2BuildDefaultTrue,
@@ -280,6 +284,7 @@ var (
 		"system/core/libvndksupport":                             Bp2BuildDefaultTrueRecursively,
 		"system/core/property_service/libpropertyinfoparser":     Bp2BuildDefaultTrueRecursively,
 		"system/core/property_service/libpropertyinfoserializer": Bp2BuildDefaultTrueRecursively,
+		"system/extras/toolchain-extras":                         Bp2BuildDefaultTrue,
 		"system/incremental_delivery/incfs":                      Bp2BuildDefaultTrue,
 		"system/libartpalette":                                   Bp2BuildDefaultTrueRecursively,
 		"system/libbase":                                         Bp2BuildDefaultTrueRecursively,
@@ -312,8 +317,6 @@ var (
 		"system/tools/aidl/build/tests_bp2build":                 Bp2BuildDefaultTrue,
 		"system/tools/sysprop":                                   Bp2BuildDefaultTrue,
 		"system/unwinding/libunwindstack":                        Bp2BuildDefaultTrueRecursively,
-
-		"frameworks/proto_logging/stats": Bp2BuildDefaultTrueRecursively,
 
 		"tools/apksig": Bp2BuildDefaultTrue,
 		"tools/platform-compat/java/android/compat":  Bp2BuildDefaultTrueRecursively,
@@ -370,8 +373,10 @@ var (
 		"code_coverage.policy.other",
 		"codec2_soft_exports",
 		"codecs_g711dec",
+		"com.android.media.swcodec",
 		"com.android.media.swcodec-androidManifest",
 		"com.android.media.swcodec-ld.config.txt",
+		"com.android.media.swcodec-mediaswcodec.32rc",
 		"com.android.media.swcodec-mediaswcodec.rc",
 		"com.android.media.swcodec.certificate",
 		"com.android.media.swcodec.key",
@@ -393,14 +398,11 @@ var (
 		"libbinder_headers_platform_shared",
 		"libbinderthreadstateutils",
 		"libbluetooth-types-header",
-		"libbufferhub_headers",
 		"libcodec2",
 		"libcodec2_headers",
 		"libcodec2_internal",
 		"libdmabufheap",
-		"libdvr_headers",
 		"libgsm",
-		"libgui_bufferqueue_sources",
 		"libgrallocusage",
 		"libgralloctypes",
 		"libnativewindow",
@@ -413,7 +415,6 @@ var (
 		"libneuralnetworks_headers",
 		"libneuralnetworks_packageinfo",
 		"libopus",
-		"libpdx_headers",
 		"libprocpartition",
 		"libruy_static",
 		"libandroidio",
@@ -439,7 +440,6 @@ var (
 		"libtextclassifier_hash_static",
 		"libtflite_kernel_utils",
 		"libtinyxml2",
-		"libgui_aidl",
 		"libui",
 		"libui-types",
 		"libui_headers",
@@ -466,10 +466,12 @@ var (
 		"statslog_neuralnetworks.h",
 		"tensorflow_headers",
 
-		"libgui_headers",
 		"libstagefright_bufferpool@2.0",
 		"libstagefright_bufferpool@2.0.1",
 		"libSurfaceFlingerProp",
+
+		// prebuilts
+		"prebuilt_stats-log-api-gen",
 
 		// fastboot
 		"bootimg_headers",
@@ -580,7 +582,6 @@ var (
 		"libcodec2_hidl_plugin_stub",
 		"libcodec2_hidl_plugin",
 		"libstagefright_bufferqueue_helper_novndk",
-		"libgui_bufferqueue_static",
 		"libGLESv2",
 		"libEGL",
 		"libcodec2_vndk",
@@ -630,13 +631,10 @@ var (
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
 		"aidl_interface_headers",
-		"api_domain",
 		"license",
 		"linker_config",
 		"java_import",
 		"java_import_host",
-		"ndk_headers",
-		"ndk_library",
 		"sysprop_library",
 		"bpf",
 	}
@@ -649,6 +647,23 @@ var (
 	// the "prebuilt_" prefix to the name, so that it's differentiable from
 	// the source versions within Soong's module graph.
 	Bp2buildModuleDoNotConvertList = []string{
+		// TODO(b/250876486): Created cc_aidl_library doesn't have static libs from parent cc module
+		"libgui_window_info_static",
+		"libgui",     // Depends on unconverted libgui_window_info_static
+		"libdisplay", // Depends on uncovnerted libgui
+		// Depends on unconverted libdisplay
+		"libdvr_static.google",
+		"libdvr.google",
+		"libvrsensor",
+		"dvr_api-test",
+		// Depends on unconverted libandroid, libgui
+		"dvr_buffer_queue-test",
+		"dvr_display-test",
+		// Depends on unconverted libchrome
+		"pdx_benchmarks",
+		"buffer_hub_queue-test",
+		"buffer_hub_queue_producer-test",
+
 		// cc bugs
 		"libactivitymanager_aidl", // TODO(b/207426160): Unsupported use of aidl sources (via Dactivity_manager_procstate_aidl) in a cc_library
 
@@ -931,6 +946,7 @@ var (
 		"libdlext_test_norelro",
 		"libdlext_test_recursive",
 		"libdlext_test_zip",
+		"libdvrcommon_test",
 		"libfortify1-new-tests-clang",
 		"libfortify1-new-tests-clang",
 		"libfortify1-tests-clang",

@@ -1618,7 +1618,7 @@ func (mod *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Mo
 		}
 	}
 
-	if depTag == procMacroDepTag {
+	if depTag == procMacroDepTag || depTag == customBindgenDepTag {
 		return false
 	}
 
@@ -1665,6 +1665,10 @@ func (k kytheExtractRustSingleton) GenerateBuildActions(ctx android.SingletonCon
 	if len(xrefTargets) > 0 {
 		ctx.Phony("xref_rust", xrefTargets...)
 	}
+}
+
+func (c *Module) Partition() string {
+	return ""
 }
 
 var Bool = proptools.Bool

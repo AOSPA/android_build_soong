@@ -201,23 +201,62 @@ func TestCcBinaryWithLinkStatic(t *testing.T) {
 	})
 }
 
-func TestCcBinaryVersionScript(t *testing.T) {
+func TestCcBinaryVersionScriptAndDynamicList(t *testing.T) {
 	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
-		description: `version script`,
+		description: `version script and dynamic list`,
 		blueprint: `
 {rule_name} {
     name: "foo",
     include_build_directory: false,
     version_script: "vs",
+    dynamic_list: "dynamic.list",
 }
 `,
 		targets: []testBazelTarget{
 			{"cc_binary", "foo", AttrNameToString{
-				"additional_linker_inputs": `["vs"]`,
-				"linkopts":                 `["-Wl,--version-script,$(location vs)"]`,
+				"additional_linker_inputs": `[
+        "vs",
+        "dynamic.list",
+    ]`,
+				"linkopts": `[
+        "-Wl,--version-script,$(location vs)",
+        "-Wl,--dynamic-list,$(location dynamic.list)",
+    ]`,
 			},
 			},
 		},
+	})
+}
+
+func TestCcBinaryLdflagsSplitBySpaceExceptSoongAdded(t *testing.T) {
+	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
+		description: "ldflags are split by spaces except for the ones added by soong (version script and dynamic list)",
+		blueprint: `
+{rule_name} {
+    name: "foo",
+		ldflags: [
+			"--nospace_flag",
+			"-z spaceflag",
+		],
+		version_script: "version_script",
+		dynamic_list: "dynamic.list",
+    include_build_directory: false,
+}
+`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"additional_linker_inputs": `[
+        "version_script",
+        "dynamic.list",
+    ]`,
+				"linkopts": `[
+        "--nospace_flag",
+        "-z",
+        "spaceflag",
+        "-Wl,--version-script,$(location version_script)",
+        "-Wl,--dynamic-list,$(location dynamic.list)",
+    ]`,
+			}}},
 	})
 }
 

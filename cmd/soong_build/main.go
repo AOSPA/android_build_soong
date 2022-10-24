@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"android/soong/android"
+	"android/soong/bazel"
 	"android/soong/bp2build"
 	"android/soong/shared"
 	"android/soong/ui/metrics/bp2build_metrics_proto"
@@ -48,11 +49,12 @@ var (
 	delveListen string
 	delvePath   string
 
-	moduleGraphFile   string
-	moduleActionsFile string
-	docFile           string
-	bazelQueryViewDir string
-	bp2buildMarker    string
+	moduleGraphFile     string
+	moduleActionsFile   string
+	docFile             string
+	bazelQueryViewDir   string
+	bazelApiBp2buildDir string
+	bp2buildMarker      string
 
 	cmdlineArgs bootstrap.Args
 )
@@ -81,6 +83,7 @@ func init() {
 	flag.StringVar(&moduleActionsFile, "module_actions_file", "", "JSON file to output inputs/outputs of actions of modules")
 	flag.StringVar(&docFile, "soong_docs", "", "build documentation file to output")
 	flag.StringVar(&bazelQueryViewDir, "bazel_queryview_dir", "", "path to the bazel queryview directory relative to --top")
+	flag.StringVar(&bazelApiBp2buildDir, "bazel_api_bp2build_dir", "", "path to the bazel api_bp2build directory relative to --top")
 	flag.StringVar(&bp2buildMarker, "bp2build_marker", "", "If set, run bp2build, touch the specified marker file then exit")
 	flag.StringVar(&cmdlineArgs.OutFile, "o", "build.ninja", "the Ninja file to output")
 	flag.BoolVar(&cmdlineArgs.EmptyNinjaFile, "empty-ninja-file", false, "write out a 0-byte ninja file")
@@ -129,6 +132,8 @@ func newConfig(availableEnv map[string]string) android.Config {
 		buildMode = android.Bp2build
 	} else if bazelQueryViewDir != "" {
 		buildMode = android.GenerateQueryView
+	} else if bazelApiBp2buildDir != "" {
+		buildMode = android.ApiBp2build
 	} else if moduleGraphFile != "" {
 		buildMode = android.GenerateModuleGraph
 	} else if docFile != "" {
@@ -162,9 +167,14 @@ func runMixedModeBuild(configuration android.Config, ctx *android.Context, extra
 		return configuration.BazelContext.InvokeBazel(configuration)
 	}
 	ctx.SetBeforePrepareBuildActionsHook(bazelHook)
-
 	ninjaDeps := bootstrap.RunBlueprint(cmdlineArgs, bootstrap.DoEverything, ctx.Context, configuration)
 	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
+
+	bazelPaths, err := readBazelPaths(configuration)
+	if err != nil {
+		panic("Bazel deps file not found: " + err.Error())
+	}
+	ninjaDeps = append(ninjaDeps, bazelPaths...)
 
 	globListFiles := writeBuildGlobsNinjaFile(ctx, configuration.SoongOutDir(), configuration)
 	ninjaDeps = append(ninjaDeps, globListFiles...)
@@ -178,12 +188,102 @@ func runQueryView(queryviewDir, queryviewMarker string, configuration android.Co
 	defer ctx.EventHandler.End("queryview")
 	codegenContext := bp2build.NewCodegenContext(configuration, *ctx, bp2build.QueryView)
 	absoluteQueryViewDir := shared.JoinPath(topDir, queryviewDir)
-	if err := createBazelQueryView(codegenContext, absoluteQueryViewDir); err != nil {
+	if err := createBazelWorkspace(codegenContext, absoluteQueryViewDir); err != nil {
 		fmt.Fprintf(os.Stderr, "%s", err)
 		os.Exit(1)
 	}
 
 	touch(shared.JoinPath(topDir, queryviewMarker))
+}
+
+// Run the code-generation phase to convert API contributions to BUILD files.
+// Return marker file for the new synthetic workspace
+func runApiBp2build(configuration android.Config, extraNinjaDeps []string) string {
+	// Create a new context and register mutators that are only meaningful to API export
+	ctx := android.NewContext(configuration)
+	ctx.EventHandler.Begin("api_bp2build")
+	defer ctx.EventHandler.End("api_bp2build")
+	ctx.SetNameInterface(newNameResolver(configuration))
+	ctx.RegisterForApiBazelConversion()
+
+	// Register the Android.bp files in the tree
+	// Add them to the workspace's .d file
+	ctx.SetModuleListFile(cmdlineArgs.ModuleListFile)
+	if paths, err := ctx.ListModulePaths("."); err == nil {
+		extraNinjaDeps = append(extraNinjaDeps, paths...)
+	} else {
+		panic(err)
+	}
+
+	// Run the loading and analysis phase
+	ninjaDeps := bootstrap.RunBlueprint(cmdlineArgs,
+		bootstrap.StopBeforePrepareBuildActions,
+		ctx.Context,
+		configuration)
+	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
+
+	// Add the globbed dependencies
+	globs := writeBuildGlobsNinjaFile(ctx, configuration.SoongOutDir(), configuration)
+	ninjaDeps = append(ninjaDeps, globs...)
+
+	// Run codegen to generate BUILD files
+	codegenContext := bp2build.NewCodegenContext(configuration, *ctx, bp2build.ApiBp2build)
+	absoluteApiBp2buildDir := shared.JoinPath(topDir, bazelApiBp2buildDir)
+	if err := createBazelWorkspace(codegenContext, absoluteApiBp2buildDir); err != nil {
+		fmt.Fprintf(os.Stderr, "%s", err)
+		os.Exit(1)
+	}
+	ninjaDeps = append(ninjaDeps, codegenContext.AdditionalNinjaDeps()...)
+
+	// Create soong_injection repository
+	soongInjectionFiles := bp2build.CreateSoongInjectionFiles(configuration, bp2build.CodegenMetrics{})
+	absoluteSoongInjectionDir := shared.JoinPath(topDir, configuration.SoongOutDir(), bazel.SoongInjectionDirName)
+	for _, file := range soongInjectionFiles {
+		writeReadOnlyFile(absoluteSoongInjectionDir, file)
+	}
+
+	workspace := shared.JoinPath(configuration.SoongOutDir(), "api_bp2build")
+
+	excludes := bazelArtifacts()
+	// Exclude all src BUILD files
+	excludes = append(excludes, apiBuildFileExcludes()...)
+
+	// Create the symlink forest
+	symlinkDeps := bp2build.PlantSymlinkForest(
+		configuration,
+		topDir,
+		workspace,
+		bazelApiBp2buildDir,
+		".",
+		excludes)
+	ninjaDeps = append(ninjaDeps, symlinkDeps...)
+
+	workspaceMarkerFile := workspace + ".marker"
+	writeDepFile(workspaceMarkerFile, *ctx.EventHandler, ninjaDeps)
+	touch(shared.JoinPath(topDir, workspaceMarkerFile))
+	return workspaceMarkerFile
+}
+
+// With some exceptions, api_bp2build does not have any dependencies on the checked-in BUILD files
+// Exclude them from the generated workspace to prevent unrelated errors during the loading phase
+func apiBuildFileExcludes() []string {
+	ret := make([]string, 0)
+
+	srcs, err := getExistingBazelRelatedFiles(topDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error determining existing Bazel-related files: %s\n", err)
+		os.Exit(1)
+	}
+	for _, src := range srcs {
+		if src != "WORKSPACE" &&
+			src != "BUILD" &&
+			src != "BUILD.bazel" &&
+			!strings.HasPrefix(src, "build/bazel") &&
+			!strings.HasPrefix(src, "prebuilts/clang") {
+			ret = append(ret, src)
+		}
+	}
+	return ret
 }
 
 func writeMetrics(configuration android.Config, eventHandler metrics.EventHandler, metricsDir string) {
@@ -248,6 +348,8 @@ func doChosenActivity(ctx *android.Context, configuration android.Config, extraN
 		return bp2buildMarker
 	} else if configuration.IsMixedBuildsEnabled() {
 		runMixedModeBuild(configuration, ctx, extraNinjaDeps)
+	} else if configuration.BuildMode == android.ApiBp2build {
+		return runApiBp2build(configuration, extraNinjaDeps)
 	} else {
 		var stopBefore bootstrap.StopBefore
 		if configuration.BuildMode == android.GenerateModuleGraph {
@@ -476,12 +578,22 @@ func getExistingBazelRelatedFiles(topDir string) ([]string, error) {
 	return files, nil
 }
 
+func bazelArtifacts() []string {
+	return []string{
+		"bazel-bin",
+		"bazel-genfiles",
+		"bazel-out",
+		"bazel-testlogs",
+		"bazel-" + filepath.Base(topDir),
+	}
+}
+
 // Run Soong in the bp2build mode. This creates a standalone context that registers
 // an alternate pipeline of mutators and singletons specifically for generating
 // Bazel BUILD files instead of Ninja files.
 func runBp2Build(configuration android.Config, extraNinjaDeps []string) {
+	var codegenMetrics bp2build.CodegenMetrics
 	eventHandler := metrics.EventHandler{}
-	var metrics bp2build.CodegenMetrics
 	eventHandler.Do("bp2build", func() {
 
 		// Register an alternate set of singletons and mutators for bazel
@@ -494,43 +606,43 @@ func runBp2Build(configuration android.Config, extraNinjaDeps []string) {
 		bp2buildCtx.SetNameInterface(newNameResolver(configuration))
 		bp2buildCtx.RegisterForBazelConversion()
 
+		var ninjaDeps []string
+		ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
+
 		// The bp2build process is a purely functional process that only depends on
 		// Android.bp files. It must not depend on the values of per-build product
 		// configurations or variables, since those will generate different BUILD
 		// files based on how the user has configured their tree.
 		bp2buildCtx.SetModuleListFile(cmdlineArgs.ModuleListFile)
-		modulePaths, err := bp2buildCtx.ListModulePaths(".")
-		if err != nil {
+		if modulePaths, err := bp2buildCtx.ListModulePaths("."); err != nil {
 			panic(err)
+		} else {
+			ninjaDeps = append(ninjaDeps, modulePaths...)
 		}
-
-		extraNinjaDeps = append(extraNinjaDeps, modulePaths...)
 
 		// Run the loading and analysis pipeline to prepare the graph of regular
 		// Modules parsed from Android.bp files, and the BazelTargetModules mapped
 		// from the regular Modules.
-		blueprintArgs := cmdlineArgs
-		ninjaDeps := bootstrap.RunBlueprint(blueprintArgs, bootstrap.StopBeforePrepareBuildActions, bp2buildCtx.Context, configuration)
-		ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
+		eventHandler.Do("bootstrap", func() {
+			blueprintArgs := cmdlineArgs
+			bootstrapDeps := bootstrap.RunBlueprint(blueprintArgs, bootstrap.StopBeforePrepareBuildActions, bp2buildCtx.Context, configuration)
+			ninjaDeps = append(ninjaDeps, bootstrapDeps...)
+		})
 
 		globListFiles := writeBuildGlobsNinjaFile(bp2buildCtx, configuration.SoongOutDir(), configuration)
 		ninjaDeps = append(ninjaDeps, globListFiles...)
 
 		// Run the code-generation phase to convert BazelTargetModules to BUILD files
-		// and print conversion metrics to the user.
+		// and print conversion codegenMetrics to the user.
 		codegenContext := bp2build.NewCodegenContext(configuration, *bp2buildCtx, bp2build.Bp2Build)
-		metrics = bp2build.Codegen(codegenContext)
+		eventHandler.Do("codegen", func() {
+			codegenMetrics = bp2build.Codegen(codegenContext)
+		})
 
 		generatedRoot := shared.JoinPath(configuration.SoongOutDir(), "bp2build")
 		workspaceRoot := shared.JoinPath(configuration.SoongOutDir(), "workspace")
 
-		excludes := []string{
-			"bazel-bin",
-			"bazel-genfiles",
-			"bazel-out",
-			"bazel-testlogs",
-			"bazel-" + filepath.Base(topDir),
-		}
+		excludes := bazelArtifacts()
 
 		if outDir[0] != '/' {
 			excludes = append(excludes, outDir)
@@ -547,11 +659,17 @@ func runBp2Build(configuration android.Config, extraNinjaDeps []string) {
 
 		excludes = append(excludes, getTemporaryExcludes()...)
 
-		symlinkForestDeps := bp2build.PlantSymlinkForest(
-			configuration, topDir, workspaceRoot, generatedRoot, ".", excludes)
+		// PlantSymlinkForest() returns all the directories that were readdir()'ed.
+		// Such a directory SHOULD be added to `ninjaDeps` so that a child directory
+		// or file created/deleted under it would trigger an update of the symlink
+		// forest.
+		eventHandler.Do("symlink_forest", func() {
+			symlinkForestDeps := bp2build.PlantSymlinkForest(
+				configuration, topDir, workspaceRoot, generatedRoot, ".", excludes)
+			ninjaDeps = append(ninjaDeps, symlinkForestDeps...)
+		})
 
 		ninjaDeps = append(ninjaDeps, codegenContext.AdditionalNinjaDeps()...)
-		ninjaDeps = append(ninjaDeps, symlinkForestDeps...)
 
 		writeDepFile(bp2buildMarker, eventHandler, ninjaDeps)
 
@@ -563,9 +681,9 @@ func runBp2Build(configuration android.Config, extraNinjaDeps []string) {
 	// for queryview, since that's a total repo-wide conversion and there's a
 	// 1:1 mapping for each module.
 	if configuration.IsEnvTrue("BP2BUILD_VERBOSE") {
-		metrics.Print()
+		codegenMetrics.Print()
 	}
-	writeBp2BuildMetrics(&metrics, configuration, eventHandler)
+	writeBp2BuildMetrics(&codegenMetrics, configuration, eventHandler)
 }
 
 // Write Bp2Build metrics into $LOG_DIR
@@ -585,4 +703,15 @@ func writeBp2BuildMetrics(codegenMetrics *bp2build.CodegenMetrics,
 		os.Exit(1)
 	}
 	codegenMetrics.Write(metricsDir)
+}
+
+func readBazelPaths(configuration android.Config) ([]string, error) {
+	depsPath := configuration.Getenv("BAZEL_DEPS_FILE")
+
+	data, err := os.ReadFile(depsPath)
+	if err != nil {
+		return nil, err
+	}
+	paths := strings.Split(strings.TrimSpace(string(data)), "\n")
+	return paths, nil
 }

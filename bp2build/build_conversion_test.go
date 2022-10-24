@@ -369,6 +369,7 @@ custom {
       x86_64:  { arch_paths: ["x86_64.txt"] },
       arm:  { arch_paths: ["arm.txt"] },
       arm64:  { arch_paths: ["arm64.txt"] },
+      riscv64: { arch_paths: ["riscv64.txt"] },
     },
     target: {
       linux: { arch_paths: ["linux.txt"] },
@@ -399,6 +400,10 @@ custom {
         ],
         "//build/bazel/platforms/arch:arm64": [
             "arm64.txt",
+            "lib64.txt",
+        ],
+        "//build/bazel/platforms/arch:riscv64": [
+            "riscv64.txt",
             "lib64.txt",
         ],
         "//build/bazel/platforms/arch:x86": [
@@ -1847,4 +1852,28 @@ filegroup {
 				MakeBazelTargetNoRestrictions("android_license", "my_license", AttrNameToString{}),
 			},
 		})
+}
+
+func TestGenerateApiBazelTargets(t *testing.T) {
+	bp := `
+	custom {
+		name: "foo",
+		api: "foo.txt",
+	}
+	`
+	expectedBazelTarget := MakeBazelTarget(
+		"custom_api_contribution",
+		"foo",
+		AttrNameToString{
+			"api": `"foo.txt"`,
+		},
+	)
+	registerCustomModule := func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("custom", customModuleFactoryHostAndDevice)
+	}
+	RunApiBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		Blueprint:            bp,
+		ExpectedBazelTargets: []string{expectedBazelTarget},
+		Description:          "Generating API contribution Bazel targets for custom module",
+	})
 }

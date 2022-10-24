@@ -447,9 +447,11 @@ type Module struct {
 	// installed file for hostdex copy
 	hostdexInstallFile android.InstallPath
 
-	// list of .java files and srcjars that was passed to javac
-	compiledJavaSrcs android.Paths
-	compiledSrcJars  android.Paths
+	// list of unique .java and .kt source files
+	uniqueSrcFiles android.Paths
+
+	// list of srcjars that was passed to javac
+	compiledSrcJars android.Paths
 
 	// manifest file to use instead of properties.Manifest
 	overrideManifest android.OptionalPath
@@ -530,7 +532,7 @@ func (j *Module) checkSdkVersions(ctx android.ModuleContext) {
 		// TODO(satayev): cover other types as well, e.g. imports
 		case *Library, *AndroidLibrary:
 			switch tag {
-			case bootClasspathTag, libTag, staticLibTag, java9LibTag:
+			case bootClasspathTag, sdkLibTag, libTag, staticLibTag, java9LibTag:
 				j.checkSdkLinkType(ctx, module.(moduleWithSdkDep), tag.(dependencyTag))
 			}
 		}
@@ -893,7 +895,7 @@ func (j *Module) collectBuilderFlags(ctx android.ModuleContext, deps deps) javaB
 
 	epEnabled := j.properties.Errorprone.Enabled
 	if (ctx.Config().RunErrorProne() && epEnabled == nil) || Bool(epEnabled) {
-		if config.ErrorProneClasspath == nil && ctx.Config().TestProductVariables == nil {
+		if config.ErrorProneClasspath == nil && !ctx.Config().RunningInsideUnitTest() {
 			ctx.ModuleErrorf("cannot build with Error Prone, missing external/error_prone?")
 		}
 
@@ -1078,15 +1080,26 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	jarName := ctx.ModuleName() + ".jar"
 
-	javaSrcFiles := srcFiles.FilterByExt(".java")
-	var uniqueSrcFiles android.Paths
+	var uniqueJavaFiles android.Paths
 	set := make(map[string]bool)
-	for _, v := range javaSrcFiles {
+	for _, v := range srcFiles.FilterByExt(".java") {
 		if _, found := set[v.String()]; !found {
 			set[v.String()] = true
-			uniqueSrcFiles = append(uniqueSrcFiles, v)
+			uniqueJavaFiles = append(uniqueJavaFiles, v)
 		}
 	}
+	var uniqueKtFiles android.Paths
+	for _, v := range srcFiles.FilterByExt(".kt") {
+		if _, found := set[v.String()]; !found {
+			set[v.String()] = true
+			uniqueKtFiles = append(uniqueKtFiles, v)
+		}
+	}
+
+	var uniqueSrcFiles android.Paths
+	uniqueSrcFiles = append(uniqueSrcFiles, uniqueJavaFiles...)
+	uniqueSrcFiles = append(uniqueSrcFiles, uniqueKtFiles...)
+	j.uniqueSrcFiles = uniqueSrcFiles
 
 	// We don't currently run annotation processors in turbine, which means we can't use turbine
 	// generated header jars when an annotation processor that generates API is enabled.  One
@@ -1094,7 +1107,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	//  is used to run all of the annotation processors.
 	disableTurbine := deps.disableTurbine
 
-	// Collect .java files for AIDEGen
+	// Collect .java and .kt files for AIDEGen
 	j.expandIDEInfoCompiledSrcs = append(j.expandIDEInfoCompiledSrcs, uniqueSrcFiles.Strings()...)
 
 	var kotlinJars android.Paths
@@ -1132,12 +1145,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			flags.kotlincFlags += "$kotlincFlags"
 		}
 
-		var kotlinSrcFiles android.Paths
-		kotlinSrcFiles = append(kotlinSrcFiles, uniqueSrcFiles...)
-		kotlinSrcFiles = append(kotlinSrcFiles, srcFiles.FilterByExt(".kt")...)
-
-		// Collect .kt files for AIDEGen
-		j.expandIDEInfoCompiledSrcs = append(j.expandIDEInfoCompiledSrcs, srcFiles.FilterByExt(".kt").Strings()...)
+		// Collect common .kt files for AIDEGen
 		j.expandIDEInfoCompiledSrcs = append(j.expandIDEInfoCompiledSrcs, kotlinCommonSrcFiles.Strings()...)
 
 		flags.classpath = append(flags.classpath, deps.kotlinStdlib...)
@@ -1150,7 +1158,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			// Use kapt for annotation processing
 			kaptSrcJar := android.PathForModuleOut(ctx, "kapt", "kapt-sources.jar")
 			kaptResJar := android.PathForModuleOut(ctx, "kapt", "kapt-res.jar")
-			kotlinKapt(ctx, kaptSrcJar, kaptResJar, kotlinSrcFiles, kotlinCommonSrcFiles, srcJars, flags)
+			kotlinKapt(ctx, kaptSrcJar, kaptResJar, uniqueSrcFiles, kotlinCommonSrcFiles, srcJars, flags)
 			srcJars = append(srcJars, kaptSrcJar)
 			kotlinJars = append(kotlinJars, kaptResJar)
 			// Disable annotation processing in javac, it's already been handled by kapt
@@ -1160,7 +1168,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 		kotlinJar := android.PathForModuleOut(ctx, "kotlin", jarName)
 		kotlinHeaderJar := android.PathForModuleOut(ctx, "kotlin_headers", jarName)
-		kotlinCompile(ctx, kotlinJar, kotlinHeaderJar, kotlinSrcFiles, kotlinCommonSrcFiles, srcJars, flags)
+		kotlinCompile(ctx, kotlinJar, kotlinHeaderJar, uniqueSrcFiles, kotlinCommonSrcFiles, srcJars, flags)
 		if ctx.Failed() {
 			return
 		}
@@ -1185,8 +1193,6 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	jars := append(android.Paths(nil), kotlinJars...)
 
-	// Store the list of .java files that was passed to javac
-	j.compiledJavaSrcs = uniqueSrcFiles
 	j.compiledSrcJars = srcJars
 
 	enableSharding := false
@@ -1201,12 +1207,12 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			// with sharding enabled. See: b/77284273.
 		}
 		headerJarFileWithoutDepsOrJarjar, j.headerJarFile =
-			j.compileJavaHeader(ctx, uniqueSrcFiles, srcJars, deps, flags, jarName, kotlinHeaderJars)
+			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName, kotlinHeaderJars)
 		if ctx.Failed() {
 			return
 		}
 	}
-	if len(uniqueSrcFiles) > 0 || len(srcJars) > 0 {
+	if len(uniqueJavaFiles) > 0 || len(srcJars) > 0 {
 		hasErrorproneableFiles := false
 		for _, ext := range j.sourceExtensions {
 			if ext != ".proto" && ext != ".aidl" {
@@ -1231,7 +1237,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			errorproneFlags := enableErrorproneFlags(flags)
 			errorprone := android.PathForModuleOut(ctx, "errorprone", jarName)
 
-			transformJavaToClasses(ctx, errorprone, -1, uniqueSrcFiles, srcJars, errorproneFlags, nil,
+			transformJavaToClasses(ctx, errorprone, -1, uniqueJavaFiles, srcJars, errorproneFlags, nil,
 				"errorprone", "errorprone")
 
 			extraJarDeps = append(extraJarDeps, errorprone)
@@ -1243,8 +1249,8 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			}
 			shardSize := int(*(j.properties.Javac_shard_size))
 			var shardSrcs []android.Paths
-			if len(uniqueSrcFiles) > 0 {
-				shardSrcs = android.ShardPaths(uniqueSrcFiles, shardSize)
+			if len(uniqueJavaFiles) > 0 {
+				shardSrcs = android.ShardPaths(uniqueJavaFiles, shardSize)
 				for idx, shardSrc := range shardSrcs {
 					classes := j.compileJavaClasses(ctx, jarName, idx, shardSrc,
 						nil, flags, extraJarDeps)
@@ -1257,7 +1263,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 				jars = append(jars, classes)
 			}
 		} else {
-			classes := j.compileJavaClasses(ctx, jarName, -1, uniqueSrcFiles, srcJars, flags, extraJarDeps)
+			classes := j.compileJavaClasses(ctx, jarName, -1, uniqueJavaFiles, srcJars, flags, extraJarDeps)
 			jars = append(jars, classes)
 		}
 		if ctx.Failed() {
@@ -1955,7 +1961,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 
 		if dep, ok := module.(SdkLibraryDependency); ok {
 			switch tag {
-			case libTag:
+			case sdkLibTag, libTag:
 				depHeaderJars := dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))
 				deps.classpath = append(deps.classpath, depHeaderJars...)
 				deps.dexClasspath = append(deps.dexClasspath, depHeaderJars...)
@@ -1975,7 +1981,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			switch tag {
 			case bootClasspathTag:
 				deps.bootClasspath = append(deps.bootClasspath, dep.HeaderJars...)
-			case libTag, instrumentationForTag:
+			case sdkLibTag, libTag, instrumentationForTag:
 				if _, ok := module.(*Plugin); ok {
 					ctx.ModuleErrorf("a java_plugin (%s) cannot be used as a libs dependency", otherName)
 				}
@@ -2048,7 +2054,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			}
 		} else if dep, ok := module.(android.SourceFileProducer); ok {
 			switch tag {
-			case libTag:
+			case sdkLibTag, libTag:
 				checkProducesJars(ctx, dep)
 				deps.classpath = append(deps.classpath, dep.Srcs()...)
 				deps.dexClasspath = append(deps.classpath, dep.Srcs()...)

@@ -870,9 +870,9 @@ filegroup {
 			})}})
 }
 
-func TestCcLibraryNonConfiguredVersionScript(t *testing.T) {
+func TestCcLibraryNonConfiguredVersionScriptAndDynamicList(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_library non-configured version script",
+		Description:                "cc_library non-configured version script and dynamic list",
 		ModuleTypeUnderTest:        "cc_library",
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Dir:                        "foo/bar",
@@ -882,6 +882,7 @@ cc_library {
     name: "a",
     srcs: ["a.cpp"],
     version_script: "v.map",
+    dynamic_list: "dynamic.list",
     bazel_module: { bp2build_available: true },
     include_build_directory: false,
 }
@@ -889,17 +890,23 @@ cc_library {
 		},
 		Blueprint: soongCcLibraryPreamble,
 		ExpectedBazelTargets: makeCcLibraryTargets("a", AttrNameToString{
-			"additional_linker_inputs": `["v.map"]`,
-			"linkopts":                 `["-Wl,--version-script,$(location v.map)"]`,
-			"srcs":                     `["a.cpp"]`,
+			"additional_linker_inputs": `[
+        "v.map",
+        "dynamic.list",
+    ]`,
+			"linkopts": `[
+        "-Wl,--version-script,$(location v.map)",
+        "-Wl,--dynamic-list,$(location dynamic.list)",
+    ]`,
+			"srcs": `["a.cpp"]`,
 		}),
 	},
 	)
 }
 
-func TestCcLibraryConfiguredVersionScript(t *testing.T) {
+func TestCcLibraryConfiguredVersionScriptAndDynamicList(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_library configured version script",
+		Description:                "cc_library configured version script and dynamic list",
 		ModuleTypeUnderTest:        "cc_library",
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Dir:                        "foo/bar",
@@ -911,9 +918,11 @@ cc_library {
    arch: {
      arm: {
        version_script: "arm.map",
+       dynamic_list: "dynamic_arm.list",
      },
      arm64: {
        version_script: "arm64.map",
+       dynamic_list: "dynamic_arm64.list",
      },
    },
 
@@ -925,19 +934,71 @@ cc_library {
 		Blueprint: soongCcLibraryPreamble,
 		ExpectedBazelTargets: makeCcLibraryTargets("a", AttrNameToString{
 			"additional_linker_inputs": `select({
-        "//build/bazel/platforms/arch:arm": ["arm.map"],
-        "//build/bazel/platforms/arch:arm64": ["arm64.map"],
+        "//build/bazel/platforms/arch:arm": [
+            "arm.map",
+            "dynamic_arm.list",
+        ],
+        "//build/bazel/platforms/arch:arm64": [
+            "arm64.map",
+            "dynamic_arm64.list",
+        ],
         "//conditions:default": [],
     })`,
 			"linkopts": `select({
-        "//build/bazel/platforms/arch:arm": ["-Wl,--version-script,$(location arm.map)"],
-        "//build/bazel/platforms/arch:arm64": ["-Wl,--version-script,$(location arm64.map)"],
+        "//build/bazel/platforms/arch:arm": [
+            "-Wl,--version-script,$(location arm.map)",
+            "-Wl,--dynamic-list,$(location dynamic_arm.list)",
+        ],
+        "//build/bazel/platforms/arch:arm64": [
+            "-Wl,--version-script,$(location arm64.map)",
+            "-Wl,--dynamic-list,$(location dynamic_arm64.list)",
+        ],
         "//conditions:default": [],
     })`,
 			"srcs": `["a.cpp"]`,
 		}),
 	},
 	)
+}
+
+func TestCcLibraryLdflagsSplitBySpaceExceptSoongAdded(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "ldflags are split by spaces except for the ones added by soong (version script and dynamic list)",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Filesystem: map[string]string{
+			"version_script": "",
+			"dynamic.list":   "",
+		},
+		Blueprint: `
+cc_library {
+    name: "foo",
+    ldflags: [
+        "--nospace_flag",
+        "-z spaceflag",
+    ],
+    version_script: "version_script",
+    dynamic_list: "dynamic.list",
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"additional_linker_inputs": `[
+        "version_script",
+        "dynamic.list",
+    ]`,
+				"linkopts": `[
+        "--nospace_flag",
+        "-z",
+        "spaceflag",
+        "-Wl,--version-script,$(location version_script)",
+        "-Wl,--dynamic-list,$(location dynamic.list)",
+    ]`,
+			}),
+		},
+	})
 }
 
 func TestCcLibrarySharedLibs(t *testing.T) {
@@ -2680,6 +2741,205 @@ cc_library {
 		ExpectedBazelTargets: expectedBazelTargets,
 	},
 	)
+}
+
+func TestCcApiContributionsWithHdrs(t *testing.T) {
+	bp := `
+	cc_library {
+		name: "libfoo",
+		stubs: { symbol_file: "libfoo.map.txt", versions: ["28", "29", "current"] },
+		llndk: { symbol_file: "libfoo.map.txt", override_export_include_dirs: ["dir2"]},
+		export_include_dirs: ["dir1"],
+	}
+	`
+	expectedBazelTargets := []string{
+		MakeBazelTarget(
+			"cc_api_library_headers",
+			"libfoo.systemapi.headers",
+			AttrNameToString{
+				"export_includes": `["dir1"]`,
+			}),
+		MakeBazelTarget(
+			"cc_api_library_headers",
+			"libfoo.vendorapi.headers",
+			AttrNameToString{
+				"export_includes": `["dir2"]`,
+			}),
+		MakeBazelTarget(
+			"cc_api_contribution",
+			"libfoo.contribution",
+			AttrNameToString{
+				"api":          `"libfoo.map.txt"`,
+				"library_name": `"libfoo"`,
+				"api_surfaces": `[
+        "systemapi",
+        "vendorapi",
+    ]`,
+				"hdrs": `[
+        ":libfoo.systemapi.headers",
+        ":libfoo.vendorapi.headers",
+    ]`,
+			}),
+	}
+	RunApiBp2BuildTestCase(t, cc.RegisterLibraryBuildComponents, Bp2buildTestCase{
+		Blueprint:            bp,
+		Description:          "cc API contributions to systemapi and vendorapi",
+		ExpectedBazelTargets: expectedBazelTargets,
+	})
+}
+
+func TestCcApiSurfaceCombinations(t *testing.T) {
+	testCases := []struct {
+		bp                  string
+		expectedApi         string
+		expectedApiSurfaces string
+		description         string
+	}{
+		{
+			bp: `
+			cc_library {
+				name: "a",
+				stubs: {symbol_file: "a.map.txt"},
+			}`,
+			expectedApi:         `"a.map.txt"`,
+			expectedApiSurfaces: `["systemapi"]`,
+			description:         "Library that contributes to systemapi",
+		},
+		{
+			bp: `
+			cc_library {
+				name: "a",
+				llndk: {symbol_file: "a.map.txt"},
+			}`,
+			expectedApi:         `"a.map.txt"`,
+			expectedApiSurfaces: `["vendorapi"]`,
+			description:         "Library that contributes to vendorapi",
+		},
+		{
+			bp: `
+			cc_library {
+				name: "a",
+				llndk: {symbol_file: "a.map.txt"},
+				stubs: {symbol_file: "a.map.txt"},
+			}`,
+			expectedApi: `"a.map.txt"`,
+			expectedApiSurfaces: `[
+        "systemapi",
+        "vendorapi",
+    ]`,
+			description: "Library that contributes to systemapi and vendorapi",
+		},
+	}
+	for _, testCase := range testCases {
+		expectedBazelTargets := []string{
+			MakeBazelTarget(
+				"cc_api_contribution",
+				"a.contribution",
+				AttrNameToString{
+					"library_name": `"a"`,
+					"hdrs":         `[]`,
+					"api":          testCase.expectedApi,
+					"api_surfaces": testCase.expectedApiSurfaces,
+				},
+			),
+		}
+		RunApiBp2BuildTestCase(t, cc.RegisterLibraryBuildComponents, Bp2buildTestCase{
+			Blueprint:            testCase.bp,
+			Description:          testCase.description,
+			ExpectedBazelTargets: expectedBazelTargets,
+		})
+	}
+}
+
+// llndk struct property in Soong provides users with several options to configure the exported include dirs
+// Test the generated bazel targets for the different configurations
+func TestCcVendorApiHeaders(t *testing.T) {
+	testCases := []struct {
+		bp                     string
+		expectedIncludes       string
+		expectedSystemIncludes string
+		description            string
+	}{
+		{
+			bp: `
+			cc_library {
+				name: "a",
+				export_include_dirs: ["include"],
+				export_system_include_dirs: ["base_system_include"],
+				llndk: {
+					symbol_file: "a.map.txt",
+					export_headers_as_system: true,
+				},
+			}
+			`,
+			expectedIncludes: "",
+			expectedSystemIncludes: `[
+        "base_system_include",
+        "include",
+    ]`,
+			description: "Headers are exported as system to API surface",
+		},
+		{
+			bp: `
+			cc_library {
+				name: "a",
+				export_include_dirs: ["include"],
+				export_system_include_dirs: ["base_system_include"],
+				llndk: {
+					symbol_file: "a.map.txt",
+					override_export_include_dirs: ["llndk_include"],
+				},
+			}
+			`,
+			expectedIncludes:       `["llndk_include"]`,
+			expectedSystemIncludes: `["base_system_include"]`,
+			description:            "Non-system Headers are ovverriden before export to API surface",
+		},
+		{
+			bp: `
+			cc_library {
+				name: "a",
+				export_include_dirs: ["include"],
+				export_system_include_dirs: ["base_system_include"],
+				llndk: {
+					symbol_file: "a.map.txt",
+					override_export_include_dirs: ["llndk_include"],
+					export_headers_as_system: true,
+				},
+			}
+			`,
+			expectedIncludes: "", // includes are set to nil
+			expectedSystemIncludes: `[
+        "base_system_include",
+        "llndk_include",
+    ]`,
+			description: "System Headers are extended before export to API surface",
+		},
+	}
+	for _, testCase := range testCases {
+		attrs := AttrNameToString{}
+		if testCase.expectedIncludes != "" {
+			attrs["export_includes"] = testCase.expectedIncludes
+		}
+		if testCase.expectedSystemIncludes != "" {
+			attrs["export_system_includes"] = testCase.expectedSystemIncludes
+		}
+
+		expectedBazelTargets := []string{
+			MakeBazelTarget("cc_api_library_headers", "a.vendorapi.headers", attrs),
+			// Create a target for cc_api_contribution target
+			MakeBazelTarget("cc_api_contribution", "a.contribution", AttrNameToString{
+				"api":          `"a.map.txt"`,
+				"api_surfaces": `["vendorapi"]`,
+				"hdrs":         `[":a.vendorapi.headers"]`,
+				"library_name": `"a"`,
+			}),
+		}
+		RunApiBp2BuildTestCase(t, cc.RegisterLibraryBuildComponents, Bp2buildTestCase{
+			Blueprint:            testCase.bp,
+			ExpectedBazelTargets: expectedBazelTargets,
+		})
+	}
 }
 
 func TestCcLibraryStubsAcrossConfigsDuplicatesRemoved(t *testing.T) {
