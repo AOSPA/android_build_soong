@@ -2191,6 +2191,38 @@ func TestApexMinSdkVersion_Okay(t *testing.T) {
 	`)
 }
 
+func TestApexMinSdkVersion_MinApiForArch(t *testing.T) {
+	// Tests that an apex dependency with min_sdk_version higher than the
+	// min_sdk_version of the apex is allowed as long as the dependency's
+	// min_sdk_version is less than or equal to the api level that the
+	// architecture was introduced in.  In this case, arm64 didn't exist
+	// until api level 21, so the arm64 code will never need to run on
+	// an api level 20 device, even if other architectures of the apex
+	// will.
+	testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			native_shared_libs: ["libfoo"],
+			min_sdk_version: "20",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "libfoo",
+			srcs: ["mylib.cpp"],
+			apex_available: ["myapex"],
+			min_sdk_version: "21",
+			stl: "none",
+		}
+	`)
+}
+
 func TestJavaStableSdkVersion(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -4096,6 +4128,76 @@ func TestApexName(t *testing.T) {
 	androidMk := builder.String()
 	ensureContains(t, androidMk, "LOCAL_MODULE := mylib.myapex\n")
 	ensureNotContains(t, androidMk, "LOCAL_MODULE := mylib.com.android.myapex\n")
+}
+
+func TestCompileMultilibProp(t *testing.T) {
+	testCases := []struct {
+		compileMultiLibProp string
+		containedLibs       []string
+		notContainedLibs    []string
+	}{
+		{
+			containedLibs: []string{
+				"image.apex/lib64/mylib.so",
+				"image.apex/lib/mylib.so",
+			},
+			compileMultiLibProp: `compile_multilib: "both",`,
+		},
+		{
+			containedLibs:       []string{"image.apex/lib64/mylib.so"},
+			notContainedLibs:    []string{"image.apex/lib/mylib.so"},
+			compileMultiLibProp: `compile_multilib: "first",`,
+		},
+		{
+			containedLibs:    []string{"image.apex/lib64/mylib.so"},
+			notContainedLibs: []string{"image.apex/lib/mylib.so"},
+			// compile_multilib, when unset, should result to the same output as when compile_multilib is "first"
+		},
+		{
+			containedLibs:       []string{"image.apex/lib64/mylib.so"},
+			notContainedLibs:    []string{"image.apex/lib/mylib.so"},
+			compileMultiLibProp: `compile_multilib: "64",`,
+		},
+		{
+			containedLibs:       []string{"image.apex/lib/mylib.so"},
+			notContainedLibs:    []string{"image.apex/lib64/mylib.so"},
+			compileMultiLibProp: `compile_multilib: "32",`,
+		},
+	}
+	for _, testCase := range testCases {
+		ctx := testApex(t, fmt.Sprintf(`
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				%s
+				native_shared_libs: ["mylib"],
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+			cc_library {
+				name: "mylib",
+				srcs: ["mylib.cpp"],
+				apex_available: [
+					"//apex_available:platform",
+					"myapex",
+			],
+			}
+		`, testCase.compileMultiLibProp),
+		)
+		module := ctx.ModuleForTests("myapex", "android_common_myapex_image")
+		apexRule := module.Rule("apexRule")
+		copyCmds := apexRule.Args["copy_commands"]
+		for _, containedLib := range testCase.containedLibs {
+			ensureContains(t, copyCmds, containedLib)
+		}
+		for _, notContainedLib := range testCase.notContainedLibs {
+			ensureNotContains(t, copyCmds, notContainedLib)
+		}
+	}
 }
 
 func TestNonTestApex(t *testing.T) {
