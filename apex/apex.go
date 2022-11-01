@@ -2665,12 +2665,13 @@ func (o *OverrideApex) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 		// Certificate
 		if overridableProperties.Certificate == nil {
-			// delegated to the rule attr default
-			attrs.Certificate = nil
+			// If overridableProperties.Certificate is nil, clear this out as
+			// well with zeroed structs, so the override_apex does not use the
+			// base apex's certificate.
+			attrs.Certificate = bazel.LabelAttribute{}
+			attrs.Certificate_name = bazel.StringAttribute{}
 		} else {
-			certificateName, certificate := java.ParseCertificateToAttribute(ctx, overridableProperties.Certificate)
-			attrs.Certificate_name = certificateName
-			attrs.Certificate = certificate
+			attrs.Certificate, attrs.Certificate_name = android.BazelStringOrLabelFromProp(ctx, overridableProperties.Certificate)
 		}
 
 		// Prebuilts
@@ -2738,11 +2739,6 @@ func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
 	minApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
 	if minApiLevel.IsNone() {
 		return ""
-	}
-
-	archMinApiLevel := cc.MinApiForArch(ctx, a.MultiTargets()[0].Arch.ArchType)
-	if !archMinApiLevel.IsNone() && archMinApiLevel.CompareTo(minApiLevel) > 0 {
-		minApiLevel = archMinApiLevel
 	}
 
 	overrideMinSdkValue := ctx.DeviceConfig().ApexGlobalMinSdkVersionOverride()
@@ -3334,8 +3330,8 @@ type bazelApexBundleAttributes struct {
 	Android_manifest      bazel.LabelAttribute
 	File_contexts         bazel.LabelAttribute
 	Key                   bazel.LabelAttribute
-	Certificate           *bazel.Label // used when the certificate prop is a module
-	Certificate_name      *string      // used when the certificate prop is a string
+	Certificate           bazel.LabelAttribute  // used when the certificate prop is a module
+	Certificate_name      bazel.StringAttribute // used when the certificate prop is a string
 	Min_sdk_version       *string
 	Updatable             bazel.BoolAttribute
 	Installable           bazel.BoolAttribute
@@ -3397,13 +3393,19 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		keyLabelAttribute.SetValue(android.BazelLabelForModuleDepSingle(ctx, *a.overridableProperties.Key))
 	}
 
-	certificateName, certificate := java.ParseCertificateToAttribute(ctx, a.overridableProperties.Certificate)
+	// Certificate
+	certificate, certificateName := android.BazelStringOrLabelFromProp(ctx, a.overridableProperties.Certificate)
 
 	nativeSharedLibs := &convertedNativeSharedLibs{
 		Native_shared_libs_32: bazel.LabelListAttribute{},
 		Native_shared_libs_64: bazel.LabelListAttribute{},
 	}
-	compileMultilib := "both"
+
+	// https://cs.android.com/android/platform/superproject/+/master:build/soong/android/arch.go;l=698;drc=f05b0d35d2fbe51be9961ce8ce8031f840295c68
+	// https://cs.android.com/android/platform/superproject/+/master:build/soong/apex/apex.go;l=2549;drc=ec731a83e3e2d80a1254e32fd4ad7ef85e262669
+	// In Soong, decodeMultilib, used to get multilib, return "first" if defaultMultilib is set to "common".
+	// Since apex sets defaultMultilib to be "common", equivalent compileMultilib in bp2build for apex should be "first"
+	compileMultilib := "first"
 	if a.CompileMultilib() != nil {
 		compileMultilib = *a.CompileMultilib()
 	}

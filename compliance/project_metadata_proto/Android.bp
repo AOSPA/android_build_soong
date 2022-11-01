@@ -1,4 +1,4 @@
-// Copyright 2017 Google Inc. All rights reserved.
+// Copyright 2021 Google Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,34 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package python
-
-import (
-	"android/soong/android"
-)
-
-func init() {
-	android.RegisterModuleType("python_defaults", DefaultsFactory)
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-type Defaults struct {
-	android.ModuleBase
-	android.DefaultsModuleBase
-}
-
-func (d *Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-}
-
-func DefaultsFactory() android.Module {
-	module := &Defaults{}
-
-	module.AddProperties(
-		&BaseProperties{},
-		&android.ProtoProperties{},
-		&BinaryProperties{},
-	)
-
-	android.InitDefaultsModule(module)
-
-	return module
+bootstrap_go_package {
+    name: "project_metadata_proto",
+    pkgPath: "android/soong/compliance/project_metadata_proto",
+    srcs: ["project_metadata.pb.go"],
+    deps: [
+        "golang-protobuf-reflect-protoreflect",
+        "golang-protobuf-runtime-protoimpl",
+    ],
 }
