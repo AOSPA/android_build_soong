@@ -100,8 +100,9 @@ type configImpl struct {
 
 	pathReplaced bool
 
-	bazelProdMode bool
-	bazelDevMode  bool
+	bazelProdMode    bool
+	bazelDevMode     bool
+	bazelStagingMode bool
 
 	// Set by multiproduct_kati
 	emptyNinjaFile bool
@@ -463,10 +464,11 @@ func storeConfigMetrics(ctx Context, config Config) {
 
 func buildConfig(config Config) *smpb.BuildConfig {
 	c := &smpb.BuildConfig{
-		ForceUseGoma:    proto.Bool(config.ForceUseGoma()),
-		UseGoma:         proto.Bool(config.UseGoma()),
-		UseRbe:          proto.Bool(config.UseRBE()),
-		BazelMixedBuild: proto.Bool(config.BazelBuildEnabled()),
+		ForceUseGoma:                proto.Bool(config.ForceUseGoma()),
+		UseGoma:                     proto.Bool(config.UseGoma()),
+		UseRbe:                      proto.Bool(config.UseRBE()),
+		BazelMixedBuild:             proto.Bool(config.BazelBuildEnabled()),
+		ForceDisableBazelMixedBuild: proto.Bool(config.IsBazelMixedBuildForceDisabled()),
 	}
 	c.Targets = append(c.Targets, config.arguments...)
 
@@ -721,6 +723,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.bazelProdMode = true
 		} else if arg == "--bazel-mode-dev" {
 			c.bazelDevMode = true
+		} else if arg == "--bazel-mode-staging" {
+			c.bazelStagingMode = true
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
 				if len(arg) > 2 {
@@ -907,7 +911,11 @@ func (c *configImpl) UsedEnvFile(tag string) string {
 	return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+tag)
 }
 
-func (c *configImpl) Bp2BuildMarkerFile() string {
+func (c *configImpl) Bp2BuildFilesMarkerFile() string {
+	return shared.JoinPath(c.SoongOutDir(), "bp2build_files_marker")
+}
+
+func (c *configImpl) Bp2BuildWorkspaceMarkerFile() string {
 	return shared.JoinPath(c.SoongOutDir(), "bp2build_workspace_marker")
 }
 
@@ -1115,7 +1123,7 @@ func (c *configImpl) UseRBE() bool {
 }
 
 func (c *configImpl) BazelBuildEnabled() bool {
-	return c.bazelProdMode || c.bazelDevMode
+	return c.bazelProdMode || c.bazelDevMode || c.bazelStagingMode
 }
 
 func (c *configImpl) StartRBE() bool {
@@ -1447,6 +1455,10 @@ func (c *configImpl) SetEmptyNinjaFile(v bool) {
 
 func (c *configImpl) EmptyNinjaFile() bool {
 	return c.emptyNinjaFile
+}
+
+func (c *configImpl) IsBazelMixedBuildForceDisabled() bool {
+	return c.Environment().IsEnvTrue("BUILD_BROKEN_DISABLE_BAZEL")
 }
 
 func GetMetricsUploader(topDir string, env *Environment) string {

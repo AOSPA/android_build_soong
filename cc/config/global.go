@@ -110,9 +110,6 @@ var (
 		// Warnings from clang-7.0
 		"-Wno-sign-compare",
 
-		// Warnings from clang-8.0
-		"-Wno-defaulted-function-deleted",
-
 		// Disable -Winconsistent-missing-override until we can clean up the existing
 		// codebase for it.
 		"-Wno-inconsistent-missing-override",
@@ -368,10 +365,8 @@ var (
 	}
 
 	llvmNextExtraCommonGlobalCflags = []string{
-		// New warnings to be fixed after clang-r468909
-		"-Wno-error=array-parameter",     // http://b/241941550
-		"-Wno-error=deprecated-builtins", // http://b/241601211
-		"-Wno-error=deprecated",          // in external/googletest/googletest
+		// New warnings to be fixed after clang-r475365
+		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
 	}
 
 	IllegalFlags = []string{

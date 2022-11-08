@@ -2336,9 +2336,11 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	ctx.ctx = ctx
 
 	deps := c.deps(ctx)
-
 	apiImportInfo := GetApiImports(c, actx)
-	deps = updateDepsWithApiImports(deps, apiImportInfo)
+
+	if ctx.Os() == android.Android && c.Target().NativeBridge != android.NativeBridgeEnabled {
+		deps = updateDepsWithApiImports(deps, apiImportInfo)
+	}
 
 	c.Properties.AndroidMkSystemSharedLibs = deps.SystemSharedLibs
 
@@ -2363,7 +2365,9 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 
 		// Check header lib replacement from API surface first, and then check again with VSDK
-		lib = GetReplaceModuleName(lib, apiImportInfo.HeaderLibs)
+		if ctx.Os() == android.Android && c.Target().NativeBridge != android.NativeBridgeEnabled {
+			lib = GetReplaceModuleName(lib, apiImportInfo.HeaderLibs)
+		}
 		lib = GetReplaceModuleName(lib, GetSnapshot(c, &snapshotInfo, actx).HeaderLibs)
 
 		if c.isNDKStubLibrary() {
