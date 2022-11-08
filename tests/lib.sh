@@ -85,6 +85,7 @@ function create_mock_soong {
   copy_directory build/blueprint
   copy_directory build/soong
   copy_directory build/make/tools/rbcrun
+  copy_directory prebuilts/bazel/common/proto
 
   symlink_directory prebuilts/sdk
   symlink_directory prebuilts/go
@@ -128,7 +129,6 @@ function create_mock_bazel {
 
   symlink_file WORKSPACE
   symlink_file BUILD
-  symlink_file tools/bazel
 }
 
 function run_bazel {
@@ -136,7 +136,7 @@ function run_bazel {
   # output should not be parsed as such.
   rm -rf out/ninja_build
 
-  tools/bazel "$@"
+  build/bazel/bin/bazel "$@"
 }
 
 function run_ninja {

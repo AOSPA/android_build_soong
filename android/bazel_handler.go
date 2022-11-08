@@ -386,6 +386,12 @@ func NewBazelContext(c *config) (BazelContext, error) {
 		for _, enabledProdModule := range allowlists.ProdMixedBuildsEnabledList {
 			enabledModules[enabledProdModule] = true
 		}
+	case BazelStagingMode:
+		modulesDefaultToBazel = false
+		for _, enabledStagingMode := range allowlists.StagingMixedBuildsEnabledList {
+			enabledModules[enabledStagingMode] = true
+
+		}
 	case BazelDevMode:
 		modulesDefaultToBazel = true
 
@@ -551,9 +557,7 @@ func (r *builtinBazelRunner) createBazelCommand(paths *bazelPaths, runName bazel
 		//
 		// The actual platform values here may be overridden by configuration
 		// transitions from the buildroot.
-		fmt.Sprintf("--platforms=%s", "//build/bazel/platforms:android_target"),
 		fmt.Sprintf("--extra_toolchains=%s", "//prebuilts/clang/host/linux-x86:all"),
-
 		// This should be parameterized on the host OS, but let's restrict to linux
 		// to keep things simple for now.
 		fmt.Sprintf("--host_platform=%s", "//build/bazel/platforms:linux_x86_64"),
@@ -572,7 +576,7 @@ func (r *builtinBazelRunner) createBazelCommand(paths *bazelPaths, runName bazel
 		"HOME=" + paths.homeDir,
 		pwdPrefix(),
 		"BUILD_DIR=" + absolutePath(paths.soongOutDir),
-		// Make OUT_DIR absolute here so tools/bazel.sh uses the correct
+		// Make OUT_DIR absolute here so build/bazel/bin/bazel uses the correct
 		// OUT_DIR at <root>/out, instead of <root>/out/soong/workspace/out.
 		"OUT_DIR=" + absolutePath(paths.outDir()),
 		// Disables local host detection of gcc; toolchain information is defined
@@ -922,7 +926,7 @@ func (context *bazelContext) InvokeBazel(config Config) error {
 	//
 	// Use jsonproto instead of proto; actual proto parsing would require a dependency on Bazel's
 	// proto sources, which would add a number of unnecessary dependencies.
-	extraFlags := []string{"--output=jsonproto", "--include_file_write_contents"}
+	extraFlags := []string{"--output=proto", "--include_file_write_contents"}
 	if Bool(config.productVariables.ClangCoverage) {
 		extraFlags = append(extraFlags, "--collect_code_coverage")
 		paths := make([]string, 0, 2)

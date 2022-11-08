@@ -17,12 +17,13 @@
 package apex
 
 import (
-	"android/soong/bazel/cquery"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"android/soong/bazel/cquery"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
@@ -47,7 +48,7 @@ func init() {
 
 func registerApexBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("apex", BundleFactory)
-	ctx.RegisterModuleType("apex_test", testApexBundleFactory)
+	ctx.RegisterModuleType("apex_test", TestApexBundleFactory)
 	ctx.RegisterModuleType("apex_vndk", vndkApexBundleFactory)
 	ctx.RegisterModuleType("apex_defaults", defaultsFactory)
 	ctx.RegisterModuleType("prebuilt_apex", PrebuiltFactory)
@@ -1853,10 +1854,10 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	a.outputFile = a.outputApexFile
 	a.setCompression(ctx)
 
-	a.publicKeyFile = android.PathForBazelOut(ctx, outputs.BundleKeyPair[0])
-	a.privateKeyFile = android.PathForBazelOut(ctx, outputs.BundleKeyPair[1])
-	a.containerCertificateFile = android.PathForBazelOut(ctx, outputs.ContainerKeyPair[0])
-	a.containerPrivateKeyFile = android.PathForBazelOut(ctx, outputs.ContainerKeyPair[1])
+	a.publicKeyFile = android.PathForBazelOut(ctx, outputs.BundleKeyInfo[0])
+	a.privateKeyFile = android.PathForBazelOut(ctx, outputs.BundleKeyInfo[1])
+	a.containerCertificateFile = android.PathForBazelOut(ctx, outputs.ContainerKeyInfo[0])
+	a.containerPrivateKeyFile = android.PathForBazelOut(ctx, outputs.ContainerKeyInfo[1])
 	apexType := a.properties.ApexType
 	switch apexType {
 	case imageApex:
@@ -2563,7 +2564,7 @@ func ApexBundleFactory(testApex bool) android.Module {
 
 // apex_test is an APEX for testing. The difference from the ordinary apex module type is that
 // certain compatibility checks such as apex_available are not done for apex_test.
-func testApexBundleFactory() android.Module {
+func TestApexBundleFactory() android.Module {
 	bundle := newApexBundle()
 	bundle.testApex = true
 	return bundle
@@ -3342,6 +3343,7 @@ type bazelApexBundleAttributes struct {
 	Compressible          bazel.BoolAttribute
 	Package_name          *string
 	Logging_parent        *string
+	Tests                 bazel.LabelListAttribute
 }
 
 type convertedNativeSharedLibs struct {
@@ -3351,13 +3353,19 @@ type convertedNativeSharedLibs struct {
 
 // ConvertWithBp2build performs bp2build conversion of an apex
 func (a *apexBundle) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	// We do not convert apex_test modules at this time
-	if ctx.ModuleType() != "apex" {
+	// We only convert apex and apex_test modules at this time
+	if ctx.ModuleType() != "apex" && ctx.ModuleType() != "apex_test" {
 		return
 	}
 
 	attrs, props := convertWithBp2build(a, ctx)
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: a.Name()}, &attrs)
+	commonAttrs := android.CommonAttributes{
+		Name: a.Name(),
+	}
+	if a.testApex {
+		commonAttrs.Testonly = proptools.BoolPtr(a.testApex)
+	}
+	ctx.CreateBazelTargetModule(props, commonAttrs, &attrs)
 }
 
 func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (bazelApexBundleAttributes, bazel.BazelTargetModuleProperties) {
@@ -3424,6 +3432,12 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 	binaries := android.BazelLabelForModuleDeps(ctx, a.properties.ApexNativeDependencies.Binaries)
 	binariesLabelListAttribute := bazel.MakeLabelListAttribute(binaries)
 
+	var testsAttrs bazel.LabelListAttribute
+	if a.testApex && len(a.properties.ApexNativeDependencies.Tests) > 0 {
+		tests := android.BazelLabelForModuleDeps(ctx, a.properties.ApexNativeDependencies.Tests)
+		testsAttrs = bazel.MakeLabelListAttribute(tests)
+	}
+
 	var updatableAttribute bazel.BoolAttribute
 	if a.properties.Updatable != nil {
 		updatableAttribute.Value = a.properties.Updatable
@@ -3466,6 +3480,7 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		Compressible:          compressibleAttribute,
 		Package_name:          packageName,
 		Logging_parent:        loggingParent,
+		Tests:                 testsAttrs,
 	}
 
 	props := bazel.BazelTargetModuleProperties{
