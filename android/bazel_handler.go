@@ -27,8 +27,10 @@ import (
 	"strings"
 	"sync"
 
+	"android/soong/android/allowlists"
 	"android/soong/bazel/cquery"
 	"android/soong/shared"
+
 	"github.com/google/blueprint"
 
 	"android/soong/bazel"
@@ -54,7 +56,7 @@ func init() {
 }
 
 func RegisterMixedBuildsMutator(ctx RegistrationContext) {
-	ctx.PostDepsMutators(func(ctx RegisterMutatorsContext) {
+	ctx.FinalDepsMutators(func(ctx RegisterMutatorsContext) {
 		ctx.BottomUp("mixed_builds_prep", mixedBuildsPrepareMutator).Parallel()
 	})
 }
@@ -141,8 +143,11 @@ type BazelContext interface {
 	// queued in the BazelContext.
 	InvokeBazel(config Config) error
 
-	// Returns true if bazel is enabled for the given configuration.
-	BazelEnabled() bool
+	// Returns true if Bazel handling is enabled for the module with the given name.
+	// Note that this only implies "bazel mixed build" allowlisting. The caller
+	// should independently verify the module is eligible for Bazel handling
+	// (for example, that it is MixedBuildBuildable).
+	BazelAllowlisted(moduleName string) bool
 
 	// Returns the bazel output base (the root directory for all bazel intermediate outputs).
 	OutputBase() string
@@ -182,6 +187,17 @@ type bazelContext struct {
 
 	// Depsets which should be used for Bazel's build statements.
 	depsets []bazel.AqueryDepset
+
+	// Per-module allowlist/denylist functionality to control whether analysis of
+	// modules are handled by Bazel. For modules which do not have a Bazel definition
+	// (or do not sufficiently support bazel handling via MixedBuildBuildable),
+	// this allowlist will have no effect, even if the module is explicitly allowlisted here.
+	// Per-module denylist to opt modules out of bazel handling.
+	bazelDisabledModules map[string]bool
+	// Per-module allowlist to opt modules in to bazel handling.
+	bazelEnabledModules map[string]bool
+	// If true, modules are bazel-enabled by default, unless present in bazelDisabledModules.
+	modulesDefaultToBazel bool
 }
 
 var _ BazelContext = &bazelContext{}
@@ -228,7 +244,7 @@ func (m MockBazelContext) InvokeBazel(_ Config) error {
 	panic("unimplemented")
 }
 
-func (m MockBazelContext) BazelEnabled() bool {
+func (m MockBazelContext) BazelAllowlisted(moduleName string) bool {
 	return true
 }
 
@@ -314,7 +330,7 @@ func (m noopBazelContext) OutputBase() string {
 	return ""
 }
 
-func (n noopBazelContext) BazelEnabled() bool {
+func (n noopBazelContext) BazelAllowlisted(moduleName string) bool {
 	return false
 }
 
@@ -327,9 +343,7 @@ func (m noopBazelContext) AqueryDepsets() []bazel.AqueryDepset {
 }
 
 func NewBazelContext(c *config) (BazelContext, error) {
-	// TODO(cparsons): Assess USE_BAZEL=1 instead once "mixed Soong/Bazel builds"
-	// are production ready.
-	if !c.IsEnvTrue("USE_BAZEL_ANALYSIS") {
+	if !c.IsMixedBuildsEnabled() {
 		return noopBazelContext{}, nil
 	}
 
@@ -337,10 +351,26 @@ func NewBazelContext(c *config) (BazelContext, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO(cparsons): Use a different allowlist depending on prod vs. dev
+	// bazel mode.
+	disabledModules := map[string]bool{}
+	// Don't use partially-converted cc_library targets in mixed builds,
+	// since mixed builds would generally rely on both static and shared
+	// variants of a cc_library.
+	for staticOnlyModule, _ := range GetBp2BuildAllowList().ccLibraryStaticOnly {
+		disabledModules[staticOnlyModule] = true
+	}
+	for _, disabledDevModule := range allowlists.MixedBuildsDisabledList {
+		disabledModules[disabledDevModule] = true
+	}
+
 	return &bazelContext{
-		bazelRunner: &builtinBazelRunner{},
-		paths:       p,
-		requests:    make(map[cqueryKey]bool),
+		bazelRunner:           &builtinBazelRunner{},
+		paths:                 p,
+		requests:              make(map[cqueryKey]bool),
+		modulesDefaultToBazel: true,
+		bazelDisabledModules:  disabledModules,
 	}, nil
 }
 
@@ -385,8 +415,14 @@ func (p *bazelPaths) BazelMetricsDir() string {
 	return p.metricsDir
 }
 
-func (context *bazelContext) BazelEnabled() bool {
-	return true
+func (context *bazelContext) BazelAllowlisted(moduleName string) bool {
+	if context.bazelDisabledModules[moduleName] {
+		return false
+	}
+	if context.bazelEnabledModules[moduleName] {
+		return true
+	}
+	return context.modulesDefaultToBazel
 }
 
 func pwdPrefix() string {
@@ -766,9 +802,9 @@ func (context *bazelContext) InvokeBazel(config Config) error {
 	cqueryOutput, cqueryErr, err := context.issueBazelCommand(context.paths, bazel.CqueryBuildRootRunName, cqueryCmd,
 		"--output=starlark", "--starlark:file="+absolutePath(cqueryFileRelpath))
 	if err != nil {
-		_ = ioutil.WriteFile(filepath.Join(soongInjectionPath, "cquery.out"), []byte(cqueryOutput), 0666)
+		return err
 	}
-	if err != nil {
+	if err = ioutil.WriteFile(filepath.Join(soongInjectionPath, "cquery.out"), []byte(cqueryOutput), 0666); err != nil {
 		return err
 	}
 
@@ -850,7 +886,7 @@ type bazelSingleton struct{}
 
 func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 	// bazelSingleton is a no-op if mixed-soong-bazel-builds are disabled.
-	if !ctx.Config().BazelContext.BazelEnabled() {
+	if !ctx.Config().IsMixedBuildsEnabled() {
 		return
 	}
 

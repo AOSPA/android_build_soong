@@ -73,6 +73,10 @@ var (
 		"-Werror=string-plus-int",
 		"-Werror=unreachable-code-loop-increment",
 
+		// Force deprecation warnings to be warnings for code that compiles with -Werror.
+		// Making deprecated usages an error causes extreme pain when trying to deprecate anything.
+		"-Wno-error=deprecated-declarations",
+
 		"-D__compiler_offsetof=__builtin_offsetof",
 
 		// Emit address-significance table which allows linker to perform safe ICF. Clang does
@@ -259,6 +263,8 @@ var (
 		// New warnings to be fixed after clang-r433403
 		"-Wno-error=unused-but-set-variable",  // http://b/197240255
 		"-Wno-error=unused-but-set-parameter", // http://b/197240255
+		// New warnings to be fixed after clang-r458507
+		"-Wno-error=unqualified-std-cast-call", // http://b/239662094
 		//Android T Vendor Compilation
 		"-Wno-reorder-init-list",
 		"-Wno-implicit-fallthrough",
@@ -351,12 +357,12 @@ var (
 
 		// http://b/175068488
 		"-Wno-string-concatenation",
-	}
 
-	llvmNextExtraCommonGlobalCflags = []string{
-		"-Wno-unqualified-std-cast-call",
+		// http://b/239661264
 		"-Wno-deprecated-non-prototype",
 	}
+
+	llvmNextExtraCommonGlobalCflags = []string{}
 
 	IllegalFlags = []string{
 		"-w",
@@ -457,6 +463,10 @@ func init() {
 
 		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
 			flags = append(flags, llvmNextExtraCommonGlobalCflags...)
+		}
+
+		if ctx.Config().IsEnvTrue("ALLOW_UNKNOWN_WARNING_OPTION") {
+			flags = append(flags, "-Wno-error=unknown-warning-option")
 		}
 		return strings.Join(flags, " ")
 	})

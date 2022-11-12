@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"android/soong/android"
+	"android/soong/multitree"
 )
 
 var (
@@ -229,17 +230,34 @@ func (library *libraryDecorator) androidMkWriteExportedFlags(entries *android.An
 	}
 }
 
-func (library *libraryDecorator) androidMkEntriesWriteAdditionalDependenciesForSourceAbiDiff(entries *android.AndroidMkEntries) {
-	if library.sAbiOutputFile.Valid() {
-		entries.SetString("LOCAL_ADDITIONAL_DEPENDENCIES",
-			"$(LOCAL_ADDITIONAL_DEPENDENCIES) "+library.sAbiOutputFile.String())
-		if library.sAbiDiff.Valid() && !library.static() {
-			entries.SetString("LOCAL_ADDITIONAL_DEPENDENCIES",
-				"$(LOCAL_ADDITIONAL_DEPENDENCIES) "+library.sAbiDiff.String())
-			entries.SetString("HEADER_ABI_DIFFS",
-				"$(HEADER_ABI_DIFFS) "+library.sAbiDiff.String())
-		}
+func (library *libraryDecorator) getAbiDiffsForAndroidMkDeps() []string {
+	if library.static() {
+		return nil
 	}
+	var abiDiffs []string
+	if library.sAbiDiff.Valid() {
+		abiDiffs = append(abiDiffs, library.sAbiDiff.String())
+	}
+	if library.prevSAbiDiff.Valid() {
+		abiDiffs = append(abiDiffs, library.prevSAbiDiff.String())
+	}
+	return abiDiffs
+}
+
+func (library *libraryDecorator) androidMkEntriesWriteAdditionalDependenciesForSourceAbiDiff(entries *android.AndroidMkEntries) {
+	diffs := library.getAbiDiffsForAndroidMkDeps()
+	if diffs == nil {
+		if library.sAbiOutputFile.Valid() {
+			entries.SetString("LOCAL_ADDITIONAL_DEPENDENCIES",
+				"$(LOCAL_ADDITIONAL_DEPENDENCIES) "+library.sAbiOutputFile.String())
+		}
+	} else {
+		entries.AddStrings("LOCAL_ADDITIONAL_DEPENDENCIES",
+			"$(LOCAL_ADDITIONAL_DEPENDENCIES) " + strings.Join(diffs, " "))
+		entries.AddStrings("HEADER_ABI_DIFFS",
+			"$(HEADER_ABI_DIFFS) " + strings.Join(diffs, " "))
+	}
+
 }
 
 // TODO(ccross): remove this once apex/androidmk.go is converted to AndroidMkEntries
@@ -249,9 +267,9 @@ func (library *libraryDecorator) androidMkWriteAdditionalDependenciesForSourceAb
 			library.sAbiOutputFile.String())
 		if library.sAbiDiff.Valid() && !library.static() {
 			fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_ADDITIONAL_DEPENDENCIES) ",
-				library.sAbiDiff.String())
+				strings.Join(library.getAbiDiffsForAndroidMkDeps(), " "))
 			fmt.Fprintln(w, "HEADER_ABI_DIFFS := $(HEADER_ABI_DIFFS) ",
-				library.sAbiDiff.String())
+				strings.Join(library.getAbiDiffsForAndroidMkDeps(), " "))
 		}
 	}
 }
@@ -418,14 +436,13 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 			entries.SetBool("LOCAL_DISABLE_AUTO_GENERATE_TEST_CONFIG", true)
 		}
 		entries.AddStrings("LOCAL_TEST_MAINLINE_MODULES", test.Properties.Test_mainline_modules...)
-		if Bool(test.Properties.Test_options.Unit_test) {
-			entries.SetBool("LOCAL_IS_UNIT_TEST", true)
-		}
 
 		entries.SetBoolIfTrue("LOCAL_COMPATIBILITY_PER_TESTCASE_DIRECTORY", Bool(test.Properties.Per_testcase_directory))
 		if len(test.Properties.Data_bins) > 0 {
 			entries.AddStrings("LOCAL_TEST_DATA_BINS", test.Properties.Data_bins...)
 		}
+
+		test.Properties.Test_options.CommonTestOptions.SetAndroidMkEntries(entries)
 	})
 
 	AndroidMkWriteTestData(test.data, entries)
@@ -631,6 +648,24 @@ func (p *prebuiltBinaryLinker) AndroidMkEntries(ctx AndroidMkContext, entries *a
 	ctx.subAndroidMk(entries, p.binaryDecorator)
 	ctx.subAndroidMk(entries, &p.prebuiltLinker)
 	androidMkWriteAllowUndefinedSymbols(p.baseLinker, entries)
+}
+
+func (a *apiLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
+	entries.Class = "SHARED_LIBRARIES"
+	entries.SubName += multitree.GetApiImportSuffix()
+
+	entries.ExtraEntries = append(entries.ExtraEntries, func(_ android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
+		a.libraryDecorator.androidMkWriteExportedFlags(entries)
+		src := *a.properties.Src
+		path, file := filepath.Split(src)
+		stem, suffix, ext := android.SplitFileExt(file)
+		entries.SetString("LOCAL_BUILT_MODULE_STEM", "$(LOCAL_MODULE)"+ext)
+		entries.SetString("LOCAL_MODULE_SUFFIX", suffix)
+		entries.SetString("LOCAL_MODULE_STEM", stem)
+		entries.SetString("LOCAL_MODULE_PATH", path)
+		entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
+		entries.SetString("LOCAL_SOONG_TOC", a.toc().String())
+	})
 }
 
 func androidMkWriteAllowUndefinedSymbols(linker *baseLinker, entries *android.AndroidMkEntries) {

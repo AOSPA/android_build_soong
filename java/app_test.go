@@ -1218,7 +1218,7 @@ func TestJNIABI(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			app := ctx.ModuleForTests(test.name, "android_common")
-			jniLibZip := app.Output("jnilibs.zip")
+			jniLibZip := app.Output(jniJarOutputPathString)
 			var abis []string
 			args := strings.Fields(jniLibZip.Args["jarArgs"])
 			for i := 0; i < len(args); i++ {
@@ -1351,7 +1351,7 @@ func TestJNIPackaging(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			app := ctx.ModuleForTests(test.name, "android_common")
-			jniLibZip := app.MaybeOutput("jnilibs.zip")
+			jniLibZip := app.MaybeOutput(jniJarOutputPathString)
 			if g, w := (jniLibZip.Rule != nil), test.packaged; g != w {
 				t.Errorf("expected jni packaged %v, got %v", w, g)
 			}
@@ -1442,7 +1442,7 @@ func TestJNISDK(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			app := ctx.ModuleForTests(test.name, "android_common")
 
-			jniLibZip := app.MaybeOutput("jnilibs.zip")
+			jniLibZip := app.MaybeOutput(jniJarOutputPathString)
 			if len(jniLibZip.Implicits) != 1 {
 				t.Fatalf("expected exactly one jni library, got %q", jniLibZip.Implicits.Strings())
 			}
@@ -2428,7 +2428,7 @@ func TestStl(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			app := ctx.ModuleForTests(test.name, "android_common")
-			jniLibZip := app.Output("jnilibs.zip")
+			jniLibZip := app.Output(jniJarOutputPathString)
 			var jnis []string
 			args := strings.Fields(jniLibZip.Args["jarArgs"])
 			for i := 0; i < len(args); i++ {
@@ -3076,4 +3076,152 @@ func TestAppMissingCertificateAllowMissingDependencies(t *testing.T) {
 		t.Fatalf("expected ErrorRule for foo.apk, got %s", fooApk.Rule.String())
 	}
 	android.AssertStringDoesContain(t, "expected error rule message", fooApk.Args["error"], "missing dependencies: missing_certificate\n")
+}
+
+func TestAppIncludesJniPackages(t *testing.T) {
+	ctx := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		android_library_import {
+			name: "aary-nodeps",
+			aars: ["aary.aar"],
+			extract_jni: true,
+		}
+
+		android_library {
+			name: "aary-lib",
+			sdk_version: "current",
+			min_sdk_version: "21",
+			static_libs: ["aary-nodeps"],
+		}
+
+		android_app {
+			name: "aary-lib-dep",
+			sdk_version: "current",
+			min_sdk_version: "21",
+			manifest: "AndroidManifest.xml",
+			static_libs: ["aary-lib"],
+			use_embedded_native_libs: true,
+		}
+
+		android_app {
+			name: "aary-import-dep",
+			sdk_version: "current",
+			min_sdk_version: "21",
+			manifest: "AndroidManifest.xml",
+			static_libs: ["aary-nodeps"],
+			use_embedded_native_libs: true,
+		}
+
+		android_app {
+			name: "aary-no-use-embedded",
+			sdk_version: "current",
+			min_sdk_version: "21",
+			manifest: "AndroidManifest.xml",
+			static_libs: ["aary-nodeps"],
+		}`)
+
+	testCases := []struct {
+		name       string
+		hasPackage bool
+	}{
+		{
+			name:       "aary-import-dep",
+			hasPackage: true,
+		},
+		{
+			name:       "aary-lib-dep",
+			hasPackage: true,
+		},
+		{
+			name:       "aary-no-use-embedded",
+			hasPackage: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := ctx.ModuleForTests(tc.name, "android_common")
+
+			outputFile := "jnilibs.zip"
+			jniOutputLibZip := app.MaybeOutput(outputFile)
+			if jniOutputLibZip.Rule == nil && !tc.hasPackage {
+				return
+			}
+
+			jniPackage := "arm64-v8a_jni.zip"
+			inputs := jniOutputLibZip.Inputs
+			foundPackage := false
+			for i := 0; i < len(inputs); i++ {
+				if strings.Contains(inputs[i].String(), jniPackage) {
+					foundPackage = true
+				}
+			}
+			if foundPackage != tc.hasPackage {
+				t.Errorf("expected to find %v in %v inputs; inputs = %v", jniPackage, outputFile, inputs)
+			}
+		})
+	}
+}
+
+func TestTargetSdkVersionMtsTests(t *testing.T) {
+	platformSdkCodename := "Tiramisu"
+	android_test := "android_test"
+	android_test_helper_app := "android_test_helper_app"
+	bpTemplate := `
+	%v {
+		name: "mytest",
+		target_sdk_version: "%v",
+		test_suites: ["othersuite", "%v"],
+	}
+	`
+	testCases := []struct {
+		desc                     string
+		moduleType               string
+		targetSdkVersionInBp     string
+		targetSdkVersionExpected string
+		testSuites               string
+	}{
+		{
+			desc:                     "Non-MTS android_test_apps targeting current should not be upgraded to 10000",
+			moduleType:               android_test,
+			targetSdkVersionInBp:     "current",
+			targetSdkVersionExpected: platformSdkCodename,
+			testSuites:               "non-mts-suite",
+		},
+		{
+			desc:                     "MTS android_test_apps targeting released sdks should not be upgraded to 10000",
+			moduleType:               android_test,
+			targetSdkVersionInBp:     "29",
+			targetSdkVersionExpected: "29",
+			testSuites:               "mts-suite",
+		},
+		{
+			desc:                     "MTS android_test_apps targeting current should be upgraded to 10000",
+			moduleType:               android_test,
+			targetSdkVersionInBp:     "current",
+			targetSdkVersionExpected: "10000",
+			testSuites:               "mts-suite",
+		},
+		{
+			desc:                     "MTS android_test_helper_apps targeting current should be upgraded to 10000",
+			moduleType:               android_test_helper_app,
+			targetSdkVersionInBp:     "current",
+			targetSdkVersionExpected: "10000",
+			testSuites:               "mts-suite",
+		},
+	}
+	fixture := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.Platform_sdk_codename = &platformSdkCodename
+			variables.Platform_version_active_codenames = []string{platformSdkCodename}
+		}),
+	)
+	for _, testCase := range testCases {
+		result := fixture.RunTestWithBp(t, fmt.Sprintf(bpTemplate, testCase.moduleType, testCase.targetSdkVersionInBp, testCase.testSuites))
+		mytest := result.ModuleForTests("mytest", "android_common")
+		manifestFixerArgs := mytest.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
+		android.AssertStringDoesContain(t, testCase.desc, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
+	}
 }

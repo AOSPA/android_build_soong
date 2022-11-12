@@ -39,6 +39,7 @@ func init() {
 	pctx.Import("android/soong/cc/config")
 	pctx.Import("android/soong/java")
 	pctx.HostBinToolVariable("apexer", "apexer")
+	pctx.HostBinToolVariable("apexer_with_DCLA_preprocessing", "apexer_with_DCLA_preprocessing")
 	// ART minimal builds (using the master-art manifest) do not have the "frameworks/base"
 	// projects, and hence cannot build 'aapt2'. Use the SDK prebuilt instead.
 	hostBinToolVariableWithPrebuilt := func(name, prebuiltDir, tool string) {
@@ -115,7 +116,35 @@ var (
 		Rspfile:        "${out}.copy_commands",
 		RspfileContent: "${copy_commands}",
 		Description:    "APEX ${image_dir} => ${out}",
-	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key", "opt_flags", "manifest", "payload_fs_type")
+	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key",
+		"opt_flags", "manifest")
+
+	DCLAApexRule = pctx.StaticRule("DCLAApexRule", blueprint.RuleParams{
+		Command: `rm -rf ${image_dir} && mkdir -p ${image_dir} && ` +
+			`(. ${out}.copy_commands) && ` +
+			`APEXER_TOOL_PATH=${tool_path} ` +
+			`${apexer_with_DCLA_preprocessing} ` +
+			`--apexer ${apexer} ` +
+			`--canned_fs_config ${canned_fs_config} ` +
+			`${image_dir} ` +
+			`${out} ` +
+			`-- ` +
+			`--include_build_info ` +
+			`--force ` +
+			`--payload_type image ` +
+			`--key ${key} ` +
+			`--file_contexts ${file_contexts} ` +
+			`--manifest ${manifest} ` +
+			`${opt_flags} `,
+		CommandDeps: []string{"${apexer_with_DCLA_preprocessing}", "${apexer}", "${avbtool}", "${e2fsdroid}",
+			"${merge_zips}", "${mke2fs}", "${resize2fs}", "${sefcontext_compile}", "${make_f2fs}",
+			"${sload_f2fs}", "${make_erofs}", "${soong_zip}", "${zipalign}", "${aapt2}",
+			"prebuilts/sdk/current/public/android.jar"},
+		Rspfile:        "${out}.copy_commands",
+		RspfileContent: "${copy_commands}",
+		Description:    "APEX ${image_dir} => ${out}",
+	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key",
+		"opt_flags", "manifest", "is_DCLA")
 
 	zipApexRule = pctx.StaticRule("zipApexRule", blueprint.RuleParams{
 		Command: `rm -rf ${image_dir} && mkdir -p ${image_dir} && ` +
@@ -214,7 +243,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 		Args: map[string]string{
 			"provideNativeLibs": strings.Join(provideNativeLibs, " "),
 			"requireNativeLibs": strings.Join(requireNativeLibs, " "),
-			"default_version":   defaultManifestVersion,
+			"default_version":   android.DefaultUpdatableModuleVersion,
 			"opt":               strings.Join(optCommands, " "),
 		},
 	})
@@ -549,8 +578,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	outHostBinDir := ctx.Config().HostToolPath(ctx, "").String()
 	prebuiltSdkToolsBinDir := filepath.Join("prebuilts", "sdk", "tools", runtime.GOOS, "bin")
 
-	// Figure out if we need to compress the apex.
-	compressionEnabled := ctx.Config().CompressedApex() && proptools.BoolDefault(a.overridableProperties.Compressible, false) && !a.testApex && !ctx.Config().UnbundledBuildApps()
 	if apexType == imageApex {
 
 		////////////////////////////////////////////////////////////////////////////////////
@@ -635,10 +662,15 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		implicitInputs = append(implicitInputs, noticeAssetPath)
 		optFlags = append(optFlags, "--assets_dir "+filepath.Dir(noticeAssetPath.String()))
 
-		if (moduleMinSdkVersion.GreaterThan(android.SdkVersion_Android10) && !a.shouldGenerateHashtree()) && !compressionEnabled {
-			// Apexes which are supposed to be installed in builtin dirs(/system, etc)
-			// don't need hashtree for activation. Therefore, by removing hashtree from
-			// apex bundle (filesystem image in it, to be specific), we can save storage.
+		// Apexes which are supposed to be installed in builtin dirs(/system, etc)
+		// don't need hashtree for activation. Therefore, by removing hashtree from
+		// apex bundle (filesystem image in it, to be specific), we can save storage.
+		needHashTree := moduleMinSdkVersion.LessThanOrEqualTo(android.SdkVersion_Android10) ||
+			a.shouldGenerateHashtree()
+		if ctx.Config().ApexCompressionEnabled() && a.isCompressable() {
+			needHashTree = true
+		}
+		if !needHashTree {
 			optFlags = append(optFlags, "--no_hashtree")
 		}
 
@@ -659,22 +691,41 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 
 		optFlags = append(optFlags, "--payload_fs_type "+a.payloadFsType.string())
 
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        apexRule,
-			Implicits:   implicitInputs,
-			Output:      unsignedOutputFile,
-			Description: "apex (" + apexType.name() + ")",
-			Args: map[string]string{
-				"tool_path":        outHostBinDir + ":" + prebuiltSdkToolsBinDir,
-				"image_dir":        imageDir.String(),
-				"copy_commands":    strings.Join(copyCommands, " && "),
-				"manifest":         a.manifestPbOut.String(),
-				"file_contexts":    fileContexts.String(),
-				"canned_fs_config": cannedFsConfig.String(),
-				"key":              a.privateKeyFile.String(),
-				"opt_flags":        strings.Join(optFlags, " "),
-			},
-		})
+		if a.dynamic_common_lib_apex() {
+			ctx.Build(pctx, android.BuildParams{
+				Rule:        DCLAApexRule,
+				Implicits:   implicitInputs,
+				Output:      unsignedOutputFile,
+				Description: "apex (" + apexType.name() + ")",
+				Args: map[string]string{
+					"tool_path":        outHostBinDir + ":" + prebuiltSdkToolsBinDir,
+					"image_dir":        imageDir.String(),
+					"copy_commands":    strings.Join(copyCommands, " && "),
+					"manifest":         a.manifestPbOut.String(),
+					"file_contexts":    fileContexts.String(),
+					"canned_fs_config": cannedFsConfig.String(),
+					"key":              a.privateKeyFile.String(),
+					"opt_flags":        strings.Join(optFlags, " "),
+				},
+			})
+		} else {
+			ctx.Build(pctx, android.BuildParams{
+				Rule:        apexRule,
+				Implicits:   implicitInputs,
+				Output:      unsignedOutputFile,
+				Description: "apex (" + apexType.name() + ")",
+				Args: map[string]string{
+					"tool_path":        outHostBinDir + ":" + prebuiltSdkToolsBinDir,
+					"image_dir":        imageDir.String(),
+					"copy_commands":    strings.Join(copyCommands, " && "),
+					"manifest":         a.manifestPbOut.String(),
+					"file_contexts":    fileContexts.String(),
+					"canned_fs_config": cannedFsConfig.String(),
+					"key":              a.privateKeyFile.String(),
+					"opt_flags":        strings.Join(optFlags, " "),
+				},
+			})
+		}
 
 		// TODO(jiyong): make the two rules below as separate functions
 		apexProtoFile := android.PathForModuleOut(ctx, a.Name()+".pb"+suffix)
@@ -806,6 +857,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		return
 	}
 
+	installSuffix := suffix
 	a.setCompression(ctx)
 	if a.isCompressed {
 		unsignedCompressedOutputFile := android.PathForModuleOut(ctx, a.Name()+imageCapexSuffix+".unsigned")
@@ -835,6 +887,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			Args:        args,
 		})
 		a.outputFile = signedCompressedOutputFile
+		installSuffix = imageCapexSuffix
 	}
 
 	if !a.installable() {
@@ -842,7 +895,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	}
 
 	// Install to $OUT/soong/{target,host}/.../apex.
-	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+a.installSuffix(), a.outputFile,
+	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
 		a.compatSymlinks.Paths()...)
 
 	// installed-files.txt is dist'ed

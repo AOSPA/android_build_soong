@@ -66,11 +66,9 @@ var commands = []command{
 	{
 		flag:        "--make-mode",
 		description: "build the modules by the target name (i.e. soong_docs)",
-		config: func(ctx build.Context, args ...string) build.Config {
-			return build.NewConfig(ctx, args...)
-		},
-		stdio: stdio,
-		run:   runMake,
+		config:      build.NewConfig,
+		stdio:       stdio,
+		run:         runMake,
 	}, {
 		flag:         "--dumpvar-mode",
 		description:  "print the value of the legacy make variable VAR to stdout",
@@ -114,7 +112,7 @@ func inList(s string, list []string) bool {
 
 // Main execution of soong_ui. The command format is as follows:
 //
-//    soong_ui <command> [<arg 1> <arg 2> ... <arg n>]
+//	soong_ui <command> [<arg 1> <arg 2> ... <arg n>]
 //
 // Command is the type of soong_ui execution. Only one type of
 // execution is specified. The args are specific to the command.
@@ -270,6 +268,8 @@ func fixBadDanglingLink(ctx build.Context, name string) {
 
 func dumpVar(ctx build.Context, config build.Config, args []string, _ string) {
 	flags := flag.NewFlagSet("dumpvar", flag.ExitOnError)
+	flags.SetOutput(ctx.Writer)
+
 	flags.Usage = func() {
 		fmt.Fprintf(ctx.Writer, "usage: %s --dumpvar-mode [--abs] <VAR>\n\n", os.Args[0])
 		fmt.Fprintln(ctx.Writer, "In dumpvar mode, print the value of the legacy make variable VAR to stdout")
@@ -320,6 +320,8 @@ func dumpVar(ctx build.Context, config build.Config, args []string, _ string) {
 
 func dumpVars(ctx build.Context, config build.Config, args []string, _ string) {
 	flags := flag.NewFlagSet("dumpvars", flag.ExitOnError)
+	flags.SetOutput(ctx.Writer)
+
 	flags.Usage = func() {
 		fmt.Fprintf(ctx.Writer, "usage: %s --dumpvars-mode [--vars=\"VAR VAR ...\"]\n\n", os.Args[0])
 		fmt.Fprintln(ctx.Writer, "In dumpvars mode, dump the values of one or more legacy make variables, in")
@@ -403,6 +405,8 @@ func dumpVarConfig(ctx build.Context, args ...string) build.Config {
 
 func buildActionConfig(ctx build.Context, args ...string) build.Config {
 	flags := flag.NewFlagSet("build-mode", flag.ContinueOnError)
+	flags.SetOutput(ctx.Writer)
+
 	flags.Usage = func() {
 		fmt.Fprintf(ctx.Writer, "usage: %s --build-mode --dir=<path> <build action> [<build arg 1> <build arg 2> ...]\n\n", os.Args[0])
 		fmt.Fprintln(ctx.Writer, "In build mode, build the set of modules based on the specified build")
@@ -455,21 +459,32 @@ func buildActionConfig(ctx build.Context, args ...string) build.Config {
 	const numBuildActionFlags = 2
 	if len(args) < numBuildActionFlags {
 		flags.Usage()
-		ctx.Fatalln("Improper build action arguments.")
+		ctx.Fatalln("Improper build action arguments: too few arguments")
 	}
-	flags.Parse(args[0:numBuildActionFlags])
+	parseError := flags.Parse(args[0:numBuildActionFlags])
 
 	// The next block of code is to validate that exactly one build action is set and the dir flag
 	// is specified.
-	buildActionCount := 0
+	buildActionFound := false
 	var buildAction build.BuildAction
-	for _, flag := range buildActionFlags {
-		if flag.set {
-			buildActionCount++
-			buildAction = flag.action
+	for _, f := range buildActionFlags {
+		if f.set {
+			if buildActionFound {
+				if parseError == nil {
+					//otherwise Parse() already called Usage()
+					flags.Usage()
+				}
+				ctx.Fatalf("Build action already specified, omit: --%s\n", f.name)
+			}
+			buildActionFound = true
+			buildAction = f.action
 		}
 	}
-	if buildActionCount != 1 {
+	if !buildActionFound {
+		if parseError == nil {
+			//otherwise Parse() already called Usage()
+			flags.Usage()
+		}
 		ctx.Fatalln("Build action not defined.")
 	}
 	if *dir == "" {
@@ -491,11 +506,7 @@ func runMake(ctx build.Context, config build.Config, _ []string, logsDir string)
 		fmt.Fprintln(writer, "!")
 		fmt.Fprintln(writer, "! Older versions are saved in verbose.log.#.gz files")
 		fmt.Fprintln(writer, "")
-		select {
-		case <-time.After(5 * time.Second):
-		case <-ctx.Done():
-			return
-		}
+		ctx.Fatal("done")
 	}
 
 	if _, ok := config.Environment().Get("ONE_SHOT_MAKEFILE"); ok {
@@ -515,8 +526,16 @@ func runMake(ctx build.Context, config build.Config, _ []string, logsDir string)
 // getCommand finds the appropriate command based on args[1] flag. args[0]
 // is the soong_ui filename.
 func getCommand(args []string) (*command, []string, error) {
+	listFlags := func() []string {
+		flags := make([]string, len(commands))
+		for i, c := range commands {
+			flags[i] = c.flag
+		}
+		return flags
+	}
+
 	if len(args) < 2 {
-		return nil, nil, fmt.Errorf("Too few arguments: %q", args)
+		return nil, nil, fmt.Errorf("Too few arguments: %q\nUse one of these: %q", args, listFlags())
 	}
 
 	for _, c := range commands {
@@ -524,13 +543,7 @@ func getCommand(args []string) (*command, []string, error) {
 			return &c, args[2:], nil
 		}
 	}
-
-	// command not found
-	flags := make([]string, len(commands))
-	for i, c := range commands {
-		flags[i] = c.flag
-	}
-	return nil, nil, fmt.Errorf("Command not found: %q\nDid you mean one of these: %q", args, flags)
+	return nil, nil, fmt.Errorf("Command not found: %q\nDid you mean one of these: %q", args[1], listFlags())
 }
 
 // For Bazel support, this moves files and directories from e.g. out/dist/$f to DIST_DIR/$f if necessary.

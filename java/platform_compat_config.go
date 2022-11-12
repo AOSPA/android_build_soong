@@ -26,12 +26,14 @@ import (
 func init() {
 	registerPlatformCompatConfigBuildComponents(android.InitRegistrationContext)
 
-	android.RegisterSdkMemberType(&compatConfigMemberType{
-		SdkMemberTypeBase: android.SdkMemberTypeBase{
-			PropertyName: "compat_configs",
-			SupportsSdk:  true,
-		},
-	})
+	android.RegisterSdkMemberType(CompatConfigSdkMemberType)
+}
+
+var CompatConfigSdkMemberType = &compatConfigMemberType{
+	SdkMemberTypeBase: android.SdkMemberTypeBase{
+		PropertyName: "compat_configs",
+		SupportsSdk:  true,
+	},
 }
 
 func registerPlatformCompatConfigBuildComponents(ctx android.RegistrationContext) {
@@ -278,7 +280,7 @@ func platformCompatConfigSingletonFactory() android.Singleton {
 	return &platformCompatConfigSingleton{}
 }
 
-//============== merged_compat_config =================
+// ============== merged_compat_config =================
 type globalCompatConfigProperties struct {
 	// name of the file into which the metadata will be copied.
 	Filename *string
