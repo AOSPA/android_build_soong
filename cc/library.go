@@ -957,7 +957,7 @@ func GlobHeadersForSnapshot(ctx android.ModuleContext, paths android.Paths) andr
 	for _, path := range paths {
 		dir := path.String()
 		// Skip if dir is for generated headers
-		if strings.HasPrefix(dir, android.PathForOutput(ctx).String()) {
+		if strings.HasPrefix(dir, ctx.Config().OutDir()) {
 			continue
 		}
 
@@ -1924,26 +1924,28 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 
 		addLsdumpPath(classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
 
+		isNdk := ctx.isNdk(ctx.Config())
+		isLlndk := ctx.isImplementationForLLNDKPublic()
 		// If NDK or PLATFORM library, check against previous version ABI.
 		if !ctx.useVndk() {
 			prevRefAbiDumpFile := getRefAbiDumpFile(ctx, strconv.Itoa(prevVersion), fileName)
 			if prevRefAbiDumpFile != nil {
 				library.prevSAbiDiff = sourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
-					prevRefAbiDumpFile, fileName, exportedHeaderFlags,
+					prevRefAbiDumpFile, fileName,
 					library.Properties.Header_abi_checker.Diff_flags, prevVersion,
 					Bool(library.Properties.Header_abi_checker.Check_all_apis),
-					ctx.IsLlndk(), ctx.isNdk(ctx.Config()), ctx.IsVndkExt(), true)
+					isLlndk || isNdk, ctx.IsVndkExt(), true)
 			}
 		}
 
 		refAbiDumpFile := getRefAbiDumpFile(ctx, version, fileName)
 		if refAbiDumpFile != nil && !library.isQiifaLibrary {
 			library.sAbiDiff = sourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
-				refAbiDumpFile, fileName, exportedHeaderFlags,
+				refAbiDumpFile, fileName,
 				library.Properties.Header_abi_checker.Diff_flags,
 				/* unused if not previousVersionDiff */ 0,
 				Bool(library.Properties.Header_abi_checker.Check_all_apis),
-				ctx.IsLlndk(), ctx.isNdk(ctx.Config()), ctx.IsVndkExt(), false)
+				isLlndk || isNdk, ctx.IsVndkExt(), false)
 		}
 	}
 }
@@ -2619,11 +2621,12 @@ func createVersionVariations(mctx android.BottomUpMutatorContext, versions []str
 	m := mctx.Module().(*Module)
 	isLLNDK := m.IsLlndk()
 	isVendorPublicLibrary := m.IsVendorPublicLibrary()
+	isImportedApiLibrary := m.isImportedApiLibrary()
 
 	modules := mctx.CreateLocalVariations(variants...)
 	for i, m := range modules {
 
-		if variants[i] != "" || isLLNDK || isVendorPublicLibrary {
+		if variants[i] != "" || isLLNDK || isVendorPublicLibrary || isImportedApiLibrary {
 			// A stubs or LLNDK stubs variant.
 			c := m.(*Module)
 			c.sanitize = nil
@@ -2813,7 +2816,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
 	}
 
-	module.convertTidyAttributes(&commonAttrs.tidyAttributes)
+	module.convertTidyAttributes(ctx, &commonAttrs.tidyAttributes)
 
 	var attrs interface{}
 	if isStatic {
