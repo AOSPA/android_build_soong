@@ -166,6 +166,7 @@ var (
 		"external/minijail":                      Bp2BuildDefaultTrueRecursively,
 		"external/objenesis":                     Bp2BuildDefaultTrueRecursively,
 		"external/openscreen":                    Bp2BuildDefaultTrueRecursively,
+		"external/ow2-asm":                       Bp2BuildDefaultTrueRecursively,
 		"external/pcre":                          Bp2BuildDefaultTrueRecursively,
 		"external/protobuf":                      Bp2BuildDefaultTrueRecursively,
 		"external/python/six":                    Bp2BuildDefaultTrueRecursively,
@@ -650,6 +651,10 @@ var (
 		"libcodec2_soft_avcenc",
 		"libcodec2_soft_aacdec",
 		"libcodec2_soft_common",
+
+		// kotlin srcs in java libs
+		"CtsPkgInstallerConstants",
+		"kotlinx_atomicfu",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
