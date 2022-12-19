@@ -1212,6 +1212,8 @@ func (c *Module) Init() android.Module {
 	return c
 }
 
+// UseVndk() returns true if this module is built against VNDK.
+// This means the vendor and product variants of a module.
 func (c *Module) UseVndk() bool {
 	return c.Properties.VndkVersion != ""
 }
@@ -1294,6 +1296,9 @@ func (c *Module) IsVndkPrivate() bool {
 	return false
 }
 
+// IsVndk() returns true if this module has a vndk variant.
+// Note that IsVndk() returns true for all variants of vndk-enabled libraries. Not only vendor variant,
+// but also platform and product variants of vndk-enabled libraries return true for IsVndk().
 func (c *Module) IsVndk() bool {
 	if vndkdep := c.vndkdep; vndkdep != nil {
 		return vndkdep.isVndk()
@@ -1368,6 +1373,13 @@ func (c *Module) IsStubs() bool {
 func (c *Module) HasStubsVariants() bool {
 	if lib := c.library; lib != nil {
 		return lib.hasStubsVariants()
+	}
+	return false
+}
+
+func (c *Module) IsStubsImplementationRequired() bool {
+	if lib := c.library; lib != nil {
+		return lib.isStubsImplementationRequired()
 	}
 	return false
 }
