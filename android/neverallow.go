@@ -58,6 +58,7 @@ func init() {
 	AddNeverAllowRules(createMakefileGoalRules()...)
 	AddNeverAllowRules(createInitFirstStageRules()...)
 	AddNeverAllowRules(createBp2BuildRule())
+	AddNeverAllowRules(createCcStubsRule())
 }
 
 // Add a NeverAllow rule to the set of rules to apply.
@@ -212,6 +213,17 @@ func createCcSdkVariantRules() []Rule {
 			WithMatcher("platform.shared_libs", isSetMatcherInstance).
 			Because("platform variant properties can only be used in allowed projects"),
 	}
+}
+
+func createCcStubsRule() Rule {
+	ccStubsImplementationInstallableProjectsAllowedList := []string{
+		"packages/modules/Virtualization/vm_payload",
+	}
+
+	return NeverAllow().
+		NotIn(ccStubsImplementationInstallableProjectsAllowedList...).
+		WithMatcher("stubs.implementation_installable", isSetMatcherInstance).
+		Because("implementation_installable can only be used in allowed projects.")
 }
 
 func createUncompressDexRules() []Rule {
