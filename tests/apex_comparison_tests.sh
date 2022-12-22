@@ -33,6 +33,10 @@ OUTPUT_DIR="$(mktemp -d)"
 SOONG_OUTPUT_DIR="$OUTPUT_DIR/soong"
 BAZEL_OUTPUT_DIR="$OUTPUT_DIR/bazel"
 
+function call_bazel() {
+  build/bazel/bin/bazel --output_base="$BAZEL_OUTPUT_DIR" $@
+}
+
 function cleanup {
   # call bazel clean because some bazel outputs don't have w bits.
   call_bazel clean
@@ -54,12 +58,10 @@ packages/modules/common/build/build_unbundled_mainline_module.sh \
 ######################
 build/soong/soong_ui.bash --make-mode BP2BUILD_VERBOSE=1 --skip-soong-tests bp2build
 
-function call_bazel() {
-  tools/bazel --output_base="$BAZEL_OUTPUT_DIR" $@
-}
-BAZEL_OUT="$(call_bazel info output_path)"
+BAZEL_OUT="$(call_bazel info --config=bp2build output_path)"
 
-call_bazel build --config=bp2build --config=ci --config=android_arm \
+export TARGET_PRODUCT="module_arm"
+call_bazel build --config=bp2build --config=ci --config=android \
   //packages/modules/adb/apex:com.android.adbd \
   //system/timezone/apex:com.android.tzdata \
   //build/bazel/examples/apex/minimal:build.bazel.examples.apex.minimal.apex
@@ -85,7 +87,7 @@ function compare_deapexer_list() {
 
   # Compare the outputs of `deapexer list`, which lists the contents of the apex filesystem image.
   local SOONG_APEX="$SOONG_OUTPUT_DIR/$APEX"
-  local BAZEL_APEX="$BAZEL_OUT/android_arm-fastbuild/bin/$APEX_DIR/$APEX"
+  local BAZEL_APEX="$BAZEL_OUT/android_target-fastbuild/bin/$APEX_DIR/$APEX"
 
   local SOONG_LIST="$OUTPUT_DIR/soong.list"
   local BAZEL_LIST="$OUTPUT_DIR/bazel.list"

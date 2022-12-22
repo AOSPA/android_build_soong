@@ -90,9 +90,6 @@ var (
 		// Help catch common 32/64-bit errors.
 		"-Werror=int-conversion",
 
-		// Enable the new pass manager.
-		"-fexperimental-new-pass-manager",
-
 		// Disable overly aggressive warning for macros defined with a leading underscore
 		// This happens in AndroidConfig.h, which is included nearly everywhere.
 		// TODO: can we remove this now?
@@ -109,9 +106,6 @@ var (
 
 		// Warnings from clang-7.0
 		"-Wno-sign-compare",
-
-		// Warnings from clang-8.0
-		"-Wno-defaulted-function-deleted",
 
 		// Disable -Winconsistent-missing-override until we can clean up the existing
 		// codebase for it.
@@ -169,6 +163,11 @@ var (
 		"-fdebug-info-for-profiling",
 	}
 
+	commonGlobalLldflags = []string{
+		"-fuse-ld=lld",
+		"-Wl,--icf=safe",
+	}
+
 	deviceGlobalCppflags = []string{
 		"-fvisibility-inlines-hidden",
 	}
@@ -186,13 +185,9 @@ var (
 		"-Wl,--exclude-libs,libgcc_stripped.a",
 		"-Wl,--exclude-libs,libunwind_llvm.a",
 		"-Wl,--exclude-libs,libunwind.a",
-		"-Wl,--icf=safe",
 	}
 
-	deviceGlobalLldflags = append(deviceGlobalLdflags,
-		[]string{
-			"-fuse-ld=lld",
-		}...)
+	deviceGlobalLldflags = append(deviceGlobalLdflags, commonGlobalLldflags...)
 
 	hostGlobalCflags = []string{}
 
@@ -200,7 +195,7 @@ var (
 
 	hostGlobalLdflags = []string{}
 
-	hostGlobalLldflags = []string{"-fuse-ld=lld"}
+	hostGlobalLldflags = commonGlobalLldflags
 
 	commonGlobalCppflags = []string{
 		"-Wsign-promo",
@@ -265,6 +260,10 @@ var (
 		"-Wno-error=unused-but-set-parameter", // http://b/197240255
 		// New warnings to be fixed after clang-r458507
 		"-Wno-error=unqualified-std-cast-call", // http://b/239662094
+		// New warnings to be fixed after clang-r468909
+		"-Wno-error=array-parameter",     // http://b/241941550
+		"-Wno-error=deprecated-builtins", // http://b/241601211
+		"-Wno-error=deprecated",          // in external/googletest/googletest
 		//Android T Vendor Compilation
 		"-Wno-reorder-init-list",
 		"-Wno-implicit-fallthrough",
@@ -362,7 +361,10 @@ var (
 		"-Wno-deprecated-non-prototype",
 	}
 
-	llvmNextExtraCommonGlobalCflags = []string{}
+	llvmNextExtraCommonGlobalCflags = []string{
+		// New warnings to be fixed after clang-r475365
+		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
+	}
 
 	IllegalFlags = []string{
 		"-w",
@@ -378,7 +380,7 @@ var (
 	ForceSDClangOff = false
 
 	// prebuilts/clang default settings.
-	ClangDefaultBase         = "prebuilts/clang/host"
+	ClangDefaultBase = "prebuilts/clang/host"
 	// TODO(b/243545528) Match upstream version
 	ClangDefaultVersion      = "clang-r450784d"
 	ClangDefaultShortVersion = "14.0.6"
@@ -388,10 +390,7 @@ var (
 		"device/",
 		"vendor/",
 	}
-
-	// Directories with warnings from Android.mk files.
-	WarningAllowedOldProjects = []string{}
-	QiifaAbiLibraryList       = []string{}
+	QiifaAbiLibraryList = []string{}
 )
 
 // BazelCcToolchainVars generates bzl file content containing variables for

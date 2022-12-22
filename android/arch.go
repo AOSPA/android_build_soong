@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 
 	"android/soong/bazel"
@@ -146,10 +147,11 @@ const COMMON_VARIANT = "common"
 var (
 	archTypeList []ArchType
 
-	Arm    = newArch("arm", "lib32")
-	Arm64  = newArch("arm64", "lib64")
-	X86    = newArch("x86", "lib32")
-	X86_64 = newArch("x86_64", "lib64")
+	Arm     = newArch("arm", "lib32")
+	Arm64   = newArch("arm64", "lib64")
+	Riscv64 = newArch("riscv64", "lib64")
+	X86     = newArch("x86", "lib32")
+	X86_64  = newArch("x86_64", "lib64")
 
 	Common = ArchType{
 		Name: COMMON_VARIANT,
@@ -317,7 +319,7 @@ var (
 	Windows = newOsType("windows", Host, true, X86, X86_64)
 	// Android is the OS for target devices that run all of Android, including the Linux kernel
 	// and the Bionic libc runtime.
-	Android = newOsType("android", Device, false, Arm, Arm64, X86, X86_64)
+	Android = newOsType("android", Device, false, Arm, Arm64, Riscv64, X86, X86_64)
 
 	// CommonOS is a pseudo OSType for a common OS variant, which is OsType agnostic and which
 	// has dependencies on all the OS variants.
@@ -1685,14 +1687,12 @@ type archConfig struct {
 	abi         []string
 }
 
-// getNdkAbisConfig returns the list of archConfigs that are used for bulding
-// the API stubs and static libraries that are included in the NDK. These are
-// built *without Neon*, because non-Neon is still supported and building these
-// with Neon will break those users.
+// getNdkAbisConfig returns the list of archConfigs that are used for building
+// the API stubs and static libraries that are included in the NDK.
 func getNdkAbisConfig() []archConfig {
 	return []archConfig{
 		{"arm64", "armv8-a-branchprot", "", []string{"arm64-v8a"}},
-		{"arm", "armv7-a", "", []string{"armeabi-v7a"}},
+		{"arm", "armv7-a-neon", "", []string{"armeabi-v7a"}},
 		{"x86_64", "", "", []string{"x86_64"}},
 		{"x86", "", "", []string{"x86"}},
 	}
@@ -2084,13 +2084,22 @@ func (m *ModuleBase) GetArchVariantProperties(ctx ArchVariantContext, propertySe
 	// For each arch type (x86, arm64, etc.)
 	for _, arch := range ArchTypeList() {
 		// Arch properties are sometimes sharded (see createArchPropTypeDesc() ).
-		// Iterate over ever shard and extract a struct with the same type as the
+		// Iterate over every shard and extract a struct with the same type as the
 		// input one that contains the data specific to that arch.
 		propertyStructs := make([]reflect.Value, 0)
+		archFeaturePropertyStructs := make(map[string][]reflect.Value, 0)
 		for _, archProperty := range archProperties {
 			archTypeStruct, ok := getArchTypeStruct(ctx, archProperty, arch)
 			if ok {
 				propertyStructs = append(propertyStructs, archTypeStruct)
+
+				// For each feature this arch supports (arm: neon, x86: ssse3, sse4, ...)
+				for _, feature := range archFeatures[arch] {
+					prefix := "arch." + arch.Name + "." + feature
+					if featureProperties, ok := getChildPropertyStruct(ctx, archTypeStruct, feature, prefix); ok {
+						archFeaturePropertyStructs[feature] = append(archFeaturePropertyStructs[feature], featureProperties)
+					}
+				}
 			}
 			multilibStruct, ok := getMultilibStruct(ctx, archProperty, arch)
 			if ok {
@@ -2098,10 +2107,31 @@ func (m *ModuleBase) GetArchVariantProperties(ctx ArchVariantContext, propertySe
 			}
 		}
 
-		// Create a new instance of the requested property set
-		value := reflect.New(reflect.ValueOf(propertySet).Elem().Type()).Interface()
+		archToProp[arch.Name] = mergeStructs(ctx, propertyStructs, propertySet)
 
-		archToProp[arch.Name] = mergeStructs(ctx, propertyStructs, value)
+		// In soong, if multiple features match the current configuration, they're
+		// all used. In bazel, we have to have unambiguous select() statements, so
+		// we can't have two features that are both active in the same select().
+		// One alternative is to split out each feature into a separate select(),
+		// but then it's difficult to support exclude_srcs, which may need to
+		// exclude things from the regular arch select() statement if a certain
+		// feature is active. Instead, keep the features in the same select
+		// statement as the arches, but emit the power set of all possible
+		// combinations of features, so that bazel can match the most precise one.
+		allFeatures := make([]string, 0, len(archFeaturePropertyStructs))
+		for feature := range archFeaturePropertyStructs {
+			allFeatures = append(allFeatures, feature)
+		}
+		for _, features := range bazel.PowerSetWithoutEmptySet(allFeatures) {
+			sort.Strings(features)
+			propsForCurrentFeatureSet := make([]reflect.Value, 0)
+			propsForCurrentFeatureSet = append(propsForCurrentFeatureSet, propertyStructs...)
+			for _, feature := range features {
+				propsForCurrentFeatureSet = append(propsForCurrentFeatureSet, archFeaturePropertyStructs[feature]...)
+			}
+			archToProp[arch.Name+"-"+strings.Join(features, "-")] =
+				mergeStructs(ctx, propsForCurrentFeatureSet, propertySet)
+		}
 	}
 	axisToProps[bazel.ArchConfigurationAxis] = archToProp
 

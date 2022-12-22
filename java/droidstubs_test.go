@@ -122,7 +122,7 @@ func getAndroidJarPatternsForDroidstubs(t *testing.T, sdkType string) []string {
 				"some-other-exported-dir",
 			],
 			api_levels_annotations_enabled: true,
-      api_levels_sdk_type: "%s",
+			api_levels_sdk_type: "%s",
 		}
 		`, sdkType),
 		map[string][]byte{
@@ -160,6 +160,21 @@ func TestModuleLibDroidstubs(t *testing.T) {
 	patterns := getAndroidJarPatternsForDroidstubs(t, "module-lib")
 
 	android.AssertArrayString(t, "order of patterns", []string{
+		"--android-jar-pattern somedir/%/module-lib/android.jar",
+		"--android-jar-pattern someotherdir/%/module-lib/android.jar",
+		"--android-jar-pattern somedir/%/system/android.jar",
+		"--android-jar-pattern someotherdir/%/system/android.jar",
+		"--android-jar-pattern somedir/%/public/android.jar",
+		"--android-jar-pattern someotherdir/%/public/android.jar",
+	}, patterns)
+}
+
+func TestSystemServerDroidstubs(t *testing.T) {
+	patterns := getAndroidJarPatternsForDroidstubs(t, "system-server")
+
+	android.AssertArrayString(t, "order of patterns", []string{
+		"--android-jar-pattern somedir/%/system-server/android.jar",
+		"--android-jar-pattern someotherdir/%/system-server/android.jar",
 		"--android-jar-pattern somedir/%/module-lib/android.jar",
 		"--android-jar-pattern someotherdir/%/module-lib/android.jar",
 		"--android-jar-pattern somedir/%/system/android.jar",
@@ -258,4 +273,34 @@ func checkSystemModulesUseByDroidstubs(t *testing.T, ctx *android.TestContext, m
 	if len(systemJars) < 1 || systemJars[0] != systemJar {
 		t.Errorf("inputs of %q must be []string{%q}, but was %#v.", moduleName, systemJar, systemJars)
 	}
+}
+
+func TestDroidstubsWithSdkExtensions(t *testing.T) {
+	ctx, _ := testJavaWithFS(t, `
+		droiddoc_exported_dir {
+			name: "sdk-dir",
+			path: "sdk",
+		}
+
+		droidstubs {
+			name: "baz-stubs",
+			api_levels_annotations_dirs: ["sdk-dir"],
+			api_levels_annotations_enabled: true,
+			extensions_info_file: ":info-file",
+		}
+
+		filegroup {
+			name: "info-file",
+			srcs: ["sdk/extensions/info.txt"],
+		}
+		`,
+		map[string][]byte{
+			"sdk/extensions/1/public/some-mainline-module-stubs.jar": nil,
+			"sdk/extensions/info.txt":                                nil,
+		})
+	m := ctx.ModuleForTests("baz-stubs", "android_common")
+	manifest := m.Output("metalava.sbox.textproto")
+	cmdline := String(android.RuleBuilderSboxProtoForTests(t, manifest).Commands[0].Command)
+	android.AssertStringDoesContain(t, "sdk-extensions-root present", cmdline, "--sdk-extensions-root sdk/extensions")
+	android.AssertStringDoesContain(t, "sdk-extensions-info present", cmdline, "--sdk-extensions-info sdk/extensions/info.txt")
 }

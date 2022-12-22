@@ -96,11 +96,6 @@ func TestBootclasspathFragmentInconsistentArtConfiguration_ApexMixture(t *testin
 }
 
 func TestBootclasspathFragment_Coverage(t *testing.T) {
-	prepareForTestWithFrameworkCoverage := android.FixtureMergeEnv(map[string]string{
-		"EMMA_INSTRUMENT":           "true",
-		"EMMA_INSTRUMENT_FRAMEWORK": "true",
-	})
-
 	prepareWithBp := android.FixtureWithRootAndroidBp(`
 		bootclasspath_fragment {
 			name: "myfragment",
@@ -179,7 +174,7 @@ func TestBootclasspathFragment_Coverage(t *testing.T) {
 
 	t.Run("with coverage", func(t *testing.T) {
 		result := android.GroupFixturePreparers(
-			prepareForTestWithFrameworkCoverage,
+			prepareForTestWithFrameworkJacocoInstrumentation,
 			preparer,
 		).RunTest(t)
 		checkContents(t, result, "mybootlib", "coveragelib")
@@ -413,22 +408,6 @@ func TestBootclasspathFragment_Test(t *testing.T) {
 			},
 		}
 
-		bootclasspath_fragment {
-			name: "test_fragment",
-			contents: ["mysdklibrary"],
-			hidden_api: {
-				split_packages: [],
-			},
-		}
-
-		bootclasspath_fragment {
-			name: "apex.apexd_test_bootclasspath-fragment",
-			contents: ["mysdklibrary"],
-			hidden_api: {
-				split_packages: [],
-			},
-		}
-
 		bootclasspath_fragment_test {
 			name: "a_test_fragment",
 			contents: ["mysdklibrary"],
@@ -450,12 +429,6 @@ func TestBootclasspathFragment_Test(t *testing.T) {
 	fragment := result.Module("myfragment", "android_common").(*BootclasspathFragmentModule)
 	android.AssertBoolEquals(t, "not a test fragment", false, fragment.isTestFragment())
 
-	fragment = result.Module("test_fragment", "android_common").(*BootclasspathFragmentModule)
-	android.AssertBoolEquals(t, "is a test fragment by prefix", true, fragment.isTestFragment())
-
 	fragment = result.Module("a_test_fragment", "android_common").(*BootclasspathFragmentModule)
 	android.AssertBoolEquals(t, "is a test fragment by type", true, fragment.isTestFragment())
-
-	fragment = result.Module("apex.apexd_test_bootclasspath-fragment", "android_common").(*BootclasspathFragmentModule)
-	android.AssertBoolEquals(t, "is a test fragment by name", true, fragment.isTestFragment())
 }

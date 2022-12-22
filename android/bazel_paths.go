@@ -202,20 +202,26 @@ func BazelLabelForModuleSrcExcludes(ctx BazelConversionPathContext, paths, exclu
 	return labels
 }
 
-// Returns true if a prefix + components[:i] + /Android.bp exists
-// TODO(b/185358476) Could check for BUILD file instead of checking for Android.bp file, or ensure BUILD is always generated?
-func directoryHasBlueprint(fs pathtools.FileSystem, prefix string, components []string, componentIndex int) bool {
-	blueprintPath := prefix
-	if blueprintPath != "" {
-		blueprintPath = blueprintPath + "/"
-	}
-	blueprintPath = blueprintPath + strings.Join(components[:componentIndex+1], "/")
-	blueprintPath = blueprintPath + "/Android.bp"
-	if exists, _, _ := fs.Exists(blueprintPath); exists {
+// Returns true if a prefix + components[:i] is a package boundary.
+//
+// A package boundary is determined by a BUILD file in the directory. This can happen in 2 cases:
+//
+//  1. An Android.bp exists, which bp2build will always convert to a sibling BUILD file.
+//  2. An Android.bp doesn't exist, but a checked-in BUILD/BUILD.bazel file exists, and that file
+//     is allowlisted by the bp2build configuration to be merged into the symlink forest workspace.
+func isPackageBoundary(config Config, prefix string, components []string, componentIndex int) bool {
+	prefix = filepath.Join(prefix, filepath.Join(components[:componentIndex+1]...))
+	if exists, _, _ := config.fs.Exists(filepath.Join(prefix, "Android.bp")); exists {
 		return true
-	} else {
-		return false
+	} else if config.Bp2buildPackageConfig.ShouldKeepExistingBuildFileForDir(prefix) {
+		if exists, _, _ := config.fs.Exists(filepath.Join(prefix, "BUILD")); exists {
+			return true
+		} else if exists, _, _ := config.fs.Exists(filepath.Join(prefix, "BUILD.bazel")); exists {
+			return true
+		}
 	}
+
+	return false
 }
 
 // Transform a path (if necessary) to acknowledge package boundaries
@@ -242,17 +248,37 @@ func transformSubpackagePath(ctx BazelConversionPathContext, path bazel.Label) b
 		newPath.Label = path.Label
 		return newPath
 	}
-
-	newLabel := ""
+	if strings.HasPrefix(path.Label, "./") {
+		// Drop "./" for consistent handling of paths.
+		// Specifically, to not let "." be considered a package boundary.
+		// Say `inputPath` is `x/Android.bp` and that file has some module
+		// with `srcs=["y/a.c", "z/b.c"]`.
+		// And say the directory tree is:
+		//     x
+		//     ├── Android.bp
+		//     ├── y
+		//     │   ├── a.c
+		//     │   └── Android.bp
+		//     └── z
+		//         └── b.c
+		// Then bazel equivalent labels in srcs should be:
+		//   //x/y:a.c, x/z/b.c
+		// The above should still be the case if `x/Android.bp` had
+		//   srcs=["./y/a.c", "./z/b.c"]
+		// However, if we didn't strip "./", we'd get
+		//   //x/./y:a.c, //x/.:z/b.c
+		path.Label = strings.TrimPrefix(path.Label, "./")
+	}
 	pathComponents := strings.Split(path.Label, "/")
-	foundBlueprint := false
+	newLabel := ""
+	foundPackageBoundary := false
 	// Check the deepest subdirectory first and work upwards
 	for i := len(pathComponents) - 1; i >= 0; i-- {
 		pathComponent := pathComponents[i]
 		var sep string
-		if !foundBlueprint && directoryHasBlueprint(ctx.Config().fs, ctx.ModuleDir(), pathComponents, i) {
+		if !foundPackageBoundary && isPackageBoundary(ctx.Config(), ctx.ModuleDir(), pathComponents, i) {
 			sep = ":"
-			foundBlueprint = true
+			foundPackageBoundary = true
 		} else {
 			sep = "/"
 		}
@@ -262,7 +288,7 @@ func transformSubpackagePath(ctx BazelConversionPathContext, path bazel.Label) b
 			newLabel = pathComponent + sep + newLabel
 		}
 	}
-	if foundBlueprint {
+	if foundPackageBoundary {
 		// Ensure paths end up looking like //bionic/... instead of //./bionic/...
 		moduleDir := ctx.ModuleDir()
 		if strings.HasPrefix(moduleDir, ".") {
@@ -507,4 +533,56 @@ func PathsForBazelOut(ctx PathContext, paths []string) Paths {
 		outs = append(outs, PathForBazelOut(ctx, p))
 	}
 	return outs
+}
+
+// BazelStringOrLabelFromProp splits a Soong module property that can be
+// either a string literal, path (with android:path tag) or a module reference
+// into separate bazel string or label attributes. Bazel treats string and label
+// attributes as distinct types, so this function categorizes a string property
+// into either one of them.
+//
+// e.g. apex.private_key = "foo.pem" can either refer to:
+//
+// 1. "foo.pem" in the current directory -> file target
+// 2. "foo.pem" module -> rule target
+// 3. "foo.pem" file in a different directory, prefixed by a product variable handled
+// in a bazel macro. -> string literal
+//
+// For the first two cases, they are defined using the label attribute. For the third case,
+// it's defined with the string attribute.
+func BazelStringOrLabelFromProp(
+	ctx TopDownMutatorContext,
+	propToDistinguish *string) (bazel.LabelAttribute, bazel.StringAttribute) {
+
+	var labelAttr bazel.LabelAttribute
+	var strAttr bazel.StringAttribute
+
+	if propToDistinguish == nil {
+		// nil pointer
+		return labelAttr, strAttr
+	}
+
+	prop := String(propToDistinguish)
+	if SrcIsModule(prop) != "" {
+		// If it's a module (SrcIsModule will return the module name), set the
+		// resolved label to the label attribute.
+		labelAttr.SetValue(BazelLabelForModuleDepSingle(ctx, prop))
+	} else {
+		// Not a module name. This could be a string literal or a file target in
+		// the current dir. Check if the path exists:
+		path := ExistentPathForSource(ctx, ctx.ModuleDir(), prop)
+
+		if path.Valid() && parentDir(path.String()) == ctx.ModuleDir() {
+			// If it exists and the path is relative to the current dir, resolve the bazel label
+			// for the _file target_ and set it to the label attribute.
+			//
+			// Resolution is necessary because this could be a file in a subpackage.
+			labelAttr.SetValue(BazelLabelForModuleSrcSingle(ctx, prop))
+		} else {
+			// Otherwise, treat it as a string literal and assign to the string attribute.
+			strAttr.Value = propToDistinguish
+		}
+	}
+
+	return labelAttr, strAttr
 }

@@ -211,11 +211,14 @@ func (s *sdk) collectMembers(ctx android.ModuleContext) {
 				container = parent.(android.SdkAware)
 			}
 
+			minApiLevel := android.MinApiLevelForSdkSnapshot(ctx, child)
+
 			export := memberTag.ExportMember()
 			s.memberVariantDeps = append(s.memberVariantDeps, sdkMemberVariantDep{
 				sdkVariant:             s,
 				memberType:             memberType,
 				variant:                child.(android.SdkAware),
+				minApiLevel:            minApiLevel,
 				container:              container,
 				export:                 export,
 				exportedComponentsInfo: exportedComponentsInfo,
@@ -332,9 +335,27 @@ const BUILD_NUMBER_FILE = "snapshot-creation-build-number.txt"
 //         <arch>/lib/
 //            libFoo.so   : a stub library
 
+func (s sdk) targetBuildRelease(ctx android.ModuleContext) *buildRelease {
+	config := ctx.Config()
+	targetBuildReleaseEnv := config.GetenvWithDefault("SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE", buildReleaseCurrent.name)
+	targetBuildRelease, err := nameToRelease(targetBuildReleaseEnv)
+	if err != nil {
+		ctx.ModuleErrorf("invalid SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE: %s", err)
+		targetBuildRelease = buildReleaseCurrent
+	}
+
+	return targetBuildRelease
+}
+
 // buildSnapshot is the main function in this source file. It creates rules to copy
 // the contents (header files, stub libraries, etc) into the zip file.
 func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
+
+	targetBuildRelease := s.targetBuildRelease(ctx)
+	targetApiLevel, err := android.ApiLevelFromUser(ctx, targetBuildRelease.name)
+	if err != nil {
+		targetApiLevel = android.FutureApiLevel
+	}
 
 	// Aggregate all the sdkMemberVariantDep instances from all the sdk variants.
 	hasLicenses := false
@@ -346,12 +367,18 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 	// Filter out any sdkMemberVariantDep that is a component of another.
 	memberVariantDeps = filterOutComponents(ctx, memberVariantDeps)
 
-	// Record the names of all the members, both explicitly specified and implicitly
-	// included.
+	// Record the names of all the members, both explicitly specified and implicitly included. Also,
+	// record the names of any members that should be excluded from this snapshot.
 	allMembersByName := make(map[string]struct{})
 	exportedMembersByName := make(map[string]struct{})
+	excludedMembersByName := make(map[string]struct{})
 
-	addMember := func(name string, export bool) {
+	addMember := func(name string, export bool, exclude bool) {
+		if exclude {
+			excludedMembersByName[name] = struct{}{}
+			return
+		}
+
 		allMembersByName[name] = struct{}{}
 		if export {
 			exportedMembersByName[name] = struct{}{}
@@ -362,11 +389,15 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		name := memberVariantDep.variant.Name()
 		export := memberVariantDep.export
 
-		addMember(name, export)
+		// If the minApiLevel of the member is greater than the target API level then exclude it from
+		// this snapshot.
+		exclude := memberVariantDep.minApiLevel.GreaterThan(targetApiLevel)
+
+		addMember(name, export, exclude)
 
 		// Add any components provided by the module.
 		for _, component := range memberVariantDep.exportedComponentsInfo.Components {
-			addMember(component, export)
+			addMember(component, export, exclude)
 		}
 
 		if memberVariantDep.memberType == android.LicenseModuleSdkMemberType {
@@ -382,17 +413,8 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		modules: make(map[string]*bpModule),
 	}
 
-	config := ctx.Config()
-
 	// Always add -current to the end
 	snapshotFileSuffix := "-current"
-
-	targetBuildReleaseEnv := config.GetenvWithDefault("SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE", buildReleaseCurrent.name)
-	targetBuildRelease, err := nameToRelease(targetBuildReleaseEnv)
-	if err != nil {
-		ctx.ModuleErrorf("invalid SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE: %s", err)
-		targetBuildRelease = buildReleaseCurrent
-	}
 
 	builder := &snapshotBuilder{
 		ctx:                   ctx,
@@ -404,6 +426,7 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		prebuiltModules:       make(map[string]*bpModule),
 		allMembersByName:      allMembersByName,
 		exportedMembersByName: exportedMembersByName,
+		excludedMembersByName: excludedMembersByName,
 		targetBuildRelease:    targetBuildRelease,
 	}
 	s.builderForTests = builder
@@ -437,6 +460,10 @@ be unnecessary as every module in the sdk already has its own licenses property.
 		}
 
 		name := member.name
+		if _, ok := excludedMembersByName[name]; ok {
+			continue
+		}
+
 		requiredTraits := traits[name]
 		if requiredTraits == nil {
 			requiredTraits = android.EmptySdkMemberTraitSet()
@@ -1034,6 +1061,9 @@ type snapshotBuilder struct {
 	// The set of exported members by name.
 	exportedMembersByName map[string]struct{}
 
+	// The set of members which have been excluded from this snapshot; by name.
+	excludedMembersByName map[string]struct{}
+
 	// The target build release for which the snapshot is to be generated.
 	targetBuildRelease *buildRelease
 
@@ -1218,6 +1248,9 @@ func (s *snapshotBuilder) snapshotSdkMemberName(name string, required bool) stri
 func (s *snapshotBuilder) snapshotSdkMemberNames(members []string, required bool) []string {
 	var references []string = nil
 	for _, m := range members {
+		if _, ok := s.excludedMembersByName[m]; ok {
+			continue
+		}
 		references = append(references, s.snapshotSdkMemberName(m, required))
 	}
 	return references
@@ -1260,6 +1293,9 @@ type sdkMemberVariantDep struct {
 
 	// The names of additional component modules provided by the variant.
 	exportedComponentsInfo android.ExportedComponentsInfo
+
+	// The minimum API level on which this module is supported.
+	minApiLevel android.ApiLevel
 }
 
 var _ android.SdkMember = (*sdkMember)(nil)
@@ -2136,6 +2172,11 @@ type extractorProperty struct {
 	// Retrieves the value on which common value optimization will be performed.
 	getter fieldAccessorFunc
 
+	// True if the field should never be cleared.
+	//
+	// This is set to true if and only if the field is annotated with `sdk:"keep"`.
+	keep bool
+
 	// The empty value for the field.
 	emptyValue reflect.Value
 
@@ -2181,8 +2222,8 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 			continue
 		}
 
-		// Ignore fields whose value should be kept.
-		if proptools.HasTag(field, "sdk", "keep") {
+		// Ignore fields tagged with sdk:"ignore".
+		if proptools.HasTag(field, "sdk", "ignore") {
 			continue
 		}
 
@@ -2199,6 +2240,8 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 				return true
 			}
 		}
+
+		keep := proptools.HasTag(field, "sdk", "keep")
 
 		// Save a copy of the field index for use in the function.
 		fieldIndex := f
@@ -2239,6 +2282,7 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 				name,
 				filter,
 				fieldGetter,
+				keep,
 				reflect.Zero(field.Type),
 				proptools.HasTag(field, "android", "arch_variant"),
 			}
@@ -2358,11 +2402,13 @@ func (e *commonValueExtractor) extractCommonProperties(commonProperties interfac
 		if commonValue != nil {
 			emptyValue := property.emptyValue
 			fieldGetter(commonStructValue).Set(*commonValue)
-			for i := 0; i < sliceValue.Len(); i++ {
-				container := sliceValue.Index(i).Interface().(propertiesContainer)
-				itemValue := reflect.ValueOf(container.optimizableProperties())
-				fieldValue := fieldGetter(itemValue)
-				fieldValue.Set(emptyValue)
+			if !property.keep {
+				for i := 0; i < sliceValue.Len(); i++ {
+					container := sliceValue.Index(i).Interface().(propertiesContainer)
+					itemValue := reflect.ValueOf(container.optimizableProperties())
+					fieldValue := fieldGetter(itemValue)
+					fieldValue.Set(emptyValue)
+				}
 			}
 		}
 

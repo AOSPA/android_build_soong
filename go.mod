@@ -1,23 +1,24 @@
 module android/soong
 
-require (
-	google.golang.org/protobuf v0.0.0
-	github.com/google/blueprint v0.0.0
-	android/soong/aidl v0.0.0
-)
+require google.golang.org/protobuf v0.0.0
+
+require github.com/google/blueprint v0.0.0
 
 replace google.golang.org/protobuf v0.0.0 => ../../external/golang-protobuf
 
 replace github.com/google/blueprint v0.0.0 => ../blueprint
-
-replace android/soong/aidl v0.0.0 => ../../system/tools/aidl/build
 
 // Indirect deps from golang-protobuf
 exclude github.com/golang/protobuf v1.5.0
 
 replace github.com/google/go-cmp v0.5.5 => ../../external/go-cmp
 
-// Indirect dep from go-cmp
-exclude golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543
+require prebuilts/bazel/common/proto/analysis_v2 v0.0.0
+
+replace prebuilts/bazel/common/proto/analysis_v2 => ../../prebuilts/bazel/common/proto/analysis_v2
+
+require prebuilts/bazel/common/proto/build v0.0.0 // indirect
+
+replace prebuilts/bazel/common/proto/build => ../../prebuilts/bazel/common/proto/build
 
 go 1.18

@@ -17,6 +17,7 @@ package java
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
@@ -27,7 +28,7 @@ import (
 )
 
 // The values allowed for Droidstubs' Api_levels_sdk_type
-var allowedApiLevelSdkTypes = []string{"public", "system", "module-lib"}
+var allowedApiLevelSdkTypes = []string{"public", "system", "module-lib", "system-server"}
 
 func init() {
 	RegisterStubsBuildComponents(android.InitRegistrationContext)
@@ -133,7 +134,7 @@ type DroidstubsProperties struct {
 	// the dirs which Metalava extracts API levels annotations from.
 	Api_levels_annotations_dirs []string
 
-	// the sdk kind which Metalava extracts API levels annotations from. Supports 'public', 'system' and 'module-lib' for now; defaults to public.
+	// the sdk kind which Metalava extracts API levels annotations from. Supports 'public', 'system', 'module-lib' and 'system-server'; defaults to public.
 	Api_levels_sdk_type *string
 
 	// the filename which Metalava extracts API levels annotations from. Defaults to android.jar.
@@ -142,6 +143,10 @@ type DroidstubsProperties struct {
 	// if set to true, collect the values used by the Dev tools and
 	// write them in files packaged with the SDK. Defaults to false.
 	Write_sdk_values *bool
+
+	// path or filegroup to file defining extension an SDK name <-> numerical ID mapping and
+	// what APIs exist in which SDKs; passed to metalava via --sdk-extensions-info
+	Extensions_info_file *string `android:"path"`
 }
 
 // Used by xsd_config
@@ -398,9 +403,20 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 	filename := proptools.StringDefault(d.properties.Api_levels_jar_filename, "android.jar")
 
 	var dirs []string
+	var extensions_dir string
 	ctx.VisitDirectDepsWithTag(metalavaAPILevelsAnnotationsDirTag, func(m android.Module) {
 		if t, ok := m.(*ExportedDroiddocDir); ok {
+			extRegex := regexp.MustCompile(t.dir.String() + `/extensions/[0-9]+/public/.*\.jar`)
+
+			// Grab the first extensions_dir and we find while scanning ExportedDroiddocDir.deps;
+			// ideally this should be read from prebuiltApis.properties.Extensions_*
 			for _, dep := range t.deps {
+				if extRegex.MatchString(dep.String()) && d.properties.Extensions_info_file != nil {
+					if extensions_dir == "" {
+						extensions_dir = t.dir.String() + "/extensions"
+					}
+					cmd.Implicit(dep)
+				}
 				if dep.Base() == filename {
 					cmd.Implicit(dep)
 				}
@@ -429,6 +445,8 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 	// for older releases. Similarly, module-lib falls back to system API.
 	var sdkDirs []string
 	switch proptools.StringDefault(d.properties.Api_levels_sdk_type, "public") {
+	case "system-server":
+		sdkDirs = []string{"system-server", "module-lib", "system", "public"}
 	case "module-lib":
 		sdkDirs = []string{"module-lib", "system", "public"}
 	case "system":
@@ -444,6 +462,16 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 		for _, dir := range dirs {
 			cmd.FlagWithArg("--android-jar-pattern ", fmt.Sprintf("%s/%%/%s/%s", dir, sdkDir, filename))
 		}
+	}
+
+	if d.properties.Extensions_info_file != nil {
+		if extensions_dir == "" {
+			ctx.ModuleErrorf("extensions_info_file set, but no SDK extension dirs found")
+		}
+		info_file := android.PathForModuleSrc(ctx, *d.properties.Extensions_info_file)
+		cmd.Implicit(info_file)
+		cmd.FlagWithArg("--sdk-extensions-root ", extensions_dir)
+		cmd.FlagWithArg("--sdk-extensions-info ", info_file.String())
 	}
 }
 

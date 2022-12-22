@@ -318,19 +318,17 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 
 	if a.isPrebuiltFrameworkRes() {
 		a.outputFile = srcApk
-		certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
+		a.certificate, certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
 		if len(certificates) != 1 {
 			ctx.ModuleErrorf("Unexpected number of certificates were extracted: %q", certificates)
 		}
-		a.certificate = certificates[0]
 	} else if a.preprocessed {
 		a.outputFile = srcApk
 		a.certificate = PresignedCertificate
 	} else if !Bool(a.properties.Presigned) {
 		// If the certificate property is empty at this point, default_dev_cert must be set to true.
 		// Which makes processMainCert's behavior for the empty cert string WAI.
-		certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
-		a.certificate = certificates[0]
+		a.certificate, certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
 		signed := android.PathForModuleOut(ctx, "signed", apkFilename)
 		var lineageFile android.Path
 		if lineage := String(a.properties.Lineage); lineage != "" {
@@ -502,7 +500,18 @@ type androidTestImportProperties struct {
 type AndroidTestImport struct {
 	AndroidAppImport
 
-	testProperties testProperties
+	testProperties struct {
+		// list of compatibility suites (for example "cts", "vts") that the module should be
+		// installed into.
+		Test_suites []string `android:"arch_variant"`
+
+		// list of files or filegroup modules that provide data that should be installed alongside
+		// the test
+		Data []string `android:"path"`
+
+		// Install the test into a folder named for the module in all test suites.
+		Per_testcase_directory *bool
+	}
 
 	testImportProperties androidTestImportProperties
 

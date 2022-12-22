@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
@@ -295,27 +296,37 @@ func (p *PrebuiltEtc) ExcludeFromRecoverySnapshot() bool {
 }
 
 func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	if p.properties.Src == nil {
-		ctx.PropertyErrorf("src", "missing prebuilt source file")
-		return
-	}
-	p.sourceFilePath = android.PathForModuleSrc(ctx, proptools.String(p.properties.Src))
-
-	// Determine the output file basename.
-	// If Filename is set, use the name specified by the property.
-	// If Filename_from_src is set, use the source file name.
-	// Otherwise use the module name.
 	filename := proptools.String(p.properties.Filename)
 	filenameFromSrc := proptools.Bool(p.properties.Filename_from_src)
-	if filename != "" {
-		if filenameFromSrc {
-			ctx.PropertyErrorf("filename_from_src", "filename is set. filename_from_src can't be true")
-			return
+	if p.properties.Src != nil {
+		p.sourceFilePath = android.PathForModuleSrc(ctx, proptools.String(p.properties.Src))
+
+		// Determine the output file basename.
+		// If Filename is set, use the name specified by the property.
+		// If Filename_from_src is set, use the source file name.
+		// Otherwise use the module name.
+		if filename != "" {
+			if filenameFromSrc {
+				ctx.PropertyErrorf("filename_from_src", "filename is set. filename_from_src can't be true")
+				return
+			}
+		} else if filenameFromSrc {
+			filename = p.sourceFilePath.Base()
+		} else {
+			filename = ctx.ModuleName()
 		}
-	} else if filenameFromSrc {
-		filename = p.sourceFilePath.Base()
+	} else if ctx.Config().AllowMissingDependencies() {
+		// If no srcs was set and AllowMissingDependencies is enabled then
+		// mark the module as missing dependencies and set a fake source path
+		// and file name.
+		ctx.AddMissingDependencies([]string{"MISSING_PREBUILT_SRC_FILE"})
+		p.sourceFilePath = android.PathForModuleSrc(ctx)
+		if filename == "" {
+			filename = ctx.ModuleName()
+		}
 	} else {
-		filename = ctx.ModuleName()
+		ctx.PropertyErrorf("src", "missing prebuilt source file")
+		return
 	}
 	p.outputFilePath = android.PathForModuleOut(ctx, filename).OutputPath
 
@@ -670,15 +681,17 @@ func generatePrebuiltSnapshot(s snapshot.SnapshotSingleton, ctx android.Singleto
 // For Bazel / bp2build
 
 type bazelPrebuiltFileAttributes struct {
-	Src         bazel.LabelAttribute
-	Filename    string
-	Dir         string
-	Installable bazel.BoolAttribute
+	Src               bazel.LabelAttribute
+	Filename          bazel.LabelAttribute
+	Dir               string
+	Installable       bazel.BoolAttribute
+	Filename_from_src bazel.BoolAttribute
 }
 
-// ConvertWithBp2build performs bp2build conversion of PrebuiltEtc
-// All prebuilt_* modules are PrebuiltEtc, which we treat uniformily as *PrebuiltFile*
-func (module *PrebuiltEtc) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+// Bp2buildHelper returns a bazelPrebuiltFileAttributes used for the conversion
+// of prebuilt_*  modules. bazelPrebuiltFileAttributes has the common attributes
+// used by both prebuilt_etc_xml and other prebuilt_* moodules
+func (module *PrebuiltEtc) Bp2buildHelper(ctx android.TopDownMutatorContext) *bazelPrebuiltFileAttributes {
 	var src bazel.LabelAttribute
 	for axis, configToProps := range module.GetArchVariantProperties(ctx, &prebuiltEtcProperties{}) {
 		for config, p := range configToProps {
@@ -691,18 +704,40 @@ func (module *PrebuiltEtc) ConvertWithBp2build(ctx android.TopDownMutatorContext
 				src.SetSelectValue(axis, config, label)
 			}
 		}
+
+		for propName, productConfigProps := range android.ProductVariableProperties(ctx) {
+			for configProp, propVal := range productConfigProps {
+				if propName == "Src" {
+					props, ok := propVal.(*string)
+					if !ok {
+						ctx.PropertyErrorf(" Expected Property to have type string, but was %s\n", reflect.TypeOf(propVal).String())
+						continue
+					}
+					if props != nil {
+						label := android.BazelLabelForModuleSrcSingle(ctx, *props)
+						src.SetSelectValue(configProp.ConfigurationAxis(), configProp.SelectKey(), label)
+					}
+				}
+			}
+		}
 	}
 
 	var filename string
-	if module.properties.Filename != nil {
-		filename = *module.properties.Filename
+	var filenameFromSrc bool
+	moduleProps := module.properties
+
+	if moduleProps.Filename != nil && *moduleProps.Filename != "" {
+		filename = *moduleProps.Filename
+	} else if moduleProps.Filename_from_src != nil && *moduleProps.Filename_from_src {
+		if moduleProps.Src != nil {
+			filename = *moduleProps.Src
+		}
+		filenameFromSrc = true
+	} else {
+		filename = ctx.ModuleName()
 	}
 
 	var dir = module.installDirBase
-	// prebuilt_file supports only `etc` or `usr/share`
-	if !(dir == "etc" || dir == "usr/share") {
-		return
-	}
 	if subDir := module.subdirProperties.Sub_dir; subDir != nil {
 		dir = dir + "/" + *subDir
 	}
@@ -714,10 +749,31 @@ func (module *PrebuiltEtc) ConvertWithBp2build(ctx android.TopDownMutatorContext
 
 	attrs := &bazelPrebuiltFileAttributes{
 		Src:         src,
-		Filename:    filename,
 		Dir:         dir,
 		Installable: installable,
 	}
+
+	if filename != "" {
+		attrs.Filename = bazel.LabelAttribute{Value: &bazel.Label{Label: filename}}
+	} else if filenameFromSrc {
+		attrs.Filename_from_src = bazel.BoolAttribute{Value: moduleProps.Filename_from_src}
+	}
+
+	return attrs
+
+}
+
+// ConvertWithBp2build performs bp2build conversion of PrebuiltEtc
+// prebuilt_* modules (except prebuilt_etc_xml) are PrebuiltEtc,
+// which we treat as *PrebuiltFile*
+func (module *PrebuiltEtc) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+	var dir = module.installDirBase
+	// prebuilt_file supports only `etc` or `usr/share`
+	if !(dir == "etc" || dir == "usr/share") {
+		return
+	}
+
+	attrs := module.Bp2buildHelper(ctx)
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "prebuilt_file",

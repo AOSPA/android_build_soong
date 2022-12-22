@@ -75,6 +75,9 @@ const (
 	// Don't use bazel at all during module analysis.
 	AnalysisNoBazel SoongBuildMode = iota
 
+	// Symlink fores mode: merge two directory trees into a symlink forest
+	SymlinkForest
+
 	// Bp2build mode: Generate BUILD files from blueprint files and exit.
 	Bp2build
 
@@ -82,6 +85,9 @@ const (
 	// blueprint modules. Individual BUILD targets will not, however, faitfhully
 	// express build semantics.
 	GenerateQueryView
+
+	// Generate BUILD files for API contributions to API surfaces
+	ApiBp2build
 
 	// Create a JSON representation of the module graph and exit.
 	GenerateModuleGraph
@@ -94,9 +100,13 @@ const (
 	// allowlisted on an experimental basis.
 	BazelDevMode
 
+	// Use bazel during analysis of a few allowlisted build modules. The allowlist
+	// is considered "staging, as these are modules being prepared to be released
+	// into prod mode shortly after.
+	BazelStagingMode
+
 	// Use bazel during analysis of build modules from an allowlist carefully
 	// curated by the build team to be proven stable.
-	// TODO(cparsons): Implement this mode.
 	BazelProdMode
 )
 
@@ -123,6 +133,11 @@ func (c Config) Subninjas() []string {
 
 func (c Config) PrimaryBuilderInvocations() []bootstrap.PrimaryBuilderInvocation {
 	return []bootstrap.PrimaryBuilderInvocation{}
+}
+
+// RunningInsideUnitTest returns true if this code is being run as part of a Soong unit test.
+func (c Config) RunningInsideUnitTest() bool {
+	return c.config.TestProductVariables != nil
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -190,7 +205,7 @@ type config struct {
 	mockBpList string
 
 	BuildMode                      SoongBuildMode
-	bp2buildPackageConfig          bp2BuildConversionAllowlist
+	Bp2buildPackageConfig          Bp2BuildConversionAllowlist
 	Bp2buildSoongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions
 
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
@@ -481,17 +496,9 @@ func NewConfig(moduleListFile string, buildMode SoongBuildMode, runGoTests bool,
 		config.AndroidFirstDeviceTarget = FirstTarget(config.Targets[Android], "lib64", "lib32")[0]
 	}
 
-	// Checking USE_BAZEL_ANALYSIS must be done here instead of in the caller, so
-	// that we can invoke IsEnvTrue (which also registers the env var as a
-	// dependency of the build).
-	// TODO(cparsons): Remove this hack once USE_BAZEL_ANALYSIS is removed.
-	if buildMode == AnalysisNoBazel && config.IsEnvTrue("USE_BAZEL_ANALYSIS") {
-		buildMode = BazelDevMode
-	}
-
 	config.BuildMode = buildMode
 	config.BazelContext, err = NewBazelContext(config)
-	config.bp2buildPackageConfig = GetBp2BuildAllowList()
+	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
 
 	return Config{config}, err
 }
@@ -529,7 +536,7 @@ func (c *config) mockFileSystem(bp string, fs map[string][]byte) {
 // Returns true if "Bazel builds" is enabled. In this mode, part of build
 // analysis is handled by Bazel.
 func (c *config) IsMixedBuildsEnabled() bool {
-	return c.BuildMode == BazelProdMode || c.BuildMode == BazelDevMode
+	return c.BuildMode == BazelProdMode || c.BuildMode == BazelDevMode || c.BuildMode == BazelStagingMode
 }
 
 func (c *config) SetAllowMissingDependencies() {
@@ -678,9 +685,7 @@ func (c *config) DeviceName() string {
 // DeviceProduct returns the current product target. There could be multiple of
 // these per device type.
 //
-// NOTE: Do not base conditional logic on this value. It may break product
-//
-//	inheritance.
+// NOTE: Do not base conditional logic on this value. It may break product inheritance.
 func (c *config) DeviceProduct() string {
 	return *c.productVariables.DeviceProduct
 }
@@ -1104,7 +1109,7 @@ func (c *deviceConfig) WithDexpreopt() bool {
 	return c.config.productVariables.WithDexpreopt
 }
 
-func (c *config) FrameworksBaseDirExists(ctx PathContext) bool {
+func (c *config) FrameworksBaseDirExists(ctx PathGlobContext) bool {
 	return ExistentPathForSource(ctx, "frameworks", "base", "Android.bp").Valid()
 }
 
@@ -1269,10 +1274,6 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 		}
 	}
 	return coverage
-}
-
-func (c *deviceConfig) AfdoAdditionalProfileDirs() []string {
-	return c.config.productVariables.AfdoAdditionalProfileDirs
 }
 
 func (c *deviceConfig) PgoAdditionalProfileDirs() []string {
@@ -1684,6 +1685,14 @@ func (c *deviceConfig) ShippingApiLevel() ApiLevel {
 	}
 	apiLevel, _ := strconv.Atoi(*c.config.productVariables.ShippingApiLevel)
 	return uncheckedFinalApiLevel(apiLevel)
+}
+
+func (c *deviceConfig) BuildBrokenClangAsFlags() bool {
+	return c.config.productVariables.BuildBrokenClangAsFlags
+}
+
+func (c *deviceConfig) BuildBrokenClangCFlags() bool {
+	return c.config.productVariables.BuildBrokenClangCFlags
 }
 
 func (c *deviceConfig) BuildBrokenEnforceSyspropOwner() bool {

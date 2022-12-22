@@ -17,6 +17,7 @@ package java
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"android/soong/android"
 )
@@ -138,6 +139,7 @@ func (j *JavaFuzzLibrary) AndroidMkEntries() []android.AndroidMkEntries {
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		entries.AddStrings("LOCAL_COMPATIBILITY_SUITE", "null-suite")
 		androidMkWriteTestData(j.jniFilePaths, entries)
+		androidMkWriteTestData(android.Paths{j.implementationJarFile}, entries)
 	})
 	return entriesList
 }
@@ -398,6 +400,19 @@ func (app *AndroidApp) AndroidMkEntries() []android.AndroidMkEntries {
 				} else {
 					for _, jniLib := range app.jniLibs {
 						entries.AddStrings("LOCAL_SOONG_JNI_LIBS_"+jniLib.target.Arch.ArchType.String(), jniLib.name)
+						var partitionTag string
+
+						// Mimic the creation of partition_tag in build/make,
+						// which defaults to an empty string when the partition is system.
+						// Otherwise, capitalize with a leading _
+						if jniLib.partition == "system" {
+							partitionTag = ""
+						} else {
+							split := strings.Split(jniLib.partition, "/")
+							partitionTag = "_" + strings.ToUpper(split[len(split)-1])
+						}
+						entries.AddStrings("LOCAL_SOONG_JNI_LIBS_PARTITION_"+jniLib.target.Arch.ArchType.String(),
+							jniLib.name+":"+partitionTag)
 					}
 				}
 

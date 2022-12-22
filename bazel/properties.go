@@ -73,6 +73,17 @@ func MakeLabelList(labels []Label) LabelList {
 	}
 }
 
+// MakeLabelListFromTargetNames creates a LabelList from unqualified target names
+// This is a utiltity function for bp2build converters of Soong modules that have 1:many generated targets
+func MakeLabelListFromTargetNames(targetNames []string) LabelList {
+	labels := []Label{}
+	for _, name := range targetNames {
+		label := Label{Label: ":" + name}
+		labels = append(labels, label)
+	}
+	return MakeLabelList(labels)
+}
+
 func (ll *LabelList) Equals(other LabelList) bool {
 	if len(ll.Includes) != len(other.Includes) || len(ll.Excludes) != len(other.Excludes) {
 		return false
@@ -309,7 +320,19 @@ func (la *LabelAttribute) Collapse() error {
 	_, containsProductVariables := axisTypes[productVariables]
 	if containsProductVariables {
 		if containsOs || containsArch || containsOsArch {
-			return fmt.Errorf("label attribute could not be collapsed as it has two or more unrelated axes")
+			if containsArch {
+				allProductVariablesAreArchVariant := true
+				for k := range la.ConfigurableValues {
+					if k.configurationType == productVariables && k.outerAxisType != arch {
+						allProductVariablesAreArchVariant = false
+					}
+				}
+				if !allProductVariablesAreArchVariant {
+					return fmt.Errorf("label attribute could not be collapsed as it has two or more unrelated axes")
+				}
+			} else {
+				return fmt.Errorf("label attribute could not be collapsed as it has two or more unrelated axes")
+			}
 		}
 	}
 	if (containsOs && containsArch) || (containsOsArch && (containsOs || containsArch)) {
@@ -708,7 +731,7 @@ func (lla *LabelListAttribute) SetSelectValue(axis ConfigurationAxis, config str
 	switch axis.configurationType {
 	case noConfig:
 		lla.Value = list
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, inApex:
 		if lla.ConfigurableValues == nil {
 			lla.ConfigurableValues = make(configurableLabelLists)
 		}
@@ -724,8 +747,8 @@ func (lla *LabelListAttribute) SelectValue(axis ConfigurationAxis, config string
 	switch axis.configurationType {
 	case noConfig:
 		return lla.Value
-	case arch, os, osArch, productVariables, osAndInApex:
-		return (lla.ConfigurableValues[axis][config])
+	case arch, os, osArch, productVariables, osAndInApex, inApex:
+		return lla.ConfigurableValues[axis][config]
 	default:
 		panic(fmt.Errorf("Unrecognized ConfigurationAxis %s", axis))
 	}
@@ -1164,6 +1187,11 @@ type StringListAttribute struct {
 	// The configured attribute label list Values. Optional
 	// a map of independent configurability axes
 	ConfigurableValues configurableStringLists
+}
+
+// IsEmpty returns true if the attribute has no values under any configuration.
+func (sla StringListAttribute) IsEmpty() bool {
+	return len(sla.Value) == 0 && !sla.HasConfigurableValues()
 }
 
 type configurableStringLists map[ConfigurationAxis]stringListSelectValues

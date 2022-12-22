@@ -213,8 +213,8 @@ func (ctx *TestContext) FinalDepsMutators(f RegisterMutatorFunc) {
 	ctx.finalDeps = append(ctx.finalDeps, f)
 }
 
-func (ctx *TestContext) RegisterBp2BuildConfig(config bp2BuildConversionAllowlist) {
-	ctx.config.bp2buildPackageConfig = config
+func (ctx *TestContext) RegisterBp2BuildConfig(config Bp2BuildConversionAllowlist) {
+	ctx.config.Bp2buildPackageConfig = config
 }
 
 // PreArchBp2BuildMutators adds mutators to be register for converting Android Blueprint modules
@@ -461,6 +461,12 @@ func (ctx *TestContext) RegisterForBazelConversion() {
 	RegisterMutatorsForBazelConversion(ctx.Context, ctx.bp2buildPreArch)
 }
 
+// RegisterForApiBazelConversion prepares a test context for API bp2build conversion.
+func (ctx *TestContext) RegisterForApiBazelConversion() {
+	ctx.config.BuildMode = ApiBp2build
+	RegisterMutatorsForApiBazelConversion(ctx.Context, ctx.bp2buildPreArch)
+}
+
 func (ctx *TestContext) ParseFileList(rootDir string, filePaths []string) (deps []string, errs []error) {
 	// This function adapts the old style ParseFileList calls that are spread throughout the tests
 	// to the new style that takes a config.
@@ -665,6 +671,46 @@ func (ctx *TestContext) InstallMakeRulesForTesting(t *testing.T) []InstallMakeRu
 	}
 
 	return parseMkRules(t, ctx.config, nodes)
+}
+
+// MakeVarVariable provides access to make vars that will be written by the makeVarsSingleton
+type MakeVarVariable interface {
+	// Name is the name of the variable.
+	Name() string
+
+	// Value is the value of the variable.
+	Value() string
+}
+
+func (v makeVarsVariable) Name() string {
+	return v.name
+}
+
+func (v makeVarsVariable) Value() string {
+	return v.value
+}
+
+// PrepareForTestAccessingMakeVars sets up the test so that MakeVarsForTesting will work.
+var PrepareForTestAccessingMakeVars = GroupFixturePreparers(
+	PrepareForTestWithAndroidMk,
+	PrepareForTestWithMakevars,
+)
+
+// MakeVarsForTesting returns a filtered list of MakeVarVariable objects that represent the
+// variables that will be written out.
+//
+// It is necessary to use PrepareForTestAccessingMakeVars in tests that want to call this function.
+// Along with any other preparers needed to add the make vars.
+func (ctx *TestContext) MakeVarsForTesting(filter func(variable MakeVarVariable) bool) []MakeVarVariable {
+	vars := ctx.SingletonForTests("makevars").Singleton().(*makeVarsSingleton).varsForTesting
+	result := make([]MakeVarVariable, 0, len(vars))
+	for _, v := range vars {
+		if filter(v) {
+			result = append(result, v)
+		}
+	}
+
+	return result
 }
 
 func (ctx *TestContext) Config() Config {
@@ -1037,7 +1083,7 @@ func FailIfNoMatchingErrors(t *testing.T, pattern string, errs []error) bool {
 		}
 	}
 	if !found {
-		t.Errorf("missing the expected error %q (checked %d error(s))", pattern, len(errs))
+		t.Errorf("could not match the expected error regex %q (checked %d error(s))", pattern, len(errs))
 		for i, err := range errs {
 			t.Errorf("errs[%d] = %q", i, err)
 		}
@@ -1074,6 +1120,7 @@ func SetKatiEnabledForTests(config Config) {
 }
 
 func AndroidMkEntriesForTest(t *testing.T, ctx *TestContext, mod blueprint.Module) []AndroidMkEntries {
+	t.Helper()
 	var p AndroidMkEntriesProvider
 	var ok bool
 	if p, ok = mod.(AndroidMkEntriesProvider); !ok {
@@ -1088,6 +1135,7 @@ func AndroidMkEntriesForTest(t *testing.T, ctx *TestContext, mod blueprint.Modul
 }
 
 func AndroidMkDataForTest(t *testing.T, ctx *TestContext, mod blueprint.Module) AndroidMkData {
+	t.Helper()
 	var p AndroidMkDataProvider
 	var ok bool
 	if p, ok = mod.(AndroidMkDataProvider); !ok {

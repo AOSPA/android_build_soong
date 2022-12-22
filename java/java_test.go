@@ -588,8 +588,8 @@ func TestPrebuilts(t *testing.T) {
 	sdklibStubsJar := ctx.ModuleForTests("sdklib.stubs", "android_common").Rule("combineJar").Output
 
 	fooLibrary := fooModule.Module().(*Library)
-	assertDeepEquals(t, "foo java sources incorrect",
-		[]string{"a.java"}, fooLibrary.compiledJavaSrcs.Strings())
+	assertDeepEquals(t, "foo unique sources incorrect",
+		[]string{"a.java"}, fooLibrary.uniqueSrcFiles.Strings())
 
 	assertDeepEquals(t, "foo java source jars incorrect",
 		[]string{".intermediates/stubs-source/android_common/stubs-source-stubs.srcjar"},
@@ -1288,6 +1288,8 @@ func TestAidlExportIncludeDirsFromImports(t *testing.T) {
 }
 
 func TestAidlIncludeDirFromConvertedFileGroupWithPathPropInMixedBuilds(t *testing.T) {
+	// TODO(b/247782695), TODO(b/242847534) Fix mixed builds for filegroups
+	t.Skip("Re-enable once filegroups are corrected for mixed builds")
 	bp := `
 	filegroup {
 		name: "foo_aidl",
@@ -1780,4 +1782,27 @@ func TestGenAidlIncludeFlagsForMixedBuilds(t *testing.T) {
 	if flags != expectedFlags {
 		t.Errorf("expected flags to be %q; was %q", expectedFlags, flags)
 	}
+}
+
+func TestDeviceBinaryWrapperGeneration(t *testing.T) {
+	// Scenario 1: java_binary has main_class property in its bp
+	ctx, _ := testJava(t, `
+		java_binary {
+			name: "foo",
+			srcs: ["foo.java"],
+			main_class: "foo.bar.jb",
+		}
+	`)
+	wrapperPath := fmt.Sprint(ctx.ModuleForTests("foo", "android_arm64_armv8-a").AllOutputs())
+	if !strings.Contains(wrapperPath, "foo.sh") {
+		t.Errorf("wrapper file foo.sh is not generated")
+	}
+
+	// Scenario 2: java_binary has neither wrapper nor main_class, its build
+	// is expected to be failed.
+	testJavaError(t, "main_class property is required for device binary if no default wrapper is assigned", `
+		java_binary {
+			name: "foo",
+			srcs: ["foo.java"],
+		}`)
 }

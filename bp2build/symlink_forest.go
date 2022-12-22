@@ -1,11 +1,29 @@
+// Copyright 2022 Google Inc. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package bp2build
 
 import (
-	"android/soong/android"
+	"errors"
 	"fmt"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sync"
+	"sync/atomic"
 
 	"android/soong/shared"
 )
@@ -16,14 +34,78 @@ import (
 // or a directory. If excluded is true, then that file/directory should be
 // excluded from symlinking. Otherwise, the node is not excluded, but one of its
 // descendants is (otherwise the node in question would not exist)
-type node struct {
+
+type instructionsNode struct {
 	name     string
 	excluded bool // If false, this is just an intermediate node
-	children map[string]*node
+	children map[string]*instructionsNode
+}
+
+type symlinkForestContext struct {
+	verbose bool
+	topdir  string // $TOPDIR
+
+	// State
+	wg    sync.WaitGroup
+	depCh chan string
+	okay  atomic.Bool // Whether the forest was successfully constructed
+}
+
+// A simple thread pool to limit concurrency on system calls.
+// Necessary because Go spawns a new OS-level thread for each blocking system
+// call. This means that if syscalls are too slow and there are too many of
+// them, the hard limit on OS-level threads can be exhausted.
+type syscallPool struct {
+	shutdownCh []chan<- struct{}
+	workCh     chan syscall
+}
+
+type syscall struct {
+	work func()
+	done chan<- struct{}
+}
+
+func createSyscallPool(count int) *syscallPool {
+	result := &syscallPool{
+		shutdownCh: make([]chan<- struct{}, count),
+		workCh:     make(chan syscall),
+	}
+
+	for i := 0; i < count; i++ {
+		shutdownCh := make(chan struct{})
+		result.shutdownCh[i] = shutdownCh
+		go result.worker(shutdownCh)
+	}
+
+	return result
+}
+
+func (p *syscallPool) do(work func()) {
+	doneCh := make(chan struct{})
+	p.workCh <- syscall{work, doneCh}
+	<-doneCh
+}
+
+func (p *syscallPool) shutdown() {
+	for _, ch := range p.shutdownCh {
+		ch <- struct{}{} // Blocks until the value is received
+	}
+}
+
+func (p *syscallPool) worker(shutdownCh <-chan struct{}) {
+	for {
+		select {
+		case <-shutdownCh:
+			return
+		case work := <-p.workCh:
+			work.work()
+			work.done <- struct{}{}
+		}
+	}
 }
 
 // Ensures that the node for the given path exists in the tree and returns it.
-func ensureNodeExists(root *node, path string) *node {
+func ensureNodeExists(root *instructionsNode, path string) *instructionsNode {
 	if path == "" {
 		return root
 	}
@@ -41,21 +123,71 @@ func ensureNodeExists(root *node, path string) *node {
 	if child, ok := dn.children[base]; ok {
 		return child
 	} else {
-		dn.children[base] = &node{base, false, make(map[string]*node)}
+		dn.children[base] = &instructionsNode{base, false, make(map[string]*instructionsNode)}
 		return dn.children[base]
 	}
 }
 
-// Turns a list of paths to be excluded into a tree made of "node" objects where
-// the specified paths are marked as excluded.
-func treeFromExcludePathList(paths []string) *node {
-	result := &node{"", false, make(map[string]*node)}
+// Turns a list of paths to be excluded into a tree
+func instructionsFromExcludePathList(paths []string) *instructionsNode {
+	result := &instructionsNode{"", false, make(map[string]*instructionsNode)}
 
 	for _, p := range paths {
 		ensureNodeExists(result, p).excluded = true
 	}
 
 	return result
+}
+
+func mergeBuildFiles(output string, srcBuildFile string, generatedBuildFile string, verbose bool) error {
+
+	srcBuildFileContent, err := os.ReadFile(srcBuildFile)
+	if err != nil {
+		return err
+	}
+
+	generatedBuildFileContent, err := os.ReadFile(generatedBuildFile)
+	if err != nil {
+		return err
+	}
+
+	// There can't be a package() call in both the source and generated BUILD files.
+	// bp2build will generate a package() call for licensing information, but if
+	// there's no licensing information, it will still generate a package() call
+	// that just sets default_visibility=public. If the handcrafted build file
+	// also has a package() call, we'll allow it to override the bp2build
+	// generated one if it doesn't have any licensing information. If the bp2build
+	// one has licensing information and the handcrafted one exists, we'll leave
+	// them both in for bazel to throw an error.
+	packageRegex := regexp.MustCompile(`(?m)^package\s*\(`)
+	packageDefaultVisibilityRegex := regexp.MustCompile(`(?m)^package\s*\(\s*default_visibility\s*=\s*\[\s*"//visibility:public",?\s*]\s*\)`)
+	if packageRegex.Find(srcBuildFileContent) != nil {
+		if verbose && packageDefaultVisibilityRegex.Find(generatedBuildFileContent) != nil {
+			fmt.Fprintf(os.Stderr, "Both '%s' and '%s' have a package() target, removing the first one\n",
+				generatedBuildFile, srcBuildFile)
+		}
+		generatedBuildFileContent = packageDefaultVisibilityRegex.ReplaceAll(generatedBuildFileContent, []byte{})
+	}
+
+	outFile, err := os.Create(output)
+	if err != nil {
+		return err
+	}
+
+	_, err = outFile.Write(generatedBuildFileContent)
+	if err != nil {
+		return err
+	}
+
+	if generatedBuildFileContent[len(generatedBuildFileContent)-1] != '\n' {
+		_, err = outFile.WriteString("\n")
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = outFile.Write(srcBuildFileContent)
+	return err
 }
 
 // Calls readdir() and returns it as a map from the basename of the files in dir
@@ -113,28 +245,45 @@ func isDir(path string, fi os.FileInfo) bool {
 
 // Recursively plants a symlink forest at forestDir. The symlink tree will
 // contain every file in buildFilesDir and srcDir excluding the files in
-// exclude. Collects every directory encountered during the traversal of srcDir
-// into acc.
-func plantSymlinkForestRecursive(cfg android.Config, topdir string, forestDir string, buildFilesDir string, srcDir string, exclude *node, acc *[]string, okay *bool) {
-	if exclude != nil && exclude.excluded {
+// instructions. Collects every directory encountered during the traversal of
+// srcDir .
+func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *instructionsNode, forestDir string, buildFilesDir string, srcDir string) {
+	defer context.wg.Done()
+
+	if instructions != nil && instructions.excluded {
 		// This directory is not needed, bail out
 		return
 	}
 
-	*acc = append(*acc, srcDir)
-	srcDirMap := readdirToMap(shared.JoinPath(topdir, srcDir))
-	buildFilesMap := readdirToMap(shared.JoinPath(topdir, buildFilesDir))
+	// We don't add buildFilesDir here because the bp2build files marker files is
+	// already a dependency which covers it. If we ever wanted to turn this into
+	// a generic symlink forest creation tool, we'd need to add it, too.
+	context.depCh <- srcDir
 
-	allEntries := make(map[string]bool)
+	srcDirMap := readdirToMap(shared.JoinPath(context.topdir, srcDir))
+	buildFilesMap := readdirToMap(shared.JoinPath(context.topdir, buildFilesDir))
+
+	renamingBuildFile := false
+	if _, ok := srcDirMap["BUILD"]; ok {
+		if _, ok := srcDirMap["BUILD.bazel"]; !ok {
+			if _, ok := buildFilesMap["BUILD.bazel"]; ok {
+				renamingBuildFile = true
+				srcDirMap["BUILD.bazel"] = srcDirMap["BUILD"]
+				delete(srcDirMap, "BUILD")
+			}
+		}
+	}
+
+	allEntries := make(map[string]struct{})
 	for n := range srcDirMap {
-		allEntries[n] = true
+		allEntries[n] = struct{}{}
 	}
 
 	for n := range buildFilesMap {
-		allEntries[n] = true
+		allEntries[n] = struct{}{}
 	}
 
-	err := os.MkdirAll(shared.JoinPath(topdir, forestDir), 0777)
+	err := os.MkdirAll(shared.JoinPath(context.topdir, forestDir), 0777)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot mkdir '%s': %s\n", forestDir, err)
 		os.Exit(1)
@@ -148,85 +297,157 @@ func plantSymlinkForestRecursive(cfg android.Config, topdir string, forestDir st
 		// The full paths of children in the input trees and in the output tree
 		forestChild := shared.JoinPath(forestDir, f)
 		srcChild := shared.JoinPath(srcDir, f)
+		if f == "BUILD.bazel" && renamingBuildFile {
+			srcChild = shared.JoinPath(srcDir, "BUILD")
+		}
 		buildFilesChild := shared.JoinPath(buildFilesDir, f)
 
-		// Descend in the exclusion tree, if there are any excludes left
-		var excludeChild *node
-		if exclude == nil {
-			excludeChild = nil
-		} else {
-			excludeChild = exclude.children[f]
+		// Descend in the instruction tree if it exists
+		var instructionsChild *instructionsNode = nil
+		if instructions != nil {
+			if f == "BUILD.bazel" && renamingBuildFile {
+				instructionsChild = instructions.children["BUILD"]
+			} else {
+				instructionsChild = instructions.children[f]
+			}
 		}
 
 		srcChildEntry, sExists := srcDirMap[f]
 		buildFilesChildEntry, bExists := buildFilesMap[f]
-		excluded := excludeChild != nil && excludeChild.excluded
 
-		if excluded {
+		if instructionsChild != nil && instructionsChild.excluded {
+			if bExists {
+				symlinkIntoForest(context.topdir, forestChild, buildFilesChild)
+			}
 			continue
 		}
 
-		sDir := false
-		bDir := false
-		if sExists {
-			sDir = isDir(shared.JoinPath(topdir, srcChild), srcChildEntry)
-		}
-
-		if bExists {
-			bDir = isDir(shared.JoinPath(topdir, buildFilesChild), buildFilesChildEntry)
-		}
+		sDir := sExists && isDir(shared.JoinPath(context.topdir, srcChild), srcChildEntry)
+		bDir := bExists && isDir(shared.JoinPath(context.topdir, buildFilesChild), buildFilesChildEntry)
 
 		if !sExists {
-			if bDir && excludeChild != nil {
+			if bDir && instructionsChild != nil {
 				// Not in the source tree, but we have to exclude something from under
 				// this subtree, so descend
-				plantSymlinkForestRecursive(cfg, topdir, forestChild, buildFilesChild, srcChild, excludeChild, acc, okay)
+				context.wg.Add(1)
+				go plantSymlinkForestRecursive(context, instructionsChild, forestChild, buildFilesChild, srcChild)
 			} else {
 				// Not in the source tree, symlink BUILD file
-				symlinkIntoForest(topdir, forestChild, buildFilesChild)
+				symlinkIntoForest(context.topdir, forestChild, buildFilesChild)
 			}
 		} else if !bExists {
-			if sDir && excludeChild != nil {
+			if sDir && instructionsChild != nil {
 				// Not in the build file tree, but we have to exclude something from
 				// under this subtree, so descend
-				plantSymlinkForestRecursive(cfg, topdir, forestChild, buildFilesChild, srcChild, excludeChild, acc, okay)
+				context.wg.Add(1)
+				go plantSymlinkForestRecursive(context, instructionsChild, forestChild, buildFilesChild, srcChild)
 			} else {
 				// Not in the build file tree, symlink source tree, carry on
-				symlinkIntoForest(topdir, forestChild, srcChild)
+				symlinkIntoForest(context.topdir, forestChild, srcChild)
 			}
 		} else if sDir && bDir {
 			// Both are directories. Descend.
-			plantSymlinkForestRecursive(cfg, topdir, forestChild, buildFilesChild, srcChild, excludeChild, acc, okay)
+			context.wg.Add(1)
+			go plantSymlinkForestRecursive(context, instructionsChild, forestChild, buildFilesChild, srcChild)
 		} else if !sDir && !bDir {
-			// Neither is a directory. Prioritize BUILD files generated by bp2build
-			// over any BUILD file imported into external/.
-			if cfg.IsEnvTrue("BP2BUILD_VERBOSE") {
-				fmt.Fprintf(os.Stderr, "Both '%s' and '%s' exist, symlinking the former to '%s'\n",
-					buildFilesChild, srcChild, forestChild)
+			// Neither is a directory. Merge them.
+			srcBuildFile := shared.JoinPath(context.topdir, srcChild)
+			generatedBuildFile := shared.JoinPath(context.topdir, buildFilesChild)
+			// The Android.bp file that codegen used to produce `buildFilesChild` is
+			// already a dependency, we can ignore `buildFilesChild`.
+			context.depCh <- srcChild
+			err = mergeBuildFiles(shared.JoinPath(context.topdir, forestChild), srcBuildFile, generatedBuildFile, context.verbose)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error merging %s and %s: %s",
+					srcBuildFile, generatedBuildFile, err)
+				context.okay.Store(false)
 			}
-			symlinkIntoForest(topdir, forestChild, buildFilesChild)
 		} else {
 			// Both exist and one is a file. This is an error.
 			fmt.Fprintf(os.Stderr,
 				"Conflict in workspace symlink tree creation: both '%s' and '%s' exist and exactly one is a directory\n",
 				srcChild, buildFilesChild)
-			*okay = false
+			context.okay.Store(false)
 		}
 	}
+}
+
+func removeParallelRecursive(pool *syscallPool, path string, fi os.FileInfo, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	if fi.IsDir() {
+		children := readdirToMap(path)
+		childrenWg := &sync.WaitGroup{}
+		childrenWg.Add(len(children))
+
+		for child, childFi := range children {
+			go removeParallelRecursive(pool, shared.JoinPath(path, child), childFi, childrenWg)
+		}
+
+		childrenWg.Wait()
+	}
+
+	pool.do(func() {
+		if err := os.Remove(path); err != nil {
+			fmt.Fprintf(os.Stderr, "Cannot unlink '%s': %s\n", path, err)
+			os.Exit(1)
+		}
+	})
+}
+
+func removeParallel(path string) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+
+		fmt.Fprintf(os.Stderr, "Cannot lstat '%s': %s\n", path, err)
+		os.Exit(1)
+	}
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	// Random guess as to the best number of syscalls to run in parallel
+	pool := createSyscallPool(100)
+	removeParallelRecursive(pool, path, fi, wg)
+	pool.shutdown()
+
+	wg.Wait()
 }
 
 // Creates a symlink forest by merging the directory tree at "buildFiles" and
 // "srcDir" while excluding paths listed in "exclude". Returns the set of paths
 // under srcDir on which readdir() had to be called to produce the symlink
 // forest.
-func PlantSymlinkForest(cfg android.Config, topdir string, forest string, buildFiles string, srcDir string, exclude []string) []string {
+func PlantSymlinkForest(verbose bool, topdir string, forest string, buildFiles string, exclude []string) []string {
+	context := &symlinkForestContext{
+		verbose: verbose,
+		topdir:  topdir,
+		depCh:   make(chan string),
+	}
+
+	context.okay.Store(true)
+
+	removeParallel(shared.JoinPath(topdir, forest))
+
+	instructions := instructionsFromExcludePathList(exclude)
+	go func() {
+		context.wg.Add(1)
+		plantSymlinkForestRecursive(context, instructions, forest, buildFiles, ".")
+		context.wg.Wait()
+		close(context.depCh)
+	}()
+
 	deps := make([]string, 0)
-	os.RemoveAll(shared.JoinPath(topdir, forest))
-	excludeTree := treeFromExcludePathList(exclude)
-	okay := true
-	plantSymlinkForestRecursive(cfg, topdir, forest, buildFiles, srcDir, excludeTree, &deps, &okay)
-	if !okay {
+	for dep := range context.depCh {
+		deps = append(deps, dep)
+	}
+
+	if !context.okay.Load() {
 		os.Exit(1)
 	}
+
 	return deps
 }

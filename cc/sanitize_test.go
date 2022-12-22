@@ -41,6 +41,7 @@ func TestAsan(t *testing.T) {
 			static_libs: [
 				"libstatic",
 				"libnoasan",
+				"libstatic_asan",
 			],
 			sanitize: {
 				address: true,
@@ -57,6 +58,7 @@ func TestAsan(t *testing.T) {
 			static_libs: [
 				"libstatic",
 				"libnoasan",
+				"libstatic_asan",
 			],
 		}
 
@@ -92,6 +94,15 @@ func TestAsan(t *testing.T) {
 				address: false,
 			}
 		}
+
+		cc_library_static {
+			name: "libstatic_asan",
+			host_supported: true,
+			sanitize: {
+				address: true,
+			}
+		}
+
 	`
 
 	result := android.GroupFixturePreparers(
@@ -124,6 +135,10 @@ func TestAsan(t *testing.T) {
 
 		// Static library that never uses asan.
 		libNoAsan := result.ModuleForTests("libnoasan", staticVariant)
+
+		// Static library that specifies asan
+		libStaticAsan := result.ModuleForTests("libstatic_asan", staticAsanVariant)
+		libStaticAsanNoAsanVariant := result.ModuleForTests("libstatic_asan", staticVariant)
 
 		// expectSharedLinkDep verifies that the from module links against the to module as a
 		// shared library.
@@ -176,6 +191,7 @@ func TestAsan(t *testing.T) {
 
 		expectStaticLinkDep(binWithAsan, libStaticAsanVariant)
 		expectStaticLinkDep(binWithAsan, libNoAsan)
+		expectStaticLinkDep(binWithAsan, libStaticAsan)
 
 		expectInstallDep(binWithAsan, libShared)
 		expectInstallDep(binWithAsan, libAsan)
@@ -190,6 +206,7 @@ func TestAsan(t *testing.T) {
 
 		expectStaticLinkDep(binNoAsan, libStaticNoAsanVariant)
 		expectStaticLinkDep(binNoAsan, libNoAsan)
+		expectStaticLinkDep(binNoAsan, libStaticAsanNoAsanVariant)
 
 		expectInstallDep(binNoAsan, libShared)
 		expectInstallDep(binNoAsan, libAsan)
@@ -344,19 +361,13 @@ func (t MemtagNoteType) str() string {
 
 func checkHasMemtagNote(t *testing.T, m android.TestingModule, expected MemtagNoteType) {
 	t.Helper()
-	note_async := "note_memtag_heap_async"
-	note_sync := "note_memtag_heap_sync"
 
 	found := None
-	implicits := m.Rule("ld").Implicits
-	for _, lib := range implicits {
-		if strings.Contains(lib.Rel(), note_async) {
-			found = Async
-			break
-		} else if strings.Contains(lib.Rel(), note_sync) {
-			found = Sync
-			break
-		}
+	ldFlags := m.Rule("ld").Args["ldFlags"]
+	if strings.Contains(ldFlags, "-fsanitize-memtag-mode=async") {
+		found = Async
+	} else if strings.Contains(ldFlags, "-fsanitize-memtag-mode=sync") {
+		found = Sync
 	}
 
 	if found != expected {
@@ -452,6 +463,7 @@ var prepareForTestWithMemtagHeap = android.GroupFixturePreparers(
 )
 
 func TestSanitizeMemtagHeap(t *testing.T) {
+	t.Skip("TODO(b/249094918) re-enable after clang version brought back in-line with upstream")
 	variant := "android_arm64_armv8-a"
 
 	result := android.GroupFixturePreparers(
@@ -524,6 +536,7 @@ func TestSanitizeMemtagHeap(t *testing.T) {
 }
 
 func TestSanitizeMemtagHeapWithSanitizeDevice(t *testing.T) {
+	t.Skip("TODO(b/249094918) re-enable after clang version brought back in-line with upstream")
 	variant := "android_arm64_armv8-a"
 
 	result := android.GroupFixturePreparers(
@@ -598,6 +611,7 @@ func TestSanitizeMemtagHeapWithSanitizeDevice(t *testing.T) {
 }
 
 func TestSanitizeMemtagHeapWithSanitizeDeviceDiag(t *testing.T) {
+	t.Skip("TODO(b/249094918) re-enable after clang version brought back in-line with upstream")
 	variant := "android_arm64_armv8-a"
 
 	result := android.GroupFixturePreparers(

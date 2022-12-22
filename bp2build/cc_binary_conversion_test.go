@@ -45,6 +45,7 @@ func generateBazelTargetsForTest(targets []testBazelTarget, hod android.HostOrDe
 
 type ccBinaryBp2buildTestCase struct {
 	description string
+	filesystem  map[string]string
 	blueprint   string
 	targets     []testBazelTarget
 }
@@ -79,6 +80,7 @@ func runCcBinaryTestCase(t *testing.T, testCase ccBinaryBp2buildTestCase) {
 			ModuleTypeUnderTestFactory: cc.BinaryFactory,
 			Description:                description,
 			Blueprint:                  binaryReplacer.Replace(testCase.blueprint),
+			Filesystem:                 testCase.filesystem,
 		})
 	})
 }
@@ -94,6 +96,7 @@ func runCcHostBinaryTestCase(t *testing.T, testCase ccBinaryBp2buildTestCase) {
 			ModuleTypeUnderTestFactory: cc.BinaryHostFactory,
 			Description:                description,
 			Blueprint:                  hostBinaryReplacer.Replace(testCase.blueprint),
+			Filesystem:                 testCase.filesystem,
 		})
 	})
 }
@@ -101,6 +104,9 @@ func runCcHostBinaryTestCase(t *testing.T, testCase ccBinaryBp2buildTestCase) {
 func TestBasicCcBinary(t *testing.T) {
 	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
 		description: "basic -- properties -> attrs with little/no transformation",
+		filesystem: map[string]string{
+			soongCcVersionLibBpPath: soongCcVersionLibBp,
+		},
 		blueprint: `
 {rule_name} {
     name: "foo",
@@ -146,9 +152,10 @@ func TestBasicCcBinary(t *testing.T) {
         "keep_symbols_list": ["symbol"],
         "none": True,
     }`,
-				"sdk_version":     `"current"`,
-				"min_sdk_version": `"29"`,
-				"use_version_lib": `True`,
+				"sdk_version":        `"current"`,
+				"min_sdk_version":    `"29"`,
+				"use_version_lib":    `True`,
+				"whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
 			},
 			},
 		},
@@ -194,23 +201,62 @@ func TestCcBinaryWithLinkStatic(t *testing.T) {
 	})
 }
 
-func TestCcBinaryVersionScript(t *testing.T) {
+func TestCcBinaryVersionScriptAndDynamicList(t *testing.T) {
 	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
-		description: `version script`,
+		description: `version script and dynamic list`,
 		blueprint: `
 {rule_name} {
     name: "foo",
     include_build_directory: false,
     version_script: "vs",
+    dynamic_list: "dynamic.list",
 }
 `,
 		targets: []testBazelTarget{
 			{"cc_binary", "foo", AttrNameToString{
-				"additional_linker_inputs": `["vs"]`,
-				"linkopts":                 `["-Wl,--version-script,$(location vs)"]`,
+				"additional_linker_inputs": `[
+        "vs",
+        "dynamic.list",
+    ]`,
+				"linkopts": `[
+        "-Wl,--version-script,$(location vs)",
+        "-Wl,--dynamic-list,$(location dynamic.list)",
+    ]`,
 			},
 			},
 		},
+	})
+}
+
+func TestCcBinaryLdflagsSplitBySpaceExceptSoongAdded(t *testing.T) {
+	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
+		description: "ldflags are split by spaces except for the ones added by soong (version script and dynamic list)",
+		blueprint: `
+{rule_name} {
+    name: "foo",
+		ldflags: [
+			"--nospace_flag",
+			"-z spaceflag",
+		],
+		version_script: "version_script",
+		dynamic_list: "dynamic.list",
+    include_build_directory: false,
+}
+`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"additional_linker_inputs": `[
+        "version_script",
+        "dynamic.list",
+    ]`,
+				"linkopts": `[
+        "--nospace_flag",
+        "-z",
+        "spaceflag",
+        "-Wl,--version-script,$(location version_script)",
+        "-Wl,--dynamic-list,$(location dynamic.list)",
+    ]`,
+			}}},
 	})
 }
 
@@ -605,8 +651,141 @@ func TestCcBinaryWithInstructionSet(t *testing.T) {
         "//conditions:default": [],
     })`,
 				"local_includes": `["."]`,
-			},
-			},
+			}},
+		},
+	})
+}
+
+func TestCcBinaryEmptySuffix(t *testing.T) {
+	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
+		description: "binary with empty suffix",
+		blueprint: `
+{rule_name} {
+    name: "foo",
+    suffix: "",
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"suffix":         `""`,
+			}},
+		},
+	})
+}
+
+func TestCcBinarySuffix(t *testing.T) {
+	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
+		description: "binary with suffix",
+		blueprint: `
+{rule_name} {
+    name: "foo",
+    suffix: "-suf",
+}
+`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"suffix":         `"-suf"`,
+			}},
+		},
+	})
+}
+
+func TestCcArchVariantBinarySuffix(t *testing.T) {
+	runCcBinaryTests(t, ccBinaryBp2buildTestCase{
+		description: "binary with suffix",
+		blueprint: `
+{rule_name} {
+    name: "foo",
+    arch: {
+        arm64: { suffix: "-64" },
+        arm:   { suffix: "-32" },
+		},
+}
+`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"suffix": `select({
+        "//build/bazel/platforms/arch:arm": "-32",
+        "//build/bazel/platforms/arch:arm64": "-64",
+        "//conditions:default": None,
+    })`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithSyspropSrcs(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary with sysprop sources",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	srcs: [
+		"bar.sysprop",
+		"baz.sysprop",
+		"blah.cpp",
+	],
+	min_sdk_version: "5",
+}`,
+		targets: []testBazelTarget{
+			{"sysprop_library", "foo_sysprop_library", AttrNameToString{
+				"srcs": `[
+        "bar.sysprop",
+        "baz.sysprop",
+    ]`,
+			}},
+			{"cc_sysprop_library_static", "foo_cc_sysprop_library_static", AttrNameToString{
+				"dep":             `":foo_sysprop_library"`,
+				"min_sdk_version": `"5"`,
+			}},
+			{"cc_binary", "foo", AttrNameToString{
+				"srcs":               `["blah.cpp"]`,
+				"local_includes":     `["."]`,
+				"min_sdk_version":    `"5"`,
+				"whole_archive_deps": `[":foo_cc_sysprop_library_static"]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithSyspropSrcsSomeConfigs(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary with sysprop sources in some configs but not others",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	srcs: [
+		"blah.cpp",
+	],
+	target: {
+		android: {
+			srcs: ["bar.sysprop"],
+		},
+	},
+	min_sdk_version: "5",
+}`,
+		targets: []testBazelTarget{
+			{"sysprop_library", "foo_sysprop_library", AttrNameToString{
+				"srcs": `select({
+        "//build/bazel/platforms/os:android": ["bar.sysprop"],
+        "//conditions:default": [],
+    })`,
+			}},
+			{"cc_sysprop_library_static", "foo_cc_sysprop_library_static", AttrNameToString{
+				"dep":             `":foo_sysprop_library"`,
+				"min_sdk_version": `"5"`,
+			}},
+			{"cc_binary", "foo", AttrNameToString{
+				"srcs":            `["blah.cpp"]`,
+				"local_includes":  `["."]`,
+				"min_sdk_version": `"5"`,
+				"whole_archive_deps": `select({
+        "//build/bazel/platforms/os:android": [":foo_cc_sysprop_library_static"],
+        "//conditions:default": [],
+    })`,
+			}},
 		},
 	})
 }

@@ -23,6 +23,7 @@ import (
 	"android/soong/android"
 	"android/soong/java/config"
 	"android/soong/tradefed"
+
 	"github.com/google/blueprint/proptools"
 )
 
@@ -64,6 +65,10 @@ type robolectricProperties struct {
 	// The version number of a robolectric prebuilt to use from prebuilts/misc/common/robolectric
 	// instead of the one built from source in external/robolectric-shadows.
 	Robolectric_prebuilt_version *string
+
+	// Use /external/robolectric rather than /external/robolectric-shadows as the version of robolectri
+	// to use.  /external/robolectric closely tracks github's master, and will fully replace /external/robolectric-shadows
+	Upstream *bool
 }
 
 type robolectricTest struct {
@@ -107,7 +112,11 @@ func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if v := String(r.robolectricProperties.Robolectric_prebuilt_version); v != "" {
 		ctx.AddVariationDependencies(nil, libTag, fmt.Sprintf(robolectricPrebuiltLibPattern, v))
 	} else {
-		ctx.AddVariationDependencies(nil, libTag, robolectricCurrentLib)
+		if proptools.Bool(r.robolectricProperties.Upstream) {
+			ctx.AddVariationDependencies(nil, libTag, robolectricCurrentLib+"_upstream")
+		} else {
+			ctx.AddVariationDependencies(nil, libTag, robolectricCurrentLib)
+		}
 	}
 
 	ctx.AddVariationDependencies(nil, libTag, robolectricDefaultLibs...)
@@ -166,12 +175,19 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		instrumentedApp.implementationAndResourcesJar,
 	}
 
-	for _, dep := range ctx.GetDirectDepsWithTag(libTag) {
+	handleLibDeps := func(dep android.Module) {
 		m := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
 		r.libs = append(r.libs, ctx.OtherModuleName(dep))
 		if !android.InList(ctx.OtherModuleName(dep), config.FrameworkLibraries) {
 			combinedJarJars = append(combinedJarJars, m.ImplementationAndResourcesJars...)
 		}
+	}
+
+	for _, dep := range ctx.GetDirectDepsWithTag(libTag) {
+		handleLibDeps(dep)
+	}
+	for _, dep := range ctx.GetDirectDepsWithTag(sdkLibTag) {
+		handleLibDeps(dep)
 	}
 
 	r.combinedJar = android.PathForModuleOut(ctx, "robolectric_combined", r.outputFile.Base())
@@ -180,9 +196,9 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 
 	// TODO: this could all be removed if tradefed was used as the test runner, it will find everything
 	// annotated as a test and run it.
-	for _, src := range r.compiledJavaSrcs {
+	for _, src := range r.uniqueSrcFiles {
 		s := src.Rel()
-		if !strings.HasSuffix(s, "Test.java") {
+		if !strings.HasSuffix(s, "Test.java") && !strings.HasSuffix(s, "Test.kt") {
 			continue
 		} else if strings.HasSuffix(s, "/BaseRobolectricTest.java") {
 			continue

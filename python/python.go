@@ -347,10 +347,6 @@ var (
 	protoExt             = ".proto"
 	pyVersion2           = "PY2"
 	pyVersion3           = "PY3"
-	initFileName         = "__init__.py"
-	mainFileName         = "__main__.py"
-	entryPointFile       = "entry_point.txt"
-	parFileExt           = ".zip"
 	internalPath         = "internal"
 )
 
@@ -672,8 +668,22 @@ func (p *Module) createSrcsZip(ctx android.ModuleContext, pkgPath string) androi
 		protoFlags := android.GetProtoFlags(ctx, &p.protoProperties)
 		protoFlags.OutTypeFlag = "--python_out"
 
+		if pkgPath != "" {
+			pkgPathStagingDir := android.PathForModuleGen(ctx, "protos_staged_for_pkg_path")
+			rule := android.NewRuleBuilder(pctx, ctx)
+			var stagedProtoSrcs android.Paths
+			for _, srcFile := range protoSrcs {
+				stagedProtoSrc := pkgPathStagingDir.Join(ctx, pkgPath, srcFile.Rel())
+				rule.Command().Text("mkdir -p").Flag(filepath.Base(stagedProtoSrc.String()))
+				rule.Command().Text("cp -f").Input(srcFile).Output(stagedProtoSrc)
+				stagedProtoSrcs = append(stagedProtoSrcs, stagedProtoSrc)
+			}
+			rule.Build("stage_protos_for_pkg_path", "Stage protos for pkg_path")
+			protoSrcs = stagedProtoSrcs
+		}
+
 		for _, srcFile := range protoSrcs {
-			zip := genProto(ctx, srcFile, protoFlags, pkgPath)
+			zip := genProto(ctx, srcFile, protoFlags)
 			zips = append(zips, zip)
 		}
 	}

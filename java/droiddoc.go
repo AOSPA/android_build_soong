@@ -267,7 +267,7 @@ func (j *Javadoc) addDeps(ctx android.BottomUpMutatorContext) {
 			ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.bootclasspath...)
 			ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
 			ctx.AddVariationDependencies(nil, java9LibTag, sdkDep.java9Classpath...)
-			ctx.AddVariationDependencies(nil, libTag, sdkDep.classpath...)
+			ctx.AddVariationDependencies(nil, sdkLibTag, sdkDep.classpath...)
 		}
 	}
 
@@ -367,7 +367,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 			} else {
 				panic(fmt.Errorf("unknown dependency %q for %q", otherName, ctx.ModuleName()))
 			}
-		case libTag:
+		case libTag, sdkLibTag:
 			if dep, ok := module.(SdkLibraryDependency); ok {
 				deps.classpath = append(deps.classpath, dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))...)
 			} else if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
@@ -684,7 +684,7 @@ func javadocCmd(ctx android.ModuleContext, rule *android.RuleBuilder, srcs andro
 	outDir, srcJarDir, srcJarList android.Path, sourcepaths android.Paths) *android.RuleBuilderCommand {
 
 	cmd := rule.Command().
-		BuiltTool("soong_javac_wrapper").Tool(config.JavadocCmd(ctx)).
+		BuiltTool("soong_javac_wrapper").Tool(android.PathForSource(ctx, "prebuilts/jdk/jdk11/linux-x86/bin/javadoc")).
 		Flag(config.JavacVmFlags).
 		FlagWithArg("-encoding ", "UTF-8").
 		FlagWithRspFileInputList("@", android.PathForModuleOut(ctx, "javadoc.rsp"), srcs).
@@ -755,6 +755,7 @@ func dokkaCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 	return rule.Command().
 		BuiltTool("dokka").
 		Flag(config.JavacVmFlags).
+		Flag("-J--add-opens=java.base/java.lang=ALL-UNNAMED").
 		Flag(srcJarDir.String()).
 		FlagWithInputList("-classpath ", dokkaClasspath, ":").
 		FlagWithArg("-format ", "dac").

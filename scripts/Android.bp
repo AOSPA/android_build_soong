@@ -172,7 +172,7 @@ python_test_host {
 }
 
 python_binary_host {
-    name: "gen-kotlin-build-file.py",
+    name: "gen-kotlin-build-file",
     main: "gen-kotlin-build-file.py",
     srcs: [
         "gen-kotlin-build-file.py",
@@ -200,6 +200,17 @@ python_binary_host {
     main: "get_clang_version.py",
     srcs: [
         "get_clang_version.py",
+    ],
+}
+
+python_binary_host {
+    name: "build-apex-bundle",
+    main: "build-apex-bundle.py",
+    srcs: [
+        "build-apex-bundle.py",
+    ],
+    required: [
+        "bundletool",
     ],
 }
 

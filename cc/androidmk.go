@@ -570,7 +570,7 @@ func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entrie
 
 	entries.SubName += c.baseProperties.Androidmk_suffix
 
-	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
+	entries.ExtraEntries = append(entries.ExtraEntries, func(_ android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		c.libraryDecorator.androidMkWriteExportedFlags(entries)
 
 		if c.shared() || c.static() {
@@ -590,6 +590,10 @@ func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entrie
 			}
 			if c.tocFile.Valid() {
 				entries.SetString("LOCAL_SOONG_TOC", c.tocFile.String())
+			}
+
+			if c.shared() && len(c.Properties.Overrides) > 0 {
+				entries.SetString("LOCAL_OVERRIDES_MODULES", strings.Join(makeOverrideModuleNames(ctx, c.Properties.Overrides), " "))
 			}
 		}
 
@@ -665,6 +669,16 @@ func (a *apiLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *an
 		entries.SetString("LOCAL_MODULE_PATH", path)
 		entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
 		entries.SetString("LOCAL_SOONG_TOC", a.toc().String())
+	})
+}
+
+func (a *apiHeadersDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
+	entries.Class = "HEADER_LIBRARIES"
+	entries.SubName += multitree.GetApiImportSuffix()
+
+	entries.ExtraEntries = append(entries.ExtraEntries, func(_ android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
+		a.libraryDecorator.androidMkWriteExportedFlags(entries)
+		entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
 	})
 }
 

@@ -122,9 +122,9 @@ type FuzzConfig struct {
 	// context from:
 	// https://source.android.com/security/overview/updates-resources#context_types.
 	Privilege_level PrivilegedLevel `json:"privilege_level,omitempty"`
-	// Can the fuzzed code isolated or can be called by multiple users/processes.
+	// Is the fuzzed code isolated or can it be called by multiple users/processes.
 	Isolated *bool `json:"users_isolation,omitempty"`
-	// When code was relaeased or will be released.
+	// When code was released or will be released.
 	Production_date string `json:"production_date,omitempty"`
 	// Prevents critical service functionality like phone calls, bluetooth, etc.
 	Critical *bool `json:"critical,omitempty"`
@@ -134,7 +134,7 @@ type FuzzConfig struct {
 	Fuzz_on_haiku_host *bool `json:"fuzz_on_haiku_host,omitempty"`
 	// Component in Google's bug tracking system that bugs should be filed to.
 	Componentid *int64 `json:"componentid,omitempty"`
-	// Hotlists in Google's bug tracking system that bugs should be marked with.
+	// Hotlist(s) in Google's bug tracking system that bugs should be marked with.
 	Hotlists []string `json:"hotlists,omitempty"`
 	// Specify whether this fuzz target was submitted by a researcher. Defaults
 	// to false.
@@ -151,6 +151,8 @@ type FuzzConfig struct {
 	// If there's a Java fuzzer with JNI, a different version of Jazzer would
 	// need to be added to the fuzzer package than one without JNI
 	IsJni *bool `json:"is_jni,omitempty"`
+	// List of modules for monitoring coverage drops in directories (e.g. "libicu")
+	Target_modules []string `json:"target_modules,omitempty"`
 }
 
 type FuzzFrameworks struct {
@@ -378,43 +380,4 @@ func (s *FuzzPackager) PreallocateSlice(ctx android.MakeVarsContext, targets str
 
 	sort.Strings(fuzzTargets)
 	ctx.Strict(targets, strings.Join(fuzzTargets, " "))
-}
-
-// CollectAllSharedDependencies performs a breadth-first search over the provided module's
-// dependencies using `visitDirectDeps` to enumerate all shared library
-// dependencies. We require breadth-first expansion, as otherwise we may
-// incorrectly use the core libraries (sanitizer runtimes, libc, libdl, etc.)
-// from a dependency. This may cause issues when dependencies have explicit
-// sanitizer tags, as we may get a dependency on an unsanitized libc, etc.
-func CollectAllSharedDependencies(ctx android.SingletonContext, module android.Module, unstrippedOutputFile func(module android.Module) android.Path, isValidSharedDependency func(dependency android.Module) bool) android.Paths {
-	var fringe []android.Module
-
-	seen := make(map[string]bool)
-
-	// Enumerate the first level of dependencies, as we discard all non-library
-	// modules in the BFS loop below.
-	ctx.VisitDirectDeps(module, func(dep android.Module) {
-		if isValidSharedDependency(dep) {
-			fringe = append(fringe, dep)
-		}
-	})
-
-	var sharedLibraries android.Paths
-
-	for i := 0; i < len(fringe); i++ {
-		module := fringe[i]
-		if seen[module.Name()] {
-			continue
-		}
-		seen[module.Name()] = true
-
-		sharedLibraries = append(sharedLibraries, unstrippedOutputFile(module))
-		ctx.VisitDirectDeps(module, func(dep android.Module) {
-			if isValidSharedDependency(dep) && !seen[dep.Name()] {
-				fringe = append(fringe, dep)
-			}
-		})
-	}
-
-	return sharedLibraries
 }

@@ -16,7 +16,6 @@ package apex
 
 import (
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -30,6 +29,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel/cquery"
 	"android/soong/bpf"
 	"android/soong/cc"
 	"android/soong/dexpreopt"
@@ -2191,6 +2191,38 @@ func TestApexMinSdkVersion_Okay(t *testing.T) {
 	`)
 }
 
+func TestApexMinSdkVersion_MinApiForArch(t *testing.T) {
+	// Tests that an apex dependency with min_sdk_version higher than the
+	// min_sdk_version of the apex is allowed as long as the dependency's
+	// min_sdk_version is less than or equal to the api level that the
+	// architecture was introduced in.  In this case, arm64 didn't exist
+	// until api level 21, so the arm64 code will never need to run on
+	// an api level 20 device, even if other architectures of the apex
+	// will.
+	testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			native_shared_libs: ["libfoo"],
+			min_sdk_version: "20",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "libfoo",
+			srcs: ["mylib.cpp"],
+			apex_available: ["myapex"],
+			min_sdk_version: "21",
+			stl: "none",
+		}
+	`)
+}
+
 func TestJavaStableSdkVersion(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -4098,6 +4130,76 @@ func TestApexName(t *testing.T) {
 	ensureNotContains(t, androidMk, "LOCAL_MODULE := mylib.com.android.myapex\n")
 }
 
+func TestCompileMultilibProp(t *testing.T) {
+	testCases := []struct {
+		compileMultiLibProp string
+		containedLibs       []string
+		notContainedLibs    []string
+	}{
+		{
+			containedLibs: []string{
+				"image.apex/lib64/mylib.so",
+				"image.apex/lib/mylib.so",
+			},
+			compileMultiLibProp: `compile_multilib: "both",`,
+		},
+		{
+			containedLibs:       []string{"image.apex/lib64/mylib.so"},
+			notContainedLibs:    []string{"image.apex/lib/mylib.so"},
+			compileMultiLibProp: `compile_multilib: "first",`,
+		},
+		{
+			containedLibs:    []string{"image.apex/lib64/mylib.so"},
+			notContainedLibs: []string{"image.apex/lib/mylib.so"},
+			// compile_multilib, when unset, should result to the same output as when compile_multilib is "first"
+		},
+		{
+			containedLibs:       []string{"image.apex/lib64/mylib.so"},
+			notContainedLibs:    []string{"image.apex/lib/mylib.so"},
+			compileMultiLibProp: `compile_multilib: "64",`,
+		},
+		{
+			containedLibs:       []string{"image.apex/lib/mylib.so"},
+			notContainedLibs:    []string{"image.apex/lib64/mylib.so"},
+			compileMultiLibProp: `compile_multilib: "32",`,
+		},
+	}
+	for _, testCase := range testCases {
+		ctx := testApex(t, fmt.Sprintf(`
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				%s
+				native_shared_libs: ["mylib"],
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+			cc_library {
+				name: "mylib",
+				srcs: ["mylib.cpp"],
+				apex_available: [
+					"//apex_available:platform",
+					"myapex",
+			],
+			}
+		`, testCase.compileMultiLibProp),
+		)
+		module := ctx.ModuleForTests("myapex", "android_common_myapex_image")
+		apexRule := module.Rule("apexRule")
+		copyCmds := apexRule.Args["copy_commands"]
+		for _, containedLib := range testCase.containedLibs {
+			ensureContains(t, copyCmds, containedLib)
+		}
+		for _, notContainedLib := range testCase.notContainedLibs {
+			ensureNotContains(t, copyCmds, notContainedLib)
+		}
+	}
+}
+
 func TestNonTestApex(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -4297,12 +4399,15 @@ func TestApexWithArch(t *testing.T) {
 			name: "myapex",
 			key: "myapex.key",
 			updatable: false,
+			native_shared_libs: ["mylib.generic"],
 			arch: {
 				arm64: {
 					native_shared_libs: ["mylib.arm64"],
+					exclude_native_shared_libs: ["mylib.generic"],
 				},
 				x86_64: {
 					native_shared_libs: ["mylib.x64"],
+					exclude_native_shared_libs: ["mylib.generic"],
 				},
 			}
 		}
@@ -4311,6 +4416,18 @@ func TestApexWithArch(t *testing.T) {
 			name: "myapex.key",
 			public_key: "testkey.avbpubkey",
 			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "mylib.generic",
+			srcs: ["mylib.cpp"],
+			system_shared_libs: [],
+			stl: "none",
+			// TODO: remove //apex_available:platform
+			apex_available: [
+				"//apex_available:platform",
+				"myapex",
+			],
 		}
 
 		cc_library {
@@ -4343,6 +4460,7 @@ func TestApexWithArch(t *testing.T) {
 
 	// Ensure that apex variant is created for the direct dep
 	ensureListContains(t, ctx.ModuleVariantsForTests("mylib.arm64"), "android_arm64_armv8-a_shared_apex10000")
+	ensureListNotContains(t, ctx.ModuleVariantsForTests("mylib.generic"), "android_arm64_armv8-a_shared_apex10000")
 	ensureListNotContains(t, ctx.ModuleVariantsForTests("mylib.x64"), "android_arm64_armv8-a_shared_apex10000")
 
 	// Ensure that both direct and indirect deps are copied into apex
@@ -7235,12 +7353,18 @@ func TestAppSetBundle(t *testing.T) {
 	ensureContains(t, content, `"compression":{"uncompressed_glob":["apex_payload.img","apex_manifest.*"]}`)
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 3 {
-		t.Fatalf("Expected 3 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 4 {
+		t.Fatalf("Expected 4 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 	ensureMatches(t, copyCmds[0], "^rm -rf .*/app/AppSet@TEST.BUILD_ID$")
 	ensureMatches(t, copyCmds[1], "^mkdir -p .*/app/AppSet@TEST.BUILD_ID$")
-	ensureMatches(t, copyCmds[2], "^unzip .*-d .*/app/AppSet@TEST.BUILD_ID .*/AppSet.zip$")
+	ensureMatches(t, copyCmds[2], "^cp -f .*/app/AppSet@TEST.BUILD_ID/AppSet.apk$")
+	ensureMatches(t, copyCmds[3], "^unzip .*-d .*/app/AppSet@TEST.BUILD_ID .*/AppSet.zip$")
+
+	// Ensure that canned_fs_config has an entry for the app set zip file
+	generateFsRule := mod.Rule("generateFsConfig")
+	cmd := generateFsRule.RuleParams.Command
+	ensureContains(t, cmd, "AppSet.zip")
 }
 
 func TestAppSetBundlePrebuilt(t *testing.T) {
@@ -7269,6 +7393,28 @@ func TestAppSetBundlePrebuilt(t *testing.T) {
 	copiedApex := m.Output("out/soong/.intermediates/myapex/android_common_myapex/foo_v2.apex")
 
 	android.AssertStringEquals(t, "myapex input", extractorOutput, copiedApex.Input.String())
+}
+
+func TestApexSetApksModuleAssignment(t *testing.T) {
+	ctx := testApex(t, `
+		apex_set {
+			name: "myapex",
+			set: ":myapex_apks_file",
+		}
+
+		filegroup {
+			name: "myapex_apks_file",
+			srcs: ["myapex.apks"],
+		}
+	`)
+
+	m := ctx.ModuleForTests("myapex.apex.extractor", "android_common")
+
+	// Check that the extractor produces the correct apks file from the input module
+	extractorOutput := "out/soong/.intermediates/myapex.apex.extractor/android_common/extracted/myapex.apks"
+	extractedApex := m.Output(extractorOutput)
+
+	android.AssertArrayString(t, "extractor input", []string{"myapex.apks"}, extractedApex.Inputs.Strings())
 }
 
 func testNoUpdatableJarsInBootImage(t *testing.T, errmsg string, preparer android.FixturePreparer, fragments ...java.ApexVariantReference) {
@@ -8843,9 +8989,7 @@ func TestApexJavaCoverage(t *testing.T) {
 		android.FixtureWithRootAndroidBp(bp),
 		dexpreopt.FixtureSetApexBootJars("myapex:mybootclasspathlib"),
 		dexpreopt.FixtureSetApexSystemServerJars("myapex:mysystemserverclasspathlib"),
-		android.FixtureMergeEnv(map[string]string{
-			"EMMA_INSTRUMENT": "true",
-		}),
+		java.PrepareForTestWithJacocoInstrumentation,
 	).RunTest(t)
 
 	// Make sure jacoco ran on both mylib and mybootclasspathlib
@@ -9602,6 +9746,94 @@ func TestApexBuildsAgainstApiSurfaceStubLibraries(t *testing.T) {
 	android.AssertBoolEquals(t, "core variant should link against source libc", true, hasDep(libfooCoreVariant, libcCoreVariant))
 }
 
-func TestMain(m *testing.M) {
-	os.Exit(m.Run())
+func TestApexImageInMixedBuilds(t *testing.T) {
+	bp := `
+apex_key{
+	name: "foo_key",
+}
+apex {
+	name: "foo",
+	key: "foo_key",
+	updatable: true,
+	min_sdk_version: "31",
+	file_contexts: ":myapex-file_contexts",
+	bazel_module: { label: "//:foo" },
+}`
+
+	outputBaseDir := "out/bazel"
+	result := android.GroupFixturePreparers(
+		prepareForApexTest,
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.BazelContext = android.MockBazelContext{
+				OutputBaseDir: outputBaseDir,
+				LabelToApexInfo: map[string]cquery.ApexInfo{
+					"//:foo": cquery.ApexInfo{
+						SignedOutput:          "signed_out.apex",
+						UnsignedOutput:        "unsigned_out.apex",
+						BundleKeyInfo:         []string{"public_key", "private_key"},
+						ContainerKeyInfo:      []string{"container_cert", "container_private"},
+						SymbolsUsedByApex:     "foo_using.txt",
+						JavaSymbolsUsedByApex: "foo_using.xml",
+						BundleFile:            "apex_bundle.zip",
+						InstalledFiles:        "installed-files.txt",
+
+						// unused
+						PackageName:  "pkg_name",
+						ProvidesLibs: []string{"a", "b"},
+						RequiresLibs: []string{"c", "d"},
+					},
+				},
+			}
+		}),
+	).RunTestWithBp(t, bp)
+
+	m := result.ModuleForTests("foo", "android_common_foo_image").Module()
+	ab, ok := m.(*apexBundle)
+	if !ok {
+		t.Fatalf("Expected module to be an apexBundle, was not")
+	}
+
+	if w, g := "out/bazel/execroot/__main__/public_key", ab.publicKeyFile.String(); w != g {
+		t.Errorf("Expected public key %q, got %q", w, g)
+	}
+
+	if w, g := "out/bazel/execroot/__main__/private_key", ab.privateKeyFile.String(); w != g {
+		t.Errorf("Expected private key %q, got %q", w, g)
+	}
+
+	if w, g := "out/bazel/execroot/__main__/container_cert", ab.containerCertificateFile.String(); w != g {
+		t.Errorf("Expected public container key %q, got %q", w, g)
+	}
+
+	if w, g := "out/bazel/execroot/__main__/container_private", ab.containerPrivateKeyFile.String(); w != g {
+		t.Errorf("Expected private container key %q, got %q", w, g)
+	}
+
+	if w, g := "out/bazel/execroot/__main__/signed_out.apex", ab.outputFile.String(); w != g {
+		t.Errorf("Expected output file %q, got %q", w, g)
+	}
+
+	if w, g := "out/bazel/execroot/__main__/foo_using.txt", ab.nativeApisUsedByModuleFile.String(); w != g {
+		t.Errorf("Expected output file %q, got %q", w, g)
+	}
+
+	if w, g := "out/bazel/execroot/__main__/foo_using.xml", ab.javaApisUsedByModuleFile.String(); w != g {
+		t.Errorf("Expected output file %q, got %q", w, g)
+	}
+
+	if w, g := "out/bazel/execroot/__main__/installed-files.txt", ab.installedFilesFile.String(); w != g {
+		t.Errorf("Expected installed-files.txt %q, got %q", w, g)
+	}
+
+	mkData := android.AndroidMkDataForTest(t, result.TestContext, m)
+	var builder strings.Builder
+	mkData.Custom(&builder, "foo", "BAZEL_TARGET_", "", mkData)
+
+	data := builder.String()
+	if w := "ALL_MODULES.$(my_register_name).BUNDLE := out/bazel/execroot/__main__/apex_bundle.zip"; !strings.Contains(data, w) {
+		t.Errorf("Expected %q in androidmk data, but did not find %q", w, data)
+	}
+	if w := "$(call dist-for-goals,checkbuild,out/bazel/execroot/__main__/installed-files.txt:foo-installed-files.txt)"; !strings.Contains(data, w) {
+		t.Errorf("Expected %q in androidmk data, but did not find %q", w, data)
+	}
 }

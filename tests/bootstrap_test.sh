@@ -285,6 +285,35 @@ EOF
 
 }
 
+function test_create_global_include_directory() {
+  setup
+  run_soong
+  local mtime1=$(stat -c "%y" out/soong/build.ninja)
+
+  # Soong needs to know if top level directories like hardware/ exist for use
+  # as global include directories.  Make sure that doesn't cause regens for
+  # unrelated changes to the top level directory.
+  mkdir -p system/core
+
+  run_soong
+  local mtime2=$(stat -c "%y" out/soong/build.ninja)
+  if [[ "$mtime1" != "$mtime2" ]]; then
+    fail "Output Ninja file changed when top level directory changed"
+  fi
+
+  # Make sure it does regen if a missing directory in the path of a global
+  # include directory is added.
+  mkdir -p system/core/include
+
+  run_soong
+  local mtime3=$(stat -c "%y" out/soong/build.ninja)
+  if [[ "$mtime2" = "$mtime3" ]]; then
+    fail "Output Ninja file did not change when global include directory created"
+  fi
+
+}
+
+
 function test_add_file_to_soong_build() {
   setup
   run_soong
@@ -547,12 +576,48 @@ function test_bp2build_smoke {
 
 function test_bp2build_generates_marker_file {
   setup
-  create_mock_bazel
 
   run_soong bp2build
 
+  if [[ ! -f "./out/soong/bp2build_files_marker" ]]; then
+    fail "bp2build marker file was not generated"
+  fi
+
   if [[ ! -f "./out/soong/bp2build_workspace_marker" ]]; then
-    fail "Marker file was not generated"
+    fail "symlink forest marker file was not generated"
+  fi
+}
+
+function test_bp2build_add_irrelevant_file {
+  setup
+
+  mkdir -p a/b
+  touch a/b/c.txt
+  cat > a/b/Android.bp <<'EOF'
+filegroup {
+  name: "c",
+  srcs: ["c.txt"],
+  bazel_module: { bp2build_available: true },
+}
+EOF
+
+  run_soong bp2build
+  if [[ ! -e out/soong/bp2build/a/b/BUILD.bazel ]]; then
+    fail "BUILD file in symlink forest was not created";
+  fi
+
+  local mtime1=$(stat -c "%y" out/soong/bp2build/a/b/BUILD.bazel)
+
+  touch a/irrelevant.txt
+  run_soong bp2build
+  local mtime2=$(stat -c "%y" out/soong/bp2build/a/b/BUILD.bazel)
+
+  if [[ "$mtime1" != "$mtime2" ]]; then
+    fail "BUILD.bazel file was regenerated"
+  fi
+
+  if [[ ! -e "out/soong/workspace/a/irrelevant.txt" ]]; then
+    fail "New file was not symlinked into symlink forest"
   fi
 }
 
@@ -838,6 +903,7 @@ test_delete_android_bp
 test_add_file_to_soong_build
 test_glob_during_bootstrapping
 test_soong_build_rerun_iff_environment_changes
+test_create_global_include_directory
 test_multiple_soong_build_modes
 test_dump_json_module_graph
 test_json_module_graph_back_and_forth_null_build
@@ -849,6 +915,7 @@ test_bp2build_generates_marker_file
 test_bp2build_null_build
 test_bp2build_back_and_forth_null_build
 test_bp2build_add_android_bp
+test_bp2build_add_irrelevant_file
 test_bp2build_add_to_glob
 test_bp2build_bazel_workspace_structure
 test_bp2build_bazel_workspace_add_file

@@ -282,7 +282,7 @@ var (
 	sAbiDiff = pctx.RuleFunc("sAbiDiff",
 		func(ctx android.PackageRuleContext) blueprint.RuleParams {
 			commandStr := "($sAbiDiffer ${extraFlags} -lib ${libName} -arch ${arch} -o ${out} -new ${in} -old ${referenceDump})"
-			commandStr += "|| (echo 'error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py ${createReferenceDumpFlags} -l ${libName}'"
+			commandStr += "|| (echo '${errorMessage}'"
 			commandStr += " && (mkdir -p $$DIST_DIR/abidiffs && cp ${out} $$DIST_DIR/abidiffs/)"
 			commandStr += " && exit 1)"
 			return blueprint.RuleParams{
@@ -290,7 +290,7 @@ var (
 				CommandDeps: []string{"$sAbiDiffer"},
 			}
 		},
-		"extraFlags", "referenceDump", "libName", "arch", "createReferenceDumpFlags")
+		"extraFlags", "referenceDump", "libName", "arch", "errorMessage")
 
 	// Rule to unzip a reference abi dump.
 	unzipRefSAbiDump = pctx.AndroidStaticRule("unzipRefSAbiDump",
@@ -679,11 +679,16 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 			tidyCmd := "${config.ClangBin}/clang-tidy"
 
 			rule := clangTidy
+			reducedCFlags := moduleFlags
 			if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_CLANG_TIDY") {
 				rule = clangTidyRE
+				// b/248371171, work around RBE input processor problem
+				// some cflags rejected by input processor, but usually
+				// do not affect included files or clang-tidy
+				reducedCFlags = config.TidyReduceCFlags(reducedCFlags)
 			}
 
-			sharedCFlags := shareFlags("cFlags", moduleFlags)
+			sharedCFlags := shareFlags("cFlags", reducedCFlags)
 			srcRelPath := srcFile.Rel()
 
 			// Add the .tidy rule
@@ -936,15 +941,15 @@ func unzipRefDump(ctx android.ModuleContext, zippedRefDump android.Path, baseNam
 }
 
 // sourceAbiDiff registers a build statement to compare linked sAbi dump files (.lsdump).
-func sourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceDump android.Path,
-	baseName, prevVersion, exportedHeaderFlags string, diffFlags []string,
-	checkAllApis, isLlndk, isNdk, isVndkExt, previousVersionDiff bool) android.OptionalPath {
+func sourceAbiDiff(ctx android.ModuleContext, inputDump, referenceDump android.Path,
+	baseName string, diffFlags []string, prevVersion int,
+	checkAllApis, isLlndkOrNdk, isVndkExt, previousVersionDiff bool) android.OptionalPath {
 
 	var outputFile android.ModuleOutPath
-	if prevVersion == "" {
-		outputFile = android.PathForModuleOut(ctx, baseName+".abidiff")
+	if previousVersionDiff {
+		outputFile = android.PathForModuleOut(ctx, baseName+"."+strconv.Itoa(prevVersion)+".abidiff")
 	} else {
-		outputFile = android.PathForModuleOut(ctx, baseName+"."+prevVersion+".abidiff")
+		outputFile = android.PathForModuleOut(ctx, baseName+".abidiff")
 	}
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 
@@ -957,12 +962,17 @@ func sourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 			"-allow-unreferenced-elf-symbol-changes")
 	}
 
-	// TODO(b/241496591): Remove -advice-only after b/239792343 and b/239790286 are reolved.
+	var errorMessage string
 	if previousVersionDiff {
-		extraFlags = append(extraFlags, "-advice-only")
+		errorMessage = "error: Please follow https://android.googlesource.com/platform/development/+/master/vndk/tools/header-checker/README.md#configure-cross_version-abi-check to resolve the ABI difference between your source code and version " + strconv.Itoa(prevVersion) + "."
+		sourceVersion := prevVersion + 1
+		extraFlags = append(extraFlags, "-target-version", strconv.Itoa(sourceVersion))
+	} else {
+		errorMessage = "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l " + libName
+		extraFlags = append(extraFlags, "-target-version", "current")
 	}
 
-	if isLlndk || isNdk {
+	if isLlndkOrNdk {
 		extraFlags = append(extraFlags, "-consider-opaque-types-different")
 	}
 	// TODO(b/232891473): Simplify the above logic with diffFlags.
@@ -991,11 +1001,11 @@ func sourceAbiDiff(ctx android.ModuleContext, inputDump android.Path, referenceD
 		Input:       inputDump,
 		Implicit:    referenceDump,
 		Args: map[string]string{
-			"referenceDump":            referenceDump.String(),
-			"libName":                  libName,
-			"arch":                     ctx.Arch().ArchType.Name,
-			"extraFlags":               strings.Join(extraFlags, " "),
-			"createReferenceDumpFlags": "",
+			"referenceDump": referenceDump.String(),
+			"libName":       libName,
+			"arch":          ctx.Arch().ArchType.Name,
+			"extraFlags":    strings.Join(extraFlags, " "),
+			"errorMessage":  errorMessage,
 		},
 	})
 	return android.OptionalPathForPath(outputFile)
@@ -1162,8 +1172,4 @@ func transformArchiveRepack(ctx android.ModuleContext, inputFile android.Path,
 			"objects": strings.Join(objects, " "),
 		},
 	})
-}
-
-func mingwCmd(toolchain config.Toolchain, cmd string) string {
-	return filepath.Join(toolchain.GccRoot(), "bin", toolchain.GccTriple()+"-"+cmd)
 }

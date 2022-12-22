@@ -48,9 +48,52 @@ EOF
 
 test_bp2build_null_build_with_globs
 
+function test_different_relative_outdir {
+  setup
+
+  mkdir -p a
+  touch a/g.txt
+  cat > a/Android.bp <<'EOF'
+filegroup {
+    name: "g",
+    srcs: ["g.txt"],
+    bazel_module: {bp2build_available: true},
+  }
+EOF
+
+  # A directory under $MOCK_TOP
+  outdir=out2
+  trap "rm -rf $outdir" EXIT
+  # Modify OUT_DIR in a subshell so it doesn't affect the top level one.
+  (export OUT_DIR=$outdir; run_soong bp2build && run_bazel build --config=bp2build //a:g)
+}
+
+test_different_relative_outdir
+
+function test_different_absolute_outdir {
+  setup
+
+  mkdir -p a
+  touch a/g.txt
+  cat > a/Android.bp <<'EOF'
+filegroup {
+    name: "g",
+    srcs: ["g.txt"],
+    bazel_module: {bp2build_available: true},
+  }
+EOF
+
+  # A directory under /tmp/...
+  outdir=$(mktemp -t -d st.XXXXX)
+  trap 'rm -rf $outdir' EXIT
+  # Modify OUT_DIR in a subshell so it doesn't affect the top level one.
+  (export OUT_DIR=$outdir; run_soong bp2build && run_bazel build --config=bp2build //a:g)
+}
+
+test_different_absolute_outdir
+
 function test_bp2build_generates_all_buildfiles {
   setup
-  create_mock_bazel
 
   mkdir -p foo/convertible_soong_module
   cat > foo/convertible_soong_module/Android.bp <<'EOF'
@@ -103,7 +146,7 @@ EOF
   fi
 
   # NOTE: We don't actually use the extra BUILD file for anything here
-  run_bazel build --package_path=out/soong/workspace //foo/...
+  run_bazel build --config=android --package_path=out/soong/workspace //foo/...
 
   local the_answer_file="bazel-out/android_target-fastbuild/bin/foo/convertible_soong_module/the_answer.txt"
   if [[ ! -f "${the_answer_file}" ]]; then
@@ -114,11 +157,13 @@ EOF
   fi
 }
 
+_save_trap=$(trap -p EXIT)
+trap '[[ $? -ne 0 ]] && echo Are you running this locally? Try changing --sandbox_tmpfs_path to something other than /tmp/ in build/bazel/linux.bazelrc.' EXIT
 test_bp2build_generates_all_buildfiles
+eval ${_save_trap}
 
 function test_cc_correctness {
   setup
-  create_mock_bazel
 
   mkdir -p a
   cat > a/Android.bp <<EOF
@@ -146,10 +191,10 @@ EOF
 
   run_soong bp2build
 
-  run_bazel build --package_path=out/soong/workspace //a:qq
+  run_bazel build --config=android --package_path=out/soong/workspace //a:qq
   local -r output_mtime1=$(stat -c "%y" bazel-bin/a/_objs/qq/qq.o)
 
-  run_bazel build --package_path=out/soong/workspace //a:qq
+  run_bazel build --config=android --package_path=out/soong/workspace //a:qq
   local -r output_mtime2=$(stat -c "%y" bazel-bin/a/_objs/qq/qq.o)
 
   if [[ "$output_mtime1" != "$output_mtime2" ]]; then
@@ -160,7 +205,7 @@ EOF
 #define QQ 2
 EOF
 
-  run_bazel build --package_path=out/soong/workspace //a:qq
+  run_bazel build --config=android --package_path=out/soong/workspace //a:qq
   local -r output_mtime3=$(stat -c "%y" bazel-bin/a/_objs/qq/qq.o)
 
   if [[ "$output_mtime1" == "$output_mtime3" ]]; then

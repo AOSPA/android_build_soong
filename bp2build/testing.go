@@ -24,19 +24,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/blueprint/proptools"
+
 	"android/soong/android"
 	"android/soong/android/allowlists"
 	"android/soong/bazel"
 )
 
 var (
-	// A default configuration for tests to not have to specify bp2build_available on top level targets.
-	bp2buildConfig = android.NewBp2BuildAllowlist().SetDefaultConfig(
-		allowlists.Bp2BuildConfig{
-			android.Bp2BuildTopLevel: allowlists.Bp2BuildDefaultTrueRecursively,
-		},
-	)
-
 	buildDir string
 )
 
@@ -71,7 +66,7 @@ func errored(t *testing.T, tc Bp2buildTestCase, errs []error) bool {
 	return false
 }
 
-func runBp2BuildTestCaseSimple(t *testing.T, tc Bp2buildTestCase) {
+func RunBp2BuildTestCaseSimple(t *testing.T, tc Bp2buildTestCase) {
 	t.Helper()
 	RunBp2BuildTestCase(t, func(ctx android.RegistrationContext) {}, tc)
 }
@@ -87,9 +82,30 @@ type Bp2buildTestCase struct {
 	// An error with a string contained within the string of the expected error
 	ExpectedErr         error
 	UnconvertedDepsMode unconvertedDepsMode
+
+	// For every directory listed here, the BUILD file for that directory will
+	// be merged with the generated BUILD file. This allows custom BUILD targets
+	// to be used in tests, or use BUILD files to draw package boundaries.
+	KeepBuildFileForDirs []string
 }
 
 func RunBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.RegistrationContext), tc Bp2buildTestCase) {
+	bp2buildSetup := func(ctx *android.TestContext) {
+		registerModuleTypes(ctx)
+		ctx.RegisterForBazelConversion()
+	}
+	runBp2BuildTestCaseWithSetup(t, bp2buildSetup, tc)
+}
+
+func RunApiBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.RegistrationContext), tc Bp2buildTestCase) {
+	apiBp2BuildSetup := func(ctx *android.TestContext) {
+		registerModuleTypes(ctx)
+		ctx.RegisterForApiBazelConversion()
+	}
+	runBp2BuildTestCaseWithSetup(t, apiBp2BuildSetup, tc)
+}
+
+func runBp2BuildTestCaseWithSetup(t *testing.T, setup func(ctx *android.TestContext), tc Bp2buildTestCase) {
 	t.Helper()
 	dir := "."
 	filesystem := make(map[string][]byte)
@@ -105,10 +121,21 @@ func RunBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.Regi
 	config := android.TestConfig(buildDir, nil, tc.Blueprint, filesystem)
 	ctx := android.NewTestContext(config)
 
-	registerModuleTypes(ctx)
+	setup(ctx)
 	ctx.RegisterModuleType(tc.ModuleTypeUnderTest, tc.ModuleTypeUnderTestFactory)
+
+	// A default configuration for tests to not have to specify bp2build_available on top level targets.
+	bp2buildConfig := android.NewBp2BuildAllowlist().SetDefaultConfig(
+		allowlists.Bp2BuildConfig{
+			android.Bp2BuildTopLevel: allowlists.Bp2BuildDefaultTrueRecursively,
+		},
+	)
+	for _, f := range tc.KeepBuildFileForDirs {
+		bp2buildConfig.SetKeepExistingBuildFile(map[string]bool{
+			f: /*recursive=*/ false,
+		})
+	}
 	ctx.RegisterBp2BuildConfig(bp2buildConfig)
-	ctx.RegisterForBazelConversion()
 
 	_, parseErrs := ctx.ParseFileList(dir, toParse)
 	if errored(t, tc, parseErrs) {
@@ -128,7 +155,7 @@ func RunBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.Regi
 	if tc.Dir != "" {
 		checkDir = tc.Dir
 	}
-	codegenCtx := NewCodegenContext(config, *ctx.Context, Bp2Build)
+	codegenCtx := NewCodegenContext(config, ctx.Context, Bp2Build)
 	codegenCtx.unconvertedDepMode = tc.UnconvertedDepsMode
 	bazelTargets, errs := generateBazelTargetsForDir(codegenCtx, checkDir)
 	if tc.ExpectedErr != nil {
@@ -141,7 +168,7 @@ func RunBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.Regi
 		android.FailIfErrored(t, errs)
 	}
 	if actualCount, expectedCount := len(bazelTargets), len(tc.ExpectedBazelTargets); actualCount != expectedCount {
-		t.Errorf("%s: Expected %d bazel target (%s), got `%d`` (%s)",
+		t.Errorf("%s: Expected %d bazel target (%s), got %d (%s)",
 			tc.Description, expectedCount, tc.ExpectedBazelTargets, actualCount, bazelTargets)
 	} else {
 		for i, target := range bazelTargets {
@@ -188,6 +215,8 @@ type customProps struct {
 
 	// Prop used to indicate this conversion should be 1 module -> multiple targets
 	One_to_many_prop *bool
+
+	Api *string // File describing the APIs of this module
 }
 
 type customModule struct {
@@ -310,6 +339,7 @@ type customBazelModuleAttributes struct {
 	String_ptr_prop     *string
 	String_list_prop    []string
 	Arch_paths          bazel.LabelListAttribute
+	Api                 bazel.LabelAttribute
 }
 
 func (m *customModule) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
@@ -354,6 +384,23 @@ func (m *customModule) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: m.Name()}, attrs)
 }
 
+var _ android.ApiProvider = (*customModule)(nil)
+
+func (c *customModule) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class: "custom_api_contribution",
+	}
+	apiAttribute := bazel.MakeLabelAttribute(
+		android.BazelLabelForModuleSrcSingle(ctx, proptools.String(c.props.Api)).Label,
+	)
+	attrs := &customBazelModuleAttributes{
+		Api: *apiAttribute,
+	}
+	ctx.CreateBazelTargetModule(props,
+		android.CommonAttributes{Name: c.Name()},
+		attrs)
+}
+
 // A bp2build mutator that uses load statements and creates a 1:M mapping from
 // module to target.
 func customBp2buildOneToMany(ctx android.TopDownMutatorContext, m *customModule) {
@@ -384,6 +431,9 @@ func customBp2buildOneToMany(ctx android.TopDownMutatorContext, m *customModule)
 func generateBazelTargetsForDir(codegenCtx *CodegenContext, dir string) (BazelTargets, []error) {
 	// TODO: Set generateFilegroups to true and/or remove the generateFilegroups argument completely
 	res, err := GenerateBazelTargets(codegenCtx, false)
+	if err != nil {
+		return BazelTargets{}, err
+	}
 	return res.buildFileToTargets[dir], err
 }
 
@@ -426,7 +476,9 @@ func makeBazelTargetHostOrDevice(typ, name string, attrs AttrNameToString, hod a
 	}
 
 	attrStrings := make([]string, 0, len(attrs)+1)
-	attrStrings = append(attrStrings, fmt.Sprintf(`    name = "%s",`, name))
+	if name != "" {
+		attrStrings = append(attrStrings, fmt.Sprintf(`    name = "%s",`, name))
+	}
 	for _, k := range android.SortedStringKeys(attrs) {
 		attrStrings = append(attrStrings, fmt.Sprintf("    %s = %s,", k, attrs[k]))
 	}
@@ -444,6 +496,37 @@ func MakeBazelTargetNoRestrictions(typ, name string, attrs AttrNameToString) str
 
 // makeBazelTargetNoRestrictions returns bazel target build file definition that is device specific
 // as this is the most common default in Soong.
-func makeBazelTarget(typ, name string, attrs AttrNameToString) string {
+func MakeBazelTarget(typ, name string, attrs AttrNameToString) string {
 	return makeBazelTargetHostOrDevice(typ, name, attrs, android.DeviceSupported)
+}
+
+type ExpectedRuleTarget struct {
+	Rule  string
+	Name  string
+	Attrs AttrNameToString
+	Hod   android.HostOrDeviceSupported
+}
+
+func (ebr ExpectedRuleTarget) String() string {
+	return makeBazelTargetHostOrDevice(ebr.Rule, ebr.Name, ebr.Attrs, ebr.Hod)
+}
+
+func makeCcStubSuiteTargets(name string, attrs AttrNameToString) string {
+	if _, hasStubs := attrs["stubs_symbol_file"]; !hasStubs {
+		return ""
+	}
+	STUB_SUITE_ATTRS := map[string]string{
+		"stubs_symbol_file": "symbol_file",
+		"stubs_versions":    "versions",
+		"soname":            "soname",
+		"source_library":    "source_library",
+	}
+
+	stubSuiteAttrs := AttrNameToString{}
+	for key, _ := range attrs {
+		if _, stubSuiteAttr := STUB_SUITE_ATTRS[key]; stubSuiteAttr {
+			stubSuiteAttrs[STUB_SUITE_ATTRS[key]] = attrs[key]
+		}
+	}
+	return MakeBazelTarget("cc_stub_suite", name+"_stub_libs", stubSuiteAttrs)
 }
