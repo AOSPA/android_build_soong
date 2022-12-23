@@ -16,6 +16,24 @@
       "message": "can we do this elsewhere?  In make, CleanSpec.mk can go just about anywhere.",
       "revId": "0f2fdc01a51f23a8432661dbc834f2eee579a306",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d2607c28_4ce2b3b6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000469
+      },
+      "writtenOn": "2022-12-23T16:42:46Z",
+      "side": 1,
+      "message": "already https://github.com/AOSPA/android_vendor_aospa/commit/99ffea52e27bb3161557e0843565a80727fb1dab",
+      "parentUuid": "51ba167a_2f4fb07b",
+      "revId": "0f2fdc01a51f23a8432661dbc834f2eee579a306",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
