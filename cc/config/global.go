@@ -190,10 +190,6 @@ var (
 		"-Werror=format-security",
 		"-nostdlibinc",
 
-		// Enable MLGO for register allocation.
-		// TODO(b/300682355) re-enable
-		// "-mllvm -wc-enable-advisor=release",
-
 		// Emit additional debug info for AutoFDO
 		"-fdebug-info-for-profiling",
 	}
@@ -222,9 +218,6 @@ var (
 		"-Wl,--exclude-libs,libgcc_stripped.a",
 		"-Wl,--exclude-libs,libunwind_llvm.a",
 		"-Wl,--exclude-libs,libunwind.a",
-		// Enable MLGO for register allocation.
-		// TODO(b/300682355) re-enable
-		// "-Wl,-mllvm,-regalloc-enable-advisor=release",
 	}
 
 	deviceGlobalLldflags = append(deviceGlobalLdflags, commonGlobalLldflags...)
@@ -440,7 +433,7 @@ var (
 	ForceSDClangOff = false
 
 	// prebuilts/clang default settings.
-	ClangDefaultBase = "prebuilts/clang/host"
+	ClangDefaultBase         = "prebuilts/clang/host"
 	ClangDefaultVersion      = "clang-r498229b"
 	ClangDefaultShortVersion = "17"
 

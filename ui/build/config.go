@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"android/soong/shared"
+	"android/soong/ui/metrics"
 
 	"google.golang.org/protobuf/proto"
 
@@ -85,7 +86,7 @@ type configImpl struct {
 	searchApiDir             bool // Scan the Android.bp files generated in out/api_surfaces
 	skipMetricsUpload        bool
 	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
-	buildFromTextStub        bool
+	buildFromSourceStub      bool
 	ensureAllowlistIntegrity bool   // For CI builds - make sure modules are mixed-built
 	bazelExitCode            int32  // For b runs - necessary for updating NonZeroExit
 	besId                    string // For b runs, to identify the BuildEventService logs
@@ -119,9 +120,6 @@ type configImpl struct {
 
 	includeTags    []string
 	sourceRootDirs []string
-
-	productReleaseConfigMaps       string
-	productReleaseConfigMapsLoaded bool
 
 	// Data source to write ninja weight list
 	ninjaWeightListSource NinjaWeightListSource
@@ -385,8 +383,6 @@ func NewConfig(ctx Context, args ...string) Config {
 
 	// Configure Java-related variables, including adding it to $PATH
 	java8Home := filepath.Join("prebuilts/jdk/jdk8", ret.HostPrebuiltTag())
-	java9Home := filepath.Join("prebuilts/jdk/jdk9", ret.HostPrebuiltTag())
-	java11Home := filepath.Join("prebuilts/jdk/jdk11", ret.HostPrebuiltTag())
 	java17Home := filepath.Join("prebuilts/jdk/jdk17", ret.HostPrebuiltTag())
 	javaHome := func() string {
 		if override, ok := ret.environ.Get("OVERRIDE_ANDROID_JAVA_HOME"); ok {
@@ -413,8 +409,6 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.environ.Set("JAVA_HOME", absJavaHome)
 	ret.environ.Set("ANDROID_JAVA_HOME", javaHome)
 	ret.environ.Set("ANDROID_JAVA8_HOME", java8Home)
-	ret.environ.Set("ANDROID_JAVA9_HOME", java9Home)
-	ret.environ.Set("ANDROID_JAVA11_HOME", java11Home)
 	ret.environ.Set("PATH", strings.Join(newPath, string(filepath.ListSeparator)))
 
 	// b/286885495, https://bugzilla.redhat.com/show_bug.cgi?id=2227130: some versions of Fedora include patches
@@ -466,6 +460,42 @@ func NewConfig(ctx Context, args ...string) Config {
 // processed based on the build action and extracts any arguments that belongs to the build action.
 func NewBuildActionConfig(action BuildAction, dir string, ctx Context, args ...string) Config {
 	return NewConfig(ctx, getConfigArgs(action, dir, ctx, args)...)
+}
+
+// Prepare for getting make variables.  For them to be accurate, we need to have
+// obtained PRODUCT_RELEASE_CONFIG_MAPS.
+//
+// Returns:
+//
+//	Whether config should be called again.
+//
+// TODO: when converting product config to a declarative language, make sure
+// that PRODUCT_RELEASE_CONFIG_MAPS is properly handled as a separate step in
+// that process.
+func SetProductReleaseConfigMaps(ctx Context, config Config) bool {
+	ctx.BeginTrace(metrics.RunKati, "SetProductReleaseConfigMaps")
+	defer ctx.EndTrace()
+
+	if config.SkipConfig() {
+		// This duplicates the logic from Build to skip product config
+		// if the user has explicitly said to.
+		return false
+	}
+
+	releaseConfigVars := []string{
+		"PRODUCT_RELEASE_CONFIG_MAPS",
+	}
+
+	origValue, _ := config.environ.Get("PRODUCT_RELEASE_CONFIG_MAPS")
+	// Get the PRODUCT_RELEASE_CONFIG_MAPS for this product, to avoid polluting the environment
+	// when we run product config to get the rest of the make vars.
+	releaseMapVars, err := dumpMakeVars(ctx, config, nil, releaseConfigVars, false, "")
+	if err != nil {
+		ctx.Fatalln("Error getting PRODUCT_RELEASE_CONFIG_MAPS:", err)
+	}
+	productReleaseConfigMaps := releaseMapVars["PRODUCT_RELEASE_CONFIG_MAPS"]
+	os.Setenv("PRODUCT_RELEASE_CONFIG_MAPS", productReleaseConfigMaps)
+	return origValue != productReleaseConfigMaps
 }
 
 // storeConfigMetrics selects a set of configuration information and store in
@@ -790,8 +820,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			} else {
 				ctx.Fatalf("unknown option for ninja_weight_source: %s", source)
 			}
-		} else if arg == "--build-from-text-stub" {
-			c.buildFromTextStub = true
+		} else if arg == "--build-from-source-stub" {
+			c.buildFromSourceStub = true
 		} else if strings.HasPrefix(arg, "--build-command=") {
 			buildCmd := strings.TrimPrefix(arg, "--build-command=")
 			// remove quotations
@@ -928,9 +958,6 @@ func (c *configImpl) configureLocale(ctx Context) {
 }
 
 func (c *configImpl) Environment() *Environment {
-	if c.productReleaseConfigMapsLoaded {
-		c.environ.Set("PRODUCT_RELEASE_CONFIG_MAPS", c.productReleaseConfigMaps)
-	}
 	return c.environ
 }
 
@@ -1129,7 +1156,7 @@ func (c *configImpl) SkipConfig() bool {
 }
 
 func (c *configImpl) BuildFromTextStub() bool {
-	return c.buildFromTextStub
+	return !c.buildFromSourceStub
 }
 
 func (c *configImpl) TargetProduct() string {

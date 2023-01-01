@@ -99,7 +99,7 @@ type CmdArgs struct {
 
 	UseBazelProxy bool
 
-	BuildFromTextStub bool
+	BuildFromSourceStub bool
 
 	EnsureAllowlistIntegrity bool
 }
@@ -167,8 +167,7 @@ func (c Config) RunningInsideUnitTest() bool {
 }
 
 // DisableHiddenApiChecks returns true if hiddenapi checks have been disabled.
-// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation
-// Hiddenapi checks are also disabled when RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE is set to false
+// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation,
 // but can be enabled by setting environment variable ENABLE_HIDDENAPI_FLAGS=true.
 // For other target variants hiddenapi check are enabled by default but can be disabled by
 // setting environment variable UNSAFE_DISABLE_HIDDENAPI_FLAGS=true.
@@ -177,8 +176,16 @@ func (c Config) RunningInsideUnitTest() bool {
 func (c Config) DisableHiddenApiChecks() bool {
 	return !c.IsEnvTrue("ENABLE_HIDDENAPI_FLAGS") &&
 		(c.IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") ||
-			Bool(c.productVariables.Eng) ||
-			!c.ReleaseDefaultModuleBuildFromSource())
+			Bool(c.productVariables.Eng))
+}
+
+// DisableVerifyOverlaps returns true if verify_overlaps is skipped.
+// Mismatch in version of apexes and module SDK is required for mainline prebuilts to work in
+// trunk stable.
+// Thus, verify_overlaps is disabled when RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE is set to false.
+// TODO(b/308174018): Re-enable verify_overlaps for both builr from source/mainline prebuilts.
+func (c Config) DisableVerifyOverlaps() bool {
+	return c.IsEnvTrue("DISABLE_VERIFY_OVERLAPS") || !c.ReleaseDefaultModuleBuildFromSource()
 }
 
 // MaxPageSizeSupported returns the max page size supported by the device. This
@@ -337,9 +344,9 @@ type config struct {
 	// unix sockets, instead of spawning Bazel as a subprocess.
 	UseBazelProxy bool
 
-	// If buildFromTextStub is true then the Java API stubs are
-	// built from the signature text files, not the source Java files.
-	buildFromTextStub bool
+	// If buildFromSourceStub is true then the Java API stubs are
+	// built from the source Java files, not the signature text files.
+	buildFromSourceStub bool
 
 	// If ensureAllowlistIntegrity is true, then the presence of any allowlisted
 	// modules that aren't mixed-built for at least one variant will cause a build
@@ -556,7 +563,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		MultitreeBuild: cmdArgs.MultitreeBuild,
 		UseBazelProxy:  cmdArgs.UseBazelProxy,
 
-		buildFromTextStub: cmdArgs.BuildFromTextStub,
+		buildFromSourceStub: cmdArgs.BuildFromSourceStub,
 	}
 
 	config.deviceConfig = &deviceConfig{
@@ -2127,11 +2134,11 @@ func (c *config) BuildFromTextStub() bool {
 	// TODO: b/302320354 - Remove the coverage build specific logic once the
 	// robust solution for handling native properties in from-text stub build
 	// is implemented.
-	return c.buildFromTextStub && !c.JavaCoverageEnabled()
+	return !c.buildFromSourceStub && !c.JavaCoverageEnabled()
 }
 
 func (c *config) SetBuildFromTextStub(b bool) {
-	c.buildFromTextStub = b
+	c.buildFromSourceStub = !b
 	c.productVariables.Build_from_text_stub = boolPtr(b)
 }
 
@@ -2171,4 +2178,47 @@ func (c *deviceConfig) ReleaseExposeFlaggedApi() bool {
 
 func (c *deviceConfig) HideFlaggedApis() bool {
 	return c.NextReleaseHideFlaggedApi() && !c.ReleaseExposeFlaggedApi()
+}
+
+func (c *config) GetBuildFlag(name string) (string, bool) {
+	val, ok := c.productVariables.BuildFlags[name]
+	return val, ok
+}
+
+var (
+	mainlineApexContributionBuildFlags = []string{
+		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES",
+		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH",
+		"RELEASE_APEX_CONTRIBUTIONS_ART",
+		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH",
+		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE",
+		"RELEASE_APEX_CONTRIBUTIONS_CONNECTIVITY",
+		"RELEASE_APEX_CONTRIBUTIONS_CONSCRYPT",
+		"RELEASE_APEX_CONTRIBUTIONS_CRASHRECOVERY",
+		"RELEASE_APEX_CONTRIBUTIONS_DEVICELOCK",
+		"RELEASE_APEX_CONTRIBUTIONS_HEALTHFITNESS",
+		"RELEASE_APEX_CONTRIBUTIONS_IPSEC",
+		"RELEASE_APEX_CONTRIBUTIONS_MEDIA",
+		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER",
+		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION",
+		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION",
+		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING",
+		"RELEASE_APEX_CONTRIBUTIONS_SCHEDULING",
+		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
+		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
+		"RELEASE_APEX_CONTRIBUTIONS_UWB",
+		"RELEASE_APEX_CONTRIBUTIONS_WIFI",
+	}
+)
+
+// Returns the list of _selected_ apex_contributions
+// Each mainline module will have one entry in the list
+func (c *config) AllApexContributions() []string {
+	ret := []string{}
+	for _, f := range mainlineApexContributionBuildFlags {
+		if val, exists := c.GetBuildFlag(f); exists && val != "" {
+			ret = append(ret, val)
+		}
+	}
+	return ret
 }

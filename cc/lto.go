@@ -156,10 +156,16 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 			}
 		}
 
-		// For ML training
-		if ctx.Config().IsEnvTrue("THINLTO_EMIT_INDEXES_AND_IMPORTS") {
-			ltoLdFlags = append(ltoLdFlags, "-Wl,--save-temps=import")
-			ltoLdFlags = append(ltoLdFlags, "-Wl,--thinlto-emit-index-files")
+		// Register allocation MLGO flags for ARM64.
+		if ctx.Arch().ArchType == android.Arm64 {
+			// TODO: b/311889575 - 15701243645303822394 - Build Failure for libperfetto.so
+			// ltoCFlags = append(ltoCFlags, "-mllvm -regalloc-enable-advisor=release")
+			// ltoLdFlags = append(ltoLdFlags, "-Wl,-mllvm,-regalloc-enable-advisor=release")
+			// Flags for training MLGO model.
+			if ctx.Config().IsEnvTrue("THINLTO_EMIT_INDEXES_AND_IMPORTS") {
+				ltoLdFlags = append(ltoLdFlags, "-Wl,--save-temps=import")
+				ltoLdFlags = append(ltoLdFlags, "-Wl,--thinlto-emit-index-files")
+			}
 		}
 
 		flags.Local.CFlags = append(flags.Local.CFlags, ltoCFlags...)
