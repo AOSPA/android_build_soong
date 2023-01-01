@@ -38,8 +38,11 @@ type CcAconfigLibraryProperties struct {
 	// name of the aconfig_declarations module to generate a library for
 	Aconfig_declarations string
 
-	// whether to generate test mode version of the library
-	Test *bool
+	// default mode is "production", the other accepted modes are:
+	// "test": to generate test mode version of the library
+	// "exported": to generate exported mode version of the library
+	// an error will be thrown if the mode is not supported
+	Mode *string
 }
 
 type CcAconfigLibraryCallbacks struct {
@@ -121,12 +124,11 @@ func (this *CcAconfigLibraryCallbacks) GeneratorBuildActions(ctx cc.ModuleContex
 	}
 	declarations := ctx.OtherModuleProvider(declarationsModules[0], declarationsProviderKey).(declarationsProviderData)
 
-	var mode string
-	if proptools.Bool(this.properties.Test) {
-		mode = "test"
-	} else {
-		mode = "production"
+	mode := proptools.StringDefault(this.properties.Mode, "production")
+	if !isModeSupported(mode) {
+		ctx.PropertyErrorf("mode", "%q is not a supported mode", mode)
 	}
+
 	ctx.Build(pctx, android.BuildParams{
 		Rule:  cppRule,
 		Input: declarations.IntermediatePath,

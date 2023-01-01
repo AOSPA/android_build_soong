@@ -482,9 +482,6 @@ type apexBundle struct {
 	nativeApisUsedByModuleFile   android.ModuleOutPath
 	nativeApisBackedByModuleFile android.ModuleOutPath
 	javaApisUsedByModuleFile     android.ModuleOutPath
-
-	// Collect the module directory for IDE info in java/jdeps.go.
-	modulePaths []string
 }
 
 // apexFileClass represents a type of file that can be included in APEX.
@@ -1893,7 +1890,7 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		installSuffix = imageCapexSuffix
 	}
 	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
-		a.compatSymlinks.Paths()...)
+		a.compatSymlinks...)
 
 	// filesInfo in mixed mode must retrieve all information about the apex's
 	// contents completely from the Starlark providers. It should never rely on
@@ -2406,8 +2403,6 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	////////////////////////////////////////////////////////////////////////////////////////////
 	// 2) traverse the dependency tree to collect apexFile structs from them.
-	// Collect the module directory for IDE info in java/jdeps.go.
-	a.modulePaths = append(a.modulePaths, ctx.ModuleDir())
 
 	// TODO(jiyong): do this using WalkPayloadDeps
 	// TODO(jiyong): make this clean!!!
@@ -2972,7 +2967,6 @@ func (a *apexBundle) IDEInfo(dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Systemserverclasspath_fragments...)
-	dpInfo.Paths = append(dpInfo.Paths, a.modulePaths...)
 }
 
 var (
@@ -3034,59 +3028,6 @@ func BaselineApexAvailable(moduleName string) []string {
 func makeApexAvailableBaseline() map[string][]string {
 	// The "Module separator"s below are employed to minimize merge conflicts.
 	m := make(map[string][]string)
-	//
-	// Module separator
-	//
-	m["com.android.appsearch"] = []string{
-		"icing-java-proto-lite",
-	}
-	//
-	// Module separator
-	//
-	m["com.android.btservices"] = []string{
-		// empty
-	}
-	//
-	// Module separator
-	//
-	m["com.android.cellbroadcast"] = []string{}
-	//
-	// Module separator
-	//
-	m["com.android.extservices"] = []string{
-		"ExtServices-core",
-		"libtextclassifier-java",
-		"textclassifier-statsd",
-		"TextClassifierNotificationLibNoManifest",
-		"TextClassifierServiceLibNoManifest",
-	}
-	//
-	// Module separator
-	//
-	m["com.android.neuralnetworks"] = []string{
-		"android.hardware.neuralnetworks@1.0",
-		"android.hardware.neuralnetworks@1.1",
-		"android.hardware.neuralnetworks@1.2",
-		"android.hardware.neuralnetworks@1.3",
-		"android.hidl.allocator@1.0",
-		"android.hidl.memory.token@1.0",
-		"android.hidl.memory@1.0",
-		"android.hidl.safe_union@1.0",
-		"libarect",
-		"libprocpartition",
-	}
-	//
-	// Module separator
-	//
-	m["com.android.media"] = []string{
-		// empty
-	}
-	//
-	// Module separator
-	//
-	m["com.android.media.swcodec"] = []string{
-		// empty
-	}
 	//
 	// Module separator
 	//
