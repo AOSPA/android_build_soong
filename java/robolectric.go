@@ -296,6 +296,7 @@ func (r *robolectricTest) AndroidMkEntries() []android.AndroidMkEntries {
 	entries.ExtraEntries = append(entries.ExtraEntries,
 		func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 			entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
+			entries.AddStrings("LOCAL_COMPATIBILITY_SUITE", "robolectric-tests")
 		})
 
 	entries.ExtraFooters = []android.AndroidMkExtraFootersFunc{
@@ -327,7 +328,7 @@ func (r *robolectricTest) AndroidMkEntries() []android.AndroidMkEntries {
 
 func (r *robolectricTest) writeTestRunner(w io.Writer, module, name string, tests []string) {
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "include $(CLEAR_VARS)")
+	fmt.Fprintln(w, "include $(CLEAR_VARS)", " # java.robolectricTest")
 	fmt.Fprintln(w, "LOCAL_MODULE :=", name)
 	fmt.Fprintln(w, "LOCAL_JAVA_LIBRARIES :=", module)
 	fmt.Fprintln(w, "LOCAL_JAVA_LIBRARIES += ", strings.Join(r.libs, " "))
