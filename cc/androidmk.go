@@ -230,47 +230,16 @@ func (library *libraryDecorator) androidMkWriteExportedFlags(entries *android.An
 	}
 }
 
-func (library *libraryDecorator) getAbiDiffsForAndroidMkDeps() []string {
-	if library.static() {
-		return nil
-	}
-	var abiDiffs []string
-	if library.sAbiDiff.Valid() {
-		abiDiffs = append(abiDiffs, library.sAbiDiff.String())
-	}
-	if library.prevSAbiDiff.Valid() {
-		abiDiffs = append(abiDiffs, library.prevSAbiDiff.String())
-	}
-	return abiDiffs
-}
-
 func (library *libraryDecorator) androidMkEntriesWriteAdditionalDependenciesForSourceAbiDiff(entries *android.AndroidMkEntries) {
-	diffs := library.getAbiDiffsForAndroidMkDeps()
-	if diffs == nil {
-		if library.sAbiOutputFile.Valid() {
-			entries.SetString("LOCAL_ADDITIONAL_DEPENDENCIES",
-				"$(LOCAL_ADDITIONAL_DEPENDENCIES) "+library.sAbiOutputFile.String())
-		}
-	} else {
-		entries.AddStrings("LOCAL_ADDITIONAL_DEPENDENCIES",
-			"$(LOCAL_ADDITIONAL_DEPENDENCIES) " + strings.Join(diffs, " "))
-		entries.AddStrings("HEADER_ABI_DIFFS",
-			"$(HEADER_ABI_DIFFS) " + strings.Join(diffs, " "))
+	if !library.static() {
+		entries.AddPaths("LOCAL_ADDITIONAL_DEPENDENCIES", library.sAbiDiff)
 	}
-
 }
 
 // TODO(ccross): remove this once apex/androidmk.go is converted to AndroidMkEntries
 func (library *libraryDecorator) androidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Writer) {
-	if library.sAbiOutputFile.Valid() {
-		fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_ADDITIONAL_DEPENDENCIES) ",
-			library.sAbiOutputFile.String())
-		if library.sAbiDiff.Valid() && !library.static() {
-			fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_ADDITIONAL_DEPENDENCIES) ",
-				strings.Join(library.getAbiDiffsForAndroidMkDeps(), " "))
-			fmt.Fprintln(w, "HEADER_ABI_DIFFS := $(HEADER_ABI_DIFFS) ",
-				strings.Join(library.getAbiDiffsForAndroidMkDeps(), " "))
-		}
+	if !library.static() {
+		fmt.Fprintln(w, "LOCAL_ADDITIONAL_DEPENDENCIES +=", strings.Join(library.sAbiDiff.Strings(), " "))
 	}
 }
 
@@ -564,8 +533,10 @@ func (c *snapshotLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entrie
 
 	entries.SubName = ""
 
-	if c.sanitizerProperties.CfiEnabled {
+	if c.isSanitizerEnabled(cfi) {
 		entries.SubName += ".cfi"
+	} else if c.isSanitizerEnabled(Hwasan) {
+		entries.SubName += ".hwasan"
 	}
 
 	entries.SubName += c.baseProperties.Androidmk_suffix

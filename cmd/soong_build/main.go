@@ -89,6 +89,7 @@ func init() {
 	flag.StringVar(&bp2buildMarker, "bp2build_marker", "", "If set, run bp2build, touch the specified marker file then exit")
 	flag.StringVar(&symlinkForestMarker, "symlink_forest_marker", "", "If set, create the bp2build symlink forest, touch the specified marker file, then exit")
 	flag.StringVar(&cmdlineArgs.OutFile, "o", "build.ninja", "the Ninja file to output")
+	flag.StringVar(&cmdlineArgs.BazelForceEnabledModules, "bazel-force-enabled-modules", "", "additional modules to build with Bazel. Comma-delimited")
 	flag.BoolVar(&cmdlineArgs.EmptyNinjaFile, "empty-ninja-file", false, "write out a 0-byte ninja file")
 	flag.BoolVar(&cmdlineArgs.BazelMode, "bazel-mode", false, "use bazel for analysis of certain modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeStaging, "bazel-mode-staging", false, "use bazel for analysis of certain near-ready modules")
@@ -113,11 +114,16 @@ func newContext(configuration android.Config) *android.Context {
 	ctx := android.NewContext(configuration)
 	ctx.SetNameInterface(newNameResolver(configuration))
 	ctx.SetAllowMissingDependencies(configuration.AllowMissingDependencies())
+	ctx.AddIncludeTags(configuration.IncludeTags()...)
 	return ctx
 }
 
 func newConfig(availableEnv map[string]string) android.Config {
 	var buildMode android.SoongBuildMode
+	var bazelForceEnabledModules []string
+	if len(cmdlineArgs.BazelForceEnabledModules) > 0 {
+		bazelForceEnabledModules = strings.Split(cmdlineArgs.BazelForceEnabledModules, ",")
+	}
 
 	if symlinkForestMarker != "" {
 		buildMode = android.SymlinkForest
@@ -141,7 +147,7 @@ func newConfig(availableEnv map[string]string) android.Config {
 		buildMode = android.AnalysisNoBazel
 	}
 
-	configuration, err := android.NewConfig(cmdlineArgs.ModuleListFile, buildMode, runGoTests, outDir, soongOutDir, availableEnv)
+	configuration, err := android.NewConfig(cmdlineArgs.ModuleListFile, buildMode, runGoTests, outDir, soongOutDir, availableEnv, bazelForceEnabledModules)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s", err)
 		os.Exit(1)
@@ -232,7 +238,12 @@ func runApiBp2build(configuration android.Config, ctx *android.Context, extraNin
 	soongInjectionFiles := bp2build.CreateSoongInjectionFiles(configuration, bp2build.CreateCodegenMetrics())
 	absoluteSoongInjectionDir := shared.JoinPath(topDir, configuration.SoongOutDir(), bazel.SoongInjectionDirName)
 	for _, file := range soongInjectionFiles {
-		writeReadOnlyFile(absoluteSoongInjectionDir, file)
+		// The API targets in api_bp2build workspace do not have any dependency on api_bp2build.
+		// But we need to create these files to prevent errors during Bazel analysis.
+		// These need to be created in Read-Write mode.
+		// This is because the subsequent step (bp2build in api domain analysis) creates them in Read-Write mode
+		// to allow users to edit/experiment in the synthetic workspace.
+		writeReadWriteFile(absoluteSoongInjectionDir, file)
 	}
 
 	workspace := shared.JoinPath(configuration.SoongOutDir(), "api_bp2build")
@@ -276,6 +287,7 @@ func apiBuildFileExcludes() []string {
 			src != "BUILD" &&
 			src != "BUILD.bazel" &&
 			!strings.HasPrefix(src, "build/bazel") &&
+			!strings.HasPrefix(src, "external/bazel-skylib") &&
 			!strings.HasPrefix(src, "prebuilts/clang") {
 			ret = append(ret, src)
 		}
@@ -578,6 +590,17 @@ func getTemporaryExcludes() []string {
 	// FIXME: 'frameworks/compile/slang' has a filegroup error due to an escaping issue
 	excludes = append(excludes, "frameworks/compile/slang")
 
+	// FIXME(b/260809113): 'prebuilts/clang/host/linux-x86/clang-dev' is a tool-generated symlink directory that contains a BUILD file.
+	// The bazel files finder code doesn't traverse into symlink dirs, and hence is not aware of this BUILD file and exclude it accordingly
+	// during symlink forest generation when checking against keepExistingBuildFiles allowlist.
+	//
+	// This is necessary because globs in //prebuilts/clang/host/linux-x86/BUILD
+	// currently assume no subpackages (keepExistingBuildFile is not recursive for that directory).
+	//
+	// This is a bandaid until we the symlink forest logic can intelligently exclude BUILD files found in source symlink dirs according
+	// to the keepExistingBuildFile allowlist.
+	excludes = append(excludes, "prebuilts/clang/host/linux-x86/clang-dev")
+
 	return excludes
 }
 
@@ -617,40 +640,41 @@ func bazelArtifacts() []string {
 // symlink tree creation binary. Then the latter would not need to depend on
 // the very heavy-weight machinery of soong_build .
 func runSymlinkForestCreation(configuration android.Config, ctx *android.Context, extraNinjaDeps []string, metricsDir string) string {
-	var ninjaDeps []string
-	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
-
-	generatedRoot := shared.JoinPath(configuration.SoongOutDir(), "bp2build")
-	workspaceRoot := shared.JoinPath(configuration.SoongOutDir(), "workspace")
-
-	excludes := bazelArtifacts()
-
-	if outDir[0] != '/' {
-		excludes = append(excludes, outDir)
-	}
-
-	existingBazelRelatedFiles, err := getExistingBazelRelatedFiles(topDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error determining existing Bazel-related files: %s\n", err)
-		os.Exit(1)
-	}
-
-	pathsToIgnoredBuildFiles := getPathsToIgnoredBuildFiles(configuration.Bp2buildPackageConfig, topDir, existingBazelRelatedFiles, configuration.IsEnvTrue("BP2BUILD_VERBOSE"))
-	excludes = append(excludes, pathsToIgnoredBuildFiles...)
-	excludes = append(excludes, getTemporaryExcludes()...)
-
-	// PlantSymlinkForest() returns all the directories that were readdir()'ed.
-	// Such a directory SHOULD be added to `ninjaDeps` so that a child directory
-	// or file created/deleted under it would trigger an update of the symlink
-	// forest.
 	ctx.EventHandler.Do("symlink_forest", func() {
-		symlinkForestDeps := bp2build.PlantSymlinkForest(
-			configuration.IsEnvTrue("BP2BUILD_VERBOSE"), topDir, workspaceRoot, generatedRoot, excludes)
-		ninjaDeps = append(ninjaDeps, symlinkForestDeps...)
-	})
+		var ninjaDeps []string
+		ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
 
-	writeDepFile(symlinkForestMarker, ctx.EventHandler, ninjaDeps)
-	touch(shared.JoinPath(topDir, symlinkForestMarker))
+		generatedRoot := shared.JoinPath(configuration.SoongOutDir(), "bp2build")
+		workspaceRoot := shared.JoinPath(configuration.SoongOutDir(), "workspace")
+
+		excludes := bazelArtifacts()
+
+		if outDir[0] != '/' {
+			excludes = append(excludes, outDir)
+		}
+
+		existingBazelRelatedFiles, err := getExistingBazelRelatedFiles(topDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error determining existing Bazel-related files: %s\n", err)
+			os.Exit(1)
+		}
+
+		pathsToIgnoredBuildFiles := getPathsToIgnoredBuildFiles(configuration.Bp2buildPackageConfig, topDir, existingBazelRelatedFiles, configuration.IsEnvTrue("BP2BUILD_VERBOSE"))
+		excludes = append(excludes, pathsToIgnoredBuildFiles...)
+		excludes = append(excludes, getTemporaryExcludes()...)
+
+		// PlantSymlinkForest() returns all the directories that were readdir()'ed.
+		// Such a directory SHOULD be added to `ninjaDeps` so that a child directory
+		// or file created/deleted under it would trigger an update of the symlink forest.
+		ctx.EventHandler.Do("plant", func() {
+			symlinkForestDeps := bp2build.PlantSymlinkForest(
+				configuration.IsEnvTrue("BP2BUILD_VERBOSE"), topDir, workspaceRoot, generatedRoot, excludes)
+			ninjaDeps = append(ninjaDeps, symlinkForestDeps...)
+		})
+
+		writeDepFile(symlinkForestMarker, ctx.EventHandler, ninjaDeps)
+		touch(shared.JoinPath(topDir, symlinkForestMarker))
+	})
 	codegenMetrics := bp2build.ReadCodegenMetrics(metricsDir)
 	if codegenMetrics == nil {
 		m := bp2build.CreateCodegenMetrics()
