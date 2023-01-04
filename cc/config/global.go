@@ -294,8 +294,8 @@ var (
 	}
 
 	llvmNextExtraCommonGlobalCflags = []string{
-		// New warnings to be fixed after clang-r475365
-		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
+		// Do not report warnings when testing with the top of trunk LLVM.
+		"-Wno-error",
 	}
 
 	IllegalFlags = []string{
@@ -344,16 +344,7 @@ func init() {
 	exportedVars.ExportStringListStaticVariable("HostGlobalLldflags", hostGlobalLldflags)
 
 	// Export the static default CommonGlobalCflags to Bazel.
-	// TODO(187086342): handle cflags that are set in VariableFuncs.
-	bazelCommonGlobalCflags := append(
-		commonGlobalCflags,
-		[]string{
-			// Default to zero initialization.
-			"-ftrivial-auto-var-init=zero",
-			"-enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang",
-			"-Wno-unused-command-line-argument",
-		}...)
-	exportedVars.ExportStringList("CommonGlobalCflags", bazelCommonGlobalCflags)
+	exportedVars.ExportStringList("CommonGlobalCflags", commonGlobalCflags)
 
 	pctx.VariableFunc("CommonGlobalCflags", func(ctx android.PackageVarContext) string {
 		flags := commonGlobalCflags
