@@ -259,3 +259,5 @@ com.qualcomm.wfd
 com.qualcomm.wfd.service
 org.codeaurora.internal
 qcom.fmradio
+
+com.sysaac.haptic.*
