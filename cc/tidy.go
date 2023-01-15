@@ -70,8 +70,14 @@ const NoWarningsAsErrorsInTidyFlags = true
 
 // keep this up to date with https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/cc/clang_tidy.bzl
 func (tidy *tidyFeature) flags(ctx ModuleContext, flags Flags) Flags {
-	CheckBadTidyFlags(ctx, "tidy_flags", tidy.Properties.Tidy_flags)
-	CheckBadTidyChecks(ctx, "tidy_checks", tidy.Properties.Tidy_checks)
+	// If not explicitly disabled, set flags.Tidy to generate .tidy rules.
+	// Note that libraries and binaries will depend on .tidy files ONLY if
+	// the global WITH_TIDY or module 'tidy' property is true.
+	flags.Tidy = false
+	if (flags.Tidy) {
+		CheckBadTidyFlags(ctx, "tidy_flags", tidy.Properties.Tidy_flags)
+		CheckBadTidyChecks(ctx, "tidy_checks", tidy.Properties.Tidy_checks)
+	}
 
 	// Check if tidy is explicitly disabled for this module
 	if tidy.Properties.Tidy != nil && !*tidy.Properties.Tidy {
@@ -86,10 +92,6 @@ func (tidy *tidyFeature) flags(ctx ModuleContext, flags Flags) Flags {
 			ctx.ModuleDir()) {
 		return flags
 	}
-	// If not explicitly disabled, set flags.Tidy to generate .tidy rules.
-	// Note that libraries and binaries will depend on .tidy files ONLY if
-	// the global WITH_TIDY or module 'tidy' property is true.
-	flags.Tidy = true
 
 	// If explicitly enabled, by global WITH_TIDY or local tidy:true property,
 	// set flags.NeedTidyFiles to make this module depend on .tidy files.
