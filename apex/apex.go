@@ -455,9 +455,6 @@ type apexBundle struct {
 	// Processed file_contexts files
 	fileContexts android.WritablePath
 
-	// Path to notice file in html.gz format.
-	htmlGzNotice android.WritablePath
-
 	// The built APEX file. This is the main product.
 	// Could be .apex or .capex
 	outputFile android.WritablePath
@@ -1903,9 +1900,6 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	apexType := a.properties.ApexType
 	switch apexType {
 	case imageApex:
-
-		// TODO(b/190817312): Generate the notice file from the apex rule.
-		a.htmlGzNotice = android.PathForBazelOut(ctx, "NOTICE.html.gz")
 		a.bundleModuleFile = android.PathForBazelOut(ctx, outputs.BundleFile)
 		a.nativeApisUsedByModuleFile = android.ModuleOutPath(android.PathForBazelOut(ctx, outputs.SymbolsUsedByApex))
 		a.nativeApisBackedByModuleFile = android.ModuleOutPath(android.PathForBazelOut(ctx, outputs.BackingLibs))
@@ -2307,7 +2301,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				//
 				// Always include if we are a host-apex however since those won't have any
 				// system libraries.
-				if !am.DirectlyInAnyApex() {
+				if ch.IsStubsImplementationRequired() && !am.DirectlyInAnyApex() {
 					// we need a module name for Make
 					name := ch.ImplementationModuleNameForMake(ctx) + ch.Properties.SubName
 					if !android.InList(name, a.requiredDeps) {
@@ -2508,7 +2502,8 @@ func apexBootclasspathFragmentFiles(ctx android.ModuleContext, module blueprint.
 		filesToAdd = append(filesToAdd, *af)
 	}
 
-	if pathInApex := bootclasspathFragmentInfo.ProfileInstallPathInApex(); pathInApex != "" {
+	pathInApex := bootclasspathFragmentInfo.ProfileInstallPathInApex()
+	if pathInApex != "" && !java.SkipDexpreoptBootJars(ctx) {
 		pathOnHost := bootclasspathFragmentInfo.ProfilePathOnHost()
 		tempPath := android.PathForModuleOut(ctx, "boot_image_profile", pathInApex)
 

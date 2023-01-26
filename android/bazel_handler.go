@@ -81,7 +81,7 @@ type cqueryRequest interface {
 	// all request-relevant information about a target and returns a string containing
 	// this information.
 	// The function should have the following properties:
-	//   - `target` is the only parameter to this function (a configured target).
+	//   - The arguments are `target` (a configured target) and `id_string` (the label + configuration).
 	//   - The return value must be a string.
 	//   - The function body should not be indented outside of its own scope.
 	StarlarkFunctionBody() string
@@ -150,8 +150,9 @@ type BazelContext interface {
 	// ** end Cquery Results Retrieval Functions
 
 	// Issues commands to Bazel to receive results for all cquery requests
-	// queued in the BazelContext.
-	InvokeBazel(config Config) error
+	// queued in the BazelContext. The ctx argument is optional and is only
+	// used for performance data collection
+	InvokeBazel(config Config, ctx *Context) error
 
 	// Returns true if Bazel handling is enabled for the module with the given name.
 	// Note that this only implies "bazel mixed build" allowlisting. The caller
@@ -259,7 +260,7 @@ func (m MockBazelContext) GetCcUnstrippedInfo(label string, _ configKey) (cquery
 	return result, nil
 }
 
-func (m MockBazelContext) InvokeBazel(_ Config) error {
+func (m MockBazelContext) InvokeBazel(_ Config, ctx *Context) error {
 	panic("unimplemented")
 }
 
@@ -355,7 +356,7 @@ func (n noopBazelContext) GetCcUnstrippedInfo(_ string, _ configKey) (cquery.CcU
 	panic("implement me")
 }
 
-func (n noopBazelContext) InvokeBazel(_ Config) error {
+func (n noopBazelContext) InvokeBazel(_ Config, ctx *Context) error {
 	panic("unimplemented")
 }
 
@@ -742,12 +743,12 @@ func (context *bazelContext) cqueryStarlarkFileContents() []byte {
 }
 `
 	functionDefFormatString := `
-def %s(target):
+def %s(target, id_string):
 %s
 `
 	mainSwitchSectionFormatString := `
   if id_string in %s:
-    return id_string + ">>" + %s(target)
+    return id_string + ">>" + %s(target, id_string)
 `
 
 	for requestType := range requestTypeToCqueryIdEntries {
@@ -865,51 +866,78 @@ func (p *bazelPaths) outDir() string {
 	return filepath.Dir(p.soongOutDir)
 }
 
+const buildrootLabel = "@soong_injection//mixed_builds:buildroot"
+
+var (
+	cqueryCmd = bazelCommand{"cquery", fmt.Sprintf("deps(%s, 2)", buildrootLabel)}
+	aqueryCmd = bazelCommand{"aquery", fmt.Sprintf("deps(%s)", buildrootLabel)}
+	buildCmd  = bazelCommand{"build", "@soong_injection//mixed_builds:phonyroot"}
+)
+
 // Issues commands to Bazel to receive results for all cquery requests
 // queued in the BazelContext.
-func (context *bazelContext) InvokeBazel(config Config) error {
+func (context *bazelContext) InvokeBazel(config Config, ctx *Context) error {
+	if ctx != nil {
+		ctx.EventHandler.Begin("bazel")
+		defer ctx.EventHandler.End("bazel")
+	}
+
+	if metricsDir := context.paths.BazelMetricsDir(); metricsDir != "" {
+		if err := os.MkdirAll(metricsDir, 0777); err != nil {
+			return err
+		}
+	}
 	context.results = make(map[cqueryKey]string)
+	if err := context.runCquery(ctx); err != nil {
+		return err
+	}
+	if err := context.runAquery(config, ctx); err != nil {
+		return err
+	}
+	if err := context.generateBazelSymlinks(ctx); err != nil {
+		return err
+	}
 
-	var err error
+	// Clear requests.
+	context.requests = map[cqueryKey]bool{}
+	return nil
+}
 
+func (context *bazelContext) runCquery(ctx *Context) error {
+	if ctx != nil {
+		ctx.EventHandler.Begin("cquery")
+		defer ctx.EventHandler.End("cquery")
+	}
 	soongInjectionPath := absolutePath(context.paths.injectedFilesDir())
 	mixedBuildsPath := filepath.Join(soongInjectionPath, "mixed_builds")
 	if _, err := os.Stat(mixedBuildsPath); os.IsNotExist(err) {
 		err = os.MkdirAll(mixedBuildsPath, 0777)
-	}
-	if err != nil {
-		return err
-	}
-	if metricsDir := context.paths.BazelMetricsDir(); metricsDir != "" {
-		err = os.MkdirAll(metricsDir, 0777)
 		if err != nil {
 			return err
 		}
 	}
-	if err = ioutil.WriteFile(filepath.Join(soongInjectionPath, "WORKSPACE.bazel"), []byte{}, 0666); err != nil {
+	if err := ioutil.WriteFile(filepath.Join(soongInjectionPath, "WORKSPACE.bazel"), []byte{}, 0666); err != nil {
 		return err
 	}
-	if err = ioutil.WriteFile(filepath.Join(mixedBuildsPath, "main.bzl"), context.mainBzlFileContents(), 0666); err != nil {
+	if err := ioutil.WriteFile(filepath.Join(mixedBuildsPath, "main.bzl"), context.mainBzlFileContents(), 0666); err != nil {
 		return err
 	}
-	if err = ioutil.WriteFile(filepath.Join(mixedBuildsPath, "BUILD.bazel"), context.mainBuildFileContents(), 0666); err != nil {
+	if err := ioutil.WriteFile(filepath.Join(mixedBuildsPath, "BUILD.bazel"), context.mainBuildFileContents(), 0666); err != nil {
 		return err
 	}
 	cqueryFileRelpath := filepath.Join(context.paths.injectedFilesDir(), "buildroot.cquery")
-	if err = ioutil.WriteFile(absolutePath(cqueryFileRelpath), context.cqueryStarlarkFileContents(), 0666); err != nil {
+	if err := ioutil.WriteFile(absolutePath(cqueryFileRelpath), context.cqueryStarlarkFileContents(), 0666); err != nil {
 		return err
 	}
 
-	const buildrootLabel = "@soong_injection//mixed_builds:buildroot"
-	cqueryCmd := bazelCommand{"cquery", fmt.Sprintf("deps(%s, 2)", buildrootLabel)}
 	cqueryCommandWithFlag := context.createBazelCommand(context.paths, bazel.CqueryBuildRootRunName, cqueryCmd,
 		"--output=starlark", "--starlark:file="+absolutePath(cqueryFileRelpath))
-	cqueryOutput, cqueryErr, err := context.issueBazelCommand(cqueryCommandWithFlag)
-	if err != nil {
-		return err
+	cqueryOutput, cqueryErrorMessage, cqueryErr := context.issueBazelCommand(cqueryCommandWithFlag)
+	if cqueryErr != nil {
+		return cqueryErr
 	}
 	cqueryCommandPrint := fmt.Sprintf("cquery command line:\n  %s \n\n\n", printableCqueryCommand(cqueryCommandWithFlag))
-	if err = ioutil.WriteFile(filepath.Join(soongInjectionPath, "cquery.out"), []byte(cqueryCommandPrint+cqueryOutput), 0666); err != nil {
+	if err := ioutil.WriteFile(filepath.Join(soongInjectionPath, "cquery.out"), []byte(cqueryCommandPrint+cqueryOutput), 0666); err != nil {
 		return err
 	}
 	cqueryResults := map[string]string{}
@@ -924,10 +952,17 @@ func (context *bazelContext) InvokeBazel(config Config) error {
 			context.results[val] = cqueryResult
 		} else {
 			return fmt.Errorf("missing result for bazel target %s. query output: [%s], cquery err: [%s]",
-				getCqueryId(val), cqueryOutput, cqueryErr)
+				getCqueryId(val), cqueryOutput, cqueryErrorMessage)
 		}
 	}
+	return nil
+}
 
+func (context *bazelContext) runAquery(config Config, ctx *Context) error {
+	if ctx != nil {
+		ctx.EventHandler.Begin("aquery")
+		defer ctx.EventHandler.End("aquery")
+	}
 	// Issue an aquery command to retrieve action information about the bazel build tree.
 	//
 	// Use jsonproto instead of proto; actual proto parsing would require a dependency on Bazel's
@@ -937,6 +972,12 @@ func (context *bazelContext) InvokeBazel(config Config) error {
 		extraFlags = append(extraFlags, "--collect_code_coverage")
 		paths := make([]string, 0, 2)
 		if p := config.productVariables.NativeCoveragePaths; len(p) > 0 {
+			for i, _ := range p {
+				// TODO(b/259404593) convert path wildcard to regex values
+				if p[i] == "*" {
+					p[i] = ".*"
+				}
+			}
 			paths = append(paths, JoinWithPrefixAndSeparator(p, "+", ","))
 		}
 		if p := config.productVariables.NativeCoverageExcludePaths; len(p) > 0 {
@@ -946,26 +987,25 @@ func (context *bazelContext) InvokeBazel(config Config) error {
 			extraFlags = append(extraFlags, "--instrumentation_filter="+strings.Join(paths, ","))
 		}
 	}
-	aqueryCmd := bazelCommand{"aquery", fmt.Sprintf("deps(%s)", buildrootLabel)}
-	if aqueryOutput, _, err := context.issueBazelCommand(context.createBazelCommand(context.paths, bazel.AqueryBuildRootRunName, aqueryCmd,
-		extraFlags...)); err == nil {
-		context.buildStatements, context.depsets, err = bazel.AqueryBuildStatements([]byte(aqueryOutput))
-	}
+	aqueryOutput, _, err := context.issueBazelCommand(context.createBazelCommand(context.paths, bazel.AqueryBuildRootRunName, aqueryCmd,
+		extraFlags...))
 	if err != nil {
 		return err
 	}
+	context.buildStatements, context.depsets, err = bazel.AqueryBuildStatements([]byte(aqueryOutput))
+	return err
+}
 
+func (context *bazelContext) generateBazelSymlinks(ctx *Context) error {
+	if ctx != nil {
+		ctx.EventHandler.Begin("symlinks")
+		defer ctx.EventHandler.End("symlinks")
+	}
 	// Issue a build command of the phony root to generate symlink forests for dependencies of the
 	// Bazel build. This is necessary because aquery invocations do not generate this symlink forest,
 	// but some of symlinks may be required to resolve source dependencies of the build.
-	buildCmd := bazelCommand{"build", "@soong_injection//mixed_builds:phonyroot"}
-	if _, _, err = context.issueBazelCommand(context.createBazelCommand(context.paths, bazel.BazelBuildPhonyRootRunName, buildCmd)); err != nil {
-		return err
-	}
-
-	// Clear requests.
-	context.requests = map[cqueryKey]bool{}
-	return nil
+	_, _, err := context.issueBazelCommand(context.createBazelCommand(context.paths, bazel.BazelBuildPhonyRootRunName, buildCmd))
+	return err
 }
 
 func (context *bazelContext) BuildStatementsToRegister() []bazel.BuildStatement {
@@ -1010,18 +1050,26 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 
 	for _, depset := range ctx.Config().BazelContext.AqueryDepsets() {
 		var outputs []Path
+		var orderOnlies []Path
 		for _, depsetDepHash := range depset.TransitiveDepSetHashes {
 			otherDepsetName := bazelDepsetName(depsetDepHash)
 			outputs = append(outputs, PathForPhony(ctx, otherDepsetName))
 		}
 		for _, artifactPath := range depset.DirectArtifacts {
-			outputs = append(outputs, PathForBazelOut(ctx, artifactPath))
+			pathInBazelOut := PathForBazelOut(ctx, artifactPath)
+			if artifactPath == "bazel-out/volatile-status.txt" {
+				// See https://bazel.build/docs/user-manual#workspace-status
+				orderOnlies = append(orderOnlies, pathInBazelOut)
+			} else {
+				outputs = append(outputs, pathInBazelOut)
+			}
 		}
 		thisDepsetName := bazelDepsetName(depset.ContentHash)
 		ctx.Build(pctx, BuildParams{
 			Rule:      blueprint.Phony,
 			Outputs:   []WritablePath{PathForPhony(ctx, thisDepsetName)},
 			Implicits: outputs,
+			OrderOnly: orderOnlies,
 		})
 	}
 

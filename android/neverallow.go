@@ -58,6 +58,7 @@ func init() {
 	AddNeverAllowRules(createMakefileGoalRules()...)
 	AddNeverAllowRules(createInitFirstStageRules()...)
 	AddNeverAllowRules(createBp2BuildRule())
+	AddNeverAllowRules(createCcStubsRule())
 }
 
 // Add a NeverAllow rule to the set of rules to apply.
@@ -73,8 +74,8 @@ func createBp2BuildRule() Rule {
 			"supported for custom conversion, use allowlists.go instead.")
 }
 
-func createIncludeDirsRules() []Rule {
-	notInIncludeDir := []string{
+var (
+	neverallowNotInIncludeDir = []string{
 		"art",
 		"art/libnativebridge",
 		"art/libnativeloader",
@@ -90,7 +91,7 @@ func createIncludeDirsRules() []Rule {
 		"external/vixl",
 		"external/wycheproof",
 	}
-	noUseIncludeDir := []string{
+	neverallowNoUseIncludeDir = []string{
 		"frameworks/av/apex",
 		"frameworks/av/tools",
 		"frameworks/native/cmds",
@@ -102,10 +103,12 @@ func createIncludeDirsRules() []Rule {
 		"system/libfmq",
 		"system/libvintf",
 	}
+)
 
-	rules := make([]Rule, 0, len(notInIncludeDir)+len(noUseIncludeDir))
+func createIncludeDirsRules() []Rule {
+	rules := make([]Rule, 0, len(neverallowNotInIncludeDir)+len(neverallowNoUseIncludeDir))
 
-	for _, path := range notInIncludeDir {
+	for _, path := range neverallowNotInIncludeDir {
 		rule :=
 			NeverAllow().
 				WithMatcher("include_dirs", StartsWith(path+"/")).
@@ -115,7 +118,7 @@ func createIncludeDirsRules() []Rule {
 		rules = append(rules, rule)
 	}
 
-	for _, path := range noUseIncludeDir {
+	for _, path := range neverallowNoUseIncludeDir {
 		rule := NeverAllow().In(path+"/").WithMatcher("include_dirs", isSetMatcherInstance).
 			Because("include_dirs is deprecated, all usages of them in '" + path + "' have been migrated" +
 				" to use alternate mechanisms and so can no longer be used.")
@@ -210,6 +213,17 @@ func createCcSdkVariantRules() []Rule {
 			WithMatcher("platform.shared_libs", isSetMatcherInstance).
 			Because("platform variant properties can only be used in allowed projects"),
 	}
+}
+
+func createCcStubsRule() Rule {
+	ccStubsImplementationInstallableProjectsAllowedList := []string{
+		"packages/modules/Virtualization/vm_payload",
+	}
+
+	return NeverAllow().
+		NotIn(ccStubsImplementationInstallableProjectsAllowedList...).
+		WithMatcher("stubs.implementation_installable", isSetMatcherInstance).
+		Because("implementation_installable can only be used in allowed projects.")
 }
 
 func createUncompressDexRules() []Rule {

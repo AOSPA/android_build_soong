@@ -71,6 +71,12 @@ type LibraryProperties struct {
 		// List versions to generate stubs libs for. The version name "current" is always
 		// implicitly added.
 		Versions []string
+
+		// Whether to not require the implementation of the library to be installed if a
+		// client of the stubs is installed. Defaults to true; set to false if the
+		// implementation is made available by some other means, e.g. in a Microdroid
+		// virtual machine.
+		Implementation_installable *bool
 	}
 
 	// set the name of the output
@@ -1353,6 +1359,7 @@ type versionedInterface interface {
 	buildStubs() bool
 	setBuildStubs(isLatest bool)
 	hasStubsVariants() bool
+	isStubsImplementationRequired() bool
 	setStubsVersion(string)
 	stubsVersion() string
 
@@ -1889,25 +1896,21 @@ func prevDumpRefVersion(ctx ModuleContext) int {
 	}
 }
 
+func currRefAbiDumpVersion(ctx ModuleContext, isVndk bool) string {
+	if isVndk {
+		// Each version of VNDK is independent, so follow the VNDK version which is the codename or PLATFORM_SDK_VERSION.
+		return ctx.Module().(*Module).VndkVersion()
+	} else if ctx.Config().PlatformSdkFinal() {
+		// After sdk finalization, the ABI of the latest API level must be consistent with the source code,
+		// so choose PLATFORM_SDK_VERSION as the current version.
+		return ctx.Config().PlatformSdkVersion().String()
+	} else {
+		return "current"
+	}
+}
+
 func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objects, fileName string, soFile android.Path) {
 	if library.sabi.shouldCreateSourceAbiDump() {
-		var version string
-		var prevVersion int
-
-		if ctx.useVndk() {
-			// For modules linking against vndk, follow its vndk version
-			version = ctx.Module().(*Module).VndkVersion()
-		} else {
-			// After sdk finalizatoin, the ABI of the latest API level must be consistent with the source code
-			// so the chosen reference dump is the PLATFORM_SDK_VERSION.
-			if ctx.Config().PlatformSdkFinal() {
-				version = ctx.Config().PlatformSdkVersion().String()
-			} else {
-				version = "current"
-			}
-			prevVersion = prevDumpRefVersion(ctx)
-		}
-
 		exportIncludeDirs := library.flagExporter.exportedIncludes(ctx)
 		var SourceAbiFlags []string
 		for _, dir := range exportIncludeDirs.Strings() {
@@ -1924,10 +1927,12 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 
 		addLsdumpPath(classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
 
+		isVndk := ctx.useVndk() && ctx.isVndk()
 		isNdk := ctx.isNdk(ctx.Config())
 		isLlndk := ctx.isImplementationForLLNDKPublic()
 		// If NDK or PLATFORM library, check against previous version ABI.
-		if !ctx.useVndk() {
+		if !isVndk {
+			prevVersion := prevDumpRefVersion(ctx)
 			prevRefAbiDumpFile := getRefAbiDumpFile(ctx, strconv.Itoa(prevVersion), fileName)
 			if prevRefAbiDumpFile != nil {
 				library.prevSAbiDiff = sourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
@@ -1938,7 +1943,8 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 			}
 		}
 
-		refAbiDumpFile := getRefAbiDumpFile(ctx, version, fileName)
+		currVersion := currRefAbiDumpVersion(ctx, isVndk)
+		refAbiDumpFile := getRefAbiDumpFile(ctx, currVersion, fileName)
 		if refAbiDumpFile != nil && !library.isQiifaLibrary {
 			library.sAbiDiff = sourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
 				refAbiDumpFile, fileName,
@@ -2319,6 +2325,10 @@ func (library *libraryDecorator) hasStubsVariants() bool {
 	// the stub for the future API level is created.
 	return library.Properties.Stubs.Symbol_file != nil ||
 		len(library.Properties.Stubs.Versions) > 0
+}
+
+func (library *libraryDecorator) isStubsImplementationRequired() bool {
+	return BoolDefault(library.Properties.Stubs.Implementation_installable, true)
 }
 
 func (library *libraryDecorator) stubsVersions(ctx android.BaseMutatorContext) []string {

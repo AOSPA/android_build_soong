@@ -593,7 +593,7 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		// Set a certificate to avoid panics later when accessing it.
 		mainCertificate = Certificate{
 			Key: android.PathForModuleOut(ctx, "missing.pk8"),
-			Pem: android.PathForModuleOut(ctx, "missing.pem"),
+			Pem: android.PathForModuleOut(ctx, "missing.x509.pem"),
 		}
 	}
 
@@ -1547,7 +1547,8 @@ type bazelAndroidAppAttributes struct {
 
 // ConvertWithBp2build is used to convert android_app to Bazel.
 func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	commonAttrs, depLabels := a.convertLibraryAttrsBp2Build(ctx)
+	commonAttrs, bp2BuildInfo := a.convertLibraryAttrsBp2Build(ctx)
+	depLabels := bp2BuildInfo.DepLabels
 
 	deps := depLabels.Deps
 	deps.Append(depLabels.StaticDeps)
