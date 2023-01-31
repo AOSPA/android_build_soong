@@ -22,6 +22,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -374,7 +375,7 @@ func (m noopBazelContext) AqueryDepsets() []bazel.AqueryDepset {
 	return []bazel.AqueryDepset{}
 }
 
-func NewBazelContext(c *config) (BazelContext, error) {
+func GetBazelEnabledAndDisabledModules(buildMode SoongBuildMode, forceEnabled map[string]struct{}) (map[string]bool, map[string]bool) {
 	disabledModules := map[string]bool{}
 	enabledModules := map[string]bool{}
 	addToStringSet := func(set map[string]bool, items []string) {
@@ -383,17 +384,17 @@ func NewBazelContext(c *config) (BazelContext, error) {
 		}
 	}
 
-	switch c.BuildMode {
+	switch buildMode {
 	case BazelProdMode:
 		addToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
-		for enabledAdHocModule := range c.BazelModulesForceEnabledByFlag() {
+		for enabledAdHocModule := range forceEnabled {
 			enabledModules[enabledAdHocModule] = true
 		}
 	case BazelStagingMode:
 		// Staging mode includes all prod modules plus all staging modules.
 		addToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
 		addToStringSet(enabledModules, allowlists.StagingMixedBuildsEnabledList)
-		for enabledAdHocModule := range c.BazelModulesForceEnabledByFlag() {
+		for enabledAdHocModule := range forceEnabled {
 			enabledModules[enabledAdHocModule] = true
 		}
 	case BazelDevMode:
@@ -405,8 +406,29 @@ func NewBazelContext(c *config) (BazelContext, error) {
 		}
 		addToStringSet(disabledModules, allowlists.MixedBuildsDisabledList)
 	default:
+		panic("Expected BazelProdMode, BazelStagingMode, or BazelDevMode")
+	}
+	return enabledModules, disabledModules
+}
+
+func GetBazelEnabledModules(buildMode SoongBuildMode) []string {
+	enabledModules, disabledModules := GetBazelEnabledAndDisabledModules(buildMode, nil)
+	enabledList := make([]string, 0, len(enabledModules))
+	for module := range enabledModules {
+		if !disabledModules[module] {
+			enabledList = append(enabledList, module)
+		}
+	}
+	sort.Strings(enabledList)
+	return enabledList
+}
+
+func NewBazelContext(c *config) (BazelContext, error) {
+	if c.BuildMode != BazelProdMode && c.BuildMode != BazelStagingMode && c.BuildMode != BazelDevMode {
 		return noopBazelContext{}, nil
 	}
+
+	enabledModules, disabledModules := GetBazelEnabledAndDisabledModules(c.BuildMode, c.BazelModulesForceEnabledByFlag())
 
 	paths := bazelPaths{
 		soongOutDir: c.soongOutDir,
@@ -1103,7 +1125,7 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 }
 
 // Register bazel-owned build statements (obtained from the aquery invocation).
-func createCommand(cmd *RuleBuilderCommand, buildStatement bazel.BuildStatement, executionRoot string, bazelOutDir string, ctx PathContext) {
+func createCommand(cmd *RuleBuilderCommand, buildStatement bazel.BuildStatement, executionRoot string, bazelOutDir string, ctx BuilderContext) {
 	// executionRoot is the action cwd.
 	cmd.Text(fmt.Sprintf("cd '%s' &&", executionRoot))
 
@@ -1122,7 +1144,14 @@ func createCommand(cmd *RuleBuilderCommand, buildStatement bazel.BuildStatement,
 	}
 
 	// The actual Bazel action.
-	cmd.Text(buildStatement.Command)
+	if len(buildStatement.Command) > 16*1024 {
+		commandFile := PathForBazelOut(ctx, buildStatement.OutputPaths[0]+".sh")
+		WriteFileRule(ctx, commandFile, buildStatement.Command)
+
+		cmd.Text("bash").Text(buildStatement.OutputPaths[0] + ".sh").Implicit(commandFile)
+	} else {
+		cmd.Text(buildStatement.Command)
+	}
 
 	for _, outputPath := range buildStatement.OutputPaths {
 		cmd.ImplicitOutput(PathForBazelOut(ctx, outputPath))

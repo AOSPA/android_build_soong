@@ -3619,7 +3619,10 @@ cc_library {
 	}{
 		{
 			description: "cc_library with afdo enabled and existing profile",
-			filesystem:  map[string]string{"vendor/google_data/pgo_profile/sampling/foo.afdo": ""},
+			filesystem: map[string]string{
+				"vendor/google_data/pgo_profile/sampling/BUILD":    "",
+				"vendor/google_data/pgo_profile/sampling/foo.afdo": "",
+			},
 			expectedBazelTargets: []string{
 				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
 				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
@@ -3629,7 +3632,10 @@ cc_library {
 		},
 		{
 			description: "cc_library with afdo enabled and existing profile in AOSP",
-			filesystem:  map[string]string{"toolchain/pgo-profiles/sampling/foo.afdo": ""},
+			filesystem: map[string]string{
+				"toolchain/pgo-profiles/sampling/BUILD":    "",
+				"toolchain/pgo-profiles/sampling/foo.afdo": "",
+			},
 			expectedBazelTargets: []string{
 				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
 				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
@@ -3639,7 +3645,10 @@ cc_library {
 		},
 		{
 			description: "cc_library with afdo enabled but profile filename doesn't match with module name",
-			filesystem:  map[string]string{"toolchain/pgo-profiles/sampling/bar.afdo": ""},
+			filesystem: map[string]string{
+				"toolchain/pgo-profiles/sampling/BUILD":    "",
+				"toolchain/pgo-profiles/sampling/bar.afdo": "",
+			},
 			expectedBazelTargets: []string{
 				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
 				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{}),
@@ -3647,6 +3656,16 @@ cc_library {
 		},
 		{
 			description: "cc_library with afdo enabled but profile doesn't exist",
+			expectedBazelTargets: []string{
+				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
+				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{}),
+			},
+		},
+		{
+			description: "cc_library with afdo enabled and existing profile but BUILD file doesn't exist",
+			filesystem: map[string]string{
+				"vendor/google_data/pgo_profile/sampling/foo.afdo": "",
+			},
 			expectedBazelTargets: []string{
 				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
 				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{}),
@@ -3754,114 +3773,4 @@ cc_library {
 		}),
 	},
 	)
-}
-
-func TestCcLibraryWithIntegerOverflowProperty(t *testing.T) {
-	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_library has correct features when integer_overflow property is provided",
-		ModuleTypeUnderTest:        "cc_library",
-		ModuleTypeUnderTestFactory: cc.LibraryFactory,
-		Blueprint: `
-cc_library {
-		name: "foo",
-		sanitize: {
-				integer_overflow: true,
-		},
-}
-`,
-		ExpectedBazelTargets: []string{
-			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
-				"features":       `["ubsan_integer_overflow"]`,
-				"local_includes": `["."]`,
-			}),
-			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
-				"features":       `["ubsan_integer_overflow"]`,
-				"local_includes": `["."]`,
-			}),
-		},
-	})
-}
-
-func TestCcLibraryWithMiscUndefinedProperty(t *testing.T) {
-	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_library has correct features when misc_undefined property is provided",
-		ModuleTypeUnderTest:        "cc_library",
-		ModuleTypeUnderTestFactory: cc.LibraryFactory,
-		Blueprint: `
-cc_library {
-		name: "foo",
-		sanitize: {
-				misc_undefined: ["undefined", "nullability"],
-		},
-}
-`,
-		ExpectedBazelTargets: []string{
-			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
-				"features": `[
-        "ubsan_undefined",
-        "ubsan_nullability",
-    ]`,
-				"local_includes": `["."]`,
-			}),
-			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
-				"features": `[
-        "ubsan_undefined",
-        "ubsan_nullability",
-    ]`,
-				"local_includes": `["."]`,
-			}),
-		},
-	})
-}
-
-func TestCcLibraryWithUBSanPropertiesArchSpecific(t *testing.T) {
-	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_library has correct feature select when UBSan props are specified in arch specific blocks",
-		ModuleTypeUnderTest:        "cc_library",
-		ModuleTypeUnderTestFactory: cc.LibraryFactory,
-		Blueprint: `
-cc_library {
-		name: "foo",
-		sanitize: {
-				misc_undefined: ["undefined", "nullability"],
-		},
-		target: {
-				android: {
-						sanitize: {
-								misc_undefined: ["alignment"],
-						},
-				},
-				linux_glibc: {
-						sanitize: {
-								integer_overflow: true,
-						},
-				},
-		},
-}
-`,
-		ExpectedBazelTargets: []string{
-			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
-				"features": `[
-        "ubsan_undefined",
-        "ubsan_nullability",
-    ] + select({
-        "//build/bazel/platforms/os:android": ["ubsan_alignment"],
-        "//build/bazel/platforms/os:linux": ["ubsan_integer_overflow"],
-        "//conditions:default": [],
-    })`,
-				"local_includes": `["."]`,
-			}),
-			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
-				"features": `[
-        "ubsan_undefined",
-        "ubsan_nullability",
-    ] + select({
-        "//build/bazel/platforms/os:android": ["ubsan_alignment"],
-        "//build/bazel/platforms/os:linux": ["ubsan_integer_overflow"],
-        "//conditions:default": [],
-    })`,
-				"local_includes": `["."]`,
-			}),
-		},
-	})
 }

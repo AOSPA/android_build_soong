@@ -8,7 +8,7 @@ source "$(dirname "$0")/lib.sh"
 
 readonly GENERATED_BUILD_FILE_NAME="BUILD.bazel"
 
-function test_bp2build_null_build() {
+function test_bp2build_null_build {
   setup
   run_soong bp2build
   local -r output_mtime1=$(stat -c "%y" out/soong/bp2build_workspace_marker)
@@ -21,9 +21,7 @@ function test_bp2build_null_build() {
   fi
 }
 
-test_bp2build_null_build
-
-function test_bp2build_null_build_with_globs() {
+function test_bp2build_null_build_with_globs {
   setup
 
   mkdir -p foo/bar
@@ -46,8 +44,6 @@ EOF
   fi
 }
 
-test_bp2build_null_build_with_globs
-
 function test_different_relative_outdir {
   setup
 
@@ -65,10 +61,8 @@ EOF
   outdir=out2
   trap "rm -rf $outdir" EXIT
   # Modify OUT_DIR in a subshell so it doesn't affect the top level one.
-  (export OUT_DIR=$outdir; run_soong bp2build && run_bazel build --config=bp2build //a:g)
+  (export OUT_DIR=$outdir; run_soong bp2build && run_bazel build --config=bp2build --config=ci //a:g)
 }
-
-test_different_relative_outdir
 
 function test_different_absolute_outdir {
   setup
@@ -87,12 +81,10 @@ EOF
   outdir=$(mktemp -t -d st.XXXXX)
   trap 'rm -rf $outdir' EXIT
   # Modify OUT_DIR in a subshell so it doesn't affect the top level one.
-  (export OUT_DIR=$outdir; run_soong bp2build && run_bazel build --config=bp2build //a:g)
+  (export OUT_DIR=$outdir; run_soong bp2build && run_bazel build --config=bp2build --config=ci //a:g)
 }
 
-test_different_absolute_outdir
-
-function test_bp2build_generates_all_buildfiles {
+function _bp2build_generates_all_buildfiles {
   setup
 
   mkdir -p foo/convertible_soong_module
@@ -146,9 +138,9 @@ EOF
   fi
 
   # NOTE: We don't actually use the extra BUILD file for anything here
-  run_bazel build --config=android --package_path=out/soong/workspace //foo/...
+  run_bazel build --config=android --config=bp2build --config=ci //foo/...
 
-  local the_answer_file="bazel-out/android_target-fastbuild/bin/foo/convertible_soong_module/the_answer.txt"
+  local the_answer_file="bazel-out/android_target-opt/bin/foo/convertible_soong_module/the_answer.txt"
   if [[ ! -f "${the_answer_file}" ]]; then
     fail "Expected '${the_answer_file}' to be generated, but was missing"
   fi
@@ -157,10 +149,12 @@ EOF
   fi
 }
 
-_save_trap=$(trap -p EXIT)
-trap '[[ $? -ne 0 ]] && echo Are you running this locally? Try changing --sandbox_tmpfs_path to something other than /tmp/ in build/bazel/linux.bazelrc.' EXIT
-test_bp2build_generates_all_buildfiles
-eval ${_save_trap}
+function test_bp2build_generates_all_buildfiles {
+  _save_trap=$(trap -p EXIT)
+  trap '[[ $? -ne 0 ]] && echo Are you running this locally? Try changing --sandbox_tmpfs_path to something other than /tmp/ in build/bazel/linux.bazelrc.' EXIT
+  _bp2build_generates_all_buildfiles
+  eval "${_save_trap}"
+}
 
 function test_cc_correctness {
   setup
@@ -191,10 +185,10 @@ EOF
 
   run_soong bp2build
 
-  run_bazel build --config=android --package_path=out/soong/workspace //a:qq
+  run_bazel build --config=android --config=bp2build --config=ci //a:qq
   local -r output_mtime1=$(stat -c "%y" bazel-bin/a/_objs/qq/qq.o)
 
-  run_bazel build --config=android --package_path=out/soong/workspace //a:qq
+  run_bazel build --config=android --config=bp2build --config=ci //a:qq
   local -r output_mtime2=$(stat -c "%y" bazel-bin/a/_objs/qq/qq.o)
 
   if [[ "$output_mtime1" != "$output_mtime2" ]]; then
@@ -205,15 +199,13 @@ EOF
 #define QQ 2
 EOF
 
-  run_bazel build --config=android --package_path=out/soong/workspace //a:qq
+  run_bazel build --config=android --config=bp2build --config=ci //a:qq
   local -r output_mtime3=$(stat -c "%y" bazel-bin/a/_objs/qq/qq.o)
 
   if [[ "$output_mtime1" == "$output_mtime3" ]]; then
     fail "output not changed when included header changed"
   fi
 }
-
-test_cc_correctness
 
 # Regression test for the following failure during symlink forest creation:
 #
@@ -239,4 +231,4 @@ EOF
   fi
 }
 
-test_bp2build_null_build_with_unresolved_symlink_in_source
+scan_and_run_tests
