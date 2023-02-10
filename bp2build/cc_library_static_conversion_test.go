@@ -1003,6 +1003,8 @@ cc_library_static {
 	})
 }
 
+// generated_headers has "variant_prepend" tag. In bp2build output,
+// variant info(select) should go before general info.
 func TestCcLibraryStaticArchSrcsExcludeSrcsGeneratedFiles(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
 		Description: "cc_library_static arch srcs/exclude_srcs with generated files",
@@ -1066,13 +1068,13 @@ cc_library_static {
         "//build/bazel/platforms/os:android": [":generated_src_android"],
         "//conditions:default": [],
     })`,
-				"hdrs": `["//dep:generated_hdr_other_pkg"] + select({
-        "//build/bazel/platforms/arch:x86": ["//dep:generated_hdr_other_pkg_x86"],
-        "//conditions:default": [],
-    }) + select({
+				"hdrs": `select({
         "//build/bazel/platforms/os:android": ["//dep:generated_hdr_other_pkg_android"],
         "//conditions:default": [],
-    })`,
+    }) + select({
+        "//build/bazel/platforms/arch:x86": ["//dep:generated_hdr_other_pkg_x86"],
+        "//conditions:default": [],
+    }) + ["//dep:generated_hdr_other_pkg"]`,
 				"local_includes":           `["."]`,
 				"export_absolute_includes": `["dep"]`,
 			}),
@@ -1719,6 +1721,88 @@ cc_library_static {
         "//build/bazel/platforms/os:android": [":foo_cc_sysprop_library_static"],
         "//conditions:default": [],
     })`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithIntegerOverflowProperty(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when integer_overflow property is provided",
+		Blueprint: `
+cc_library_static {
+		name: "foo",
+		sanitize: {
+				integer_overflow: true,
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["ubsan_integer_overflow"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithMiscUndefinedProperty(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when misc_undefined property is provided",
+		Blueprint: `
+cc_library_static {
+		name: "foo",
+		sanitize: {
+				misc_undefined: ["undefined", "nullability"],
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithUBSanPropertiesArchSpecific(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct feature select when UBSan props are specified in arch specific blocks",
+		Blueprint: `
+cc_library_static {
+		name: "foo",
+		sanitize: {
+				misc_undefined: ["undefined", "nullability"],
+		},
+		target: {
+				android: {
+						sanitize: {
+								misc_undefined: ["alignment"],
+						},
+				},
+				linux_glibc: {
+						sanitize: {
+								integer_overflow: true,
+						},
+				},
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ] + select({
+        "//build/bazel/platforms/os:android": ["ubsan_alignment"],
+        "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
 			}),
 		},
 	})

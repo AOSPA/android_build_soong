@@ -396,7 +396,6 @@ type apexBundle struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 	android.OverridableModuleBase
-	android.SdkBase
 	android.BazelModuleBase
 	multitree.ExportableModuleBase
 
@@ -1875,6 +1874,17 @@ func (a *apexBundle) QueueBazelCall(ctx android.BaseModuleContext) {
 	bazelCtx.QueueBazelRequest(a.GetBazelLabel(ctx, a), cquery.GetApexInfo, android.GetConfigKey(ctx))
 }
 
+// GetBazelLabel returns the bazel label of this apexBundle, or the label of the
+// override_apex module overriding this apexBundle. An apexBundle can be
+// overridden by different override_apex modules (e.g. Google or Go variants),
+// which is handled by the overrides mutators.
+func (a *apexBundle) GetBazelLabel(ctx android.BazelConversionPathContext, module blueprint.Module) string {
+	if _, ok := ctx.Module().(android.OverridableModule); ok {
+		return android.MaybeBp2buildLabelOfOverridingModule(ctx)
+	}
+	return a.BazelModuleBase.GetBazelLabel(ctx, a)
+}
+
 func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	if !a.commonBuildActions(ctx) {
 		return
@@ -1895,9 +1905,15 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		return
 	}
 	a.installDir = android.PathForModuleInstall(ctx, "apex")
-	a.outputApexFile = android.PathForBazelOut(ctx, outputs.SignedOutput)
-	a.outputFile = a.outputApexFile
+
+	// Set the output file to .apex or .capex depending on the compression configuration.
 	a.setCompression(ctx)
+	if a.isCompressed {
+		a.outputApexFile = android.PathForBazelOut(ctx, outputs.SignedCompressedOutput)
+	} else {
+		a.outputApexFile = android.PathForBazelOut(ctx, outputs.SignedOutput)
+	}
+	a.outputFile = a.outputApexFile
 
 	// TODO(b/257829940): These are used by the apex_keys_text singleton; would probably be a clearer
 	// interface if these were set in a provider rather than the module itself
@@ -2055,15 +2071,23 @@ type visitorContext struct {
 	requireNativeLibs []string
 
 	handleSpecialLibs bool
+
+	// if true, raise error on duplicate apexFile
+	checkDuplicate bool
 }
 
-func (vctx *visitorContext) normalizeFileInfo() {
+func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 	encountered := make(map[string]apexFile)
 	for _, f := range vctx.filesInfo {
 		dest := filepath.Join(f.installDir, f.builtFile.Base())
 		if e, ok := encountered[dest]; !ok {
 			encountered[dest] = f
 		} else {
+			if vctx.checkDuplicate && f.builtFile.String() != e.builtFile.String() {
+				mctx.ModuleErrorf("apex file %v is provided by two different files %v and %v",
+					dest, e.builtFile, f.builtFile)
+				return
+			}
 			// If a module is directly included and also transitively depended on
 			// consider it as directly included.
 			e.transitiveDep = e.transitiveDep && f.transitiveDep
@@ -2422,6 +2446,25 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 	return false
 }
 
+func (a *apexBundle) shouldCheckDuplicate(ctx android.ModuleContext) bool {
+	// TODO(b/263308293) remove this
+	if a.properties.IsCoverageVariant {
+		return false
+	}
+	// TODO(b/263308515) remove this
+	if a.testApex {
+		return false
+	}
+	// TODO(b/263309864) remove this
+	if a.Host() {
+		return false
+	}
+	if a.Device() && ctx.DeviceConfig().DeviceArch() == "" {
+		return false
+	}
+	return true
+}
+
 // Creates build rules for an APEX. It consists of the following major steps:
 //
 // 1) do some validity checks such as apex_available, min_sdk_version, etc.
@@ -2442,9 +2485,12 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// TODO(jiyong): do this using WalkPayloadDeps
 	// TODO(jiyong): make this clean!!!
-	vctx := visitorContext{handleSpecialLibs: !android.Bool(a.properties.Ignore_system_library_special_case)}
+	vctx := visitorContext{
+		handleSpecialLibs: !android.Bool(a.properties.Ignore_system_library_special_case),
+		checkDuplicate:    a.shouldCheckDuplicate(ctx),
+	}
 	ctx.WalkDepsBlueprint(func(child, parent blueprint.Module) bool { return a.depVisitor(&vctx, ctx, child, parent) })
-	vctx.normalizeFileInfo()
+	vctx.normalizeFileInfo(ctx)
 	if a.privateKeyFile == nil {
 		ctx.PropertyErrorf("key", "private_key for %q could not be found", String(a.overridableProperties.Key))
 		return
@@ -2599,7 +2645,6 @@ func newApexBundle() *apexBundle {
 
 	android.InitAndroidMultiTargetsArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
-	android.InitSdkAwareModule(module)
 	android.InitOverridableModule(module, &module.overridableProperties.Overrides)
 	android.InitBazelModule(module)
 	multitree.InitExportableModule(module)

@@ -317,10 +317,6 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 		}
 	}
 
-	if Bool(a.appProperties.Enforce_default_target_sdk_version) {
-		a.SetEnforceDefaultTargetSdkVersion(true)
-	}
-
 	a.checkPlatformAPI(ctx)
 	a.checkSdkVersions(ctx)
 }
@@ -459,7 +455,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 func (a *AndroidApp) proguardBuildActions(ctx android.ModuleContext) {
 	var staticLibProguardFlagFiles android.Paths
 	ctx.VisitDirectDeps(func(m android.Module) {
-		if lib, ok := m.(AndroidLibraryDependency); ok && ctx.OtherModuleDependencyTag(m) == staticLibTag {
+		if lib, ok := m.(LibraryDependency); ok && ctx.OtherModuleDependencyTag(m) == staticLibTag {
 			staticLibProguardFlagFiles = append(staticLibProguardFlagFiles, lib.ExportedProguardFlagFiles()...)
 		}
 	})
@@ -639,6 +635,11 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		// be generated later.
 		noticeAssetPath = android.PathForModuleOut(ctx, "NOTICE", "NOTICE.html.gz")
 		a.aapt.noticeFile = android.OptionalPathForPath(noticeAssetPath)
+	}
+
+	// For apps targeting latest target_sdk_version
+	if Bool(a.appProperties.Enforce_default_target_sdk_version) {
+		a.SetEnforceDefaultTargetSdkVersion(true)
 	}
 
 	// Process all building blocks, from AAPT to certificates.
@@ -855,6 +856,8 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 						unstrippedFile: dep.UnstrippedOutputFile(),
 						partition:      dep.Partition(),
 					})
+				} else if ctx.Config().AllowMissingDependencies() {
+					ctx.AddMissingDependencies([]string{otherName})
 				} else {
 					ctx.ModuleErrorf("dependency %q missing output file", otherName)
 				}
@@ -1350,14 +1353,14 @@ func (u *usesLibrary) addLib(lib string, optional bool) {
 	}
 }
 
-func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, hasFrameworkLibs bool) {
+func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, addCompatDeps bool) {
 	if !ctx.Config().UnbundledBuild() || ctx.Config().UnbundledBuildImage() {
 		ctx.AddVariationDependencies(nil, usesLibReqTag, u.usesLibraryProperties.Uses_libs...)
 		ctx.AddVariationDependencies(nil, usesLibOptTag, u.presentOptionalUsesLibs(ctx)...)
-		// Only add these extra dependencies if the module depends on framework libs. This avoids
-		// creating a cyclic dependency:
+		// Only add these extra dependencies if the module is an app that depends on framework
+		// libs. This avoids creating a cyclic dependency:
 		//     e.g. framework-res -> org.apache.http.legacy -> ... -> framework-res.
-		if hasFrameworkLibs {
+		if addCompatDeps {
 			// Dexpreopt needs paths to the dex jars of these libraries in order to construct
 			// class loader context for dex2oat. Add them as a dependency with a special tag.
 			ctx.AddVariationDependencies(nil, usesLibCompat29ReqTag, dexpreopt.CompatUsesLibs29...)

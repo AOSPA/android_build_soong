@@ -134,7 +134,7 @@ func runMixedModeBuild(ctx *android.Context, extraNinjaDeps []string) string {
 func runQueryView(queryviewDir, queryviewMarker string, ctx *android.Context) {
 	ctx.EventHandler.Begin("queryview")
 	defer ctx.EventHandler.End("queryview")
-	codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.QueryView)
+	codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.QueryView, topDir)
 	err := createBazelWorkspace(codegenContext, shared.JoinPath(topDir, queryviewDir))
 	maybeQuit(err, "")
 	touch(shared.JoinPath(topDir, queryviewMarker))
@@ -145,8 +145,10 @@ func runQueryView(queryviewDir, queryviewMarker string, ctx *android.Context) {
 func runApiBp2build(ctx *android.Context, extraNinjaDeps []string) string {
 	ctx.EventHandler.Begin("api_bp2build")
 	defer ctx.EventHandler.End("api_bp2build")
-	// Do not allow missing dependencies.
-	ctx.SetAllowMissingDependencies(false)
+	// api_bp2build does not run the typical pipeline of soong mutators.
+	// Hoevever, it still runs the defaults mutator which can create dependencies.
+	// These dependencies might not always exist (e.g. in tests)
+	ctx.SetAllowMissingDependencies(ctx.Config().AllowMissingDependencies())
 	ctx.RegisterForApiBazelConversion()
 
 	// Register the Android.bp files in the tree
@@ -169,14 +171,14 @@ func runApiBp2build(ctx *android.Context, extraNinjaDeps []string) string {
 	ninjaDeps = append(ninjaDeps, writeBuildGlobsNinjaFile(ctx)...)
 
 	// Run codegen to generate BUILD files
-	codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.ApiBp2build)
+	codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.ApiBp2build, topDir)
 	absoluteApiBp2buildDir := shared.JoinPath(topDir, cmdlineArgs.BazelApiBp2buildDir)
 	err := createBazelWorkspace(codegenContext, absoluteApiBp2buildDir)
 	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, codegenContext.AdditionalNinjaDeps()...)
 
 	// Create soong_injection repository
-	soongInjectionFiles := bp2build.CreateSoongInjectionFiles(ctx.Config(), bp2build.CreateCodegenMetrics())
+	soongInjectionFiles := bp2build.CreateSoongInjectionDirFiles(codegenContext, bp2build.CreateCodegenMetrics())
 	absoluteSoongInjectionDir := shared.JoinPath(topDir, ctx.Config().SoongOutDir(), bazel.SoongInjectionDirName)
 	for _, file := range soongInjectionFiles {
 		// The API targets in api_bp2build workspace do not have any dependency on api_bp2build.
@@ -277,7 +279,7 @@ func runSoongOnlyBuild(ctx *android.Context, extraNinjaDeps []string) string {
 	switch ctx.Config().BuildMode {
 	case android.GenerateModuleGraph:
 		stopBefore = bootstrap.StopBeforeWriteNinja
-	case android.GenerateQueryView | android.GenerateDocFile:
+	case android.GenerateQueryView, android.GenerateDocFile:
 		stopBefore = bootstrap.StopBeforePrepareBuildActions
 	default:
 		stopBefore = bootstrap.DoEverything
@@ -586,7 +588,7 @@ func runBp2Build(ctx *android.Context, extraNinjaDeps []string, metricsDir strin
 
 		// Run the code-generation phase to convert BazelTargetModules to BUILD files
 		// and print conversion codegenMetrics to the user.
-		codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.Bp2Build)
+		codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.Bp2Build, topDir)
 		ctx.EventHandler.Do("codegen", func() {
 			codegenMetrics = bp2build.Codegen(codegenContext)
 		})

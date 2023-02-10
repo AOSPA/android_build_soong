@@ -44,12 +44,14 @@ const (
 	SdkNone
 	SdkCore
 	SdkCorePlatform
+	SdkIntraCore // API surface provided by one core module to another
 	SdkPublic
 	SdkSystem
 	SdkTest
 	SdkModule
 	SdkSystemServer
 	SdkPrivate
+	SdkToolchain // API surface provided by ART to compile other API domains
 )
 
 // String returns the string representation of this SdkKind
@@ -69,10 +71,14 @@ func (k SdkKind) String() string {
 		return "core"
 	case SdkCorePlatform:
 		return "core_platform"
+	case SdkIntraCore:
+		return "intracore"
 	case SdkModule:
 		return "module-lib"
 	case SdkSystemServer:
 		return "system-server"
+	case SdkToolchain:
+		return "toolchain"
 	default:
 		return "invalid"
 	}

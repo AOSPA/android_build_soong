@@ -1960,8 +1960,10 @@ java_test_host {
 	}
 }
 `)
-	args := result.ModuleForTests("foo", "linux_glibc_common").
-		Output("out/soong/.intermediates/foo/linux_glibc_common/foo.config").Args
+
+	buildOS := result.Config.BuildOS.String()
+	args := result.ModuleForTests("foo", buildOS+"_common").
+		Output("out/soong/.intermediates/foo/" + buildOS + "_common/foo.config").Args
 	expected := proptools.NinjaAndShellEscape("<option name=\"exclude-path\" value=\"org/apache\" />")
 	if args["extraConfigs"] != expected {
 		t.Errorf("Expected args[\"extraConfigs\"] to equal %q, was %q", expected, args["extraConfigs"])

@@ -35,6 +35,7 @@ func registerBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_filesystem", filesystemFactory)
 	ctx.RegisterModuleType("android_system_image", systemImageFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer", avbAddHashFooterFactory)
+	ctx.RegisterModuleType("avb_gen_vbmeta_image", avbGenVbmetaImageFactory)
 }
 
 type filesystem struct {
@@ -69,8 +70,12 @@ type filesystemProperties struct {
 	// TODO(jiyong): allow apex_key to be specified here
 	Avb_private_key *string `android:"path"`
 
-	// Hash and signing algorithm for avbtool. Default is SHA256_RSA4096.
+	// Signing algorithm for avbtool. Default is SHA256_RSA4096.
 	Avb_algorithm *string
+
+	// Hash algorithm used for avbtool (for descriptors). This is passed as hash_algorithm to
+	// avbtool. Default used by avbtool is sha1.
+	Avb_hash_algorithm *string
 
 	// Name of the partition stored in vbmeta desc. Defaults to the name of this module.
 	Partition_name *string
@@ -261,6 +266,14 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 		Input(rootZip).
 		Input(rebasedDepsZip)
 
+	// run host_init_verifier
+	// Ideally we should have a concept of pluggable linters that verify the generated image.
+	// While such concept is not implement this will do.
+	// TODO(b/263574231): substitute with pluggable linter.
+	builder.Command().
+		BuiltTool("host_init_verifier").
+		FlagWithArg("--out_system=", rootDir.String()+"/system")
+
 	propFile, toolDeps := f.buildPropFile(ctx)
 	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
 	builder.Command().BuiltTool("build_image").
@@ -333,7 +346,11 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.
 		addStr("avb_algorithm", algorithm)
 		key := android.PathForModuleSrc(ctx, proptools.String(f.properties.Avb_private_key))
 		addPath("avb_key_path", key)
-		addStr("avb_add_hashtree_footer_args", "--do_not_generate_fec")
+		avb_add_hashtree_footer_args := "--do_not_generate_fec"
+		if hashAlgorithm := proptools.String(f.properties.Avb_hash_algorithm); hashAlgorithm != "" {
+			avb_add_hashtree_footer_args += " --hash_algorithm " + hashAlgorithm
+		}
+		addStr("avb_add_hashtree_footer_args", avb_add_hashtree_footer_args)
 		partitionName := proptools.StringDefault(f.properties.Partition_name, f.Name())
 		addStr("partition_name", partitionName)
 		addStr("avb_salt", f.salt())

@@ -18,11 +18,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel"
 	"android/soong/java/config"
 	"android/soong/remoteexec"
 )
@@ -46,7 +48,6 @@ func RegisterStubsBuildComponents(ctx android.RegistrationContext) {
 // Droidstubs
 type Droidstubs struct {
 	Javadoc
-	android.SdkBase
 
 	properties              DroidstubsProperties
 	apiFile                 android.Path
@@ -177,7 +178,6 @@ func DroidstubsFactory() android.Module {
 		&module.Javadoc.properties)
 
 	InitDroiddocModule(module, android.HostAndDeviceSupported)
-	android.InitSdkAwareModule(module)
 	return module
 }
 
@@ -834,6 +834,75 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 }
 
+var _ android.ApiProvider = (*Droidstubs)(nil)
+
+type bazelJavaApiContributionAttributes struct {
+	Api         bazel.LabelAttribute
+	Api_surface *string
+}
+
+func (d *Droidstubs) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "java_api_contribution",
+		Bzl_load_location: "//build/bazel/rules/apis:java_api_contribution.bzl",
+	}
+	apiFile := d.properties.Check_api.Current.Api_file
+	// Do not generate a target if check_api is not set
+	if apiFile == nil {
+		return
+	}
+	attrs := &bazelJavaApiContributionAttributes{
+		Api: *bazel.MakeLabelAttribute(
+			android.BazelLabelForModuleSrcSingle(ctx, proptools.String(apiFile)).Label,
+		),
+		Api_surface: proptools.StringPtr(bazelApiSurfaceName(d.Name())),
+	}
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{
+		Name: android.ApiContributionTargetName(ctx.ModuleName()),
+	}, attrs)
+}
+
+// TODO (b/262014796): Export the API contributions of CorePlatformApi
+// A map to populate the api surface of a droidstub from a substring appearing in its name
+// This map assumes that droidstubs (either checked-in or created by java_sdk_library)
+// use a strict naming convention
+var (
+	droidstubsModuleNamingToSdkKind = map[string]android.SdkKind{
+		//public is commented out since the core libraries use public in their java_sdk_library names
+		"intracore":     android.SdkIntraCore,
+		"intra.core":    android.SdkIntraCore,
+		"system_server": android.SdkSystemServer,
+		"system-server": android.SdkSystemServer,
+		"system":        android.SdkSystem,
+		"module_lib":    android.SdkModule,
+		"module-lib":    android.SdkModule,
+		"test":          android.SdkTest,
+		"toolchain":     android.SdkToolchain,
+	}
+)
+
+// A helper function that returns the api surface of the corresponding java_api_contribution Bazel target
+// The api_surface is populated using the naming convention of the droidstubs module.
+func bazelApiSurfaceName(name string) string {
+	// Sort the keys so that longer strings appear first
+	// Otherwise substrings like system will match both system and system_server
+	sortedKeys := make([]string, 0)
+	for key := range droidstubsModuleNamingToSdkKind {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Slice(sortedKeys, func(i, j int) bool {
+		return len(sortedKeys[i]) > len(sortedKeys[j])
+	})
+	for _, sortedKey := range sortedKeys {
+		if strings.Contains(name, sortedKey) {
+			sdkKind := droidstubsModuleNamingToSdkKind[sortedKey]
+			return sdkKind.String() + "api"
+		}
+	}
+	// Default is publicapi
+	return android.SdkPublic.String() + "api"
+}
+
 func StubsDefaultsFactory() android.Module {
 	module := &DocDefaults{}
 
@@ -857,7 +926,6 @@ type PrebuiltStubsSources struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 	prebuilt android.Prebuilt
-	android.SdkBase
 
 	properties PrebuiltStubsSourcesProperties
 
@@ -937,7 +1005,6 @@ func PrebuiltStubsSourcesFactory() android.Module {
 	module.AddProperties(&module.properties)
 
 	android.InitPrebuiltModule(module, &module.properties.Srcs)
-	android.InitSdkAwareModule(module)
 	InitDroiddocModule(module, android.HostAndDeviceSupported)
 	return module
 }
