@@ -306,6 +306,14 @@ var (
 		"-Wno-missing-declarations",
 		"-Wno-reorder-ctor",
 		"-Wno-unused-function",
+		// sdclang 16
+		"-Wno-enum-conversion",
+		"-Wno-strict-prototypes",
+		"-Wno-deprecated-builtins",
+		"-Wno-deprecated",
+		"-Wno-unqualified-std-cast-call",
+		"-Wno-array-parameter",
+		"-Wno-unused-private-field",
 	}
 
 	noOverrideExternalGlobalCflags = []string{
