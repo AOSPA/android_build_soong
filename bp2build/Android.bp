@@ -8,6 +8,7 @@ bootstrap_go_package {
     srcs: [
         "androidbp_to_build_templates.go",
         "bp2build.go",
+        "bp2build_product_config.go",
         "build_conversion.go",
         "bzl_conversion.go",
         "configurability.go",
@@ -55,6 +56,7 @@ bootstrap_go_package {
         "cc_test_conversion_test.go",
         "cc_yasm_conversion_test.go",
         "conversion_test.go",
+        "droidstubs_conversion_test.go",
         "filegroup_conversion_test.go",
         "genrule_conversion_test.go",
         "gensrcs_conversion_test.go",

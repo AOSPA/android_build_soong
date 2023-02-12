@@ -140,9 +140,9 @@ EOF
   # NOTE: We don't actually use the extra BUILD file for anything here
   run_bazel build --config=android --config=bp2build --config=ci //foo/...
 
-  local the_answer_file="bazel-out/android_target-opt/bin/foo/convertible_soong_module/the_answer.txt"
+  local the_answer_file="$(find -L bazel-out -name the_answer.txt)"
   if [[ ! -f "${the_answer_file}" ]]; then
-    fail "Expected '${the_answer_file}' to be generated, but was missing"
+    fail "Expected the_answer.txt to be generated, but was missing"
   fi
   if ! grep 42 "${the_answer_file}"; then
     fail "Expected to find 42 in '${the_answer_file}'"
@@ -229,6 +229,13 @@ EOF
   if [[ "$dest" != "/tmp/non-existent" ]]; then
     fail "expected to plant an unresolved symlink out/soong/workspace/foo/bar/unresolved_symlink that resolves to /tmp/non-existent"
   fi
+}
+
+# Smoke test to verify api_bp2build worksapce does not contain any errors
+function test_api_bp2build_empty_build() {
+  setup
+  run_soong api_bp2build
+  run_bazel build --config=android --config=api_bp2build //:empty
 }
 
 scan_and_run_tests

@@ -666,15 +666,8 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	// Also disable CFI for VNDK variants of components
 	if ctx.isVndk() && ctx.useVndk() {
-		if ctx.static() {
-			// Cfi variant for static vndk should be captured as vendor snapshot,
-			// so don't strictly disable Cfi.
-			s.Cfi = nil
-			s.Diag.Cfi = nil
-		} else {
-			s.Cfi = nil
-			s.Diag.Cfi = nil
-		}
+		s.Cfi = nil
+		s.Diag.Cfi = nil
 	}
 
 	// HWASan ramdisk (which is built from recovery) goes over some bootloader limit.
@@ -1107,6 +1100,11 @@ func (m *Module) SanitizableDepTagChecker() SantizableDependencyTagChecker {
 // as vendor snapshot. Such modules must create both cfi and non-cfi variants,
 // except for ones which explicitly disable cfi.
 func needsCfiForVendorSnapshot(mctx android.BaseModuleContext) bool {
+	if inList("hwaddress", mctx.Config().SanitizeDevice()) {
+		// cfi will not be built if SANITIZE_TARGET=hwaddress is set
+		return false
+	}
+
 	if snapshot.IsVendorProprietaryModule(mctx) {
 		return false
 	}
@@ -1203,10 +1201,12 @@ func (s *sanitizerSplitMutator) Split(ctx android.BaseModuleContext) []string {
 		//TODO: When Rust modules have vendor support, enable this path for PlatformSanitizeable
 
 		// Check if it's a snapshot module supporting sanitizer
-		if ss, ok := c.linker.(snapshotSanitizer); ok && ss.isSanitizerAvailable(s.sanitizer) {
-			return []string{"", s.sanitizer.variationName()}
-		} else {
-			return []string{""}
+		if ss, ok := c.linker.(snapshotSanitizer); ok {
+			if ss.isSanitizerAvailable(s.sanitizer) {
+				return []string{"", s.sanitizer.variationName()}
+			} else {
+				return []string{""}
+			}
 		}
 	}
 

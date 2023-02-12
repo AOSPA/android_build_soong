@@ -131,14 +131,14 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	r.forceOSType = ctx.Config().BuildOS
 	r.forceArchType = ctx.Config().BuildArch
 
-	r.testConfig = tradefed.NewMaybeAutoGenTestConfigBuilder(ctx).
-		SetTestConfigProp(r.testProperties.Test_config).
-		SetTestTemplateConfigProp(r.testProperties.Test_config_template).
-		SetTestSuites(r.testProperties.Test_suites).
-		SetAutoGenConfig(r.testProperties.Auto_gen_config).
-		SetDeviceTemplate("${RobolectricTestConfigTemplate}").
-		SetHostTemplate("${RobolectricTestConfigTemplate}").
-		Build()
+	r.testConfig = tradefed.AutoGenTestConfig(ctx, tradefed.AutoGenTestConfigOptions{
+		TestConfigProp:         r.testProperties.Test_config,
+		TestConfigTemplateProp: r.testProperties.Test_config_template,
+		TestSuites:             r.testProperties.Test_suites,
+		AutoGenConfig:          r.testProperties.Auto_gen_config,
+		DeviceTemplate:         "${RobolectricTestConfigTemplate}",
+		HostTemplate:           "${RobolectricTestConfigTemplate}",
+	})
 	r.data = android.PathsForModuleSrc(ctx, r.testProperties.Data)
 
 	roboTestConfig := android.PathForModuleGen(ctx, "robolectric").

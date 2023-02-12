@@ -63,6 +63,7 @@ type configImpl struct {
 	environ       *Environment
 	distDir       string
 	buildDateTime string
+	logsPrefix    string
 
 	// From the arguments
 	parallel          int
@@ -84,6 +85,7 @@ type configImpl struct {
 	skipSoongTests    bool
 	searchApiDir      bool // Scan the Android.bp files generated in out/api_surfaces
 	skipMetricsUpload bool
+	buildStartedTime  int64 // For metrics-upload-only - manually specify a build-started time
 
 	// From the product config
 	katiArgs        []string
@@ -202,14 +204,9 @@ func fetchEnvConfig(ctx Context, config *configImpl, envConfigName string) error
 	return nil
 }
 
-func loadEnvConfig(ctx Context, config *configImpl) error {
-	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
+func loadEnvConfig(ctx Context, config *configImpl, bc string) error {
 	if bc == "" {
 		return nil
-	}
-
-	if err := fetchEnvConfig(ctx, config, bc); err != nil {
-		ctx.Verbosef("Failed to fetch config file: %v\n", err)
 	}
 
 	configDirs := []string{
@@ -257,6 +254,20 @@ func defaultBazelProdMode(cfg *configImpl) bool {
 	return false
 }
 
+func UploadOnlyConfig(ctx Context, _ ...string) Config {
+	ret := &configImpl{
+		environ:       OsEnvironment(),
+		sandboxConfig: &SandboxConfig{},
+	}
+	srcDir := absPath(ctx, ".")
+	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
+	if err := loadEnvConfig(ctx, ret, bc); err != nil {
+		ctx.Fatalln("Failed to parse env config files: %v", err)
+	}
+	ret.metricsUploader = GetMetricsUploader(srcDir, ret.environ)
+	return Config{ret}
+}
+
 func NewConfig(ctx Context, args ...string) Config {
 	ret := &configImpl{
 		environ:       OsEnvironment(),
@@ -268,9 +279,7 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.keepGoing = 1
 
 	ret.totalRAM = detectTotalRAM(ctx)
-
 	ret.parseArgs(ctx, args)
-
 	// Make sure OUT_DIR is set appropriately
 	if outDir, ok := ret.environ.Get("OUT_DIR"); ok {
 		ret.environ.Set("OUT_DIR", filepath.Clean(outDir))
@@ -288,8 +297,15 @@ func NewConfig(ctx Context, args ...string) Config {
 
 	// loadEnvConfig needs to know what the OUT_DIR is, so it should
 	// be called after we determine the appropriate out directory.
-	if err := loadEnvConfig(ctx, ret); err != nil {
-		ctx.Fatalln("Failed to parse env config files: %v", err)
+	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
+
+	if bc != "" {
+		if err := fetchEnvConfig(ctx, ret, bc); err != nil {
+			ctx.Verbosef("Failed to fetch config file: %v\n", err)
+
+		} else if err := loadEnvConfig(ctx, ret, bc); err != nil {
+			ctx.Fatalln("Failed to parse env config files: %v", err)
+		}
 	}
 
 	if distDir, ok := ret.environ.Get("DIST_DIR"); ok {
@@ -758,6 +774,14 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			ctx.Metrics.SetBuildCommand([]string{buildCmd})
 		} else if strings.HasPrefix(arg, "--bazel-force-enabled-modules=") {
 			c.bazelForceEnabledModules = strings.TrimPrefix(arg, "--bazel-force-enabled-modules=")
+		} else if strings.HasPrefix(arg, "--build-started-time-unix-millis=") {
+			buildTimeStr := strings.TrimPrefix(arg, "--build-started-time-unix-millis=")
+			val, err := strconv.ParseInt(buildTimeStr, 10, 64)
+			if err == nil {
+				c.buildStartedTime = val
+			} else {
+				ctx.Fatalf("Error parsing build-time-started-unix-millis", err)
+			}
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
 				if len(arg) > 2 {
@@ -1092,6 +1116,14 @@ func (c *configImpl) GetIncludeTags() []string {
 
 func (c *configImpl) SetIncludeTags(i []string) {
 	c.includeTags = i
+}
+
+func (c *configImpl) GetLogsPrefix() string {
+	return c.logsPrefix
+}
+
+func (c *configImpl) SetLogsPrefix(prefix string) {
+	c.logsPrefix = prefix
 }
 
 func (c *configImpl) HighmemParallel() int {
@@ -1519,6 +1551,15 @@ func (c *configImpl) BazelModulesForceEnabledByFlag() string {
 
 func (c *configImpl) SkipMetricsUpload() bool {
 	return c.skipMetricsUpload
+}
+
+// Returns a Time object if one was passed via a command-line flag.
+// Otherwise returns the passed default.
+func (c *configImpl) BuildStartedTimeOrDefault(defaultTime time.Time) time.Time {
+	if c.buildStartedTime == 0 {
+		return defaultTime
+	}
+	return time.UnixMilli(c.buildStartedTime)
 }
 
 func GetMetricsUploader(topDir string, env *Environment) string {

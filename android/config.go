@@ -583,36 +583,28 @@ func (c *config) mockFileSystem(bp string, fs map[string][]byte) {
 	c.mockBpList = blueprint.MockModuleListFile
 }
 
+// TODO(b/265062549): Add a field to our collected (and uploaded) metrics which
+// describes a reason that we fell back to non-mixed builds.
 // Returns true if "Bazel builds" is enabled. In this mode, part of build
 // analysis is handled by Bazel.
 func (c *config) IsMixedBuildsEnabled() bool {
 	globalMixedBuildsSupport := c.Once(OnceKey{"globalMixedBuildsSupport"}, func() interface{} {
 		if c.productVariables.DeviceArch != nil && *c.productVariables.DeviceArch == "riscv64" {
-			fmt.Fprintln(os.Stderr, "unsupported device arch 'riscv64' for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if c.IsEnvTrue("GLOBAL_THINLTO") {
-			fmt.Fprintln(os.Stderr, "unsupported env var GLOBAL_THINLTO for Bazel: falling back to non-mixed build")
-			return false
-		}
-		if c.IsEnvTrue("CLANG_COVERAGE") {
-			fmt.Fprintln(os.Stderr, "unsupported env var CLANG_COVERAGE for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if len(c.productVariables.SanitizeHost) > 0 {
-			fmt.Fprintln(os.Stderr, "unsupported product var SanitizeHost for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if len(c.productVariables.SanitizeDevice) > 0 {
-			fmt.Fprintln(os.Stderr, "unsupported product var SanitizeDevice for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if len(c.productVariables.SanitizeDeviceDiag) > 0 {
-			fmt.Fprintln(os.Stderr, "unsupported product var SanitizeDeviceDiag for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if len(c.productVariables.SanitizeDeviceArch) > 0 {
-			fmt.Fprintln(os.Stderr, "unsupported product var SanitizeDeviceArch for Bazel: falling back to non-mixed build")
 			return false
 		}
 		return true
@@ -771,6 +763,13 @@ func (c *config) DeviceName() string {
 // NOTE: Do not base conditional logic on this value. It may break product inheritance.
 func (c *config) DeviceProduct() string {
 	return *c.productVariables.DeviceProduct
+}
+
+// HasDeviceProduct returns if the build has a product. A build will not
+// necessarily have a product when --skip-config is passed to soong, like it is
+// in prebuilts/build-tools/build-prebuilts.sh
+func (c *config) HasDeviceProduct() bool {
+	return c.productVariables.DeviceProduct != nil
 }
 
 func (c *config) DeviceResourceOverlays() []string {

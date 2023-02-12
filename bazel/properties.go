@@ -674,6 +674,11 @@ type LabelListAttribute struct {
 	// specific select statements where an empty list for a non-default select
 	// key has a meaning.
 	EmitEmptyList bool
+
+	// If a property has struct tag "variant_prepend", this value should
+	// be set to True, so that when bp2build generates BUILD.bazel, variant
+	// properties(select ...) come before general properties.
+	Prepend bool
 }
 
 type configurableLabelLists map[ConfigurationAxis]labelListSelectValues
@@ -1278,9 +1283,6 @@ func (sla StringListAttribute) HasConfigurableValues() bool {
 // Append appends all values, including os and arch specific ones, from another
 // StringListAttribute to this StringListAttribute
 func (sla *StringListAttribute) Append(other StringListAttribute) *StringListAttribute {
-	if sla.Prepend != other.Prepend {
-		panic(fmt.Errorf("StringListAttribute could not be appended because it has different prepend value"))
-	}
 	sla.Value = append(sla.Value, other.Value...)
 	if sla.ConfigurableValues == nil {
 		sla.ConfigurableValues = make(configurableStringLists)
