@@ -16,6 +16,23 @@
       "message": "See https://gerrit.aospa.co/c/AOSPA/manifest/+/27694",
       "revId": "d1cd9fd50516b3e8258026177512b6d96a34ac4c",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "98dfca7c_7f534986",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000760
+      },
+      "writtenOn": "2023-02-12T13:11:33Z",
+      "side": 1,
+      "message": "https://github.com/ThankYouMario/proprietary_vendor_qcom_sdclang/blob/12/config/SnapdragonClang.json#L5\n\nadding those to this json file is a way better approach.. and that\u0027s how it was being done previously..",
+      "revId": "d1cd9fd50516b3e8258026177512b6d96a34ac4c",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
