@@ -1623,8 +1623,8 @@ type JavaApiLibraryProperties struct {
 func ApiLibraryFactory() android.Module {
 	module := &ApiLibrary{}
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
-	android.InitDefaultableModule(module)
 	module.AddProperties(&module.properties)
+	android.InitDefaultableModule(module)
 	return module
 }
 
@@ -2402,6 +2402,7 @@ func DefaultsFactory() android.Module {
 		&RuntimeResourceOverlayProperties{},
 		&LintProperties{},
 		&appTestHelperAppProperties{},
+		&JavaApiLibraryProperties{},
 	)
 
 	android.InitDefaultsModule(module)
@@ -2674,9 +2675,9 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 	}
 
 	if m.properties.Libs != nil {
-
 		// TODO 244210934 ALIX Check if this else statement breaks presubmits get rid of it if it doesn't
-		if strings.HasPrefix(ctx.ModuleType(), "java_binary") || strings.HasPrefix(ctx.ModuleType(), "java_library") || ctx.ModuleType() == "android_library" {
+		modType := ctx.ModuleType()
+		if strings.HasPrefix(modType, "java_binary") || strings.HasPrefix(modType, "java_library") || modType == "android_app" || modType == "android_library" || modType == "java_plugin" {
 			for _, d := range m.properties.Libs {
 				neverlinkLabel := android.BazelLabelForModuleDepSingle(ctx, d)
 				neverlinkLabel.Label = neverlinkLabel.Label + "-neverlink"
