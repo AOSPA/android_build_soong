@@ -243,7 +243,6 @@ var (
 		// http://b/145211066
 		"-Wno-implicit-int-float-conversion",
 		// New warnings to be fixed after clang-r377782.
-		"-Wno-sizeof-array-div",             // http://b/148815709
 		"-Wno-tautological-overlap-compare", // http://b/148815696
 		// New warnings to be fixed after clang-r383902.
 		"-Wno-deprecated-copy",                      // http://b/153746672
@@ -261,9 +260,13 @@ var (
 		// New warnings to be fixed after clang-r458507
 		"-Wno-error=unqualified-std-cast-call", // http://b/239662094
 		// New warnings to be fixed after clang-r468909
-		"-Wno-error=array-parameter",     // http://b/241941550
 		"-Wno-error=deprecated-builtins", // http://b/241601211
 		"-Wno-error=deprecated",          // in external/googletest/googletest
+		// New warnings to be fixed after clang-r475365
+		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
+		"-Wno-error=incompatible-function-pointer-types",     // http://b/257101299
+		"-Wno-error=enum-constexpr-conversion",               // http://b/243964282
+
 		//Android T Vendor Compilation
 		"-Wno-reorder-init-list",
 		"-Wno-implicit-fallthrough",
@@ -318,6 +321,8 @@ var (
 	}
 
 	noOverrideExternalGlobalCflags = []string{
+		// http://b/148815709
+		"-Wno-sizeof-array-div",
 		// http://b/197240255
 		"-Wno-unused-but-set-variable",
 		"-Wno-unused-but-set-parameter",
@@ -325,6 +330,8 @@ var (
 		"-Wno-bitwise-instead-of-logical",
 		// http://b/232926688
 		"-Wno-misleading-indentation",
+		// http://b/241941550
+		"-Wno-array-parameter",
 	}
 
 	// Extra cflags for external third-party projects to disable warnings that
@@ -364,8 +371,6 @@ var (
 	llvmNextExtraCommonGlobalCflags = []string{
 		// New warnings to be fixed after clang-r475365
 		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
-		// Skip deprecated flags.
-		"-Wno-unused-command-line-argument",
 	}
 
 	IllegalFlags = []string{
@@ -437,6 +442,7 @@ func init() {
 			// Default to zero initialization.
 			"-ftrivial-auto-var-init=zero",
 			"-enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang",
+			"-Wno-unused-command-line-argument",
 		}...)
 	exportedVars.ExportStringList("CommonGlobalCflags", bazelCommonGlobalCflags)
 
@@ -447,14 +453,14 @@ func init() {
 		// Automatically initialize any uninitialized stack variables.
 		// Prefer zero-init if multiple options are set.
 		if ctx.Config().IsEnvTrue("AUTO_ZERO_INITIALIZE") {
-			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
+			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang -Wno-unused-command-line-argument")
 		} else if ctx.Config().IsEnvTrue("AUTO_PATTERN_INITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=pattern")
 		} else if ctx.Config().IsEnvTrue("AUTO_UNINITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=uninitialized")
 		} else {
 			// Default to zero initialization.
-			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
+			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang -Wno-unused-command-line-argument")
 		}
 		// Workaround for ccache with clang.
 		// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
