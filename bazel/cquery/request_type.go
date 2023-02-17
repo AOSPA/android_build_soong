@@ -14,7 +14,14 @@ var (
 	GetCcUnstrippedInfo = &getCcUnstrippedInfoType{}
 )
 
+type CcAndroidMkInfo struct {
+	LocalStaticLibs      []string
+	LocalWholeStaticLibs []string
+	LocalSharedLibs      []string
+}
+
 type CcInfo struct {
+	CcAndroidMkInfo
 	OutputFiles          []string
 	CcObjectFiles        []string
 	CcSharedLibraryFiles []string
@@ -173,27 +180,40 @@ else:
 tidy_files = []
 clang_tidy_info = p.get("//build/bazel/rules/cc:clang_tidy.bzl%ClangTidyInfo")
 if clang_tidy_info:
-  tidy_files = [v.path for v in clang_tidy_info.tidy_files.to_list()]
+  tidy_files = [v.path for v in clang_tidy_info.transitive_tidy_files.to_list()]
 
 abi_diff_files = []
 abi_diff_info = p.get("//build/bazel/rules/abi:abi_dump.bzl%AbiDiffInfo")
 if abi_diff_info:
   abi_diff_files = [f.path for f in abi_diff_info.diff_files.to_list()]
 
+local_static_libs = []
+local_whole_static_libs = []
+local_shared_libs = []
+androidmk_tag = "//build/bazel/rules/cc:cc_library_common.bzl%CcAndroidMkInfo"
+if androidmk_tag in p:
+    androidmk_info = p[androidmk_tag]
+    local_static_libs = androidmk_info.local_static_libs
+    local_whole_static_libs = androidmk_info.local_whole_static_libs
+    local_shared_libs = androidmk_info.local_shared_libs
+
 return json_encode({
-	"OutputFiles": outputFiles,
-	"CcObjectFiles": ccObjectFiles,
-	"CcSharedLibraryFiles": sharedLibraries,
-	"CcStaticLibraryFiles": staticLibraries,
-	"Includes": includes,
-	"SystemIncludes": system_includes,
-	"Headers": headers,
-	"RootStaticArchives": rootStaticArchives,
-	"RootDynamicLibraries": rootSharedLibraries,
-	"TidyFiles": tidy_files,
-	"TocFile": toc_file,
-	"UnstrippedOutput": unstripped,
-	"AbiDiffFiles": abi_diff_files,
+    "OutputFiles": outputFiles,
+    "CcObjectFiles": ccObjectFiles,
+    "CcSharedLibraryFiles": sharedLibraries,
+    "CcStaticLibraryFiles": staticLibraries,
+    "Includes": includes,
+    "SystemIncludes": system_includes,
+    "Headers": headers,
+    "RootStaticArchives": rootStaticArchives,
+    "RootDynamicLibraries": rootSharedLibraries,
+    "TidyFiles": [t for t in tidy_files],
+    "TocFile": toc_file,
+    "UnstrippedOutput": unstripped,
+    "AbiDiffFiles": abi_diff_files,
+    "LocalStaticLibs": [l for l in local_static_libs],
+    "LocalWholeStaticLibs": [l for l in local_whole_static_libs],
+    "LocalSharedLibs": [l for l in local_shared_libs],
 })`
 
 }
@@ -232,8 +252,23 @@ if not info:
   fail("%s did not provide ApexInfo" % id_string)
 bundle_key_info = info.bundle_key_info
 container_key_info = info.container_key_info
+
+signed_compressed_output = "" # no .capex if the apex is not compressible, cannot be None as it needs to be json encoded.
+if info.signed_compressed_output:
+    signed_compressed_output = info.signed_compressed_output.path
+
+mk_info = providers(target).get("//build/bazel/rules/apex:apex_info.bzl%ApexMkInfo")
+if not mk_info:
+  fail("%s did not provide ApexMkInfo" % id_string)
+
+tidy_files = []
+clang_tidy_info = providers(target).get("//build/bazel/rules/cc:clang_tidy.bzl%ClangTidyInfo")
+if clang_tidy_info:
+    tidy_files = [v.path for v in clang_tidy_info.transitive_tidy_files.to_list()]
+
 return json_encode({
     "signed_output": info.signed_output.path,
+    "signed_compressed_output": signed_compressed_output,
     "unsigned_output": info.unsigned_output.path,
     "provides_native_libs": [str(lib) for lib in info.provides_native_libs],
     "requires_native_libs": [str(lib) for lib in info.requires_native_libs],
@@ -245,22 +280,30 @@ return json_encode({
     "backing_libs": info.backing_libs.path,
     "bundle_file": info.base_with_config_zip.path,
     "installed_files": info.installed_files.path,
+    "make_modules_to_install": mk_info.make_modules_to_install,
+    "tidy_files": [t for t in tidy_files],
 })`
 }
 
 type ApexInfo struct {
-	SignedOutput          string   `json:"signed_output"`
-	UnsignedOutput        string   `json:"unsigned_output"`
-	ProvidesLibs          []string `json:"provides_native_libs"`
-	RequiresLibs          []string `json:"requires_native_libs"`
-	BundleKeyInfo         []string `json:"bundle_key_info"`
-	ContainerKeyInfo      []string `json:"container_key_info"`
-	PackageName           string   `json:"package_name"`
-	SymbolsUsedByApex     string   `json:"symbols_used_by_apex"`
-	JavaSymbolsUsedByApex string   `json:"java_symbols_used_by_apex"`
-	BackingLibs           string   `json:"backing_libs"`
-	BundleFile            string   `json:"bundle_file"`
-	InstalledFiles        string   `json:"installed_files"`
+	// From the ApexInfo provider
+	SignedOutput           string   `json:"signed_output"`
+	SignedCompressedOutput string   `json:"signed_compressed_output"`
+	UnsignedOutput         string   `json:"unsigned_output"`
+	ProvidesLibs           []string `json:"provides_native_libs"`
+	RequiresLibs           []string `json:"requires_native_libs"`
+	BundleKeyInfo          []string `json:"bundle_key_info"`
+	ContainerKeyInfo       []string `json:"container_key_info"`
+	PackageName            string   `json:"package_name"`
+	SymbolsUsedByApex      string   `json:"symbols_used_by_apex"`
+	JavaSymbolsUsedByApex  string   `json:"java_symbols_used_by_apex"`
+	BackingLibs            string   `json:"backing_libs"`
+	BundleFile             string   `json:"bundle_file"`
+	InstalledFiles         string   `json:"installed_files"`
+	TidyFiles              []string `json:"tidy_files"`
+
+	// From the ApexMkInfo provider
+	MakeModulesToInstall []string `json:"make_modules_to_install"`
 }
 
 // ParseResult returns a value obtained by parsing the result of the request's Starlark function.
@@ -282,15 +325,38 @@ func (g getCcUnstrippedInfoType) Name() string {
 }
 
 func (g getCcUnstrippedInfoType) StarlarkFunctionBody() string {
-	return `unstripped_tag = "//build/bazel/rules/cc:stripped_cc_common.bzl%CcUnstrippedInfo"
+	return `
 p = providers(target)
 output_path = target.files.to_list()[0].path
+
 unstripped = output_path
+unstripped_tag = "//build/bazel/rules/cc:stripped_cc_common.bzl%CcUnstrippedInfo"
 if unstripped_tag in p:
-    unstripped = p[unstripped_tag].unstripped.files.to_list()[0].path
+    unstripped_info = p[unstripped_tag]
+    unstripped = unstripped_info.unstripped.files.to_list()[0].path
+
+local_static_libs = []
+local_whole_static_libs = []
+local_shared_libs = []
+androidmk_tag = "//build/bazel/rules/cc:cc_library_common.bzl%CcAndroidMkInfo"
+if androidmk_tag in p:
+    androidmk_info = p[androidmk_tag]
+    local_static_libs = androidmk_info.local_static_libs
+    local_whole_static_libs = androidmk_info.local_whole_static_libs
+    local_shared_libs = androidmk_info.local_shared_libs
+
+tidy_files = []
+clang_tidy_info = p.get("//build/bazel/rules/cc:clang_tidy.bzl%ClangTidyInfo")
+if clang_tidy_info:
+    tidy_files = [v.path for v in clang_tidy_info.transitive_tidy_files.to_list()]
+
 return json_encode({
     "OutputFile":  output_path,
     "UnstrippedOutput": unstripped,
+    "LocalStaticLibs": [l for l in local_static_libs],
+    "LocalWholeStaticLibs": [l for l in local_whole_static_libs],
+    "LocalSharedLibs": [l for l in local_shared_libs],
+    "TidyFiles": [t for t in tidy_files],
 })
 `
 }
@@ -305,8 +371,10 @@ func (g getCcUnstrippedInfoType) ParseResult(rawString string) (CcUnstrippedInfo
 }
 
 type CcUnstrippedInfo struct {
+	CcAndroidMkInfo
 	OutputFile       string
 	UnstrippedOutput string
+	TidyFiles        []string
 }
 
 // splitOrEmpty is a modification of strings.Split() that returns an empty list

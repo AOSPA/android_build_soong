@@ -35,6 +35,7 @@ func registerBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_filesystem", filesystemFactory)
 	ctx.RegisterModuleType("android_system_image", systemImageFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer", avbAddHashFooterFactory)
+	ctx.RegisterModuleType("avb_gen_vbmeta_image", avbGenVbmetaImageFactory)
 }
 
 type filesystem struct {
@@ -69,10 +70,11 @@ type filesystemProperties struct {
 	// TODO(jiyong): allow apex_key to be specified here
 	Avb_private_key *string `android:"path"`
 
-	// Hash and signing algorithm for avbtool. Default is SHA256_RSA4096.
+	// Signing algorithm for avbtool. Default is SHA256_RSA4096.
 	Avb_algorithm *string
 
-	// Hash and signing algorithm for avbtool. Default is SHA256_RSA4096.
+	// Hash algorithm used for avbtool (for descriptors). This is passed as hash_algorithm to
+	// avbtool. Default used by avbtool is sha1.
 	Avb_hash_algorithm *string
 
 	// Name of the partition stored in vbmeta desc. Defaults to the name of this module.

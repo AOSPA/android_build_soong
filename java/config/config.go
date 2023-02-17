@@ -96,8 +96,6 @@ func init() {
 	}, dexerJavaVmFlagsList...))
 	exportedVars.ExportStringListStaticVariable("R8Flags", append([]string{
 		"-JXmx2048M",
-		// Disable this optimization as it can impact weak reference semantics. See b/233432839.
-		"-JDcom.android.tools.r8.disableEnqueuerDeferredTracing=true",
 	}, dexerJavaVmFlagsList...))
 
 	exportedVars.ExportStringListStaticVariable("CommonJdkFlags", []string{
@@ -197,6 +195,7 @@ func init() {
 	pctx.HostBinToolVariable("ManifestMergerCmd", "manifest-merger")
 
 	pctx.HostBinToolVariable("Class2NonSdkList", "class2nonsdklist")
+	pctx.HostBinToolVariable("MergeCsvCommand", "merge_csv")
 	pctx.HostBinToolVariable("HiddenAPI", "hiddenapi")
 
 	hostBinToolVariableWithSdkToolsPrebuilt("Aapt2Cmd", "aapt2")

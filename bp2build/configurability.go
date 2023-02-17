@@ -28,10 +28,13 @@ func getStringValue(str bazel.StringAttribute) (reflect.Value, []selects) {
 			ret[selectKey] = reflect.ValueOf(strs)
 		}
 	}
+
 	// if there is a select, use the base value as the conditions default value
 	if len(ret) > 0 {
-		ret[bazel.ConditionsDefaultSelectKey] = value
-		value = reflect.Zero(value.Type())
+		if _, ok := ret[bazel.ConditionsDefaultSelectKey]; !ok {
+			ret[bazel.ConditionsDefaultSelectKey] = value
+			value = reflect.Zero(value.Type())
+		}
 	}
 
 	return value, []selects{ret}
@@ -106,8 +109,9 @@ func getBoolValue(boolAttr bazel.BoolAttribute) (reflect.Value, []selects) {
 
 	return value, []selects{ret}
 }
-func getLabelListValues(list bazel.LabelListAttribute) (reflect.Value, []selects) {
+func getLabelListValues(list bazel.LabelListAttribute) (reflect.Value, []selects, bool) {
 	value := reflect.ValueOf(list.Value.Includes)
+	prepend := list.Prepend
 	var ret []selects
 	for _, axis := range list.SortedConfigurationAxes() {
 		configToLabels := list.ConfigurableValues[axis]
@@ -133,7 +137,7 @@ func getLabelListValues(list bazel.LabelListAttribute) (reflect.Value, []selects
 		}
 	}
 
-	return value, ret
+	return value, ret, prepend
 }
 
 func labelListSelectValue(selectKey string, list bazel.LabelList, emitEmptyList bool) (bool, reflect.Value) {
@@ -156,6 +160,12 @@ var (
 // select statements.
 func prettyPrintAttribute(v bazel.Attribute, indent int) (string, error) {
 	var value reflect.Value
+	// configurableAttrs is the list of individual select statements to be
+	// concatenated together. These select statements should be along different
+	// axes. For example, one element may be
+	// `select({"//color:red": "one", "//color:green": "two"})`, and the second
+	// element may be `select({"//animal:cat": "three", "//animal:dog": "four"}).
+	// These selects should be sorted by axis identifier.
 	var configurableAttrs []selects
 	var prepend bool
 	var defaultSelectValue *string
@@ -173,7 +183,7 @@ func prettyPrintAttribute(v bazel.Attribute, indent int) (string, error) {
 		value, configurableAttrs, prepend = getStringListValues(list)
 		defaultSelectValue = &emptyBazelList
 	case bazel.LabelListAttribute:
-		value, configurableAttrs = getLabelListValues(list)
+		value, configurableAttrs, prepend = getLabelListValues(list)
 		emitZeroValues = list.EmitEmptyList
 		defaultSelectValue = &emptyBazelList
 		if list.ForceSpecifyEmptyList && (!value.IsNil() || list.HasConfigurableValues()) {

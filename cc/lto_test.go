@@ -15,9 +15,10 @@
 package cc
 
 import (
-	"android/soong/android"
 	"strings"
 	"testing"
+
+	"android/soong/android"
 
 	"github.com/google/blueprint"
 )
@@ -176,4 +177,65 @@ func TestThinLtoOnlyOnStaticDep(t *testing.T) {
 	if w := "-flto=thin -fsplit-lto-unit"; !strings.Contains(libBazCFlags, w) {
 		t.Errorf("'baz' expected to have flags %q, but got %q", w, libFooCFlags)
 	}
+}
+
+func TestLtoDisabledButEnabledForArch(t *testing.T) {
+	t.Parallel()
+	bp := `
+	cc_library {
+		name: "libfoo",
+		srcs: ["foo.c"],
+		lto: {
+			never: true,
+		},
+		target: {
+			android_arm: {
+				lto: {
+					never: false,
+					thin: true,
+				},
+			},
+		},
+	}`
+	result := android.GroupFixturePreparers(
+		prepareForCcTest,
+	).RunTestWithBp(t, bp)
+
+	libFooWithLto := result.ModuleForTests("libfoo", "android_arm_armv7-a-neon_shared").Rule("ld")
+	libFooWithoutLto := result.ModuleForTests("libfoo", "android_arm64_armv8-a_shared").Rule("ld")
+
+	android.AssertStringDoesContain(t, "missing flag for LTO in variant that expects it",
+		libFooWithLto.Args["ldFlags"], "-flto=thin")
+	android.AssertStringDoesNotContain(t, "got flag for LTO in variant that doesn't expect it",
+		libFooWithoutLto.Args["ldFlags"], "-flto=thin")
+}
+
+func TestLtoDoesNotPropagateToRuntimeLibs(t *testing.T) {
+	t.Parallel()
+	bp := `
+	cc_library {
+		name: "runtime_libbar",
+		srcs: ["bar.c"],
+	}
+
+	cc_library {
+		name: "libfoo",
+		srcs: ["foo.c"],
+		runtime_libs: ["runtime_libbar"],
+		lto: {
+			thin: true,
+		},
+	}`
+
+	result := android.GroupFixturePreparers(
+		prepareForCcTest,
+	).RunTestWithBp(t, bp)
+
+	libFoo := result.ModuleForTests("libfoo", "android_arm_armv7-a-neon_shared").Rule("ld")
+	libBar := result.ModuleForTests("runtime_libbar", "android_arm_armv7-a-neon_shared").Rule("ld")
+
+	android.AssertStringDoesContain(t, "missing flag for LTO in LTO enabled library",
+		libFoo.Args["ldFlags"], "-flto=thin")
+	android.AssertStringDoesNotContain(t, "got flag for LTO in runtime_lib",
+		libBar.Args["ldFlags"], "-flto=thin")
 }

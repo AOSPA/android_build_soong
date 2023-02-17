@@ -73,6 +73,16 @@ func MakeLabelList(labels []Label) LabelList {
 	}
 }
 
+func SortedConfigurationAxes[T any](m map[ConfigurationAxis]T) []ConfigurationAxis {
+	keys := make([]ConfigurationAxis, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	sort.Slice(keys, func(i, j int) bool { return keys[i].less(keys[j]) })
+	return keys
+}
+
 // MakeLabelListFromTargetNames creates a LabelList from unqualified target names
 // This is a utiltity function for bp2build converters of Soong modules that have 1:many generated targets
 func MakeLabelListFromTargetNames(targetNames []string) LabelList {
@@ -152,7 +162,7 @@ func (ll *LabelList) Append(other LabelList) {
 		ll.Includes = append(ll.Includes, other.Includes...)
 	}
 	if len(ll.Excludes) > 0 || len(other.Excludes) > 0 {
-		ll.Excludes = append(other.Excludes, other.Excludes...)
+		ll.Excludes = append(ll.Excludes, other.Excludes...)
 	}
 }
 
@@ -412,13 +422,7 @@ func (la *LabelAttribute) SelectValue(axis ConfigurationAxis, config string) *La
 
 // SortedConfigurationAxes returns all the used ConfigurationAxis in sorted order.
 func (la *LabelAttribute) SortedConfigurationAxes() []ConfigurationAxis {
-	keys := make([]ConfigurationAxis, 0, len(la.ConfigurableValues))
-	for k := range la.ConfigurableValues {
-		keys = append(keys, k)
-	}
-
-	sort.Slice(keys, func(i, j int) bool { return keys[i].less(keys[j]) })
-	return keys
+	return SortedConfigurationAxes(la.ConfigurableValues)
 }
 
 // MakeLabelAttribute turns a string into a LabelAttribute
@@ -608,13 +612,7 @@ func (ba BoolAttribute) SelectValue(axis ConfigurationAxis, config string) *bool
 
 // SortedConfigurationAxes returns all the used ConfigurationAxis in sorted order.
 func (ba *BoolAttribute) SortedConfigurationAxes() []ConfigurationAxis {
-	keys := make([]ConfigurationAxis, 0, len(ba.ConfigurableValues))
-	for k := range ba.ConfigurableValues {
-		keys = append(keys, k)
-	}
-
-	sort.Slice(keys, func(i, j int) bool { return keys[i].less(keys[j]) })
-	return keys
+	return SortedConfigurationAxes(ba.ConfigurableValues)
 }
 
 // labelListSelectValues supports config-specific label_list typed Bazel attribute values.
@@ -674,6 +672,11 @@ type LabelListAttribute struct {
 	// specific select statements where an empty list for a non-default select
 	// key has a meaning.
 	EmitEmptyList bool
+
+	// If a property has struct tag "variant_prepend", this value should
+	// be set to True, so that when bp2build generates BUILD.bazel, variant
+	// properties(select ...) come before general properties.
+	Prepend bool
 }
 
 type configurableLabelLists map[ConfigurationAxis]labelListSelectValues
@@ -756,13 +759,7 @@ func (lla *LabelListAttribute) SelectValue(axis ConfigurationAxis, config string
 
 // SortedConfigurationAxes returns all the used ConfigurationAxis in sorted order.
 func (lla *LabelListAttribute) SortedConfigurationAxes() []ConfigurationAxis {
-	keys := make([]ConfigurationAxis, 0, len(lla.ConfigurableValues))
-	for k := range lla.ConfigurableValues {
-		keys = append(keys, k)
-	}
-
-	sort.Slice(keys, func(i, j int) bool { return keys[i].less(keys[j]) })
-	return keys
+	return SortedConfigurationAxes(lla.ConfigurableValues)
 }
 
 // Append all values, including os and arch specific ones, from another
@@ -803,6 +800,16 @@ func (lla *LabelListAttribute) Add(label *LabelAttribute) {
 func (lla LabelListAttribute) HasConfigurableValues() bool {
 	for _, selectValues := range lla.ConfigurableValues {
 		if len(selectValues) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAxisSpecificValues returns true if the attribute contains axis specific label list values from a given axis
+func (lla LabelListAttribute) HasAxisSpecificValues(axis ConfigurationAxis) bool {
+	for _, values := range lla.ConfigurableValues[axis] {
+		if !values.IsNil() {
 			return true
 		}
 	}
@@ -873,7 +880,7 @@ func (lla *LabelListAttribute) ResolveExcludes() {
 			// then remove all config-specific excludes
 			allLabels := baseLabels.deepCopy()
 			allLabels.Append(val)
-			lla.ConfigurableValues[axis][config] = SubtractBazelLabelList(allLabels, LabelList{Includes: val.Excludes})
+			lla.ConfigurableValues[axis][config] = SubtractBazelLabelList(allLabels, LabelList{Includes: allLabels.Excludes})
 		}
 
 		// After going through all configs, delete the duplicates in the config
@@ -1075,14 +1082,10 @@ func (cs configurableStrings) setValueForAxis(axis ConfigurationAxis, config str
 	if cs[axis] == nil {
 		cs[axis] = make(stringSelectValues)
 	}
-	var v = ""
-	if str != nil {
-		v = *str
-	}
-	cs[axis][config] = v
+	cs[axis][config] = str
 }
 
-type stringSelectValues map[string]string
+type stringSelectValues map[string]*string
 
 // HasConfigurableValues returns true if the attribute contains axis-specific string values.
 func (sa StringAttribute) HasConfigurableValues() bool {
@@ -1092,6 +1095,11 @@ func (sa StringAttribute) HasConfigurableValues() bool {
 		}
 	}
 	return false
+}
+
+// SetValue sets the base, non-configured value for the Label
+func (sa *StringAttribute) SetValue(value string) {
+	sa.SetSelectValue(NoConfigAxis, "", &value)
 }
 
 // SetSelectValue set a value for a bazel select for the given axis, config and value.
@@ -1118,7 +1126,7 @@ func (sa *StringAttribute) SelectValue(axis ConfigurationAxis, config string) *s
 		return sa.Value
 	case arch, os, osArch, productVariables:
 		if v, ok := sa.ConfigurableValues[axis][config]; ok {
-			return &v
+			return v
 		} else {
 			return nil
 		}
@@ -1129,13 +1137,7 @@ func (sa *StringAttribute) SelectValue(axis ConfigurationAxis, config string) *s
 
 // SortedConfigurationAxes returns all the used ConfigurationAxis in sorted order.
 func (sa *StringAttribute) SortedConfigurationAxes() []ConfigurationAxis {
-	keys := make([]ConfigurationAxis, 0, len(sa.ConfigurableValues))
-	for k := range sa.ConfigurableValues {
-		keys = append(keys, k)
-	}
-
-	sort.Slice(keys, func(i, j int) bool { return keys[i].less(keys[j]) })
-	return keys
+	return SortedConfigurationAxes(sa.ConfigurableValues)
 }
 
 // Collapse reduces the configurable axes of the string attribute to a single axis.
@@ -1149,7 +1151,7 @@ func (sa *StringAttribute) Collapse() error {
 	_, containsProductVariables := axisTypes[productVariables]
 	if containsProductVariables {
 		if containsOs || containsArch || containsOsArch {
-			return fmt.Errorf("boolean attribute could not be collapsed as it has two or more unrelated axes")
+			return fmt.Errorf("string attribute could not be collapsed as it has two or more unrelated axes")
 		}
 	}
 	if (containsOs && containsArch) || (containsOsArch && (containsOs || containsArch)) {
@@ -1176,13 +1178,28 @@ func (sa *StringAttribute) Collapse() error {
 				}
 			}
 		}
-		// All os_arch values are now set. Clear os and arch axes.
+		/// All os_arch values are now set. Clear os and arch axes.
 		delete(sa.ConfigurableValues, ArchConfigurationAxis)
 		delete(sa.ConfigurableValues, OsConfigurationAxis)
 		// Verify post-condition; this should never fail, provided no additional
 		// axes are introduced.
 		if len(sa.ConfigurableValues) > 1 {
 			panic(fmt.Errorf("error in collapsing attribute: %#v", sa))
+		}
+	} else if containsProductVariables {
+		usedBaseValue := false
+		for a, configToProp := range sa.ConfigurableValues {
+			if a.configurationType == productVariables {
+				for c, p := range configToProp {
+					if p == nil {
+						sa.SetSelectValue(a, c, sa.Value)
+						usedBaseValue = true
+					}
+				}
+			}
+		}
+		if usedBaseValue {
+			sa.Value = nil
 		}
 	}
 	return nil
@@ -1322,13 +1339,7 @@ func (sla *StringListAttribute) SelectValue(axis ConfigurationAxis, config strin
 
 // SortedConfigurationAxes returns all the used ConfigurationAxis in sorted order.
 func (sla *StringListAttribute) SortedConfigurationAxes() []ConfigurationAxis {
-	keys := make([]ConfigurationAxis, 0, len(sla.ConfigurableValues))
-	for k := range sla.ConfigurableValues {
-		keys = append(keys, k)
-	}
-
-	sort.Slice(keys, func(i, j int) bool { return keys[i].less(keys[j]) })
-	return keys
+	return SortedConfigurationAxes(sla.ConfigurableValues)
 }
 
 // DeduplicateAxesFromBase ensures no duplication of items between the no-configuration value and
@@ -1362,6 +1373,9 @@ func (sla *StringListAttribute) DeduplicateAxesFromBase() {
 // TryVariableSubstitution, replace string substitution formatting within each string in slice with
 // Starlark string.format compatible tag for productVariable.
 func TryVariableSubstitutions(slice []string, productVariable string) ([]string, bool) {
+	if len(slice) == 0 {
+		return slice, false
+	}
 	ret := make([]string, 0, len(slice))
 	changesMade := false
 	for _, s := range slice {

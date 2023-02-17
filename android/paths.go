@@ -16,7 +16,6 @@ package android
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1033,9 +1032,6 @@ func (p basePath) withRel(rel string) basePath {
 // SourcePath is a Path representing a file path rooted from SrcDir
 type SourcePath struct {
 	basePath
-
-	// The sources root, i.e. Config.SrcDir()
-	srcDir string
 }
 
 func (p SourcePath) RelativeToTop() Path {
@@ -1054,7 +1050,7 @@ func (p SourcePath) withRel(rel string) SourcePath {
 // code that is embedding ninja variables in paths
 func safePathForSource(ctx PathContext, pathComponents ...string) (SourcePath, error) {
 	p, err := validateSafePath(pathComponents...)
-	ret := SourcePath{basePath{p, ""}, "."}
+	ret := SourcePath{basePath{p, ""}}
 	if err != nil {
 		return ret, err
 	}
@@ -1071,7 +1067,7 @@ func safePathForSource(ctx PathContext, pathComponents ...string) (SourcePath, e
 // pathForSource creates a SourcePath from pathComponents, but does not check that it exists.
 func pathForSource(ctx PathContext, pathComponents ...string) (SourcePath, error) {
 	p, err := validatePath(pathComponents...)
-	ret := SourcePath{basePath{p, ""}, "."}
+	ret := SourcePath{basePath{p, ""}}
 	if err != nil {
 		return ret, err
 	}
@@ -1174,7 +1170,10 @@ func ExistentPathForSource(ctx PathGlobContext, pathComponents ...string) Option
 }
 
 func (p SourcePath) String() string {
-	return filepath.Join(p.srcDir, p.path)
+	if p.path == "" {
+		return "."
+	}
+	return p.path
 }
 
 // Join creates a new SourcePath with paths... joined with the current path. The
@@ -1207,7 +1206,7 @@ func (p SourcePath) OverlayPath(ctx ModuleMissingDepsPathContext, path Path) Opt
 		// No need to put the error message into the returned path since it has been reported already.
 		return OptionalPath{}
 	}
-	dir := filepath.Join(p.srcDir, p.path, relDir)
+	dir := filepath.Join(p.path, relDir)
 	// Use Glob so that we are run again if the directory is added.
 	if pathtools.IsGlob(dir) {
 		ReportPathErrorf(ctx, "Path may not contain a glob: %s", dir)
@@ -1220,8 +1219,7 @@ func (p SourcePath) OverlayPath(ctx ModuleMissingDepsPathContext, path Path) Opt
 	if len(paths) == 0 {
 		return InvalidOptionalPath(dir + " does not exist")
 	}
-	relPath := Rel(ctx, p.srcDir, paths[0])
-	return OptionalPathForPath(PathForSource(ctx, relPath))
+	return OptionalPathForPath(PathForSource(ctx, paths[0]))
 }
 
 // OutputPath is a Path representing an intermediates file path rooted from the build directory
@@ -1711,10 +1709,10 @@ func makePathForInstall(ctx ModuleInstallPathContext, os OsType, arch ArchType, 
 func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string, debug bool,
 	pathComponents ...string) InstallPath {
 
-	var partionPaths []string
+	var partitionPaths []string
 
 	if os.Class == Device {
-		partionPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
+		partitionPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
 	} else {
 		osName := os.String()
 		if os == Linux {
@@ -1736,21 +1734,21 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 		if os.Class == Host && (arch == X86_64 || arch == Common) {
 			archName = "x86"
 		}
-		partionPaths = []string{"host", osName + "-" + archName, partition}
+		partitionPaths = []string{"host", osName + "-" + archName, partition}
 	}
 	if debug {
-		partionPaths = append([]string{"debug"}, partionPaths...)
+		partitionPaths = append([]string{"debug"}, partitionPaths...)
 	}
 
-	partionPath, err := validatePath(partionPaths...)
+	partitionPath, err := validatePath(partitionPaths...)
 	if err != nil {
 		reportPathError(ctx, err)
 	}
 
 	base := InstallPath{
-		basePath:     basePath{partionPath, ""},
+		basePath:     basePath{partitionPath, ""},
 		soongOutDir:  ctx.Config().soongOutDir,
-		partitionDir: partionPath,
+		partitionDir: partitionPath,
 		partition:    partition,
 	}
 
@@ -1869,10 +1867,14 @@ func (p InstallPaths) Strings() []string {
 	return ret
 }
 
-// validateSafePath validates a path that we trust (may contain ninja variables).
-// Ensures that each path component does not attempt to leave its component.
-func validateSafePath(pathComponents ...string) (string, error) {
+// validatePathInternal ensures that a path does not leave its component, and
+// optionally doesn't contain Ninja variables.
+func validatePathInternal(allowNinjaVariables bool, pathComponents ...string) (string, error) {
 	for _, path := range pathComponents {
+		if !allowNinjaVariables && strings.Contains(path, "$") {
+			return "", fmt.Errorf("Path contains invalid character($): %s", path)
+		}
+
 		path := filepath.Clean(path)
 		if path == ".." || strings.HasPrefix(path, "../") || strings.HasPrefix(path, "/") {
 			return "", fmt.Errorf("Path is outside directory: %s", path)
@@ -1884,16 +1886,18 @@ func validateSafePath(pathComponents ...string) (string, error) {
 	return filepath.Join(pathComponents...), nil
 }
 
+// validateSafePath validates a path that we trust (may contain ninja
+// variables).  Ensures that each path component does not attempt to leave its
+// component. Returns a joined version of each path component.
+func validateSafePath(pathComponents ...string) (string, error) {
+	return validatePathInternal(true, pathComponents...)
+}
+
 // validatePath validates that a path does not include ninja variables, and that
 // each path component does not attempt to leave its component. Returns a joined
 // version of each path component.
 func validatePath(pathComponents ...string) (string, error) {
-	for _, path := range pathComponents {
-		if strings.Contains(path, "$") {
-			return "", fmt.Errorf("Path contains invalid character($): %s", path)
-		}
-	}
-	return validateSafePath(pathComponents...)
+	return validatePathInternal(false, pathComponents...)
 }
 
 func PathForPhony(ctx PathContext, phony string) WritablePath {
@@ -2094,13 +2098,16 @@ func maybeRelErr(basePath string, targetPath string) (string, bool, error) {
 
 // Writes a file to the output directory.  Attempting to write directly to the output directory
 // will fail due to the sandbox of the soong_build process.
+// Only writes the file if the file doesn't exist or if it has different contents, to prevent
+// updating the timestamp if no changes would be made. (This is better for incremental
+// performance.)
 func WriteFileToOutputDir(path WritablePath, data []byte, perm os.FileMode) error {
 	absPath := absolutePath(path.String())
 	err := os.MkdirAll(filepath.Dir(absPath), 0777)
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(absPath, data, perm)
+	return pathtools.WriteFileIfChanged(absPath, data, perm)
 }
 
 func RemoveAllOutputDir(path WritablePath) error {
