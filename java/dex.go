@@ -22,6 +22,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/java/config"
 	"android/soong/remoteexec"
 )
 
@@ -89,7 +90,10 @@ type dexer struct {
 	// list of extra proguard flag files
 	extraProguardFlagFiles android.Paths
 	proguardDictionary     android.OptionalPath
+	proguardConfiguration  android.OptionalPath
 	proguardUsageZip       android.OptionalPath
+
+	providesTransitiveHeaderJars
 }
 
 func (d *dexer) effectiveOptimizeEnabled() bool {
@@ -130,17 +134,18 @@ var d8, d8RE = pctx.MultiCommandRemoteStaticRules("d8",
 var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 	blueprint.RuleParams{
 		Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
-			`rm -f "$outDict" && rm -rf "${outUsageDir}" && ` +
+			`rm -f "$outDict" && rm -f "$outConfig" && rm -rf "${outUsageDir}" && ` +
 			`mkdir -p $$(dirname ${outUsage}) && ` +
 			`mkdir -p $$(dirname $tmpJar) && ` +
 			`${config.Zip2ZipCmd} -i $in -o $tmpJar -x '**/*.dex' && ` +
 			`$r8Template${config.R8Cmd} ${config.R8Flags} -injars $tmpJar --output $outDir ` +
 			`--no-data-resources ` +
 			`-printmapping ${outDict} ` +
+			`--pg-conf-output ${outConfig} ` +
 			`-printusage ${outUsage} ` +
 			`--deps-file ${out}.d ` +
 			`$r8Flags && ` +
-			`touch "${outDict}" "${outUsage}" && ` +
+			`touch "${outDict}" "${outConfig}" "${outUsage}" && ` +
 			`${config.SoongZipCmd} -o ${outUsageZip} -C ${outUsageDir} -f ${outUsage} && ` +
 			`rm -rf ${outUsageDir} && ` +
 			`$zipTemplate${config.SoongZipCmd} $zipFlags -o $outDir/classes.dex.jar -C $outDir -f "$outDir/classes*.dex" && ` +
@@ -176,7 +181,7 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 			ExecStrategy: "${config.RER8ExecStrategy}",
 			Platform:     map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
 		},
-	}, []string{"outDir", "outDict", "outUsage", "outUsageZip", "outUsageDir",
+	}, []string{"outDir", "outDict", "outConfig", "outUsage", "outUsageZip", "outUsageDir",
 		"r8Flags", "zipFlags", "tmpJar", "mergeZipsFlags"}, []string{"implicits"})
 
 func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
@@ -249,12 +254,37 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, flags javaBuilderFlags) (r8Fl
 	})
 
 	r8Flags = append(r8Flags, proguardRaiseDeps.FormJavaClassPath("-libraryjars"))
-	r8Flags = append(r8Flags, flags.bootClasspath.FormJavaClassPath("-libraryjars"))
-	r8Flags = append(r8Flags, flags.dexClasspath.FormJavaClassPath("-libraryjars"))
-
 	r8Deps = append(r8Deps, proguardRaiseDeps...)
+	r8Flags = append(r8Flags, flags.bootClasspath.FormJavaClassPath("-libraryjars"))
 	r8Deps = append(r8Deps, flags.bootClasspath...)
+	r8Flags = append(r8Flags, flags.dexClasspath.FormJavaClassPath("-libraryjars"))
 	r8Deps = append(r8Deps, flags.dexClasspath...)
+	r8Flags = append(r8Flags, flags.processorPath.FormJavaClassPath("-libraryjars"))
+	r8Deps = append(r8Deps, flags.processorPath...)
+
+	errorProneClasspath := classpath(android.PathsForSource(ctx, config.ErrorProneClasspath))
+	r8Flags = append(r8Flags, errorProneClasspath.FormJavaClassPath("-libraryjars"))
+	r8Deps = append(r8Deps, errorProneClasspath...)
+
+	transitiveStaticLibsLookupMap := map[android.Path]bool{}
+	if d.transitiveStaticLibsHeaderJars != nil {
+		for _, jar := range d.transitiveStaticLibsHeaderJars.ToList() {
+			transitiveStaticLibsLookupMap[jar] = true
+		}
+	}
+	transitiveHeaderJars := android.Paths{}
+	if d.transitiveLibsHeaderJars != nil {
+		for _, jar := range d.transitiveLibsHeaderJars.ToList() {
+			if _, ok := transitiveStaticLibsLookupMap[jar]; ok {
+				// don't include a lib if it is already packaged in the current JAR as a static lib
+				continue
+			}
+			transitiveHeaderJars = append(transitiveHeaderJars, jar)
+		}
+	}
+	transitiveClasspath := classpath(transitiveHeaderJars)
+	r8Flags = append(r8Flags, transitiveClasspath.FormJavaClassPath("-libraryjars"))
+	r8Deps = append(r8Deps, transitiveClasspath...)
 
 	flagFiles := android.Paths{
 		android.PathForSource(ctx, "build/make/core/proguard.flags"),
@@ -342,6 +372,8 @@ func (d *dexer) compileDex(ctx android.ModuleContext, flags javaBuilderFlags, mi
 	if useR8 {
 		proguardDictionary := android.PathForModuleOut(ctx, "proguard_dictionary")
 		d.proguardDictionary = android.OptionalPathForPath(proguardDictionary)
+		proguardConfiguration := android.PathForModuleOut(ctx, "proguard_configuration")
+		d.proguardConfiguration = android.OptionalPathForPath(proguardConfiguration)
 		proguardUsageDir := android.PathForModuleOut(ctx, "proguard_usage")
 		proguardUsage := proguardUsageDir.Join(ctx, ctx.Namespace().Path,
 			android.ModuleNameWithPossibleOverride(ctx), "unused.txt")
@@ -354,6 +386,7 @@ func (d *dexer) compileDex(ctx android.ModuleContext, flags javaBuilderFlags, mi
 			"r8Flags":        strings.Join(append(commonFlags, r8Flags...), " "),
 			"zipFlags":       zipFlags,
 			"outDict":        proguardDictionary.String(),
+			"outConfig":      proguardConfiguration.String(),
 			"outUsageDir":    proguardUsageDir.String(),
 			"outUsage":       proguardUsage.String(),
 			"outUsageZip":    proguardUsageZip.String(),

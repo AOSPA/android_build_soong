@@ -233,27 +233,42 @@ func (m MockBazelContext) QueueBazelRequest(_ string, _ cqueryRequest, _ configK
 }
 
 func (m MockBazelContext) GetOutputFiles(label string, _ configKey) ([]string, error) {
-	result, _ := m.LabelToOutputFiles[label]
+	result, ok := m.LabelToOutputFiles[label]
+	if !ok {
+		return []string{}, fmt.Errorf("no target with label %q in LabelToOutputFiles", label)
+	}
 	return result, nil
 }
 
 func (m MockBazelContext) GetCcInfo(label string, _ configKey) (cquery.CcInfo, error) {
-	result, _ := m.LabelToCcInfo[label]
+	result, ok := m.LabelToCcInfo[label]
+	if !ok {
+		return cquery.CcInfo{}, fmt.Errorf("no target with label %q in LabelToCcInfo", label)
+	}
 	return result, nil
 }
 
 func (m MockBazelContext) GetPythonBinary(label string, _ configKey) (string, error) {
-	result, _ := m.LabelToPythonBinary[label]
+	result, ok := m.LabelToPythonBinary[label]
+	if !ok {
+		return "", fmt.Errorf("no target with label %q in LabelToPythonBinary", label)
+	}
 	return result, nil
 }
 
 func (m MockBazelContext) GetApexInfo(label string, _ configKey) (cquery.ApexInfo, error) {
-	result, _ := m.LabelToApexInfo[label]
+	result, ok := m.LabelToApexInfo[label]
+	if !ok {
+		return cquery.ApexInfo{}, fmt.Errorf("no target with label %q in LabelToApexInfo", label)
+	}
 	return result, nil
 }
 
 func (m MockBazelContext) GetCcUnstrippedInfo(label string, _ configKey) (cquery.CcUnstrippedInfo, error) {
-	result, _ := m.LabelToCcBinary[label]
+	result, ok := m.LabelToCcBinary[label]
+	if !ok {
+		return cquery.CcUnstrippedInfo{}, fmt.Errorf("no target with label %q in LabelToCcBinary", label)
+	}
 	return result, nil
 }
 
@@ -1120,10 +1135,11 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 		// the 'bazel' package, which cannot depend on 'android' package where ctx is defined,
 		// because this would cause circular dependency. So, until we move aquery processing
 		// to the 'android' package, we need to handle special cases here.
-		if buildStatement.Mnemonic == "FileWrite" || buildStatement.Mnemonic == "SourceSymlinkManifest" {
+		switch buildStatement.Mnemonic {
+		case "FileWrite", "SourceSymlinkManifest":
 			out := PathForBazelOut(ctx, buildStatement.OutputPaths[0])
 			WriteFileRuleVerbatim(ctx, out, buildStatement.FileContents)
-		} else if buildStatement.Mnemonic == "SymlinkTree" {
+		case "SymlinkTree":
 			// build-runfiles arguments are the manifest file and the target directory
 			// where it creates the symlink tree according to this manifest (and then
 			// writes the MANIFEST file to it).
@@ -1142,7 +1158,7 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 					"outDir": outDir,
 				},
 			})
-		} else {
+		default:
 			panic(fmt.Sprintf("unhandled build statement: %v", buildStatement))
 		}
 	}
