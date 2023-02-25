@@ -94,10 +94,6 @@ type apexBundleProperties struct {
 	// a default one is automatically generated.
 	AndroidManifest *string `android:"path"`
 
-	// Canonical name of this APEX bundle. Used to determine the path to the activated APEX on
-	// device (/apex/<apex_name>). If unspecified, follows the name property.
-	Apex_name *string
-
 	// Determines the file contexts file for setting the security contexts to files in this APEX
 	// bundle. For platform APEXes, this should points to a file under /system/sepolicy Default:
 	// /system/sepolicy/apex/<module_name>_file_contexts.
@@ -124,10 +120,6 @@ type apexBundleProperties struct {
 	// List of filesystem images that are embedded inside this APEX bundle.
 	Filesystems []string
 
-	// The minimum SDK version that this APEX must support at minimum. This is usually set to
-	// the SDK version that the APEX was first introduced.
-	Min_sdk_version *string
-
 	// Whether this APEX is considered updatable or not. When set to true, this will enforce
 	// additional rules for making sure that the APEX is truly updatable. To be updatable,
 	// min_sdk_version should be set as well. This will also disable the size optimizations like
@@ -152,16 +144,6 @@ type apexBundleProperties struct {
 	// If set true, VNDK libs are considered as stable libs and are not included in this APEX.
 	// Should be only used in non-system apexes (e.g. vendor: true). Default is false.
 	Use_vndk_as_stable *bool
-
-	// Whether this is multi-installed APEX should skip installing symbol files.
-	// Multi-installed APEXes share the same apex_name and are installed at the same time.
-	// Default is false.
-	//
-	// Should be set to true for all multi-installed APEXes except the singular
-	// default version within the multi-installed group.
-	// Only the default version can install symbol files in $(PRODUCT_OUT}/apex,
-	// or else conflicting build rules may be created.
-	Multi_install_skip_symbol_files *bool
 
 	// The type of APEX to build. Controls what the APEX payload is. Either 'image', 'zip' or
 	// 'both'. When set to image, contents are stored in a filesystem image inside a zip
@@ -393,6 +375,10 @@ type overridableProperties struct {
 
 	// Trim against a specific Dynamic Common Lib APEX
 	Trim_against *string
+
+	// The minimum SDK version that this APEX must support at minimum. This is usually set to
+	// the SDK version that the APEX was first introduced.
+	Min_sdk_version *string
 }
 
 type apexBundle struct {
@@ -1047,7 +1033,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	// This is the main part of this mutator. Mark the collected dependencies that they need to
 	// be built for this apexBundle.
 
-	apexVariationName := proptools.StringDefault(a.properties.Apex_name, mctx.ModuleName()) // could be com.android.foo
+	apexVariationName := mctx.ModuleName() // could be com.android.foo
 	a.properties.ApexVariationName = apexVariationName
 	apexInfo := android.ApexInfo{
 		ApexVariationName: apexVariationName,
@@ -1781,6 +1767,18 @@ func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaMod
 	return af
 }
 
+func apexFileForJavaModuleProfile(ctx android.BaseModuleContext, module javaModule) *apexFile {
+	if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
+		if profilePathOnHost := dexpreopter.ProfilePathOnHost(); profilePathOnHost != nil {
+			dirInApex := "javalib"
+			af := newApexFile(ctx, profilePathOnHost, module.BaseModuleName()+"-profile", dirInApex, etc, nil)
+			af.customStem = module.Stem() + ".jar.prof"
+			return &af
+		}
+	}
+	return nil
+}
+
 // androidApp is an interface to handle all app modules (android_app, android_app_import, etc.) in
 // the same way.
 type androidApp interface {
@@ -1964,6 +1962,11 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	}
 	a.outputFile = a.outputApexFile
 
+	if len(outputs.TidyFiles) > 0 {
+		tidyFiles := android.PathsForBazelOut(ctx, outputs.TidyFiles)
+		a.outputFile = android.AttachValidationActions(ctx, a.outputFile, tidyFiles)
+	}
+
 	// TODO(b/257829940): These are used by the apex_keys_text singleton; would probably be a clearer
 	// interface if these were set in a provider rather than the module itself
 	a.publicKeyFile = android.PathForBazelOut(ctx, outputs.BundleKeyInfo[0])
@@ -1991,21 +1994,17 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
 			a.compatSymlinks.Paths()...)
 	default:
-		panic(fmt.Errorf("unexpected apex_type for the ProcessBazelQuery: %v", a.properties.ApexType))
+		panic(fmt.Errorf("internal error: unexpected apex_type for the ProcessBazelQueryResponse: %v", a.properties.ApexType))
 	}
 
-	/*
-			TODO(asmundak): compared to building an APEX with Soong, building it with Bazel does not
-			return filesInfo and requiredDeps fields (in the Soong build the latter is updated).
-			Fix this, as these fields are subsequently used in apex/androidmk.go and in apex/builder/go
-			To find out what Soong build puts there, run:
-			vctx := visitorContext{handleSpecialLibs: !android.Bool(a.properties.Ignore_system_library_special_case)}
-			ctx.WalkDepsBlueprint(func(child, parent blueprint.Module) bool {
-		      return a.depVisitor(&vctx, ctx, child, parent)
-		    })
-			vctx.normalizeFileInfo()
-	*/
-
+	// filesInfo is not set in mixed mode, because all information about the
+	// apex's contents should completely come from the Starlark providers.
+	//
+	// Prevent accidental writes to filesInfo in the earlier parts Soong by
+	// asserting it to be nil.
+	if a.filesInfo != nil {
+		panic(fmt.Errorf("internal error: filesInfo must be nil for an apex handled by Bazel."))
+	}
 }
 
 func (a *apexBundle) setCompression(ctx android.ModuleContext) {
@@ -2475,6 +2474,9 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		case *java.Library, *java.SdkLibrary:
 			af := apexFileForJavaModule(ctx, child.(javaModule))
 			vctx.filesInfo = append(vctx.filesInfo, af)
+			if profileAf := apexFileForJavaModuleProfile(ctx, child.(javaModule)); profileAf != nil {
+				vctx.filesInfo = append(vctx.filesInfo, *profileAf)
+			}
 			return true // track transitive dependencies
 		default:
 			ctx.PropertyErrorf("systemserverclasspath_fragments",
@@ -2880,7 +2882,7 @@ func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
 	// Only override the minSdkVersion value on Apexes which already specify
 	// a min_sdk_version (it's optional for non-updatable apexes), and that its
 	// min_sdk_version value is lower than the one to override with.
-	minApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
+	minApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.overridableProperties.Min_sdk_version))
 	if minApiLevel.IsNone() {
 		return ""
 	}
@@ -3541,8 +3543,8 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 	// TODO(b/219503907) this would need to be set to a.MinSdkVersionValue(ctx) but
 	// given it's coming via config, we probably don't want to put it in here.
 	var minSdkVersion bazel.StringAttribute
-	if a.properties.Min_sdk_version != nil {
-		minSdkVersion.SetValue(*a.properties.Min_sdk_version)
+	if a.overridableProperties.Min_sdk_version != nil {
+		minSdkVersion.SetValue(*a.overridableProperties.Min_sdk_version)
 	}
 	if props, ok := productVariableProps[minSdkVersionPropName]; ok {
 		for c, p := range props {

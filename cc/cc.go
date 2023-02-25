@@ -28,6 +28,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel/cquery"
 	"android/soong/cc/config"
 	"android/soong/fuzz"
 	"android/soong/genrule"
@@ -1072,6 +1073,31 @@ func (c *Module) CcLibraryInterface() bool {
 	return false
 }
 
+func (c *Module) IsFuzzModule() bool {
+	if _, ok := c.compiler.(*fuzzBinary); ok {
+		return true
+	}
+	return false
+}
+
+func (c *Module) FuzzModuleStruct() fuzz.FuzzModule {
+	return c.FuzzModule
+}
+
+func (c *Module) FuzzPackagedModule() fuzz.FuzzPackagedModule {
+	if fuzzer, ok := c.compiler.(*fuzzBinary); ok {
+		return fuzzer.fuzzPackagedModule
+	}
+	panic(fmt.Errorf("FuzzPackagedModule called on non-fuzz module: %q", c.BaseModuleName()))
+}
+
+func (c *Module) FuzzSharedLibraries() android.Paths {
+	if fuzzer, ok := c.compiler.(*fuzzBinary); ok {
+		return fuzzer.sharedLibraries
+	}
+	panic(fmt.Errorf("FuzzSharedLibraries called on non-fuzz module: %q", c.BaseModuleName()))
+}
+
 func (c *Module) NonCcVariants() bool {
 	return false
 }
@@ -1885,20 +1911,6 @@ func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
 
 func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	bazelModuleLabel := c.getBazelModuleLabel(ctx)
-
-	bazelCtx := ctx.Config().BazelContext
-	if ccInfo, err := bazelCtx.GetCcInfo(bazelModuleLabel, android.GetConfigKey(ctx)); err == nil {
-		c.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
-		c.Properties.AndroidMkSharedLibs = ccInfo.LocalSharedLibs
-		c.Properties.AndroidMkStaticLibs = ccInfo.LocalStaticLibs
-		c.Properties.AndroidMkWholeStaticLibs = ccInfo.LocalWholeStaticLibs
-	}
-	if unstrippedInfo, err := bazelCtx.GetCcUnstrippedInfo(bazelModuleLabel, android.GetConfigKey(ctx)); err == nil {
-		c.Properties.AndroidMkSharedLibs = unstrippedInfo.LocalSharedLibs
-		c.Properties.AndroidMkStaticLibs = unstrippedInfo.LocalStaticLibs
-		c.Properties.AndroidMkWholeStaticLibs = unstrippedInfo.LocalWholeStaticLibs
-	}
-
 	c.bazelHandler.ProcessBazelQueryResponse(ctx, bazelModuleLabel)
 
 	c.setSubnameProperty(ctx)
@@ -2091,6 +2103,12 @@ func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 			return
 		}
 	}
+}
+
+func (c *Module) setAndroidMkVariablesFromCquery(info cquery.CcAndroidMkInfo) {
+	c.Properties.AndroidMkSharedLibs = info.LocalSharedLibs
+	c.Properties.AndroidMkStaticLibs = info.LocalStaticLibs
+	c.Properties.AndroidMkWholeStaticLibs = info.LocalWholeStaticLibs
 }
 
 func (c *Module) toolchain(ctx android.BaseModuleContext) config.Toolchain {

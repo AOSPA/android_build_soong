@@ -29,8 +29,10 @@ import (
 	"android/soong/android/allowlists"
 	"android/soong/bazel/cquery"
 	"android/soong/shared"
+	"android/soong/starlark_fmt"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/metrics"
 
 	"android/soong/bazel"
 )
@@ -43,6 +45,30 @@ var (
 		Description: "",
 		CommandDeps: []string{"${bazelBuildRunfilesTool}"},
 	}, "outDir")
+	allowedBazelEnvironmentVars = []string{
+		// clang-tidy
+		"ALLOW_LOCAL_TIDY_TRUE",
+		"DEFAULT_TIDY_HEADER_DIRS",
+		"TIDY_TIMEOUT",
+		"WITH_TIDY",
+		"WITH_TIDY_FLAGS",
+		"TIDY_EXTERNAL_VENDOR",
+
+		"SKIP_ABI_CHECKS",
+		"UNSAFE_DISABLE_APEX_ALLOWED_DEPS_CHECK",
+		"AUTO_ZERO_INITIALIZE",
+		"AUTO_PATTERN_INITIALIZE",
+		"AUTO_UNINITIALIZE",
+		"USE_CCACHE",
+		"LLVM_NEXT",
+		"ALLOW_UNKNOWN_WARNING_OPTION",
+
+		// Overrides the version in the apex_manifest.json. The version is unique for
+		// each branch (internal, aosp, mainline releases, dessert releases).  This
+		// enables modules built on an older branch to be installed against a newer
+		// device for development purposes.
+		"OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION",
+	}
 )
 
 func init() {
@@ -110,6 +136,10 @@ func (c cqueryKey) String() string {
 	return fmt.Sprintf("cquery(%s,%s,%s)", c.label, c.requestType.Name(), c.configKey)
 }
 
+type invokeBazelContext interface {
+	GetEventHandler() *metrics.EventHandler
+}
+
 // BazelContext is a context object useful for interacting with Bazel during
 // the course of a build. Use of Bazel to evaluate part of the build graph
 // is referred to as a "mixed build". (Some modules are managed by Soong,
@@ -146,7 +176,7 @@ type BazelContext interface {
 	// Issues commands to Bazel to receive results for all cquery requests
 	// queued in the BazelContext. The ctx argument is optional and is only
 	// used for performance data collection
-	InvokeBazel(config Config, ctx *Context) error
+	InvokeBazel(config Config, ctx invokeBazelContext) error
 
 	// Returns true if Bazel handling is enabled for the module with the given name.
 	// Note that this only implies "bazel mixed build" allowlisting. The caller
@@ -165,8 +195,8 @@ type BazelContext interface {
 }
 
 type bazelRunner interface {
-	createBazelCommand(paths *bazelPaths, runName bazel.RunName, command bazelCommand, extraFlags ...string) *exec.Cmd
-	issueBazelCommand(bazelCmd *exec.Cmd) (output string, errorMessage string, error error)
+	createBazelCommand(config Config, paths *bazelPaths, runName bazel.RunName, command bazelCommand, extraFlags ...string) *exec.Cmd
+	issueBazelCommand(bazelCmd *exec.Cmd, eventHandler *metrics.EventHandler) (output string, errorMessage string, error error)
 }
 
 type bazelPaths struct {
@@ -183,9 +213,11 @@ type bazelPaths struct {
 // and their results after the requests have been made.
 type mixedBuildBazelContext struct {
 	bazelRunner
-	paths        *bazelPaths
-	requests     map[cqueryKey]bool // cquery requests that have not yet been issued to Bazel
-	requestMutex sync.Mutex         // requests can be written in parallel
+	paths *bazelPaths
+	// cquery requests that have not yet been issued to Bazel. This list is maintained
+	// in a sorted state, and is guaranteed to have no duplicates.
+	requests     []cqueryKey
+	requestMutex sync.Mutex // requests can be written in parallel
 
 	results map[cqueryKey]string // Results of cquery requests after Bazel invocations
 
@@ -272,7 +304,7 @@ func (m MockBazelContext) GetCcUnstrippedInfo(label string, _ configKey) (cquery
 	return result, nil
 }
 
-func (m MockBazelContext) InvokeBazel(_ Config, _ *Context) error {
+func (m MockBazelContext) InvokeBazel(_ Config, _ invokeBazelContext) error {
 	panic("unimplemented")
 }
 
@@ -296,7 +328,29 @@ func (bazelCtx *mixedBuildBazelContext) QueueBazelRequest(label string, requestT
 	key := makeCqueryKey(label, requestType, cfgKey)
 	bazelCtx.requestMutex.Lock()
 	defer bazelCtx.requestMutex.Unlock()
-	bazelCtx.requests[key] = true
+
+	// Insert key into requests, maintaining the sort, and only if it's not duplicate.
+	keyString := key.String()
+	foundEqual := false
+	notLessThanKeyString := func(i int) bool {
+		s := bazelCtx.requests[i].String()
+		v := strings.Compare(s, keyString)
+		if v == 0 {
+			foundEqual = true
+		}
+		return v >= 0
+	}
+	targetIndex := sort.Search(len(bazelCtx.requests), notLessThanKeyString)
+	if foundEqual {
+		return
+	}
+
+	if targetIndex == len(bazelCtx.requests) {
+		bazelCtx.requests = append(bazelCtx.requests, key)
+	} else {
+		bazelCtx.requests = append(bazelCtx.requests[:targetIndex+1], bazelCtx.requests[targetIndex:]...)
+		bazelCtx.requests[targetIndex] = key
+	}
 }
 
 func (bazelCtx *mixedBuildBazelContext) GetOutputFiles(label string, cfgKey configKey) ([]string, error) {
@@ -368,7 +422,7 @@ func (n noopBazelContext) GetCcUnstrippedInfo(_ string, _ configKey) (cquery.CcU
 	panic("implement me")
 }
 
-func (n noopBazelContext) InvokeBazel(_ Config, _ *Context) error {
+func (n noopBazelContext) InvokeBazel(_ Config, _ invokeBazelContext) error {
 	panic("unimplemented")
 }
 
@@ -487,7 +541,6 @@ func NewBazelContext(c *config) (BazelContext, error) {
 	return &mixedBuildBazelContext{
 		bazelRunner:           &builtinBazelRunner{},
 		paths:                 &paths,
-		requests:              make(map[cqueryKey]bool),
 		modulesDefaultToBazel: c.BuildMode == BazelDevMode,
 		bazelEnabledModules:   enabledModules,
 		bazelDisabledModules:  disabledModules,
@@ -535,7 +588,7 @@ type mockBazelRunner struct {
 	extraFlags []string
 }
 
-func (r *mockBazelRunner) createBazelCommand(_ *bazelPaths, _ bazel.RunName,
+func (r *mockBazelRunner) createBazelCommand(_ Config, _ *bazelPaths, _ bazel.RunName,
 	command bazelCommand, extraFlags ...string) *exec.Cmd {
 	r.commands = append(r.commands, command)
 	r.extraFlags = append(r.extraFlags, strings.Join(extraFlags, " "))
@@ -547,7 +600,7 @@ func (r *mockBazelRunner) createBazelCommand(_ *bazelPaths, _ bazel.RunName,
 	return cmd
 }
 
-func (r *mockBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd) (string, string, error) {
+func (r *mockBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd, _ *metrics.EventHandler) (string, string, error) {
 	if command, ok := r.tokens[bazelCmd]; ok {
 		return r.bazelCommandResults[command], "", nil
 	}
@@ -560,7 +613,9 @@ type builtinBazelRunner struct{}
 // Returns (stdout, stderr, error). The first and second return values are strings
 // containing the stdout and stderr of the run command, and an error is returned if
 // the invocation returned an error code.
-func (r *builtinBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd) (string, string, error) {
+func (r *builtinBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd, eventHandler *metrics.EventHandler) (string, string, error) {
+	eventHandler.Begin("bazel command")
+	defer eventHandler.End("bazel command")
 	stderr := &bytes.Buffer{}
 	bazelCmd.Stderr = stderr
 	if output, err := bazelCmd.Output(); err != nil {
@@ -572,7 +627,7 @@ func (r *builtinBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd) (string, stri
 	}
 }
 
-func (r *builtinBazelRunner) createBazelCommand(paths *bazelPaths, runName bazel.RunName, command bazelCommand,
+func (r *builtinBazelRunner) createBazelCommand(config Config, paths *bazelPaths, runName bazel.RunName, command bazelCommand,
 	extraFlags ...string) *exec.Cmd {
 	cmdFlags := []string{
 		"--output_base=" + absolutePath(paths.outputBase),
@@ -615,6 +670,13 @@ func (r *builtinBazelRunner) createBazelCommand(paths *bazelPaths, runName bazel
 		// Disables local host detection of gcc; toolchain information is defined
 		// explicitly in BUILD files.
 		"BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1",
+	}
+	for _, envvar := range allowedBazelEnvironmentVars {
+		val := config.Getenv(envvar)
+		if val == "" {
+			continue
+		}
+		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", envvar, val))
 	}
 	bazelCmd.Env = append(os.Environ(), extraEnv...)
 
@@ -727,14 +789,23 @@ config_node(name = "%s",
 	configNodesSection := ""
 
 	labelsByConfig := map[string][]string{}
-	for val := range context.requests {
+
+	for _, val := range context.requests {
 		labelString := fmt.Sprintf("\"@%s\"", val.label)
 		configString := getConfigString(val)
 		labelsByConfig[configString] = append(labelsByConfig[configString], labelString)
 	}
 
+	// Configs need to be sorted to maintain determinism of the BUILD file.
+	sortedConfigs := make([]string, 0, len(labelsByConfig))
+	for val := range labelsByConfig {
+		sortedConfigs = append(sortedConfigs, val)
+	}
+	sort.Slice(sortedConfigs, func(i, j int) bool { return sortedConfigs[i] < sortedConfigs[j] })
+
 	allLabels := []string{}
-	for configString, labels := range labelsByConfig {
+	for _, configString := range sortedConfigs {
+		labels := labelsByConfig[configString]
 		configTokens := strings.Split(configString, "|")
 		if len(configTokens) != 2 {
 			panic(fmt.Errorf("Unexpected config string format: %s", configString))
@@ -765,7 +836,7 @@ func indent(original string) string {
 // request type.
 func (context *mixedBuildBazelContext) cqueryStarlarkFileContents() []byte {
 	requestTypeToCqueryIdEntries := map[cqueryRequest][]string{}
-	for val := range context.requests {
+	for _, val := range context.requests {
 		cqueryId := getCqueryId(val)
 		mapEntryString := fmt.Sprintf("%q : True", cqueryId)
 		requestTypeToCqueryIdEntries[val.requestType] =
@@ -921,11 +992,10 @@ var (
 
 // Issues commands to Bazel to receive results for all cquery requests
 // queued in the BazelContext.
-func (context *mixedBuildBazelContext) InvokeBazel(config Config, ctx *Context) error {
-	if ctx != nil {
-		ctx.EventHandler.Begin("bazel")
-		defer ctx.EventHandler.End("bazel")
-	}
+func (context *mixedBuildBazelContext) InvokeBazel(config Config, ctx invokeBazelContext) error {
+	eventHandler := ctx.GetEventHandler()
+	eventHandler.Begin("bazel")
+	defer eventHandler.End("bazel")
 
 	if metricsDir := context.paths.BazelMetricsDir(); metricsDir != "" {
 		if err := os.MkdirAll(metricsDir, 0777); err != nil {
@@ -933,26 +1003,25 @@ func (context *mixedBuildBazelContext) InvokeBazel(config Config, ctx *Context) 
 		}
 	}
 	context.results = make(map[cqueryKey]string)
-	if err := context.runCquery(ctx); err != nil {
+	if err := context.runCquery(config, ctx); err != nil {
 		return err
 	}
 	if err := context.runAquery(config, ctx); err != nil {
 		return err
 	}
-	if err := context.generateBazelSymlinks(ctx); err != nil {
+	if err := context.generateBazelSymlinks(config, ctx); err != nil {
 		return err
 	}
 
 	// Clear requests.
-	context.requests = map[cqueryKey]bool{}
+	context.requests = []cqueryKey{}
 	return nil
 }
 
-func (context *mixedBuildBazelContext) runCquery(ctx *Context) error {
-	if ctx != nil {
-		ctx.EventHandler.Begin("cquery")
-		defer ctx.EventHandler.End("cquery")
-	}
+func (context *mixedBuildBazelContext) runCquery(config Config, ctx invokeBazelContext) error {
+	eventHandler := ctx.GetEventHandler()
+	eventHandler.Begin("cquery")
+	defer eventHandler.End("cquery")
 	soongInjectionPath := absolutePath(context.paths.injectedFilesDir())
 	mixedBuildsPath := filepath.Join(soongInjectionPath, "mixed_builds")
 	if _, err := os.Stat(mixedBuildsPath); os.IsNotExist(err) {
@@ -961,23 +1030,23 @@ func (context *mixedBuildBazelContext) runCquery(ctx *Context) error {
 			return err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(soongInjectionPath, "WORKSPACE.bazel"), []byte{}, 0666); err != nil {
+	if err := writeFileBytesIfChanged(filepath.Join(soongInjectionPath, "WORKSPACE.bazel"), []byte{}, 0666); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(mixedBuildsPath, "main.bzl"), context.mainBzlFileContents(), 0666); err != nil {
+	if err := writeFileBytesIfChanged(filepath.Join(mixedBuildsPath, "main.bzl"), context.mainBzlFileContents(), 0666); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(mixedBuildsPath, "BUILD.bazel"), context.mainBuildFileContents(), 0666); err != nil {
+	if err := writeFileBytesIfChanged(filepath.Join(mixedBuildsPath, "BUILD.bazel"), context.mainBuildFileContents(), 0666); err != nil {
 		return err
 	}
 	cqueryFileRelpath := filepath.Join(context.paths.injectedFilesDir(), "buildroot.cquery")
-	if err := os.WriteFile(absolutePath(cqueryFileRelpath), context.cqueryStarlarkFileContents(), 0666); err != nil {
+	if err := writeFileBytesIfChanged(absolutePath(cqueryFileRelpath), context.cqueryStarlarkFileContents(), 0666); err != nil {
 		return err
 	}
 
-	cqueryCommandWithFlag := context.createBazelCommand(context.paths, bazel.CqueryBuildRootRunName, cqueryCmd,
+	cqueryCommandWithFlag := context.createBazelCommand(config, context.paths, bazel.CqueryBuildRootRunName, cqueryCmd,
 		"--output=starlark", "--starlark:file="+absolutePath(cqueryFileRelpath))
-	cqueryOutput, cqueryErrorMessage, cqueryErr := context.issueBazelCommand(cqueryCommandWithFlag)
+	cqueryOutput, cqueryErrorMessage, cqueryErr := context.issueBazelCommand(cqueryCommandWithFlag, eventHandler)
 	if cqueryErr != nil {
 		return cqueryErr
 	}
@@ -992,7 +1061,7 @@ func (context *mixedBuildBazelContext) runCquery(ctx *Context) error {
 			cqueryResults[splitLine[0]] = splitLine[1]
 		}
 	}
-	for val := range context.requests {
+	for _, val := range context.requests {
 		if cqueryResult, ok := cqueryResults[getCqueryId(val)]; ok {
 			context.results[val] = cqueryResult
 		} else {
@@ -1003,11 +1072,18 @@ func (context *mixedBuildBazelContext) runCquery(ctx *Context) error {
 	return nil
 }
 
-func (context *mixedBuildBazelContext) runAquery(config Config, ctx *Context) error {
-	if ctx != nil {
-		ctx.EventHandler.Begin("aquery")
-		defer ctx.EventHandler.End("aquery")
+func writeFileBytesIfChanged(path string, contents []byte, perm os.FileMode) error {
+	oldContents, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(contents, oldContents) {
+		err = os.WriteFile(path, contents, perm)
 	}
+	return nil
+}
+
+func (context *mixedBuildBazelContext) runAquery(config Config, ctx invokeBazelContext) error {
+	eventHandler := ctx.GetEventHandler()
+	eventHandler.Begin("aquery")
+	defer eventHandler.End("aquery")
 	// Issue an aquery command to retrieve action information about the bazel build tree.
 	//
 	// Use jsonproto instead of proto; actual proto parsing would require a dependency on Bazel's
@@ -1032,24 +1108,23 @@ func (context *mixedBuildBazelContext) runAquery(config Config, ctx *Context) er
 			extraFlags = append(extraFlags, "--instrumentation_filter="+strings.Join(paths, ","))
 		}
 	}
-	aqueryOutput, _, err := context.issueBazelCommand(context.createBazelCommand(context.paths, bazel.AqueryBuildRootRunName, aqueryCmd,
-		extraFlags...))
+	aqueryOutput, _, err := context.issueBazelCommand(context.createBazelCommand(config, context.paths, bazel.AqueryBuildRootRunName, aqueryCmd,
+		extraFlags...), eventHandler)
 	if err != nil {
 		return err
 	}
-	context.buildStatements, context.depsets, err = bazel.AqueryBuildStatements([]byte(aqueryOutput))
+	context.buildStatements, context.depsets, err = bazel.AqueryBuildStatements([]byte(aqueryOutput), eventHandler)
 	return err
 }
 
-func (context *mixedBuildBazelContext) generateBazelSymlinks(ctx *Context) error {
-	if ctx != nil {
-		ctx.EventHandler.Begin("symlinks")
-		defer ctx.EventHandler.End("symlinks")
-	}
+func (context *mixedBuildBazelContext) generateBazelSymlinks(config Config, ctx invokeBazelContext) error {
+	eventHandler := ctx.GetEventHandler()
+	eventHandler.Begin("symlinks")
+	defer eventHandler.End("symlinks")
 	// Issue a build command of the phony root to generate symlink forests for dependencies of the
 	// Bazel build. This is necessary because aquery invocations do not generate this symlink forest,
 	// but some of symlinks may be required to resolve source dependencies of the build.
-	_, _, err := context.issueBazelCommand(context.createBazelCommand(context.paths, bazel.BazelBuildPhonyRootRunName, buildCmd))
+	_, _, err := context.issueBazelCommand(context.createBazelCommand(config, context.paths, bazel.BazelBuildPhonyRootRunName, buildCmd), eventHandler)
 	return err
 }
 
@@ -1258,4 +1333,14 @@ func GetConfigKey(ctx BaseModuleContext) configKey {
 
 func bazelDepsetName(contentHash string) string {
 	return fmt.Sprintf("bazel_depset_%s", contentHash)
+}
+
+func EnvironmentVarsFile(config Config) string {
+	return fmt.Sprintf(bazel.GeneratedBazelFileWarning+`
+_env = %s
+
+env = _env
+`,
+		starlark_fmt.PrintStringList(allowedBazelEnvironmentVars, 0),
+	)
 }
