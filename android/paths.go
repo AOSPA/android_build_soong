@@ -16,7 +16,6 @@ package android
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1868,10 +1867,14 @@ func (p InstallPaths) Strings() []string {
 	return ret
 }
 
-// validateSafePath validates a path that we trust (may contain ninja variables).
-// Ensures that each path component does not attempt to leave its component.
-func validateSafePath(pathComponents ...string) (string, error) {
+// validatePathInternal ensures that a path does not leave its component, and
+// optionally doesn't contain Ninja variables.
+func validatePathInternal(allowNinjaVariables bool, pathComponents ...string) (string, error) {
 	for _, path := range pathComponents {
+		if !allowNinjaVariables && strings.Contains(path, "$") {
+			return "", fmt.Errorf("Path contains invalid character($): %s", path)
+		}
+
 		path := filepath.Clean(path)
 		if path == ".." || strings.HasPrefix(path, "../") || strings.HasPrefix(path, "/") {
 			return "", fmt.Errorf("Path is outside directory: %s", path)
@@ -1883,16 +1886,18 @@ func validateSafePath(pathComponents ...string) (string, error) {
 	return filepath.Join(pathComponents...), nil
 }
 
+// validateSafePath validates a path that we trust (may contain ninja
+// variables).  Ensures that each path component does not attempt to leave its
+// component. Returns a joined version of each path component.
+func validateSafePath(pathComponents ...string) (string, error) {
+	return validatePathInternal(true, pathComponents...)
+}
+
 // validatePath validates that a path does not include ninja variables, and that
 // each path component does not attempt to leave its component. Returns a joined
 // version of each path component.
 func validatePath(pathComponents ...string) (string, error) {
-	for _, path := range pathComponents {
-		if strings.Contains(path, "$") {
-			return "", fmt.Errorf("Path contains invalid character($): %s", path)
-		}
-	}
-	return validateSafePath(pathComponents...)
+	return validatePathInternal(false, pathComponents...)
 }
 
 func PathForPhony(ctx PathContext, phony string) WritablePath {
@@ -2093,13 +2098,16 @@ func maybeRelErr(basePath string, targetPath string) (string, bool, error) {
 
 // Writes a file to the output directory.  Attempting to write directly to the output directory
 // will fail due to the sandbox of the soong_build process.
+// Only writes the file if the file doesn't exist or if it has different contents, to prevent
+// updating the timestamp if no changes would be made. (This is better for incremental
+// performance.)
 func WriteFileToOutputDir(path WritablePath, data []byte, perm os.FileMode) error {
 	absPath := absolutePath(path.String())
 	err := os.MkdirAll(filepath.Dir(absPath), 0777)
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(absPath, data, perm)
+	return pathtools.WriteFileIfChanged(absPath, data, perm)
 }
 
 func RemoveAllOutputDir(path WritablePath) error {

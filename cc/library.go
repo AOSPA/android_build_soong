@@ -846,7 +846,11 @@ func (handler *ccLibraryBazelHandler) generateStaticBazelBuildActions(ctx androi
 		ctx.ModuleErrorf("expected exactly one root archive file for '%s', but got %s", label, rootStaticArchives)
 		return
 	}
-	outputFilePath := android.PathForBazelOut(ctx, rootStaticArchives[0])
+	var outputFilePath android.Path = android.PathForBazelOut(ctx, rootStaticArchives[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		handler.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
+	}
 	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
 
 	objPaths := ccInfo.CcObjectFiles
@@ -882,9 +886,13 @@ func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx androi
 		ctx.ModuleErrorf("expected exactly one root dynamic library file for '%s', but got %s", label, rootDynamicLibraries)
 		return
 	}
-	outputFilePath := android.PathForBazelOut(ctx, rootDynamicLibraries[0])
-	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
+	var outputFilePath android.Path = android.PathForBazelOut(ctx, rootDynamicLibraries[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		handler.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
+	}
 
+	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
 	handler.module.linker.(*libraryDecorator).unstrippedOutputFile = android.PathForBazelOut(ctx, ccInfo.UnstrippedOutput)
 
 	var tocFile android.OptionalPath
@@ -938,6 +946,8 @@ func (handler *ccLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.Modu
 		// implementation.
 		i.(*libraryDecorator).collectedSnapshotHeaders = android.Paths{}
 	}
+
+	handler.module.setAndroidMkVariablesFromCquery(ccInfo.CcAndroidMkInfo)
 }
 
 func (library *libraryDecorator) setFlagExporterInfoFromCcInfo(ctx android.ModuleContext, ccInfo cquery.CcInfo) {
