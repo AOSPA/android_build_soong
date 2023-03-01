@@ -38,6 +38,7 @@ func hasDirectDep(ctx visitDirectDepsInterface, m android.Module, wantDep androi
 }
 
 func TestAfdoDeps(t *testing.T) {
+	t.Parallel()
 	bp := `
 	cc_library_shared {
 		name: "libTest",
@@ -93,6 +94,7 @@ func TestAfdoDeps(t *testing.T) {
 }
 
 func TestAfdoEnabledOnStaticDepNoAfdo(t *testing.T) {
+	t.Parallel()
 	bp := `
 	cc_library_shared {
 		name: "libTest",
@@ -149,4 +151,32 @@ func TestAfdoEnabledOnStaticDepNoAfdo(t *testing.T) {
 		}
 	}
 
+}
+
+func TestAfdoEnabledWithRuntimeDepNoAfdo(t *testing.T) {
+	bp := `
+	cc_library {
+		name: "libTest",
+		srcs: ["foo.c"],
+		runtime_libs: ["libFoo"],
+		afdo: true,
+	}
+
+	cc_library {
+		name: "libFoo",
+	}
+	`
+	prepareForAfdoTest := android.FixtureAddTextFile("toolchain/pgo-profiles/sampling/libTest.afdo", "TEST")
+
+	result := android.GroupFixturePreparers(
+		prepareForCcTest,
+		prepareForAfdoTest,
+	).RunTestWithBp(t, bp)
+
+	libFooVariants := result.ModuleVariantsForTests("libFoo")
+	for _, v := range libFooVariants {
+		if strings.Contains(v, "afdo-") {
+			t.Errorf("Expected no afdo variant of 'foo', got %q", v)
+		}
+	}
 }

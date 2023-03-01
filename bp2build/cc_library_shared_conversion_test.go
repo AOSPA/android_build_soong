@@ -543,7 +543,6 @@ cc_library_shared {
     ]`,
 		}),
 			MakeBazelTarget("cc_library_shared", "a", AttrNameToString{
-				"has_stubs":         `True`,
 				"stubs_symbol_file": `"a.map.txt"`,
 			}),
 		},
@@ -960,7 +959,7 @@ cc_library_shared {
         "ubsan_nullability",
     ] + select({
         "//build/bazel/platforms/os:android": ["ubsan_alignment"],
-        "//build/bazel/platforms/os:linux": ["ubsan_integer_overflow"],
+        "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
         "//conditions:default": [],
     })`,
 				"local_includes": `["."]`,

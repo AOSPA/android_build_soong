@@ -155,6 +155,7 @@ func TestPrepareForTestWithCcDefaultModules(t *testing.T) {
 }
 
 func TestVendorSrc(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library {
 			name: "libTest",
@@ -221,6 +222,7 @@ func checkInstallPartition(t *testing.T, ctx *android.TestContext, name, variant
 }
 
 func TestInstallPartition(t *testing.T) {
+	t.Parallel()
 	t.Helper()
 	ctx := prepareForCcTest.RunTestWithBp(t, `
 		cc_library {
@@ -353,6 +355,7 @@ func checkVndkLibrariesOutput(t *testing.T, ctx *android.TestContext, module str
 }
 
 func TestVndk(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_library {
 			name: "libvndk",
@@ -570,6 +573,7 @@ func TestVndk(t *testing.T) {
 }
 
 func TestVndkWithHostSupported(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library {
 			name: "libvndk_host_supported",
@@ -606,6 +610,7 @@ func TestVndkWithHostSupported(t *testing.T) {
 }
 
 func TestVndkLibrariesTxtAndroidMk(t *testing.T) {
+	t.Parallel()
 	bp := `
 		llndk_libraries_txt {
 			name: "llndk.libraries.txt",
@@ -622,6 +627,7 @@ func TestVndkLibrariesTxtAndroidMk(t *testing.T) {
 }
 
 func TestVndkUsingCoreVariant(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_library {
 			name: "libvndk",
@@ -674,6 +680,7 @@ func TestVndkUsingCoreVariant(t *testing.T) {
 }
 
 func TestDataLibs(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_test_library {
 			name: "test_lib",
@@ -724,6 +731,7 @@ func TestDataLibs(t *testing.T) {
 }
 
 func TestDataLibsRelativeInstallPath(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_test_library {
 			name: "test_lib",
@@ -782,6 +790,7 @@ func TestDataLibsRelativeInstallPath(t *testing.T) {
 }
 
 func TestTestBinaryTestSuites(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_test {
 			name: "main_test",
@@ -813,6 +822,7 @@ func TestTestBinaryTestSuites(t *testing.T) {
 }
 
 func TestTestLibraryTestSuites(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_test_library {
 			name: "main_test_lib",
@@ -844,6 +854,7 @@ func TestTestLibraryTestSuites(t *testing.T) {
 }
 
 func TestVndkWhenVndkVersionIsNotSet(t *testing.T) {
+	t.Parallel()
 	ctx := testCcNoVndk(t, `
 		cc_library {
 			name: "libvndk",
@@ -900,6 +911,7 @@ func TestVndkWhenVndkVersionIsNotSet(t *testing.T) {
 }
 
 func TestVndkModuleError(t *testing.T) {
+	t.Parallel()
 	// Check the error message for vendor_available and product_available properties.
 	testCcErrorProductVndk(t, "vndk: vendor_available must be set to true when `vndk: {enabled: true}`", `
 		cc_library {
@@ -941,6 +953,7 @@ func TestVndkModuleError(t *testing.T) {
 }
 
 func TestVndkDepError(t *testing.T) {
+	t.Parallel()
 	// Check whether an error is emitted when a VNDK lib depends on a system lib.
 	testCcError(t, "dependency \".*\" of \".*\" missing variant", `
 		cc_library {
@@ -1132,6 +1145,7 @@ func TestVndkDepError(t *testing.T) {
 }
 
 func TestDoubleLoadbleDep(t *testing.T) {
+	t.Parallel()
 	// okay to link : LLNDK -> double_loadable VNDK
 	testCc(t, `
 		cc_library {
@@ -1236,6 +1250,7 @@ func TestDoubleLoadbleDep(t *testing.T) {
 }
 
 func TestDoubleLoadableDepError(t *testing.T) {
+	t.Parallel()
 	// Check whether an error is emitted when a LLNDK depends on a non-double_loadable VNDK lib.
 	testCcError(t, "module \".*\" variant \".*\": link.* \".*\" which is not LL-NDK, VNDK-SP, .*double_loadable", `
 		cc_library {
@@ -1318,6 +1333,7 @@ func TestDoubleLoadableDepError(t *testing.T) {
 }
 
 func TestCheckVndkMembershipBeforeDoubleLoadable(t *testing.T) {
+	t.Parallel()
 	testCcError(t, "module \"libvndksp\" variant .*: .*: VNDK-SP must only depend on VNDK-SP", `
 		cc_library {
 			name: "libvndksp",
@@ -1343,6 +1359,7 @@ func TestCheckVndkMembershipBeforeDoubleLoadable(t *testing.T) {
 }
 
 func TestVndkExt(t *testing.T) {
+	t.Parallel()
 	// This test checks the VNDK-Ext properties.
 	bp := `
 		cc_library {
@@ -1430,6 +1447,7 @@ func TestVndkExt(t *testing.T) {
 }
 
 func TestVndkExtWithoutBoardVndkVersion(t *testing.T) {
+	t.Parallel()
 	// This test checks the VNDK-Ext properties when BOARD_VNDK_VERSION is not set.
 	ctx := testCcNoVndk(t, `
 		cc_library {
@@ -1461,6 +1479,7 @@ func TestVndkExtWithoutBoardVndkVersion(t *testing.T) {
 }
 
 func TestVndkExtWithoutProductVndkVersion(t *testing.T) {
+	t.Parallel()
 	// This test checks the VNDK-Ext properties when PRODUCT_PRODUCT_VNDK_VERSION is not set.
 	ctx := testCcNoProductVndk(t, `
 		cc_library {
@@ -1492,6 +1511,7 @@ func TestVndkExtWithoutProductVndkVersion(t *testing.T) {
 }
 
 func TestVndkExtError(t *testing.T) {
+	t.Parallel()
 	// This test ensures an error is emitted in ill-formed vndk-ext definition.
 	testCcError(t, "must set `vendor: true` or `product_specific: true` to set `extends: \".*\"`", `
 		cc_library {
@@ -1582,6 +1602,7 @@ func TestVndkExtError(t *testing.T) {
 }
 
 func TestVndkExtInconsistentSupportSystemProcessError(t *testing.T) {
+	t.Parallel()
 	// This test ensures an error is emitted for inconsistent support_system_process.
 	testCcError(t, "module \".*\" with mismatched support_system_process", `
 		cc_library {
@@ -1631,6 +1652,7 @@ func TestVndkExtInconsistentSupportSystemProcessError(t *testing.T) {
 }
 
 func TestVndkExtVendorAvailableFalseError(t *testing.T) {
+	t.Parallel()
 	// This test ensures an error is emitted when a VNDK-Ext library extends a VNDK library
 	// with `private: true`.
 	testCcError(t, "`extends` refers module \".*\" which has `private: true`", `
@@ -1681,6 +1703,7 @@ func TestVndkExtVendorAvailableFalseError(t *testing.T) {
 }
 
 func TestVendorModuleUseVndkExt(t *testing.T) {
+	t.Parallel()
 	// This test ensures a vendor module can depend on a VNDK-Ext library.
 	testCc(t, `
 		cc_library {
@@ -1735,6 +1758,7 @@ func TestVendorModuleUseVndkExt(t *testing.T) {
 }
 
 func TestVndkExtUseVendorLib(t *testing.T) {
+	t.Parallel()
 	// This test ensures a VNDK-Ext library can depend on a vendor library.
 	testCc(t, `
 		cc_library {
@@ -1799,6 +1823,7 @@ func TestVndkExtUseVendorLib(t *testing.T) {
 }
 
 func TestProductVndkExtDependency(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_library {
 			name: "libvndk",
@@ -1866,6 +1891,7 @@ func TestProductVndkExtDependency(t *testing.T) {
 }
 
 func TestVndkSpExtUseVndkError(t *testing.T) {
+	t.Parallel()
 	// This test ensures an error is emitted if a VNDK-SP-Ext library depends on a VNDK
 	// library.
 	testCcError(t, "module \".*\" variant \".*\": \\(.*\\) should not link to \".*\"", `
@@ -1952,6 +1978,7 @@ func TestVndkSpExtUseVndkError(t *testing.T) {
 }
 
 func TestVndkUseVndkExtError(t *testing.T) {
+	t.Parallel()
 	// This test ensures an error is emitted if a VNDK/VNDK-SP library depends on a
 	// VNDK-Ext/VNDK-SP-Ext library.
 	testCcError(t, "dependency \".*\" of \".*\" missing variant", `
@@ -2097,6 +2124,7 @@ func TestVndkUseVndkExtError(t *testing.T) {
 }
 
 func TestEnforceProductVndkVersion(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_library {
 			name: "libllndk",
@@ -2222,6 +2250,7 @@ func TestEnforceProductVndkVersion(t *testing.T) {
 }
 
 func TestEnforceProductVndkVersionErrors(t *testing.T) {
+	t.Parallel()
 	testCcErrorProductVndk(t, "dependency \".*\" of \".*\" missing variant:\n.*image:product.29", `
 		cc_library {
 			name: "libprod",
@@ -2319,6 +2348,7 @@ func TestEnforceProductVndkVersionErrors(t *testing.T) {
 }
 
 func TestMakeLinkType(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_library {
 			name: "libvndk",
@@ -2610,6 +2640,7 @@ func parseModuleDeps(text string) (modulesInOrder []android.Path, allDeps map[an
 }
 
 func TestStaticLibDepReordering(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 	cc_library {
 		name: "a",
@@ -2649,6 +2680,7 @@ func TestStaticLibDepReordering(t *testing.T) {
 }
 
 func TestStaticLibDepReorderingWithShared(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 	cc_library {
 		name: "a",
@@ -2696,6 +2728,7 @@ func checkEquals(t *testing.T, message string, expected, actual interface{}) {
 }
 
 func TestLlndkLibrary(t *testing.T) {
+	t.Parallel()
 	result := prepareForCcTest.RunTestWithBp(t, `
 	cc_library {
 		name: "libllndk",
@@ -2783,6 +2816,7 @@ func TestLlndkLibrary(t *testing.T) {
 }
 
 func TestLlndkHeaders(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 	cc_library_headers {
 		name: "libllndk_headers",
@@ -2915,6 +2949,7 @@ const runtimeLibAndroidBp = `
 `
 
 func TestRuntimeLibs(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, runtimeLibAndroidBp)
 
 	// runtime_libs for core variants use the module names without suffixes.
@@ -2951,6 +2986,7 @@ func TestRuntimeLibs(t *testing.T) {
 }
 
 func TestExcludeRuntimeLibs(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, runtimeLibAndroidBp)
 
 	variant := "android_arm64_armv8-a_shared"
@@ -2963,6 +2999,7 @@ func TestExcludeRuntimeLibs(t *testing.T) {
 }
 
 func TestRuntimeLibsNoVndk(t *testing.T) {
+	t.Parallel()
 	ctx := testCcNoVndk(t, runtimeLibAndroidBp)
 
 	// If DeviceVndkVersion is not defined, then runtime_libs are copied as-is.
@@ -3003,6 +3040,7 @@ const staticLibAndroidBp = `
 `
 
 func TestStaticLibDepExport(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, staticLibAndroidBp)
 
 	// Check the shared version of lib2.
@@ -3090,6 +3128,7 @@ func (ctx *mockContext) PropertyErrorf(property, format string, args ...interfac
 }
 
 func TestCompilerFlags(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range compilerFlagsTestCases {
 		ctx := &mockContext{result: true}
 		CheckBadCompilerFlags(ctx, "", []string{testCase.in})
@@ -3103,6 +3142,7 @@ func TestCompilerFlags(t *testing.T) {
 }
 
 func TestRecovery(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library_shared {
 			name: "librecovery",
@@ -3173,6 +3213,7 @@ func TestRamdisk(t *testing.T) {
 }
 
 func TestDataLibsPrebuiltSharedTestLibrary(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_prebuilt_test_library_shared {
 			name: "test_lib",
@@ -3219,6 +3260,7 @@ func TestDataLibsPrebuiltSharedTestLibrary(t *testing.T) {
 }
 
 func TestVersionedStubs(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library_shared {
 			name: "libFoo",
@@ -3285,6 +3327,7 @@ func TestVersionedStubs(t *testing.T) {
 }
 
 func TestVersioningMacro(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ moduleName, expected string }{
 		{"libc", "__LIBC_API__"},
 		{"libfoo", "__LIBFOO_API__"},
@@ -3305,6 +3348,7 @@ func pathsToBase(paths android.Paths) []string {
 }
 
 func TestStaticLibArchiveArgs(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library_static {
 			name: "foo",
@@ -3345,6 +3389,7 @@ func TestStaticLibArchiveArgs(t *testing.T) {
 }
 
 func TestSharedLibLinkingArgs(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library_static {
 			name: "foo",
@@ -3393,6 +3438,7 @@ func TestSharedLibLinkingArgs(t *testing.T) {
 }
 
 func TestStaticExecutable(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_binary {
 			name: "static_test",
@@ -3418,6 +3464,7 @@ func TestStaticExecutable(t *testing.T) {
 }
 
 func TestStaticDepsOrderWithStubs(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_binary {
 			name: "mybin",
@@ -3458,6 +3505,7 @@ func TestStaticDepsOrderWithStubs(t *testing.T) {
 }
 
 func TestErrorsIfAModuleDependsOnDisabled(t *testing.T) {
+	t.Parallel()
 	testCcError(t, `module "libA" .* depends on disabled module "libB"`, `
 		cc_library {
 			name: "libA",
@@ -3585,10 +3633,12 @@ func VerifyAFLFuzzTargetVariant(t *testing.T, variant string) {
 }
 
 func TestAFLFuzzTargetForDevice(t *testing.T) {
+	t.Parallel()
 	VerifyAFLFuzzTargetVariant(t, "android_arm64_armv8-a")
 }
 
 func TestAFLFuzzTargetForLinuxHost(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("requires linux")
 	}
@@ -3599,6 +3649,7 @@ func TestAFLFuzzTargetForLinuxHost(t *testing.T) {
 // Simple smoke test for the cc_fuzz target that ensures the rule compiles
 // correctly.
 func TestFuzzTarget(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_fuzz {
 			name: "fuzz_smoke_test",
@@ -3607,9 +3658,6 @@ func TestFuzzTarget(t *testing.T) {
 
 	variant := "android_arm64_armv8-a_fuzzer"
 	ctx.ModuleForTests("fuzz_smoke_test", variant).Rule("cc")
-}
-
-func TestAidl(t *testing.T) {
 }
 
 func assertString(t *testing.T, got, expected string) {
@@ -3640,6 +3688,7 @@ func assertMapKeys(t *testing.T, m map[string]string, expected []string) {
 }
 
 func TestDefaults(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_defaults {
 			name: "defaults",
@@ -3699,6 +3748,7 @@ func TestDefaults(t *testing.T) {
 }
 
 func TestProductVariableDefaults(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_defaults {
 			name: "libfoo_defaults",
@@ -3760,6 +3810,7 @@ func TestEmptyWholeStaticLibsAllowMissingDependencies(t *testing.T) {
 }
 
 func TestInstallSharedLibs(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_binary {
 			name: "bin",
@@ -3855,6 +3906,7 @@ func TestInstallSharedLibs(t *testing.T) {
 }
 
 func TestStubsLibReexportsHeaders(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library_shared {
 			name: "libclient",
@@ -3887,6 +3939,7 @@ func TestStubsLibReexportsHeaders(t *testing.T) {
 }
 
 func TestAidlFlagsPassedToTheAidlCompiler(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library {
 			name: "libfoo",
@@ -3905,6 +3958,7 @@ func TestAidlFlagsPassedToTheAidlCompiler(t *testing.T) {
 }
 
 func TestAidlFlagsWithMinSdkVersion(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		sdkVersion string
@@ -3957,6 +4011,7 @@ func TestAidlFlagsWithMinSdkVersion(t *testing.T) {
 }
 
 func TestMinSdkVersionInClangTriple(t *testing.T) {
+	t.Parallel()
 	ctx := testCc(t, `
 		cc_library_shared {
 			name: "libfoo",
@@ -3969,6 +4024,7 @@ func TestMinSdkVersionInClangTriple(t *testing.T) {
 }
 
 func TestNonDigitMinSdkVersionInClangTriple(t *testing.T) {
+	t.Parallel()
 	bp := `
 		cc_library_shared {
 			name: "libfoo",
@@ -3988,6 +4044,7 @@ func TestNonDigitMinSdkVersionInClangTriple(t *testing.T) {
 }
 
 func TestIncludeDirsExporting(t *testing.T) {
+	t.Parallel()
 
 	// Trim spaces from the beginning, end and immediately after any newline characters. Leaves
 	// embedded newline characters alone.
@@ -4259,6 +4316,7 @@ func TestIncludeDirsExporting(t *testing.T) {
 }
 
 func TestIncludeDirectoryOrdering(t *testing.T) {
+	t.Parallel()
 	baseExpectedFlags := []string{
 		"${config.ArmThumbCflags}",
 		"${config.ArmCflags}",
@@ -4464,6 +4522,7 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 }
 
 func TestCcBuildBrokenClangAsFlags(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                    string
 		clangAsFlags            []string
@@ -4509,6 +4568,7 @@ func TestCcBuildBrokenClangAsFlags(t *testing.T) {
 }
 
 func TestCcBuildBrokenClangCFlags(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                   string
 		clangCFlags            []string

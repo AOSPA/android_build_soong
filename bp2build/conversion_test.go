@@ -84,7 +84,7 @@ func TestCreateBazelFiles_QueryView_AddsTopLevelFiles(t *testing.T) {
 
 func TestCreateBazelFiles_Bp2Build_CreatesDefaultFiles(t *testing.T) {
 	testConfig := android.TestConfig("", make(map[string]string), "", make(map[string][]byte))
-	files := CreateSoongInjectionFiles(testConfig, CreateCodegenMetrics())
+	files := soongInjectionFiles(testConfig, CreateCodegenMetrics())
 
 	expectedFilePaths := []bazelFilepath{
 		{
@@ -146,6 +146,14 @@ func TestCreateBazelFiles_Bp2Build_CreatesDefaultFiles(t *testing.T) {
 		{
 			dir:      "api_levels",
 			basename: "api_levels.bzl",
+		},
+		{
+			dir:      "allowlists",
+			basename: "mixed_build_prod_allowlist.txt",
+		},
+		{
+			dir:      "allowlists",
+			basename: "mixed_build_staging_allowlist.txt",
 		},
 	}
 

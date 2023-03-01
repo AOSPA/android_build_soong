@@ -129,7 +129,8 @@ func TestInvokeBazelPopulatesBuildStatements(t *testing.T) {
 		}
 
 		cmd := RuleBuilderCommand{}
-		createCommand(&cmd, got[0], "test/exec_root", "test/bazel_out", PathContextForTesting(TestConfig("out", nil, "", nil)))
+		ctx := builderContextForTests{PathContextForTesting(TestConfig("out", nil, "", nil))}
+		createCommand(&cmd, got[0], "test/exec_root", "test/bazel_out", ctx)
 		if actual, expected := cmd.buf.String(), testCase.command; expected != actual {
 			t.Errorf("expected: [%s], actual: [%s]", expected, actual)
 		}
@@ -188,7 +189,7 @@ func verifyExtraFlags(t *testing.T, config Config, expected string) string {
 	return actual
 }
 
-func testBazelContext(t *testing.T, bazelCommandResults map[bazelCommand]string) (*bazelContext, string) {
+func testBazelContext(t *testing.T, bazelCommandResults map[bazelCommand]string) (*mixedBuildBazelContext, string) {
 	t.Helper()
 	p := bazelPaths{
 		soongOutDir:  t.TempDir(),
@@ -200,7 +201,7 @@ func testBazelContext(t *testing.T, bazelCommandResults map[bazelCommand]string)
 		bazelCommandResults[aqueryCommand] = ""
 	}
 	runner := &mockBazelRunner{bazelCommandResults: bazelCommandResults}
-	return &bazelContext{
+	return &mixedBuildBazelContext{
 		bazelRunner: runner,
 		paths:       &p,
 		requests:    map[cqueryKey]bool{},

@@ -585,6 +585,7 @@ android_library {
 					"manifest":       `"manifest/AndroidManifest.xml"`,
 					"resource_files": `[]`,
 				}),
+			MakeNeverlinkDuplicateTarget("android_library", "TestLib"),
 		}})
 }
 
@@ -628,6 +629,7 @@ android_library {
 					"manifest":       `"manifest/AndroidManifest.xml"`,
 					"resource_files": `[]`,
 				}),
+			MakeNeverlinkDuplicateTarget("android_library", "TestLib"),
 		}})
 }
 
@@ -665,6 +667,7 @@ android_library {
 					"manifest":       `"manifest/AndroidManifest.xml"`,
 					"resource_files": `[]`,
 				}),
+			MakeNeverlinkDuplicateTarget("android_library", "TestLib"),
 		}})
 }
 
@@ -685,6 +688,7 @@ func TestJavaLibraryKotlinSrcs(t *testing.T) {
         "c.kt",
     ]`,
 			}),
+			MakeNeverlinkDuplicateTarget("kt_jvm_library", "java-lib-1"),
 		},
 	})
 }
@@ -707,6 +711,7 @@ func TestJavaLibraryKotlinCommonSrcs(t *testing.T) {
     ]`,
 				"common_srcs": `["c.kt"]`,
 			}),
+			MakeNeverlinkDuplicateTarget("kt_jvm_library", "java-lib-1"),
 		},
 	})
 }

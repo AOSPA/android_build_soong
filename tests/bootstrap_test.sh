@@ -75,7 +75,6 @@ EOF
   grep -q "^# Module:.*my_great_binary_host" out/soong/build.ninja || fail "new module not found"
 }
 
-
 function test_add_android_bp() {
   setup
   run_soong
@@ -312,7 +311,6 @@ function test_create_global_include_directory() {
   fi
 
 }
-
 
 function test_add_file_to_soong_build() {
   setup
@@ -736,7 +734,6 @@ function test_json_module_graph_back_and_forth_null_build() {
 
 }
 
-
 function test_bp2build_bazel_workspace_structure {
   setup
 
@@ -802,7 +799,7 @@ EOF
     || fail "${GENERATED_BUILD_FILE_NAME} files symlinked to the wrong place"
 }
 
-function test_bp2build_reports_multiple_errors {
+function test_bp2build_fails_fast {
   setup
 
   mkdir -p "a/${GENERATED_BUILD_FILE_NAME}"
@@ -830,7 +827,7 @@ EOF
   fi
 
   grep -q "a/${GENERATED_BUILD_FILE_NAME}' exist" "$MOCK_TOP/errors" || fail "Error for a/${GENERATED_BUILD_FILE_NAME} not found"
-  grep -q "b/${GENERATED_BUILD_FILE_NAME}' exist" "$MOCK_TOP/errors" || fail "Error for b/${GENERATED_BUILD_FILE_NAME} not found"
+  grep -q -v "b/${GENERATED_BUILD_FILE_NAME}' exist" "$MOCK_TOP/errors" || fail "Error for b/${GENERATED_BUILD_FILE_NAME} found but not expected"
 }
 
 function test_bp2build_back_and_forth_null_build {
@@ -890,34 +887,4 @@ function test_queryview_null_build() {
   fi
 }
 
-test_smoke
-test_null_build
-test_soong_docs_smoke
-test_null_build_after_soong_docs
-test_soong_build_rebuilt_if_blueprint_changes
-test_glob_noop_incremental
-test_add_file_to_glob
-test_add_android_bp
-test_change_android_bp
-test_delete_android_bp
-test_add_file_to_soong_build
-test_glob_during_bootstrapping
-test_soong_build_rerun_iff_environment_changes
-test_create_global_include_directory
-test_multiple_soong_build_modes
-test_dump_json_module_graph
-test_json_module_graph_back_and_forth_null_build
-test_write_to_source_tree
-test_queryview_smoke
-test_queryview_null_build
-test_bp2build_smoke
-test_bp2build_generates_marker_file
-test_bp2build_null_build
-test_bp2build_back_and_forth_null_build
-test_bp2build_add_android_bp
-test_bp2build_add_irrelevant_file
-test_bp2build_add_to_glob
-test_bp2build_bazel_workspace_structure
-test_bp2build_bazel_workspace_add_file
-test_bp2build_build_file_precedence
-test_bp2build_reports_multiple_errors
+scan_and_run_tests

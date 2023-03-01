@@ -200,7 +200,7 @@ func (b *bazelTestRunner) PostParseProcessor(result android.CustomTestResult) {
 		return
 	}
 
-	codegenCtx := NewCodegenContext(config, ctx.Context, Bp2Build)
+	codegenCtx := NewCodegenContext(config, ctx.Context, Bp2Build, "")
 	res, errs := GenerateBazelTargets(codegenCtx, false)
 	if bazelResult.CollateErrs(errs) {
 		return
@@ -450,6 +450,14 @@ func (m *customModule) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 				if custProps.String_literal_prop != nil {
 					strAttr.SetSelectValue(axis, config, custProps.String_literal_prop)
 				}
+			}
+		}
+	}
+	productVariableProps := android.ProductVariableProperties(ctx)
+	if props, ok := productVariableProps["String_literal_prop"]; ok {
+		for c, p := range props {
+			if val, ok := p.(*string); ok {
+				strAttr.SetSelectValue(c.ConfigurationAxis(), c.SelectKey(), val)
 			}
 		}
 	}

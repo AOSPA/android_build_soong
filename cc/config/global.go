@@ -351,8 +351,6 @@ var (
 		// http://b/145211477
 		"-Wno-pointer-compare",
 		// http://b/145211022
-		"-Wno-xor-used-as-pow",
-		// http://b/145211022
 		"-Wno-final-dtor-non-final-class",
 
 		// http://b/165945989
@@ -369,8 +367,8 @@ var (
 	}
 
 	llvmNextExtraCommonGlobalCflags = []string{
-		// New warnings to be fixed after clang-r475365
-		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
+		// Do not report warnings when testing with the top of trunk LLVM.
+		"-Wno-error",
 	}
 
 	IllegalFlags = []string{
@@ -435,16 +433,7 @@ func init() {
 	exportedVars.ExportStringListStaticVariable("HostGlobalLldflags", hostGlobalLldflags)
 
 	// Export the static default CommonGlobalCflags to Bazel.
-	// TODO(187086342): handle cflags that are set in VariableFuncs.
-	bazelCommonGlobalCflags := append(
-		ClangFilterUnknownCflags(commonGlobalCflags),
-		[]string{
-			// Default to zero initialization.
-			"-ftrivial-auto-var-init=zero",
-			"-enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang",
-			"-Wno-unused-command-line-argument",
-		}...)
-	exportedVars.ExportStringList("CommonGlobalCflags", bazelCommonGlobalCflags)
+	exportedVars.ExportStringList("CommonGlobalCflags", ClangFilterUnknownCflags(commonGlobalCflags))
 
 	pctx.VariableFunc("CommonGlobalCflags", func(ctx android.PackageVarContext) string {
 		flags := commonGlobalCflags
@@ -468,10 +457,6 @@ func init() {
 			flags = append(flags, "-Wno-unused-command-line-argument")
 		}
 
-		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
-			flags = append(flags, llvmNextExtraCommonGlobalCflags...)
-		}
-
 		if ctx.Config().IsEnvTrue("ALLOW_UNKNOWN_WARNING_OPTION") {
 			flags = append(flags, "-Wno-error=unknown-warning-option")
 		}
@@ -486,8 +471,17 @@ func init() {
 		return strings.Join(deviceGlobalCflags, " ")
 	})
 
+	// Export the static default NoOverrideGlobalCflags to Bazel.
+	exportedVars.ExportStringList("NoOverrideGlobalCflags", noOverrideGlobalCflags)
+	pctx.VariableFunc("NoOverrideGlobalCflags", func(ctx android.PackageVarContext) string {
+		flags := noOverrideGlobalCflags
+		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
+			flags = append(noOverrideGlobalCflags, llvmNextExtraCommonGlobalCflags...)
+		}
+		return strings.Join(flags, " ")
+	})
+
 	exportedVars.ExportStringListStaticVariable("HostGlobalCflags", hostGlobalCflags)
-	exportedVars.ExportStringListStaticVariable("NoOverrideGlobalCflags", noOverrideGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("NoOverrideExternalGlobalCflags", noOverrideExternalGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("CommonGlobalCppflags", commonGlobalCppflags)
 	exportedVars.ExportStringListStaticVariable("ExternalCflags", extraExternalCflags)

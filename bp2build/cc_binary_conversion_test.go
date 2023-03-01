@@ -861,7 +861,7 @@ func TestCcBinaryWithUBSanPropertiesArchSpecific(t *testing.T) {
         "ubsan_nullability",
     ] + select({
         "//build/bazel/platforms/os:android": ["ubsan_alignment"],
-        "//build/bazel/platforms/os:linux": ["ubsan_integer_overflow"],
+        "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
         "//conditions:default": [],
     })`,
 			}},

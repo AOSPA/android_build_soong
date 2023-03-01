@@ -1567,6 +1567,9 @@ $(foreach x,$(MY_LIST_VAR), \
 
 $(foreach x,$(MY_LIST_VAR), \
   $(eval include foo/$(x).mk))
+
+# Check that we get as least close to correct line numbers for errors on statements inside evals
+$(eval $(call inherit-product,$(A_VAR)))
 `,
 		expected: `load("//build/make/core:product_config.rbc", "rblf")
 load("//foo:font.star", _font_init = "init")
@@ -1592,6 +1595,8 @@ def init(g, handle):
     if not _varmod_init:
       rblf.mkerror("product.mk", "Cannot find %s" % ("foo/%s.mk" % x))
     _varmod_init(g, handle)
+  # Check that we get as least close to correct line numbers for errors on statements inside evals
+  rblf.mk2rbc_error("product.mk:17", "inherit-product/include argument is too complex")
 `,
 	},
 	{
@@ -1627,6 +1632,58 @@ def init(g, handle):
   g["MY_VAR_3"] = (cfg).get(g["MY_VAR_2"], (g).get(g["MY_VAR_2"], ""))
   g["MY_VAR_4"] = rblf.mk2rbc_error("product.mk:5", "cannot handle invoking foo")
   g["MY_VAR_5"] = rblf.mk2rbc_error("product.mk:6", "reference is too complex: $(MY_VAR_2) bar")
+`,
+	},
+	{
+		desc:   "Conditional functions",
+		mkname: "product.mk",
+		in: `
+B := foo
+X := $(or $(A))
+X := $(or $(A),$(B))
+X := $(or $(A),$(B),$(C))
+X := $(and $(A))
+X := $(and $(A),$(B))
+X := $(and $(A),$(B),$(C))
+X := $(or $(A),$(B)) Y
+
+D := $(wildcard *.mk)
+X := $(or $(B),$(D))
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  g["B"] = "foo"
+  g["X"] = g.get("A", "")
+  g["X"] = g.get("A", "") or g["B"]
+  g["X"] = g.get("A", "") or g["B"] or g.get("C", "")
+  g["X"] = g.get("A", "")
+  g["X"] = g.get("A", "") and g["B"]
+  g["X"] = g.get("A", "") and g["B"] and g.get("C", "")
+  g["X"] = "%s Y" % g.get("A", "") or g["B"]
+  g["D"] = rblf.expand_wildcard("*.mk")
+  g["X"] = rblf.mk2rbc_error("product.mk:12", "Expected all arguments to $(or) or $(and) to have the same type, found \"string\" and \"list\"")
+`,
+	},
+	{
+
+		desc:   "is-lower/is-upper",
+		mkname: "product.mk",
+		in: `
+X := $(call to-lower,aBc)
+X := $(call to-upper,aBc)
+X := $(call to-lower,$(VAR))
+X := $(call to-upper,$(VAR))
+`,
+		expected: `load("//build/make/core:product_config.rbc", "rblf")
+
+def init(g, handle):
+  cfg = rblf.cfg(handle)
+  g["X"] = ("aBc").lower()
+  g["X"] = ("aBc").upper()
+  g["X"] = (g.get("VAR", "")).lower()
+  g["X"] = (g.get("VAR", "")).upper()
 `,
 	},
 }

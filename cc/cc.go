@@ -825,7 +825,6 @@ type BazelHandler interface {
 type Module struct {
 	fuzz.FuzzModule
 
-	android.SdkBase
 	android.BazelModuleBase
 
 	VendorProperties VendorProperties
@@ -1206,7 +1205,6 @@ func (c *Module) Init() android.Module {
 		android.InitBazelModule(c)
 	}
 	android.InitApexModule(c)
-	android.InitSdkAwareModule(c)
 	android.InitDefaultableModule(c)
 
 	return c
@@ -1440,7 +1438,7 @@ func (c *Module) ExcludeFromRamdiskSnapshot() bool {
 
 func isBionic(name string) bool {
 	switch name {
-	case "libc", "libm", "libdl", "libdl_android", "linker", "linkerconfig":
+	case "libc", "libm", "libdl", "libdl_android", "linker":
 		return true
 	}
 	return false
@@ -1856,8 +1854,22 @@ func (c *Module) QueueBazelCall(ctx android.BaseModuleContext) {
 	c.bazelHandler.QueueBazelCall(ctx, c.getBazelModuleLabel(ctx))
 }
 
+var (
+	mixedBuildSupportedCcTest = []string{
+		"adbd_test",
+	}
+)
+
+// IsMixedBuildSupported returns true if the module should be analyzed by Bazel
+// in any of the --bazel-mode(s). This filters at the module level and takes
+// precedence over the allowlists in allowlists/allowlists.go.
 func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	// TODO(b/261058727): Remove this (enable mised builds for modules with UBSan)
+	if c.testBinary() && !android.InList(c.Name(), mixedBuildSupportedCcTest) {
+		// Per-module rollout of mixed-builds for cc_test modules.
+		return false
+	}
+
+	// TODO(b/261058727): Remove this (enable mixed builds for modules with UBSan)
 	ubsanEnabled := c.sanitize != nil &&
 		((c.sanitize.Properties.Sanitize.Integer_overflow != nil && *c.sanitize.Properties.Sanitize.Integer_overflow) ||
 			c.sanitize.Properties.Sanitize.Misc_undefined != nil)
@@ -1890,6 +1902,8 @@ func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	}
 	mctx.ctx = mctx
 
+	// TODO(b/244432500): Get the tradefed config from the bazel target instead
+	// of generating it with Soong.
 	c.maybeInstall(mctx, apexInfo)
 }
 
@@ -2039,6 +2053,9 @@ func (c *Module) maybeUnhideFromMake() {
 	}
 }
 
+// maybeInstall is called at the end of both GenerateAndroidBuildActions and
+// ProcessBazelQueryResponse to run the install hooks for installable modules,
+// like binaries and tests.
 func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 	if !proptools.BoolDefault(c.Installable(), true) {
 		// If the module has been specifically configure to not be installed then
@@ -3536,7 +3553,7 @@ func (c *Module) IsInstallableToApex() bool {
 	if lib := c.library; lib != nil {
 		// Stub libs and prebuilt libs in a versioned SDK are not
 		// installable to APEX even though they are shared libs.
-		return lib.shared() && !lib.buildStubs() && c.ContainingSdk().Unversioned()
+		return lib.shared() && !lib.buildStubs()
 	} else if _, ok := c.linker.(testPerSrc); ok {
 		return true
 	}
@@ -3795,7 +3812,9 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 			testBinaryBp2build(ctx, c)
 		}
 	case object:
-		if !prebuilt {
+		if prebuilt {
+			prebuiltObjectBp2Build(ctx, c)
+		} else {
 			objectBp2Build(ctx, c)
 		}
 	case fullLibrary:
