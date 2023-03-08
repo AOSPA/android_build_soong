@@ -440,7 +440,7 @@ func (i BootclasspathFragmentApexContentInfo) DexBootJarPathForContentModule(mod
 		return dexJar, nil
 	} else {
 		return nil, fmt.Errorf("unknown bootclasspath_fragment content module %s, expected one of %s",
-			name, strings.Join(android.SortedStringKeys(i.contentModuleDexJarPaths), ", "))
+			name, strings.Join(android.SortedKeys(i.contentModuleDexJarPaths), ", "))
 	}
 }
 
@@ -709,7 +709,7 @@ func (b *BootclasspathFragmentModule) getImageConfig(ctx android.EarlyModuleCont
 	imageName := *imageNamePtr
 	imageConfig := imageConfigs[imageName]
 	if imageConfig == nil {
-		ctx.PropertyErrorf("image_name", "Unknown image name %q, expected one of %s", imageName, strings.Join(android.SortedStringKeys(imageConfigs), ", "))
+		ctx.PropertyErrorf("image_name", "Unknown image name %q, expected one of %s", imageName, strings.Join(android.SortedKeys(imageConfigs), ", "))
 		return nil
 	}
 	return imageConfig
@@ -1291,7 +1291,7 @@ func (module *PrebuiltBootclasspathFragmentModule) produceBootImageFiles(ctx and
 		}
 		return bootImageFiles
 	} else {
-		if profile == nil {
+		if profile == nil && imageConfig.isProfileGuided() {
 			ctx.ModuleErrorf("Unable to produce boot image files: neither boot image files nor profiles exists in the prebuilt apex")
 			return bootImageOutputs{}
 		}

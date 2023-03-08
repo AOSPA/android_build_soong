@@ -1003,7 +1003,7 @@ func (j *Module) collectJavacFlags(
 					topLevelDirs[srcFileParts[0]] = true
 				}
 			}
-			patchPaths = append(patchPaths, android.SortedStringKeys(topLevelDirs)...)
+			patchPaths = append(patchPaths, android.SortedKeys(topLevelDirs)...)
 
 			classPath := flags.classpath.FormJavaClassPath("")
 			if classPath != "" {
@@ -1487,7 +1487,14 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			}
 			// Dex compilation
 			var dexOutputFile android.OutputPath
-			dexOutputFile = j.dexer.compileDex(ctx, flags, j.MinSdkVersion(ctx), implementationAndResourcesJar, jarName)
+			params := &compileDexParams{
+				flags:         flags,
+				sdkVersion:    j.SdkVersion(ctx),
+				minSdkVersion: j.MinSdkVersion(ctx),
+				classesJar:    implementationAndResourcesJar,
+				jarName:       jarName,
+			}
+			dexOutputFile = j.dexer.compileDex(ctx, params)
 			if ctx.Failed() {
 				return
 			}
@@ -1838,15 +1845,18 @@ func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 
 // Implements android.ApexModule
 func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion android.ApiLevel) error {
-	sdkSpec := j.MinSdkVersion(ctx)
-	if !sdkSpec.Specified() {
+	sdkVersionSpec := j.SdkVersion(ctx)
+	minSdkVersionSpec := j.MinSdkVersion(ctx)
+	if !minSdkVersionSpec.Specified() {
 		return fmt.Errorf("min_sdk_version is not specified")
 	}
-	if sdkSpec.Kind == android.SdkCore {
+	// If the module is compiling against core (via sdk_version), skip comparison check.
+	if sdkVersionSpec.Kind == android.SdkCore {
 		return nil
 	}
-	if sdkSpec.ApiLevel.GreaterThan(sdkVersion) {
-		return fmt.Errorf("newer SDK(%v)", sdkSpec.ApiLevel)
+	minSdkVersion := minSdkVersionSpec.ApiLevel
+	if minSdkVersion.GreaterThan(sdkVersion) {
+		return fmt.Errorf("newer SDK(%v)", minSdkVersion)
 	}
 	return nil
 }

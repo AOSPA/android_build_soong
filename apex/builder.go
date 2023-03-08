@@ -333,6 +333,8 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		ctx.PropertyErrorf("file_contexts", "cannot find file_contexts file: %q", fileContexts.String())
 	}
 
+	useFileContextsAsIs := proptools.Bool(a.properties.Use_file_contexts_as_is)
+
 	output := android.PathForModuleOut(ctx, "file_contexts")
 	rule := android.NewRuleBuilder(pctx, ctx)
 
@@ -344,9 +346,11 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		rule.Command().Text("cat").Input(fileContexts).Text(">>").Output(output)
 		// new line
 		rule.Command().Text("echo").Text(">>").Output(output)
-		// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-		rule.Command().Text("echo").Flag("/apex_manifest\\\\.pb u:object_r:system_file:s0").Text(">>").Output(output)
-		rule.Command().Text("echo").Flag("/ u:object_r:system_file:s0").Text(">>").Output(output)
+		if !useFileContextsAsIs {
+			// force-label /apex_manifest.pb and / as system_file so that apexd can read them
+			rule.Command().Text("echo").Flag("/apex_manifest\\\\.pb u:object_r:system_file:s0").Text(">>").Output(output)
+			rule.Command().Text("echo").Flag("/ u:object_r:system_file:s0").Text(">>").Output(output)
+		}
 	case flattenedApex:
 		// For flattened apexes, install path should be prepended.
 		// File_contexts file should be emiited to make via LOCAL_FILE_CONTEXTS
@@ -359,9 +363,11 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		rule.Command().Text("awk").Text(`'/object_r/{printf("` + apexPath + `%s\n", $0)}'`).Input(fileContexts).Text(">").Output(output)
 		// new line
 		rule.Command().Text("echo").Text(">>").Output(output)
-		// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-		rule.Command().Text("echo").Flag(apexPath + `/apex_manifest\\.pb u:object_r:system_file:s0`).Text(">>").Output(output)
-		rule.Command().Text("echo").Flag(apexPath + "/ u:object_r:system_file:s0").Text(">>").Output(output)
+		if !useFileContextsAsIs {
+			// force-label /apex_manifest.pb and / as system_file so that apexd can read them
+			rule.Command().Text("echo").Flag(apexPath + `/apex_manifest\\.pb u:object_r:system_file:s0`).Text(">>").Output(output)
+			rule.Command().Text("echo").Flag(apexPath + "/ u:object_r:system_file:s0").Text(">>").Output(output)
+		}
 	default:
 		panic(fmt.Errorf("unsupported type %v", a.properties.ApexType))
 	}
@@ -476,8 +482,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		// Copy the built file to the directory. But if the symlink optimization is turned
 		// on, place a symlink to the corresponding file in /system partition instead.
 		if a.linkToSystemLib && fi.transitiveDep && fi.availableToPlatform() {
-			// TODO(jiyong): pathOnDevice should come from fi.module, not being calculated here
-			pathOnDevice := filepath.Join("/system", fi.path())
+			pathOnDevice := filepath.Join("/", fi.partition, fi.path())
 			copyCommands = append(copyCommands, "ln -sfn "+pathOnDevice+" "+destPath)
 		} else {
 			// Copy the file into APEX
@@ -544,7 +549,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 
 	if len(installMapSet) > 0 {
 		var installs []string
-		installs = append(installs, android.SortedStringKeys(installMapSet)...)
+		installs = append(installs, android.SortedKeys(installMapSet)...)
 		a.SetLicenseInstallMap(installs)
 	}
 
@@ -941,8 +946,7 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 			dir := filepath.Join("apex", bundleName, fi.installDir)
 			installDir := android.PathForModuleInstall(ctx, dir)
 			if a.linkToSystemLib && fi.transitiveDep && fi.availableToPlatform() {
-				// TODO(jiyong): pathOnDevice should come from fi.module, not being calculated here
-				pathOnDevice := filepath.Join("/system", fi.path())
+				pathOnDevice := filepath.Join("/", fi.partition, fi.path())
 				installedSymlinks = append(installedSymlinks,
 					ctx.InstallAbsoluteSymlink(installDir, fi.stem(), pathOnDevice))
 			} else {
