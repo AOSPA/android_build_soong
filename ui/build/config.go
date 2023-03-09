@@ -371,6 +371,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		"CDPATH",
 		"DISPLAY",
 		"GREP_OPTIONS",
+		"JAVAC",
 		"NDK_ROOT",
 		"POSIXLY_CORRECT",
 
@@ -1567,6 +1568,10 @@ func (c *configImpl) EmptyNinjaFile() bool {
 
 func (c *configImpl) IsBazelMixedBuildForceDisabled() bool {
 	return c.Environment().IsEnvTrue("BUILD_BROKEN_DISABLE_BAZEL")
+}
+
+func (c *configImpl) IsPersistentBazelEnabled() bool {
+	return c.Environment().IsEnvTrue("USE_PERSISTENT_BAZEL")
 }
 
 func (c *configImpl) BazelModulesForceEnabledByFlag() string {

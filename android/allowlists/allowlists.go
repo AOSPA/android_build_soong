@@ -144,7 +144,9 @@ var (
 		"external/jemalloc_new":                  Bp2BuildDefaultTrueRecursively,
 		"external/jsoncpp":                       Bp2BuildDefaultTrueRecursively,
 		"external/jsr305":                        Bp2BuildDefaultTrueRecursively,
+		"external/jsr330":                        Bp2BuildDefaultTrueRecursively,
 		"external/junit":                         Bp2BuildDefaultTrueRecursively,
+		"external/kotlinc":                       Bp2BuildDefaultTrueRecursively,
 		"external/libaom":                        Bp2BuildDefaultTrueRecursively,
 		"external/libavc":                        Bp2BuildDefaultTrueRecursively,
 		"external/libcap":                        Bp2BuildDefaultTrueRecursively,
@@ -197,6 +199,7 @@ var (
 		"frameworks/base/tests/appwidgets/AppWidgetHostTest": Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/tools/aapt2":                        Bp2BuildDefaultTrue,
 		"frameworks/base/tools/streaming_proto":              Bp2BuildDefaultTrueRecursively,
+		"frameworks/hardware/interfaces/stats/aidl":          Bp2BuildDefaultTrue,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/arect":                       Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/gui":                         Bp2BuildDefaultTrue,
@@ -255,29 +258,32 @@ var (
 
 		"libnativehelper": Bp2BuildDefaultTrueRecursively,
 
-		"packages/apps/DevCamera":                          Bp2BuildDefaultTrue,
-		"packages/apps/HTMLViewer":                         Bp2BuildDefaultTrue,
-		"packages/apps/Protips":                            Bp2BuildDefaultTrue,
-		"packages/apps/SafetyRegulatoryInfo":               Bp2BuildDefaultTrue,
-		"packages/apps/WallpaperPicker":                    Bp2BuildDefaultTrue,
-		"packages/modules/NeuralNetworks/driver/cache":     Bp2BuildDefaultTrueRecursively,
-		"packages/modules/StatsD/lib/libstatssocket":       Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb":                             Bp2BuildDefaultTrue,
-		"packages/modules/adb/apex":                        Bp2BuildDefaultTrue,
-		"packages/modules/adb/crypto":                      Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/libs":                        Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/pairing_auth":                Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/pairing_connection":          Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/proto":                       Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/tls":                         Bp2BuildDefaultTrueRecursively,
-		"packages/providers/MediaProvider/tools/dialogs":   Bp2BuildDefaultFalse, // TODO(b/242834374)
-		"packages/screensavers/Basic":                      Bp2BuildDefaultTrue,
-		"packages/services/Car/tests/SampleRearViewCamera": Bp2BuildDefaultFalse, // TODO(b/242834321)
+		"packages/apps/DevCamera":                            Bp2BuildDefaultTrue,
+		"packages/apps/HTMLViewer":                           Bp2BuildDefaultTrue,
+		"packages/apps/Protips":                              Bp2BuildDefaultTrue,
+		"packages/apps/SafetyRegulatoryInfo":                 Bp2BuildDefaultTrue,
+		"packages/apps/WallpaperPicker":                      Bp2BuildDefaultTrue,
+		"packages/modules/NeuralNetworks/driver/cache":       Bp2BuildDefaultTrueRecursively,
+		"packages/modules/StatsD/lib/libstatssocket":         Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb":                               Bp2BuildDefaultTrue,
+		"packages/modules/adb/apex":                          Bp2BuildDefaultTrue,
+		"packages/modules/adb/crypto":                        Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/libs":                          Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/pairing_auth":                  Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/pairing_connection":            Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/proto":                         Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/tls":                           Bp2BuildDefaultTrueRecursively,
+		"packages/modules/NetworkStack/common/captiveportal": Bp2BuildDefaultTrue,
+		"packages/providers/MediaProvider/tools/dialogs":     Bp2BuildDefaultFalse, // TODO(b/242834374)
+		"packages/screensavers/Basic":                        Bp2BuildDefaultTrue,
+		"packages/services/Car/tests/SampleRearViewCamera":   Bp2BuildDefaultFalse, // TODO(b/242834321)
 
 		"platform_testing/tests/example": Bp2BuildDefaultTrueRecursively,
 
 		"prebuilts/clang/host/linux-x86":           Bp2BuildDefaultTrueRecursively,
+		"prebuilts/gradle-plugin":                  Bp2BuildDefaultTrueRecursively,
 		"prebuilts/runtime/mainline/platform/sdk":  Bp2BuildDefaultTrueRecursively,
+		"prebuilts/sdk/current/androidx":           Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/extras/app-toolkit": Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/support":            Bp2BuildDefaultTrue,
 		"prebuilts/tools":                          Bp2BuildDefaultTrue,
@@ -346,7 +352,8 @@ var (
 		"system/tools/sysprop":                                   Bp2BuildDefaultTrue,
 		"system/unwinding/libunwindstack":                        Bp2BuildDefaultTrueRecursively,
 
-		"tools/apksig": Bp2BuildDefaultTrue,
+		"tools/apksig":   Bp2BuildDefaultTrue,
+		"tools/metalava": Bp2BuildDefaultTrue,
 		"tools/platform-compat/java/android/compat":  Bp2BuildDefaultTrueRecursively,
 		"tools/tradefederation/prebuilts/filegroups": Bp2BuildDefaultTrueRecursively,
 	}
@@ -686,12 +693,13 @@ var (
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
 		"aidl_interface_headers",
+		"bpf",
 		"license",
 		"linker_config",
 		"java_import",
 		"java_import_host",
+		"java_sdk_library",
 		"sysprop_library",
-		"bpf",
 	}
 
 	// Add the names of modules that bp2build should never convert, if it is
@@ -1407,6 +1415,13 @@ var (
 	ProdMixedBuildsEnabledList = []string{
 		"com.android.tzdata",
 		"test1_com.android.tzdata",
+		"com.android.adbd",
+		"test_com.android.adbd",
+		"adbd_test",
+		"adb_crypto_test",
+		"adb_pairing_auth_test",
+		"adb_pairing_connection_test",
+		"adb_tls_connection_test",
 	}
 
 	// Staging-mode allowlist. Modules in this list are only built
@@ -1414,12 +1429,21 @@ var (
 	// which will soon be added to the prod allowlist.
 	// It is implicit that all modules in ProdMixedBuildsEnabledList will
 	// also be built - do not add them to this list.
-	StagingMixedBuildsEnabledList = []string{
-		"com.android.adbd",
-		"adbd_test",
-		"adb_crypto_test",
-		"adb_pairing_auth_test",
-		"adb_pairing_connection_test",
-		"adb_tls_connection_test",
+	StagingMixedBuildsEnabledList = []string{}
+
+	// These should be the libs that are included by the apexes in the ProdMixedBuildsEnabledList
+	ProdDclaMixedBuildsEnabledList = []string{}
+
+	// These should be the libs that are included by the apexes in the StagingMixedBuildsEnabledList
+	StagingDclaMixedBuildsEnabledList = []string{
+		"libbase",
+		"libc++",
+		"libcrypto",
+		"libcutils",
 	}
+
+	// TODO(b/269342245): Enable the rest of the DCLA libs
+	// "libssl",
+	// "libstagefright_flacdec",
+	// "libutils",
 )
