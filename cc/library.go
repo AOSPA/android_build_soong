@@ -475,10 +475,10 @@ func createStubsBazelTargetIfNeeded(ctx android.TopDownMutatorContext, m *Module
 func apiContributionBp2Build(ctx android.TopDownMutatorContext, module *Module) {
 	apiSurfaces := make([]string, 0)
 	apiHeaders := make([]string, 0)
-	// systemapi (non-null `stubs` property)
+	// module-libapi for apexes (non-null `stubs` property)
 	if module.HasStubsVariants() {
-		apiSurfaces = append(apiSurfaces, android.SystemApi.String())
-		apiIncludes := getSystemApiIncludes(ctx, module)
+		apiSurfaces = append(apiSurfaces, android.ModuleLibApi.String())
+		apiIncludes := getModuleLibApiIncludes(ctx, module)
 		if !apiIncludes.isEmpty() {
 			createApiHeaderTarget(ctx, apiIncludes)
 			apiHeaders = append(apiHeaders, apiIncludes.name)
@@ -494,8 +494,8 @@ func apiContributionBp2Build(ctx android.TopDownMutatorContext, module *Module) 
 		}
 	}
 	// create a target only if this module contributes to an api surface
-	// TODO: Currently this does not distinguish systemapi-only headers and vendrorapi-only headers
-	// TODO: Update so that systemapi-only headers do not get exported to vendorapi (and vice-versa)
+	// TODO: Currently this does not distinguish modulelibapi-only headers and vendrorapi-only headers
+	// TODO: Update so that modulelibapi-only headers do not get exported to vendorapi (and vice-versa)
 	if len(apiSurfaces) > 0 {
 		props := bazel.BazelTargetModuleProperties{
 			Rule_class:        "cc_api_contribution",
@@ -527,8 +527,8 @@ func apiLabelAttribute(ctx android.TopDownMutatorContext, module *Module) bazel.
 	linker := module.linker.(*libraryDecorator)
 	if llndkApi := linker.Properties.Llndk.Symbol_file; llndkApi != nil {
 		apiFile = llndkApi
-	} else if systemApi := linker.Properties.Stubs.Symbol_file; systemApi != nil {
-		apiFile = systemApi
+	} else if moduleLibApi := linker.Properties.Stubs.Symbol_file; moduleLibApi != nil {
+		apiFile = moduleLibApi
 	} else {
 		ctx.ModuleErrorf("API surface library does not have any API file")
 	}
@@ -566,7 +566,8 @@ func (includes *apiIncludes) addDep(name string) {
 	includes.attrs.Deps.Append(lla)
 }
 
-func getSystemApiIncludes(ctx android.TopDownMutatorContext, c *Module) apiIncludes {
+// includes provided to the module-lib API surface. This API surface is used by apexes.
+func getModuleLibApiIncludes(ctx android.TopDownMutatorContext, c *Module) apiIncludes {
 	flagProps := c.library.(*libraryDecorator).flagExporter.Properties
 	linkProps := c.library.(*libraryDecorator).baseLinker.Properties
 	includes := android.FirstUniqueStrings(flagProps.Export_include_dirs)
@@ -579,7 +580,7 @@ func getSystemApiIncludes(ctx android.TopDownMutatorContext, c *Module) apiInclu
 	}
 
 	return apiIncludes{
-		name: c.Name() + ".systemapi.headers",
+		name: c.Name() + ".module-libapi.headers",
 		attrs: bazelCcApiLibraryHeadersAttributes{
 			bazelCcLibraryHeadersAttributes: attrs,
 		},
@@ -845,7 +846,11 @@ func (handler *ccLibraryBazelHandler) generateStaticBazelBuildActions(ctx androi
 		ctx.ModuleErrorf("expected exactly one root archive file for '%s', but got %s", label, rootStaticArchives)
 		return
 	}
-	outputFilePath := android.PathForBazelOut(ctx, rootStaticArchives[0])
+	var outputFilePath android.Path = android.PathForBazelOut(ctx, rootStaticArchives[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		handler.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
+	}
 	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
 
 	objPaths := ccInfo.CcObjectFiles
@@ -881,9 +886,13 @@ func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx androi
 		ctx.ModuleErrorf("expected exactly one root dynamic library file for '%s', but got %s", label, rootDynamicLibraries)
 		return
 	}
-	outputFilePath := android.PathForBazelOut(ctx, rootDynamicLibraries[0])
-	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
+	var outputFilePath android.Path = android.PathForBazelOut(ctx, rootDynamicLibraries[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		handler.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
+	}
 
+	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
 	handler.module.linker.(*libraryDecorator).unstrippedOutputFile = android.PathForBazelOut(ctx, ccInfo.UnstrippedOutput)
 
 	var tocFile android.OptionalPath
@@ -937,6 +946,8 @@ func (handler *ccLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.Modu
 		// implementation.
 		i.(*libraryDecorator).collectedSnapshotHeaders = android.Paths{}
 	}
+
+	handler.module.setAndroidMkVariablesFromCquery(ccInfo.CcAndroidMkInfo)
 }
 
 func (library *libraryDecorator) setFlagExporterInfoFromCcInfo(ctx android.ModuleContext, ccInfo cquery.CcInfo) {
@@ -1251,6 +1262,10 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		// b/239274367 --apex and --systemapi filters symbols tagged with # apex and #
 		// systemapi, respectively. The former is for symbols defined in platform libraries
 		// and the latter is for symbols defined in APEXes.
+		// A single library can contain either # apex or # systemapi, but not both.
+		// The stub generator (ndkstubgen) is additive, so passing _both_ of these to it should be a no-op.
+		// However, having this distinction helps guard accidental
+		// promotion or demotion of API and also helps the API review process b/191371676
 		var flag string
 		if ctx.Module().(android.ApexModule).NotInPlatform() {
 			flag = "--apex"

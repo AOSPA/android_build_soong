@@ -1599,6 +1599,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		Srcs                             []string
 		Installable                      *bool
 		Sdk_version                      *string
+		Api_surface                      *string
 		System_modules                   *string
 		Libs                             []string
 		Output_javadoc_comments          *bool
@@ -1638,6 +1639,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	props.Srcs = append(props.Srcs, module.properties.Srcs...)
 	props.Srcs = append(props.Srcs, module.sdkLibraryProperties.Api_srcs...)
 	props.Sdk_version = module.deviceProperties.Sdk_version
+	props.Api_surface = &apiScope.name
 	props.System_modules = module.deviceProperties.System_modules
 	props.Installable = proptools.BoolPtr(false)
 	// A droiddoc module has only one Libs property and doesn't distinguish between
@@ -1747,7 +1749,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		}
 	}
 
-	mctx.CreateModule(DroidstubsFactory, &props)
+	mctx.CreateModule(DroidstubsFactory, &props).(*Droidstubs).CallHookIfAvailable(mctx)
 }
 
 func (module *SdkLibrary) compareAgainstLatestApi(apiScope *apiScope) bool {

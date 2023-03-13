@@ -30,7 +30,6 @@ import (
 	"android/soong/cc"
 	"android/soong/dexpreopt"
 	"android/soong/genrule"
-	"android/soong/python"
 )
 
 // Legacy preparer used for running tests within the java package.
@@ -49,7 +48,6 @@ var prepareForJavaTest = android.GroupFixturePreparers(
 	// Include all the default java modules.
 	PrepareForTestWithJavaDefaultModules,
 	PrepareForTestWithOverlayBuildComponents,
-	python.PrepareForTestWithPythonBuildComponents,
 	android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
 		ctx.RegisterPreSingletonType("sdk_versions", sdkPreSingletonFactory)
 	}),
@@ -1440,24 +1438,26 @@ func TestAidlEnforcePermissionsException(t *testing.T) {
 }
 
 func TestDataNativeBinaries(t *testing.T) {
-	ctx, _ := testJava(t, `
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		android.PrepareForTestWithAllowMissingDependencies).RunTestWithBp(t, `
 		java_test_host {
 			name: "foo",
 			srcs: ["a.java"],
 			data_native_bins: ["bin"]
 		}
 
-		python_binary_host {
+		cc_binary_host {
 			name: "bin",
-			srcs: ["bin.py"],
+			srcs: ["bin.cpp"],
 		}
-	`)
+	`).TestContext
 
 	buildOS := ctx.Config().BuildOS.String()
 
 	test := ctx.ModuleForTests("foo", buildOS+"_common").Module().(*TestHost)
 	entries := android.AndroidMkEntriesForTest(t, ctx, test)[0]
-	expected := []string{"out/soong/.intermediates/bin/" + buildOS + "_x86_64_PY3/bin:bin"}
+	expected := []string{"out/soong/.intermediates/bin/" + buildOS + "_x86_64/bin:bin"}
 	actual := entries.EntryMap["LOCAL_COMPATIBILITY_SUPPORT_FILES"]
 	android.AssertStringPathsRelativeToTopEquals(t, "LOCAL_COMPATIBILITY_SUPPORT_FILES", ctx.Config(), expected, actual)
 }
@@ -1840,6 +1840,20 @@ func TestDeviceBinaryWrapperGeneration(t *testing.T) {
 		}`)
 }
 
+func TestJavaApiContributionEmptyApiFile(t *testing.T) {
+	testJavaError(t,
+		"Error: foo has an empty api file.",
+		`java_api_contribution {
+			name: "foo",
+		}
+		java_api_library {
+			name: "bar",
+			api_surface: "public",
+			api_contributions: ["foo"],
+		}
+	`)
+}
+
 func TestJavaApiLibraryAndProviderLink(t *testing.T) {
 	provider_bp_a := `
 	java_api_contribution {
@@ -1895,22 +1909,26 @@ func TestJavaApiLibraryAndProviderLink(t *testing.T) {
 }
 
 func TestJavaApiLibraryAndDefaultsLink(t *testing.T) {
-	provider_bp_a := `java_api_contribution {
+	provider_bp_a := `
+	java_api_contribution {
 		name: "foo1",
 		api_file: "foo1.txt",
 	}
 	`
-	provider_bp_b := `java_api_contribution {
+	provider_bp_b := `
+	java_api_contribution {
 		name: "foo2",
 		api_file: "foo2.txt",
 	}
 	`
-	provider_bp_c := `java_api_contribution {
+	provider_bp_c := `
+	java_api_contribution {
 		name: "foo3",
 		api_file: "foo3.txt",
 	}
 	`
-	provider_bp_d := `java_api_contribution {
+	provider_bp_d := `
+	java_api_contribution {
 		name: "foo4",
 		api_file: "foo4.txt",
 	}
@@ -1989,7 +2007,8 @@ func TestJavaApiLibraryJarGeneration(t *testing.T) {
 		api_file: "foo1.txt",
 	}
 	`
-	provider_bp_b := `java_api_contribution {
+	provider_bp_b := `
+	java_api_contribution {
 		name: "foo2",
 		api_file: "foo2.txt",
 	}
@@ -2030,6 +2049,81 @@ func TestJavaApiLibraryJarGeneration(t *testing.T) {
 		outputs := fmt.Sprint(m.AllOutputs())
 		if !strings.Contains(outputs, c.outputJarName) {
 			t.Errorf("Module output does not contain expected jar %s", c.outputJarName)
+		}
+	}
+}
+
+func TestJavaApiLibraryLibsLink(t *testing.T) {
+	provider_bp_a := `
+	java_api_contribution {
+		name: "foo1",
+		api_file: "foo1.txt",
+	}
+	`
+	provider_bp_b := `
+	java_api_contribution {
+		name: "foo2",
+		api_file: "foo2.txt",
+	}
+	`
+	lib_bp_a := `
+	java_library {
+		name: "lib1",
+		srcs: ["Lib.java"],
+	}
+	`
+	lib_bp_b := `
+	java_library {
+		name: "lib2",
+		srcs: ["Lib.java"],
+	}
+	`
+
+	ctx, _ := testJavaWithFS(t, `
+		java_api_library {
+			name: "bar1",
+			api_surface: "public",
+			api_contributions: ["foo1"],
+			libs: ["lib1"],
+		}
+
+		java_api_library {
+			name: "bar2",
+			api_surface: "system",
+			api_contributions: ["foo1", "foo2"],
+			libs: ["lib1", "lib2", "bar1"],
+		}
+		`,
+		map[string][]byte{
+			"a/Android.bp": []byte(provider_bp_a),
+			"b/Android.bp": []byte(provider_bp_b),
+			"c/Android.bp": []byte(lib_bp_a),
+			"c/Lib.java":   {},
+			"d/Android.bp": []byte(lib_bp_b),
+			"d/Lib.java":   {},
+		})
+
+	testcases := []struct {
+		moduleName        string
+		classPathJarNames []string
+	}{
+		{
+			moduleName:        "bar1",
+			classPathJarNames: []string{"lib1.jar"},
+		},
+		{
+			moduleName:        "bar2",
+			classPathJarNames: []string{"lib1.jar", "lib2.jar", "bar1/android.jar"},
+		},
+	}
+	for _, c := range testcases {
+		m := ctx.ModuleForTests(c.moduleName, "android_common")
+		javacRules := m.Rule("javac")
+		classPathArgs := javacRules.Args["classpath"]
+		for _, jarName := range c.classPathJarNames {
+			if !strings.Contains(classPathArgs, jarName) {
+				t.Errorf("Module output does not contain expected jar %s", jarName)
+			}
 		}
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"android/soong/android"
+	"android/soong/bazel/cquery"
 )
 
 func TestMain(m *testing.M) {
@@ -3055,6 +3056,253 @@ func TestStaticLibDepExport(t *testing.T) {
 	checkStaticLibs(t, []string{"lib1", "libc++_static", "libc++demangle", "libclang_rt.builtins"}, module)
 }
 
+func TestLibDepAndroidMkExportInMixedBuilds(t *testing.T) {
+	bp := `
+		cc_library {
+			name: "static_dep",
+		}
+		cc_library {
+			name: "whole_static_dep",
+		}
+		cc_library {
+			name: "shared_dep",
+		}
+		cc_library {
+			name: "lib",
+			bazel_module: { label: "//:lib" },
+			static_libs: ["static_dep"],
+			whole_static_libs: ["whole_static_dep"],
+			shared_libs: ["shared_dep"],
+		}
+		cc_test {
+			name: "test",
+			bazel_module: { label: "//:test" },
+			static_libs: ["static_dep"],
+			whole_static_libs: ["whole_static_dep"],
+			shared_libs: ["shared_dep"],
+			gtest: false,
+		}
+		cc_binary {
+			name: "binary",
+			bazel_module: { label: "//:binary" },
+			static_libs: ["static_dep"],
+			whole_static_libs: ["whole_static_dep"],
+			shared_libs: ["shared_dep"],
+		}
+		cc_library_headers {
+			name: "lib_headers",
+			bazel_module: { label: "//:lib_headers" },
+			static_libs: ["static_dep"],
+			whole_static_libs: ["whole_static_dep"],
+			shared_libs: ["shared_dep"],
+		}
+		cc_prebuilt_library {
+			name: "lib_prebuilt",
+			bazel_module: { label: "//:lib_prebuilt" },
+			static_libs: ["static_dep"],
+			whole_static_libs: ["whole_static_dep"],
+			shared_libs: ["shared_dep"],
+		}
+	`
+
+	testCases := []struct {
+		name          string
+		moduleName    string
+		variant       string
+		androidMkInfo cquery.CcAndroidMkInfo
+	}{
+		{
+			name:       "shared lib",
+			moduleName: "lib",
+			variant:    "android_arm64_armv8-a_shared",
+			androidMkInfo: cquery.CcAndroidMkInfo{
+				LocalStaticLibs:      []string{"static_dep"},
+				LocalWholeStaticLibs: []string{"whole_static_dep"},
+				LocalSharedLibs:      []string{"shared_dep"},
+			},
+		},
+		{
+			name:       "static lib",
+			moduleName: "lib",
+			variant:    "android_arm64_armv8-a_static",
+			androidMkInfo: cquery.CcAndroidMkInfo{
+				LocalStaticLibs:      []string{"static_dep"},
+				LocalWholeStaticLibs: []string{"whole_static_dep"},
+				LocalSharedLibs:      []string{"shared_dep"},
+			},
+		},
+		{
+			name:       "cc_test arm64",
+			moduleName: "test",
+			variant:    "android_arm64_armv8-a",
+			androidMkInfo: cquery.CcAndroidMkInfo{
+				LocalStaticLibs:      []string{"static_dep"},
+				LocalWholeStaticLibs: []string{"whole_static_dep"},
+				LocalSharedLibs:      []string{"shared_dep"},
+			},
+		},
+		{
+			name:       "cc_test arm",
+			moduleName: "test",
+			variant:    "android_arm_armv7-a-neon",
+			androidMkInfo: cquery.CcAndroidMkInfo{
+				LocalStaticLibs:      []string{"static_dep"},
+				LocalWholeStaticLibs: []string{"whole_static_dep"},
+				LocalSharedLibs:      []string{"shared_dep"},
+			},
+		},
+		{
+			name:       "cc_binary",
+			moduleName: "binary",
+			variant:    "android_arm64_armv8-a",
+			androidMkInfo: cquery.CcAndroidMkInfo{
+				LocalStaticLibs:      []string{"static_dep"},
+				LocalWholeStaticLibs: []string{"whole_static_dep"},
+				LocalSharedLibs:      []string{"shared_dep"},
+			},
+		},
+		{
+			name:       "cc_library_headers",
+			moduleName: "lib_headers",
+			variant:    "android_arm64_armv8-a",
+			androidMkInfo: cquery.CcAndroidMkInfo{
+				LocalStaticLibs:      []string{"static_dep"},
+				LocalWholeStaticLibs: []string{"whole_static_dep"},
+				LocalSharedLibs:      []string{"shared_dep"},
+			},
+		},
+		{
+			name:       "prebuilt lib static",
+			moduleName: "lib_prebuilt",
+			variant:    "android_arm64_armv8-a_static",
+			androidMkInfo: cquery.CcAndroidMkInfo{
+				LocalStaticLibs:      []string{"static_dep"},
+				LocalWholeStaticLibs: []string{"whole_static_dep"},
+				LocalSharedLibs:      []string{"shared_dep"},
+			},
+		},
+		{
+			name:       "prebuilt lib shared",
+			moduleName: "lib_prebuilt",
+			variant:    "android_arm64_armv8-a_shared",
+			androidMkInfo: cquery.CcAndroidMkInfo{
+				LocalStaticLibs:      []string{"static_dep"},
+				LocalWholeStaticLibs: []string{"whole_static_dep"},
+				LocalSharedLibs:      []string{"shared_dep"},
+			},
+		},
+	}
+
+	outputBaseDir := "out/bazel"
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := android.GroupFixturePreparers(
+				prepareForCcTest,
+				android.FixtureModifyConfig(func(config android.Config) {
+					config.BazelContext = android.MockBazelContext{
+						OutputBaseDir: outputBaseDir,
+						LabelToCcInfo: map[string]cquery.CcInfo{
+							"//:lib": cquery.CcInfo{
+								CcAndroidMkInfo:      tc.androidMkInfo,
+								RootDynamicLibraries: []string{""},
+							},
+							"//:lib_bp2build_cc_library_static": cquery.CcInfo{
+								CcAndroidMkInfo:    tc.androidMkInfo,
+								RootStaticArchives: []string{""},
+							},
+							"//:lib_headers": cquery.CcInfo{
+								CcAndroidMkInfo: tc.androidMkInfo,
+								OutputFiles:     []string{""},
+							},
+							"//:lib_prebuilt": cquery.CcInfo{
+								CcAndroidMkInfo: tc.androidMkInfo,
+							},
+							"//:lib_prebuilt_bp2build_cc_library_static": cquery.CcInfo{
+								CcAndroidMkInfo: tc.androidMkInfo,
+							},
+						},
+						LabelToCcBinary: map[string]cquery.CcUnstrippedInfo{
+							"//:test": cquery.CcUnstrippedInfo{
+								CcAndroidMkInfo: tc.androidMkInfo,
+							},
+							"//:binary": cquery.CcUnstrippedInfo{
+								CcAndroidMkInfo: tc.androidMkInfo,
+							},
+						},
+					}
+				}),
+			).RunTestWithBp(t, bp)
+			ctx := result.TestContext
+
+			module := ctx.ModuleForTests(tc.moduleName, tc.variant).Module().(*Module)
+			entries := android.AndroidMkEntriesForTest(t, ctx, module)[0]
+			if !reflect.DeepEqual(module.Properties.AndroidMkStaticLibs, tc.androidMkInfo.LocalStaticLibs) {
+				t.Errorf("incorrect static_libs"+
+					"\nactual:   %v"+
+					"\nexpected: %v",
+					module.Properties.AndroidMkStaticLibs,
+					tc.androidMkInfo.LocalStaticLibs,
+				)
+			}
+			staticDepsDiffer, missingStaticDeps, additionalStaticDeps := android.ListSetDifference(
+				entries.EntryMap["LOCAL_STATIC_LIBRARIES"],
+				tc.androidMkInfo.LocalStaticLibs,
+			)
+			if staticDepsDiffer {
+				t.Errorf(
+					"expected LOCAL_STATIC_LIBRARIES to be %q but was %q; missing: %q; extra %q",
+					tc.androidMkInfo.LocalStaticLibs,
+					entries.EntryMap["LOCAL_STATIC_LIBRARIES"],
+					missingStaticDeps,
+					additionalStaticDeps,
+				)
+			}
+
+			if !reflect.DeepEqual(module.Properties.AndroidMkWholeStaticLibs, tc.androidMkInfo.LocalWholeStaticLibs) {
+				t.Errorf("expected module.Properties.AndroidMkWholeStaticLibs to be %q, but was %q",
+					tc.androidMkInfo.LocalWholeStaticLibs,
+					module.Properties.AndroidMkWholeStaticLibs,
+				)
+			}
+			wholeStaticDepsDiffer, missingWholeStaticDeps, additionalWholeStaticDeps := android.ListSetDifference(
+				entries.EntryMap["LOCAL_WHOLE_STATIC_LIBRARIES"],
+				tc.androidMkInfo.LocalWholeStaticLibs,
+			)
+			if wholeStaticDepsDiffer {
+				t.Errorf(
+					"expected LOCAL_WHOLE_STATIC_LIBRARIES to be %q but was %q; missing: %q; extra %q",
+					tc.androidMkInfo.LocalWholeStaticLibs,
+					entries.EntryMap["LOCAL_WHOLE_STATIC_LIBRARIES"],
+					missingWholeStaticDeps,
+					additionalWholeStaticDeps,
+				)
+			}
+
+			if !reflect.DeepEqual(module.Properties.AndroidMkSharedLibs, tc.androidMkInfo.LocalSharedLibs) {
+				t.Errorf("incorrect shared_libs"+
+					"\nactual:   %v"+
+					"\nexpected: %v",
+					module.Properties.AndroidMkSharedLibs,
+					tc.androidMkInfo.LocalSharedLibs,
+				)
+			}
+			sharedDepsDiffer, missingSharedDeps, additionalSharedDeps := android.ListSetDifference(
+				entries.EntryMap["LOCAL_SHARED_LIBRARIES"],
+				tc.androidMkInfo.LocalSharedLibs,
+			)
+			if sharedDepsDiffer {
+				t.Errorf(
+					"expected LOCAL_SHARED_LIBRARIES to be %q but was %q; missing %q; extra %q",
+					tc.androidMkInfo.LocalSharedLibs,
+					entries.EntryMap["LOCAL_SHARED_LIBRARIES"],
+					missingSharedDeps,
+					additionalSharedDeps,
+				)
+			}
+		})
+	}
+}
+
 var compilerFlagsTestCases = []struct {
 	in  string
 	out bool
@@ -4519,6 +4767,39 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 		})
 	}
 
+}
+
+func TestAddnoOverride64GlobalCflags(t *testing.T) {
+	t.Parallel()
+	ctx := testCc(t, `
+		cc_library_shared {
+			name: "libclient",
+			srcs: ["foo.c"],
+			shared_libs: ["libfoo#1"],
+		}
+
+		cc_library_shared {
+			name: "libfoo",
+			srcs: ["foo.c"],
+			shared_libs: ["libbar"],
+			export_shared_lib_headers: ["libbar"],
+			stubs: {
+				symbol_file: "foo.map.txt",
+				versions: ["1", "2", "3"],
+			},
+		}
+
+		cc_library_shared {
+			name: "libbar",
+			export_include_dirs: ["include/libbar"],
+			srcs: ["foo.c"],
+		}`)
+
+	cFlags := ctx.ModuleForTests("libclient", "android_arm64_armv8-a_shared").Rule("cc").Args["cFlags"]
+
+	if !strings.Contains(cFlags, "${config.NoOverride64GlobalCflags}") {
+		t.Errorf("expected %q in cflags, got %q", "${config.NoOverride64GlobalCflags}", cFlags)
+	}
 }
 
 func TestCcBuildBrokenClangAsFlags(t *testing.T) {

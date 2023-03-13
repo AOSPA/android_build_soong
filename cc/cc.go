@@ -28,6 +28,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel/cquery"
 	"android/soong/cc/config"
 	"android/soong/fuzz"
 	"android/soong/genrule"
@@ -1072,6 +1073,31 @@ func (c *Module) CcLibraryInterface() bool {
 	return false
 }
 
+func (c *Module) IsFuzzModule() bool {
+	if _, ok := c.compiler.(*fuzzBinary); ok {
+		return true
+	}
+	return false
+}
+
+func (c *Module) FuzzModuleStruct() fuzz.FuzzModule {
+	return c.FuzzModule
+}
+
+func (c *Module) FuzzPackagedModule() fuzz.FuzzPackagedModule {
+	if fuzzer, ok := c.compiler.(*fuzzBinary); ok {
+		return fuzzer.fuzzPackagedModule
+	}
+	panic(fmt.Errorf("FuzzPackagedModule called on non-fuzz module: %q", c.BaseModuleName()))
+}
+
+func (c *Module) FuzzSharedLibraries() android.Paths {
+	if fuzzer, ok := c.compiler.(*fuzzBinary); ok {
+		return fuzzer.sharedLibraries
+	}
+	panic(fmt.Errorf("FuzzSharedLibraries called on non-fuzz module: %q", c.BaseModuleName()))
+}
+
 func (c *Module) NonCcVariants() bool {
 	return false
 }
@@ -1445,6 +1471,8 @@ func isBionic(name string) bool {
 }
 
 func InstallToBootstrap(name string, config android.Config) bool {
+	// NOTE: also update //build/bazel/rules/apex/cc.bzl#_installed_to_bootstrap
+	// if this list is updated.
 	if name == "libclang_rt.hwasan" {
 		return true
 	}
@@ -1857,6 +1885,10 @@ func (c *Module) QueueBazelCall(ctx android.BaseModuleContext) {
 var (
 	mixedBuildSupportedCcTest = []string{
 		"adbd_test",
+		"adb_crypto_test",
+		"adb_pairing_auth_test",
+		"adb_pairing_connection_test",
+		"adb_tls_connection_test",
 	}
 )
 
@@ -1864,7 +1896,8 @@ var (
 // in any of the --bazel-mode(s). This filters at the module level and takes
 // precedence over the allowlists in allowlists/allowlists.go.
 func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	if c.testBinary() && !android.InList(c.Name(), mixedBuildSupportedCcTest) {
+	_, isForTesting := ctx.Config().BazelContext.(android.MockBazelContext)
+	if c.testBinary() && !android.InList(c.Name(), mixedBuildSupportedCcTest) && !isForTesting {
 		// Per-module rollout of mixed-builds for cc_test modules.
 		return false
 	}
@@ -1878,12 +1911,6 @@ func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
 
 func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	bazelModuleLabel := c.getBazelModuleLabel(ctx)
-
-	bazelCtx := ctx.Config().BazelContext
-	if ccInfo, err := bazelCtx.GetCcInfo(bazelModuleLabel, android.GetConfigKey(ctx)); err == nil {
-		c.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
-	}
-
 	c.bazelHandler.ProcessBazelQueryResponse(ctx, bazelModuleLabel)
 
 	c.setSubnameProperty(ctx)
@@ -2078,6 +2105,12 @@ func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 	}
 }
 
+func (c *Module) setAndroidMkVariablesFromCquery(info cquery.CcAndroidMkInfo) {
+	c.Properties.AndroidMkSharedLibs = info.LocalSharedLibs
+	c.Properties.AndroidMkStaticLibs = info.LocalStaticLibs
+	c.Properties.AndroidMkWholeStaticLibs = info.LocalWholeStaticLibs
+}
+
 func (c *Module) toolchain(ctx android.BaseModuleContext) config.Toolchain {
 	if c.cachedToolchain == nil {
 		c.cachedToolchain = config.FindToolchainWithContext(ctx)
@@ -2209,6 +2242,13 @@ func GetCrtVariations(ctx android.BottomUpMutatorContext,
 		if err != nil {
 			ctx.PropertyErrorf("min_sdk_version", err.Error())
 		}
+
+		// Raise the minSdkVersion to the minimum supported for the architecture.
+		minApiForArch := MinApiForArch(ctx, m.Target().Arch.ArchType)
+		if apiLevel.LessThan(minApiForArch) {
+			apiLevel = minApiForArch
+		}
+
 		return []blueprint.Variation{
 			{Mutator: "sdk", Variation: "sdk"},
 			{Mutator: "version", Variation: apiLevel.String()},
@@ -3709,7 +3749,7 @@ func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 	// This allows introducing new architectures in the platform that
 	// need to be included in apexes that normally require an older
 	// min_sdk_version.
-	minApiForArch := minApiForArch(ctx, c.Target().Arch.ArchType)
+	minApiForArch := MinApiForArch(ctx, c.Target().Arch.ArchType)
 	if sdkVersion.LessThan(minApiForArch) {
 		sdkVersion = minApiForArch
 	}

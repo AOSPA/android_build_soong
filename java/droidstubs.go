@@ -148,6 +148,10 @@ type DroidstubsProperties struct {
 	// path or filegroup to file defining extension an SDK name <-> numerical ID mapping and
 	// what APIs exist in which SDKs; passed to metalava via --sdk-extensions-info
 	Extensions_info_file *string `android:"path"`
+
+	// API surface of this module. If set, the module contributes to an API surface.
+	// For the full list of available API surfaces, refer to soong/android/sdk_version.go
+	Api_surface *string
 }
 
 // Used by xsd_config
@@ -178,6 +182,10 @@ func DroidstubsFactory() android.Module {
 		&module.Javadoc.properties)
 
 	InitDroiddocModule(module, android.HostAndDeviceSupported)
+
+	module.SetDefaultableHook(func(ctx android.DefaultableHookContext) {
+		module.createApiContribution(ctx)
+	})
 	return module
 }
 
@@ -862,6 +870,25 @@ func (d *Droidstubs) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
 	}, attrs)
 }
 
+func (d *Droidstubs) createApiContribution(ctx android.DefaultableHookContext) {
+	api_file := d.properties.Check_api.Current.Api_file
+	api_surface := d.properties.Api_surface
+
+	props := struct {
+		Name        *string
+		Api_surface *string
+		Api_file    *string
+		Visibility  []string
+	}{}
+
+	props.Name = proptools.StringPtr(d.Name() + ".api.contribution")
+	props.Api_surface = api_surface
+	props.Api_file = api_file
+	props.Visibility = []string{"//visibility:override", "//visibility:public"}
+
+	ctx.CreateModule(ApiContributionFactory, &props)
+}
+
 // TODO (b/262014796): Export the API contributions of CorePlatformApi
 // A map to populate the api surface of a droidstub from a substring appearing in its name
 // This map assumes that droidstubs (either checked-in or created by java_sdk_library)
@@ -876,6 +903,7 @@ var (
 		"system":        android.SdkSystem,
 		"module_lib":    android.SdkModule,
 		"module-lib":    android.SdkModule,
+		"platform.api":  android.SdkCorePlatform,
 		"test":          android.SdkTest,
 		"toolchain":     android.SdkToolchain,
 	}

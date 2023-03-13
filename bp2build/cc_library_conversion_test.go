@@ -1806,6 +1806,11 @@ func TestCcLibrary_SystemSharedLibsLinuxBionicEmpty(t *testing.T) {
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Blueprint: soongCcLibraryPreamble + `
 cc_library {
+	name: "libc_musl",
+	bazel_module: { bp2build_available: false },
+}
+
+cc_library {
     name: "target_linux_bionic_empty",
     target: {
         linux_bionic: {
@@ -1816,7 +1821,10 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("target_linux_bionic_empty", AttrNameToString{
-			"system_dynamic_deps": `[]`,
+			"system_dynamic_deps": `select({
+        "//build/bazel/platforms/os:linux_musl": [":libc_musl"],
+        "//conditions:default": [],
+    })`,
 		}),
 	},
 	)
@@ -1829,6 +1837,11 @@ func TestCcLibrary_SystemSharedLibsBionicEmpty(t *testing.T) {
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Blueprint: soongCcLibraryPreamble + `
 cc_library {
+	name: "libc_musl",
+	bazel_module: { bp2build_available: false },
+}
+
+cc_library {
     name: "target_bionic_empty",
     target: {
         bionic: {
@@ -1839,12 +1852,68 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("target_bionic_empty", AttrNameToString{
-			"system_dynamic_deps": `[]`,
+			"system_dynamic_deps": `select({
+        "//build/bazel/platforms/os:linux_musl": [":libc_musl"],
+        "//conditions:default": [],
+    })`,
 		}),
 	},
 	)
 }
 
+func TestCcLibrary_SystemSharedLibsMuslEmpty(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library system_shared_lib empty for musl variant",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: soongCcLibraryPreamble + `
+cc_library {
+		name: "libc_musl",
+		bazel_module: { bp2build_available: false },
+}
+
+cc_library {
+    name: "target_musl_empty",
+    target: {
+        musl: {
+            system_shared_libs: [],
+        },
+    },
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: makeCcLibraryTargets("target_musl_empty", AttrNameToString{
+			"system_dynamic_deps": `[]`,
+		}),
+	})
+}
+
+func TestCcLibrary_SystemSharedLibsLinuxMuslEmpty(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library system_shared_lib empty for linux_musl variant",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: soongCcLibraryPreamble + `
+cc_library {
+		name: "libc_musl",
+		bazel_module: { bp2build_available: false },
+}
+
+cc_library {
+    name: "target_linux_musl_empty",
+    target: {
+        linux_musl: {
+            system_shared_libs: [],
+        },
+    },
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: makeCcLibraryTargets("target_linux_musl_empty", AttrNameToString{
+			"system_dynamic_deps": `[]`,
+		}),
+	})
+}
 func TestCcLibrary_SystemSharedLibsSharedAndRoot(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
 		Description:                "cc_library system_shared_libs set for shared and root",
@@ -2756,7 +2825,7 @@ func TestCcApiContributionsWithHdrs(t *testing.T) {
 	expectedBazelTargets := []string{
 		MakeBazelTarget(
 			"cc_api_library_headers",
-			"libfoo.systemapi.headers",
+			"libfoo.module-libapi.headers",
 			AttrNameToString{
 				"export_includes": `["dir1"]`,
 			}),
@@ -2773,18 +2842,18 @@ func TestCcApiContributionsWithHdrs(t *testing.T) {
 				"api":          `"libfoo.map.txt"`,
 				"library_name": `"libfoo"`,
 				"api_surfaces": `[
-        "systemapi",
+        "module-libapi",
         "vendorapi",
     ]`,
 				"hdrs": `[
-        ":libfoo.systemapi.headers",
+        ":libfoo.module-libapi.headers",
         ":libfoo.vendorapi.headers",
     ]`,
 			}),
 	}
 	RunApiBp2BuildTestCase(t, cc.RegisterLibraryBuildComponents, Bp2buildTestCase{
 		Blueprint:            bp,
-		Description:          "cc API contributions to systemapi and vendorapi",
+		Description:          "cc API contributions to module-libapi and vendorapi",
 		ExpectedBazelTargets: expectedBazelTargets,
 	})
 }
@@ -2803,8 +2872,8 @@ func TestCcApiSurfaceCombinations(t *testing.T) {
 				stubs: {symbol_file: "a.map.txt"},
 			}`,
 			expectedApi:         `"a.map.txt"`,
-			expectedApiSurfaces: `["systemapi"]`,
-			description:         "Library that contributes to systemapi",
+			expectedApiSurfaces: `["module-libapi"]`,
+			description:         "Library that contributes to module-libapi",
 		},
 		{
 			bp: `
@@ -2825,10 +2894,10 @@ func TestCcApiSurfaceCombinations(t *testing.T) {
 			}`,
 			expectedApi: `"a.map.txt"`,
 			expectedApiSurfaces: `[
-        "systemapi",
+        "module-libapi",
         "vendorapi",
     ]`,
-			description: "Library that contributes to systemapi and vendorapi",
+			description: "Library that contributes to module-libapi and vendorapi",
 		},
 	}
 	for _, testCase := range testCases {
@@ -3368,23 +3437,23 @@ cc_library {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
 				"implementation_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
-        "//build/bazel/rules/apex:non_apex": [":buh__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":buh__BP2BUILD__MISSING__DEP"],
     })`,
 				"implementation_dynamic_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
-        "//build/bazel/rules/apex:non_apex": [":bar__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
     })`,
 				"local_includes": `["."]`,
 			}),
 			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
 				"implementation_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
-        "//build/bazel/rules/apex:non_apex": [":buh__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":buh__BP2BUILD__MISSING__DEP"],
     })`,
 				"implementation_dynamic_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
-        "//build/bazel/rules/apex:non_apex": [":bar__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
     })`,
 				"local_includes": `["."]`,
 			}),
@@ -3414,16 +3483,16 @@ cc_library_static {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
 				"implementation_dynamic_deps": `select({
-        "//build/bazel/rules/apex:non_apex": [":bar__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
     })`,
 				"dynamic_deps": `select({
-        "//build/bazel/rules/apex:non_apex": [":baz__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":baz__BP2BUILD__MISSING__DEP"],
     })`,
 				"deps": `select({
-        "//build/bazel/rules/apex:non_apex": [":abc__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":abc__BP2BUILD__MISSING__DEP"],
     })`,
 				"local_includes": `["."]`,
 			}),

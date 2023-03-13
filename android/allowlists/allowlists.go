@@ -143,6 +143,7 @@ var (
 		"external/javassist":                     Bp2BuildDefaultTrueRecursively,
 		"external/jemalloc_new":                  Bp2BuildDefaultTrueRecursively,
 		"external/jsoncpp":                       Bp2BuildDefaultTrueRecursively,
+		"external/jsr305":                        Bp2BuildDefaultTrueRecursively,
 		"external/junit":                         Bp2BuildDefaultTrueRecursively,
 		"external/libaom":                        Bp2BuildDefaultTrueRecursively,
 		"external/libavc":                        Bp2BuildDefaultTrueRecursively,
@@ -369,7 +370,6 @@ var (
 		"external/bazelbuild-kotlin-rules":/* recursive = */ true,
 		"external/bazel-skylib":/* recursive = */ true,
 		"external/guava":/* recursive = */ true,
-		"external/jsr305":/* recursive = */ true,
 		"external/protobuf":/* recursive = */ false,
 		"external/python/absl-py":/* recursive = */ true,
 
@@ -379,8 +379,8 @@ var (
 		"frameworks/base/tools/codegen":/* recursive = */ true,
 		"frameworks/ex/common":/* recursive = */ true,
 
+		// Building manually due to b/179889880: resource files cross package boundary
 		"packages/apps/Music":/* recursive = */ true,
-		"packages/apps/QuickSearchBox":/* recursive = */ true,
 
 		"prebuilts/abi-dumps/platform":/* recursive = */ true,
 		"prebuilts/abi-dumps/ndk":/* recursive = */ true,
@@ -400,6 +400,9 @@ var (
 		// not recursive due to conflicting workspace paths in tools/atest/bazel/rules
 		"tools/asuite/atest":/* recursive = */ false,
 		"tools/asuite/atest/bazel/reporter":/* recursive = */ true,
+
+		// TODO(b/266459895): remove this and the placeholder BUILD file after re-enabling libunwindstack
+		"external/rust/crates/rustc-demangle-capi":/* recursive = */ false,
 	}
 
 	Bp2buildModuleAlwaysConvertList = []string{
@@ -673,6 +676,12 @@ var (
 		// kotlin srcs in java binary
 		"AnalyzerKt",
 		"trebuchet-core",
+
+		// kotlin srcs in android_library
+		"renderscript_toolkit",
+
+		//kotlin srcs in android_binary
+		"MusicKotlin",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -1320,6 +1329,9 @@ var (
 
 		// uses glob in $(locations)
 		"libc_musl_sysroot",
+
+		// TODO(b/266459895): depends on libunwindstack
+		"libutils_test",
 	}
 
 	MixedBuildsDisabledList = []string{
@@ -1364,6 +1376,30 @@ var (
 		"prebuilt_kotlin-test",
 		// TODO(b/217750501) exclude_files property not supported
 		"prebuilt_currysrc_org.eclipse",
+
+		// TODO(b/266459895): re-enable libunwindstack
+		"libunwindstack",
+		"libunwindstack_stdout_log",
+		"libunwindstack_no_dex",
+		"libunwindstack_utils",
+		"unwind_reg_info",
+		"libunwindstack_local",
+		"unwind_for_offline",
+		"unwind",
+		"unwind_info",
+		"unwind_symbols",
+		"libc_malloc_debug",
+		"libfdtrack",
+		"mediaswcodec",
+		"libcodec2_hidl@1.0",
+		"libEGL",
+		"libstagefright_bufferqueue_helper_novndk",
+		"libGLESv2",
+		"libcodec2_hidl@1.1",
+		"libmedia_codecserviceregistrant",
+		"libcodec2_hidl@1.2",
+		"libutils_test",
+		"libutilscallstack",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel
@@ -1381,5 +1417,9 @@ var (
 	StagingMixedBuildsEnabledList = []string{
 		"com.android.adbd",
 		"adbd_test",
+		"adb_crypto_test",
+		"adb_pairing_auth_test",
+		"adb_pairing_connection_test",
+		"adb_tls_connection_test",
 	}
 )

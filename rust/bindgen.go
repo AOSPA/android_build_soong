@@ -15,7 +15,6 @@
 package rust
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -30,7 +29,7 @@ var (
 	defaultBindgenFlags = []string{""}
 
 	// bindgen should specify its own Clang revision so updating Clang isn't potentially blocked on bindgen failures.
-	bindgenClangVersion = "clang-r468909b"
+	bindgenClangVersion = "clang-r475365b"
 
 	_ = pctx.VariableFunc("bindgenClangVersion", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("LLVM_BINDGEN_PREBUILTS_VERSION"); override != "" {
@@ -53,7 +52,7 @@ var (
 		if ctx.Config().UseHostMusl() {
 			return "musl/lib/"
 		} else {
-			return "lib64/"
+			return "lib/"
 		}
 	})
 	_ = pctx.SourcePathVariable("bindgenClang",
@@ -178,10 +177,6 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 
 	if mctx, ok := ctx.(*moduleContext); ok && mctx.apexVariationName() != "" {
 		cflags = append(cflags, "-D__ANDROID_APEX__")
-		if ctx.Device() {
-			cflags = append(cflags, fmt.Sprintf("-D__ANDROID_APEX_MIN_SDK_VERSION__=%d",
-				ctx.RustModule().apexSdkVersion.FinalOrFutureInt()))
-		}
 	}
 
 	if ctx.Target().NativeBridge == android.NativeBridgeEnabled {

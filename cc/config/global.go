@@ -228,10 +228,7 @@ var (
 		// "-Werror=fortify-source",
 
 		"-Werror=address-of-temporary",
-		// Bug: http://b/29823425 Disable -Wnull-dereference until the
-		// new cases detected by this warning in Clang r271374 are
-		// fixed.
-		//"-Werror=null-dereference",
+		"-Werror=null-dereference",
 		"-Werror=return-type",
 
 		// http://b/72331526 Disable -Wtautological-* until the instances detected by these
@@ -320,6 +317,8 @@ var (
 		"-Wno-unused-function",
 	}
 
+	noOverride64GlobalCflags = []string{}
+
 	noOverrideExternalGlobalCflags = []string{
 		// http://b/148815709
 		"-Wno-sizeof-array-div",
@@ -350,7 +349,6 @@ var (
 
 		// http://b/145211477
 		"-Wno-pointer-compare",
-		// http://b/145211022
 		"-Wno-final-dtor-non-final-class",
 
 		// http://b/165945989
@@ -364,6 +362,9 @@ var (
 
 		// http://b/239661264
 		"-Wno-deprecated-non-prototype",
+
+		// http://b/191699019
+		"-Wno-format-insufficient-args",
 	}
 
 	llvmNextExtraCommonGlobalCflags = []string{
@@ -481,6 +482,7 @@ func init() {
 		return strings.Join(flags, " ")
 	})
 
+	exportedVars.ExportStringListStaticVariable("NoOverride64GlobalCflags", noOverride64GlobalCflags)
 	exportedVars.ExportStringListStaticVariable("HostGlobalCflags", hostGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("NoOverrideExternalGlobalCflags", noOverrideExternalGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("CommonGlobalCppflags", commonGlobalCppflags)
@@ -518,7 +520,7 @@ func init() {
 	pctx.StaticVariable("ClangBin", "${ClangPath}/bin")
 
 	pctx.StaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
-	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib64/clang/${ClangShortVersion}/lib/linux")
+	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib/clang/${ClangShortVersion}/lib/linux")
 
 	// These are tied to the version of LLVM directly in external/llvm, so they might trail the host prebuilts
 	// being used for the rest of the build process.

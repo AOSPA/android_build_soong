@@ -136,6 +136,38 @@ func InList(s string, list []string) bool {
 	return IndexList(s, list) != -1
 }
 
+func setFromList[T comparable](l []T) map[T]bool {
+	m := make(map[T]bool, len(l))
+	for _, t := range l {
+		m[t] = true
+	}
+	return m
+}
+
+// ListSetDifference checks if the two lists contain the same elements. It returns
+// a boolean which is true if there is a difference, and then returns lists of elements
+// that are in l1 but not l2, and l2 but not l1.
+func ListSetDifference[T comparable](l1, l2 []T) (bool, []T, []T) {
+	listsDiffer := false
+	diff1 := []T{}
+	diff2 := []T{}
+	m1 := setFromList(l1)
+	m2 := setFromList(l2)
+	for t := range m1 {
+		if _, ok := m2[t]; !ok {
+			diff1 = append(diff1, t)
+			listsDiffer = true
+		}
+	}
+	for t := range m2 {
+		if _, ok := m1[t]; !ok {
+			diff2 = append(diff2, t)
+			listsDiffer = true
+		}
+	}
+	return listsDiffer, diff1, diff2
+}
+
 // Returns true if the given string s is prefixed with any string in the given prefix list.
 func HasAnyPrefix(s string, prefixList []string) bool {
 	for _, prefix := range prefixList {

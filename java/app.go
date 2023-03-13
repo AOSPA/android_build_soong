@@ -1039,8 +1039,11 @@ type appTestProperties struct {
 	// The name of the android_app module that the tests will run against.
 	Instrumentation_for *string
 
-	// if specified, the instrumentation target package name in the manifest is overwritten by it.
+	// If specified, the instrumentation target package name in the manifest is overwritten by it.
 	Instrumentation_target_package *string
+
+	// If specified, the mainline module package name in the test config is overwritten by it.
+	Mainline_package_name *string
 }
 
 type AndroidTest struct {
@@ -1116,6 +1119,11 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 		fixNeeded = true
 		command.FlagWithInput("--manifest ", a.manifestPath).
 			FlagWithArg("--package-name ", *a.overridableAppProperties.Package_name)
+	}
+
+	if a.appTestProperties.Mainline_package_name != nil {
+		fixNeeded = true
+		command.FlagWithArg("--mainline-package-name ", *a.appTestProperties.Mainline_package_name)
 	}
 
 	if fixNeeded {
@@ -1367,6 +1375,9 @@ func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, addCompatDeps boo
 			ctx.AddVariationDependencies(nil, usesLibCompat28OptTag, dexpreopt.OptionalCompatUsesLibs28...)
 			ctx.AddVariationDependencies(nil, usesLibCompat30OptTag, dexpreopt.OptionalCompatUsesLibs30...)
 		}
+	} else {
+		ctx.AddVariationDependencies(nil, r8LibraryJarTag, u.usesLibraryProperties.Uses_libs...)
+		ctx.AddVariationDependencies(nil, r8LibraryJarTag, u.presentOptionalUsesLibs(ctx)...)
 	}
 }
 
@@ -1560,20 +1571,48 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 	certificate, certificateName := android.BazelStringOrLabelFromProp(ctx, a.overridableAppProperties.Certificate)
 
-	attrs := &bazelAndroidAppAttributes{
-		commonAttrs,
-		aapt,
-		deps,
+	appAttrs := &bazelAndroidAppAttributes{
 		// TODO(b/209576404): handle package name override by product variable PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES
-		a.overridableAppProperties.Package_name,
-		certificate,
-		certificateName,
+		Custom_package:   a.overridableAppProperties.Package_name,
+		Certificate:      certificate,
+		Certificate_name: certificateName,
 	}
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "android_binary",
 		Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
 	}
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: a.Name()}, attrs)
+
+	if !bp2BuildInfo.hasKotlinSrcs && len(a.properties.Common_srcs) == 0 {
+		appAttrs.javaCommonAttributes = commonAttrs
+		appAttrs.bazelAapt = aapt
+		appAttrs.Deps = deps
+	} else {
+		ktName := a.Name() + "_kt"
+		commonAttrs.Common_srcs = bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, a.properties.Common_srcs))
+		ctx.CreateBazelTargetModule(
+			bazel.BazelTargetModuleProperties{
+				Rule_class:        "android_library",
+				Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
+			},
+			android.CommonAttributes{Name: ktName},
+			&bazelAndroidLibrary{
+				javaLibraryAttributes: &javaLibraryAttributes{
+					javaCommonAttributes: commonAttrs,
+					Deps:                 deps,
+				},
+				bazelAapt: aapt,
+			},
+		)
+
+		appAttrs.bazelAapt = &bazelAapt{Manifest: aapt.Manifest}
+		appAttrs.Deps = bazel.MakeSingleLabelListAttribute(bazel.Label{Label: ":" + ktName})
+	}
+
+	ctx.CreateBazelTargetModule(
+		props,
+		android.CommonAttributes{Name: a.Name()},
+		appAttrs,
+	)
 
 }
