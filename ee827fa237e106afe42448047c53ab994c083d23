@@ -16,6 +16,24 @@
       "message": "Please confirm if this works via zipalign or p7z.",
       "revId": "ee827fa237e106afe42448047c53ab994c083d23",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8d3a7872_f0d43c9e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000730
+      },
+      "writtenOn": "2023-03-26T22:16:10Z",
+      "side": 1,
+      "message": "zipalign doesn\u0027t work, can\u0027t tell about p7z",
+      "parentUuid": "efb323de_795a2713",
+      "revId": "ee827fa237e106afe42448047c53ab994c083d23",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
