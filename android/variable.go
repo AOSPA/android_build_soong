@@ -487,6 +487,7 @@ type productVariables struct {
 	BuildBrokenDepfile                 *bool    `json:",omitempty"`
 	BuildBrokenEnforceSyspropOwner     bool     `json:",omitempty"`
 	BuildBrokenTrebleSyspropNeverallow bool     `json:",omitempty"`
+	BuildBrokenUsesSoongPython2Modules bool     `json:",omitempty"`
 	BuildBrokenVendorPropertyNamespace bool     `json:",omitempty"`
 	BuildBrokenInputDirModules         []string `json:",omitempty"`
 
@@ -708,9 +709,8 @@ func (p *ProductConfigProperty) SelectKey() string {
 type ProductConfigProperties map[string]map[ProductConfigProperty]interface{}
 
 // ProductVariableProperties returns a ProductConfigProperties containing only the properties which
-// have been set for the module in the given context.
-func ProductVariableProperties(ctx BazelConversionPathContext) ProductConfigProperties {
-	module := ctx.Module()
+// have been set for the given module.
+func ProductVariableProperties(ctx ArchVariantContext, module Module) ProductConfigProperties {
 	moduleBase := module.base()
 
 	productConfigProperties := ProductConfigProperties{}
