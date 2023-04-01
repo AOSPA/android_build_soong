@@ -134,6 +134,8 @@ func TransformSrctoRlib(ctx ModuleContext, mainSrc android.Path, deps PathDeps, 
 
 func TransformSrctoDylib(ctx ModuleContext, mainSrc android.Path, deps PathDeps, flags Flags,
 	outputFile android.WritablePath) buildOutput {
+	flags.GlobalRustFlags = append(flags.GlobalRustFlags, "-C lto=thin")
+
 	return transformSrctoCrate(ctx, mainSrc, deps, flags, outputFile, "dylib")
 }
 
@@ -247,7 +249,13 @@ func transformSrctoCrate(ctx ModuleContext, main android.Path, deps PathDeps, fl
 	if ctx.Config().IsEnvTrue("SOONG_RUSTC_INCREMENTAL") {
 		incrementalPath := android.PathForOutput(ctx, "rustc").String()
 
-		rustcFlags = append(rustcFlags, "-C incremental="+incrementalPath)
+		rustcFlags = append(rustcFlags, "-Cincremental="+incrementalPath)
+	}
+
+	// Disallow experimental features
+	modulePath := android.PathForModuleSrc(ctx).String()
+	if !(android.IsThirdPartyPath(modulePath) || strings.HasPrefix(modulePath, "prebuilts")) {
+		rustcFlags = append(rustcFlags, "-Zallow-features=\"default_alloc_error_handler,custom_inner_attributes,mixed_integer_ops,slice_internals\"")
 	}
 
 	// Collect linker flags
@@ -399,7 +407,7 @@ func Rustdoc(ctx ModuleContext, main android.Path, deps PathDeps,
 	// Silence warnings about renamed lints for third-party crates
 	modulePath := android.PathForModuleSrc(ctx).String()
 	if android.IsThirdPartyPath(modulePath) {
-		rustdocFlags = append(rustdocFlags, " -A renamed_and_removed_lints")
+		rustdocFlags = append(rustdocFlags, " -A warnings")
 	}
 
 	// Yes, the same out directory is used simultaneously by all rustdoc builds.

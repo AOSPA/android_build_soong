@@ -795,6 +795,8 @@ type librarySdkMemberProperties struct {
 
 	// The value of the min_sdk_version property, translated into a number where possible.
 	MinSdkVersion *string `supported_build_releases:"Tiramisu+"`
+
+	DexPreoptProfileGuided *bool `supported_build_releases:"UpsideDownCake+"`
 }
 
 func (p *librarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMemberContext, variant android.Module) {
@@ -811,6 +813,10 @@ func (p *librarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMemberCo
 	if j.deviceProperties.Min_sdk_version != nil {
 		canonical := android.ReplaceFinalizedCodenames(ctx.SdkModuleContext().Config(), j.minSdkVersion.ApiLevel.String())
 		p.MinSdkVersion = proptools.StringPtr(canonical)
+	}
+
+	if j.dexpreopter.dexpreoptProperties.Dex_preopt_result.Profile_guided {
+		p.DexPreoptProfileGuided = proptools.BoolPtr(true)
 	}
 }
 
@@ -836,6 +842,11 @@ func (p *librarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberConte
 
 	if len(p.PermittedPackages) > 0 {
 		propertySet.AddProperty("permitted_packages", p.PermittedPackages)
+	}
+
+	dexPreoptSet := propertySet.AddPropertySet("dex_preopt")
+	if p.DexPreoptProfileGuided != nil {
+		dexPreoptSet.AddProperty("profile_guided", proptools.Bool(p.DexPreoptProfileGuided))
 	}
 
 	// Do not copy anything else to the snapshot.
@@ -1626,6 +1637,10 @@ type JavaApiLibraryProperties struct {
 	// List of shared java libs that this module has dependencies to and
 	// should be passed as classpath in javac invocation
 	Libs []string
+
+	// List of java libs that this module has static dependencies to and will be
+	// passed in metalava invocation
+	Static_libs []string
 }
 
 func ApiLibraryFactory() android.Module {
@@ -1698,6 +1713,7 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 		ctx.AddDependency(ctx.Module(), javaApiContributionTag, apiContributionName)
 	}
 	ctx.AddVariationDependencies(nil, libTag, al.properties.Libs...)
+	ctx.AddVariationDependencies(nil, staticLibTag, al.properties.Static_libs...)
 }
 
 func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -1717,6 +1733,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	var srcFiles android.Paths
 	var classPaths android.Paths
+	var staticLibs android.Paths
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		tag := ctx.OtherModuleDependencyTag(dep)
 		switch tag {
@@ -1730,6 +1747,9 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		case libTag:
 			provider := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
 			classPaths = append(classPaths, provider.HeaderJars...)
+		case staticLibTag:
+			provider := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
+			staticLibs = append(staticLibs, provider.HeaderJars...)
 		}
 	})
 
@@ -1754,16 +1774,24 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		FlagWithArg("-D ", stubsDir.String())
 
 	rule.Build("metalava", "metalava merged")
-
-	al.stubsJar = android.PathForModuleOut(ctx, ctx.ModuleName(), "android.jar")
+	compiledStubs := android.PathForModuleOut(ctx, ctx.ModuleName(), "stubs.jar")
+	al.stubsJar = android.PathForModuleOut(ctx, ctx.ModuleName(), fmt.Sprintf("%s.jar", ctx.ModuleName()))
 
 	var flags javaBuilderFlags
 	flags.javaVersion = getStubsJavaVersion()
 	flags.javacFlags = strings.Join(al.properties.Javacflags, " ")
 	flags.classpath = classpath(classPaths)
 
-	TransformJavaToClasses(ctx, al.stubsJar, 0, android.Paths{},
+	TransformJavaToClasses(ctx, compiledStubs, 0, android.Paths{},
 		android.Paths{al.stubsSrcJar}, flags, android.Paths{})
+
+	builder := android.NewRuleBuilder(pctx, ctx)
+	builder.Command().
+		BuiltTool("merge_zips").
+		Output(al.stubsJar).
+		Inputs(android.Paths{compiledStubs}).
+		Inputs(staticLibs)
+	builder.Build("merge_zips", "merge jar files")
 
 	ctx.Phony(ctx.ModuleName(), al.stubsJar)
 
@@ -1990,7 +2018,8 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			if di == nil {
 				return // An error has been reported by FindDeapexerProviderForModule.
 			}
-			if dexOutputPath := di.PrebuiltExportPath(apexRootRelativePathToJavaLib(j.BaseModuleName())); dexOutputPath != nil {
+			dexJarFileApexRootRelative := apexRootRelativePathToJavaLib(j.BaseModuleName())
+			if dexOutputPath := di.PrebuiltExportPath(dexJarFileApexRootRelative); dexOutputPath != nil {
 				dexJarFile := makeDexJarPathFromPath(dexOutputPath)
 				j.dexJarFile = dexJarFile
 				installPath := android.PathForModuleInPartitionInstall(ctx, "apex", ai.ApexVariationName, apexRootRelativePathToJavaLib(j.BaseModuleName()))
@@ -1999,6 +2028,11 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				j.dexpreopter.installPath = j.dexpreopter.getInstallPath(ctx, installPath)
 				setUncompressDex(ctx, &j.dexpreopter, &j.dexer)
 				j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
+
+				if profilePath := di.PrebuiltExportPath(dexJarFileApexRootRelative + ".prof"); profilePath != nil {
+					j.dexpreopter.inputProfilePathOnHost = profilePath
+				}
+
 				j.dexpreopt(ctx, dexOutputPath)
 
 				// Initialize the hiddenapi structure.
@@ -2026,7 +2060,15 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
 
 			var dexOutputFile android.OutputPath
-			dexOutputFile = j.dexer.compileDex(ctx, flags, j.MinSdkVersion(ctx), outputFile, jarName)
+			dexParams := &compileDexParams{
+				flags:         flags,
+				sdkVersion:    j.SdkVersion(ctx),
+				minSdkVersion: j.MinSdkVersion(ctx),
+				classesJar:    outputFile,
+				jarName:       jarName,
+			}
+
+			dexOutputFile = j.dexer.compileDex(ctx, dexParams)
 			if ctx.Failed() {
 				return
 			}
@@ -2117,15 +2159,18 @@ func (j *Import) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 // Implements android.ApexModule
 func (j *Import) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 	sdkVersion android.ApiLevel) error {
-	sdkSpec := j.MinSdkVersion(ctx)
-	if !sdkSpec.Specified() {
+	sdkVersionSpec := j.SdkVersion(ctx)
+	minSdkVersionSpec := j.MinSdkVersion(ctx)
+	if !minSdkVersionSpec.Specified() {
 		return fmt.Errorf("min_sdk_version is not specified")
 	}
-	if sdkSpec.Kind == android.SdkCore {
+	// If the module is compiling against core (via sdk_version), skip comparison check.
+	if sdkVersionSpec.Kind == android.SdkCore {
 		return nil
 	}
-	if sdkSpec.ApiLevel.GreaterThan(sdkVersion) {
-		return fmt.Errorf("newer SDK(%v)", sdkSpec.ApiLevel)
+	minSdkVersion := minSdkVersionSpec.ApiLevel
+	if minSdkVersion.GreaterThan(sdkVersion) {
+		return fmt.Errorf("newer SDK(%v)", minSdkVersion)
 	}
 	return nil
 }
@@ -2133,11 +2178,16 @@ func (j *Import) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 // requiredFilesFromPrebuiltApexForImport returns information about the files that a java_import or
 // java_sdk_library_import with the specified base module name requires to be exported from a
 // prebuilt_apex/apex_set.
-func requiredFilesFromPrebuiltApexForImport(name string) []string {
+func requiredFilesFromPrebuiltApexForImport(name string, d *dexpreopter) []string {
+	dexJarFileApexRootRelative := apexRootRelativePathToJavaLib(name)
 	// Add the dex implementation jar to the set of exported files.
-	return []string{
-		apexRootRelativePathToJavaLib(name),
+	files := []string{
+		dexJarFileApexRootRelative,
 	}
+	if BoolDefault(d.importDexpreoptProperties.Dex_preopt.Profile_guided, false) {
+		files = append(files, dexJarFileApexRootRelative+".prof")
+	}
+	return files
 }
 
 // apexRootRelativePathToJavaLib returns the path, relative to the root of the apex's contents, for
@@ -2150,7 +2200,7 @@ var _ android.RequiredFilesFromPrebuiltApex = (*Import)(nil)
 
 func (j *Import) RequiredFilesFromPrebuiltApex(_ android.BaseModuleContext) []string {
 	name := j.BaseModuleName()
-	return requiredFilesFromPrebuiltApexForImport(name)
+	return requiredFilesFromPrebuiltApexForImport(name, &j.dexpreopter)
 }
 
 // Add compile time check for interface implementation
@@ -2191,6 +2241,7 @@ func ImportFactory() android.Module {
 	module.AddProperties(
 		&module.properties,
 		&module.dexer.dexProperties,
+		&module.importDexpreoptProperties,
 	)
 
 	module.initModuleAndImport(module)
@@ -2760,6 +2811,9 @@ func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
 		if sdkVersion.Kind == android.SdkPublic && sdkVersion.ApiLevel == android.FutureApiLevel {
 			// TODO(b/220869005) remove forced dependency on current public android.jar
 			deps.Add(bazel.MakeLabelAttribute("//prebuilts/sdk:public_current_android_sdk_java_import"))
+		} else if sdkVersion.Kind == android.SdkSystem && sdkVersion.ApiLevel == android.FutureApiLevel {
+			// TODO(b/215230098) remove forced dependency on current public android.jar
+			deps.Add(bazel.MakeLabelAttribute("//prebuilts/sdk:system_current_android_sdk_java_import"))
 		}
 	} else if !deps.IsEmpty() {
 		ctx.ModuleErrorf("Module has direct dependencies but no sources. Bazel will not allow this.")
@@ -2783,7 +2837,7 @@ func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
 
 		props = bazel.BazelTargetModuleProperties{
 			Rule_class:        "kt_jvm_library",
-			Bzl_load_location: "@rules_kotlin//kotlin:jvm_library.bzl",
+			Bzl_load_location: "//build/bazel/rules/kotlin:kt_jvm_library.bzl",
 		}
 	}
 
@@ -2878,32 +2932,20 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 		ktName := m.Name() + "_kt"
 		ktProps := bazel.BazelTargetModuleProperties{
 			Rule_class:        "kt_jvm_library",
-			Bzl_load_location: "@rules_kotlin//kotlin:jvm_library.bzl",
+			Bzl_load_location: "//build/bazel/rules/kotlin:kt_jvm_library.bzl",
 		}
 		ktAttrs := &javaLibraryAttributes{
 			Deps: deps,
 			javaCommonAttributes: &javaCommonAttributes{
-				Srcs:      commonAttrs.Srcs,
-				Plugins:   commonAttrs.Plugins,
-				Javacopts: commonAttrs.Javacopts,
+				Srcs:                    commonAttrs.Srcs,
+				Plugins:                 commonAttrs.Plugins,
+				Javacopts:               commonAttrs.Javacopts,
+				javaResourcesAttributes: commonAttrs.javaResourcesAttributes,
 			},
 		}
 
 		if len(m.properties.Common_srcs) != 0 {
 			ktAttrs.javaCommonAttributes.Common_srcs = bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, m.properties.Common_srcs))
-		}
-
-		// kt_jvm_library does not support resource_strip_prefix, if this attribute
-		// is set, than javaResourcesAttributes needs to be set in the
-		// javaCommonAttributes of the java_binary target
-		if commonAttrs.javaResourcesAttributes != nil {
-			if commonAttrs.javaResourcesAttributes.Resource_strip_prefix != nil {
-				attrs.javaCommonAttributes = &javaCommonAttributes{
-					javaResourcesAttributes: commonAttrs.javaResourcesAttributes,
-				}
-			} else {
-				ktAttrs.javaCommonAttributes.javaResourcesAttributes = commonAttrs.javaResourcesAttributes
-			}
 		}
 
 		ctx.CreateBazelTargetModule(ktProps, android.CommonAttributes{Name: ktName}, ktAttrs)

@@ -87,6 +87,8 @@ type CmdArgs struct {
 	BazelModeDev             bool
 	BazelModeStaging         bool
 	BazelForceEnabledModules string
+
+	UseBazelProxy bool
 }
 
 // Build modes that soong_build can run as.
@@ -251,6 +253,10 @@ type config struct {
 	// specified modules. They are passed via the command-line flag
 	// "--bazel-force-enabled-modules"
 	bazelForceEnabledModules map[string]struct{}
+
+	// If true, for any requests to Bazel, communicate with a Bazel proxy using
+	// unix sockets, instead of spawning Bazel as a subprocess.
+	UseBazelProxy bool
 }
 
 type deviceConfig struct {
@@ -442,6 +448,8 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		mixedBuildDisabledModules: make(map[string]struct{}),
 		mixedBuildEnabledModules:  make(map[string]struct{}),
 		bazelForceEnabledModules:  make(map[string]struct{}),
+
+		UseBazelProxy: cmdArgs.UseBazelProxy,
 	}
 
 	config.deviceConfig = &deviceConfig{
@@ -875,6 +883,8 @@ func (c *config) AllSupportedApiLevels() []ApiLevel {
 // DefaultAppTargetSdk returns the API level that platform apps are targeting.
 // This converts a codename to the exact ApiLevel it represents.
 func (c *config) DefaultAppTargetSdk(ctx EarlyModuleContext) ApiLevel {
+	// This logic is replicated in starlark, if changing logic here update starlark code too
+	// https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/common/api.bzl;l=72;drc=231c7e8c8038fd478a79eb68aa5b9f5c64e0e061
 	if Bool(c.productVariables.Platform_sdk_final) {
 		return c.PlatformSdkVersion()
 	}

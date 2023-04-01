@@ -24,7 +24,7 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust/config")
 
 var (
-	RustDefaultVersion = "1.66.1"
+	RustDefaultVersion = "1.67.1"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -54,6 +54,7 @@ var (
 		// TODO (b/267698452): Temporary workaround until the "no unstable
 		// features" policy is enforced.
 		"-A stable-features",
+		"-Zdylib-lto",
 	}
 
 	deviceGlobalRustFlags = []string{

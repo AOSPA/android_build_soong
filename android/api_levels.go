@@ -225,6 +225,8 @@ func ApiLevelFromUser(ctx PathContext, raw string) (ApiLevel, error) {
 // ApiLevelFromUserWithConfig implements ApiLevelFromUser, see comments for
 // ApiLevelFromUser for more details.
 func ApiLevelFromUserWithConfig(config Config, raw string) (ApiLevel, error) {
+	// This logic is replicated in starlark, if changing logic here update starlark code too
+	// https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/common/api.bzl;l=42;drc=231c7e8c8038fd478a79eb68aa5b9f5c64e0e061
 	if raw == "" {
 		panic("API level string must be non-empty")
 	}
@@ -302,31 +304,37 @@ func GetApiLevelsJson(ctx PathContext) WritablePath {
 	return PathForOutput(ctx, "api_levels.json")
 }
 
+func getApiLevelsMapReleasedVersions() map[string]int {
+	return map[string]int{
+		"G":        9,
+		"I":        14,
+		"J":        16,
+		"J-MR1":    17,
+		"J-MR2":    18,
+		"K":        19,
+		"L":        21,
+		"L-MR1":    22,
+		"M":        23,
+		"N":        24,
+		"N-MR1":    25,
+		"O":        26,
+		"O-MR1":    27,
+		"P":        28,
+		"Q":        29,
+		"R":        30,
+		"S":        31,
+		"S-V2":     32,
+		"Tiramisu": 33,
+	}
+}
+
 var finalCodenamesMapKey = NewOnceKey("FinalCodenamesMap")
 
 func getFinalCodenamesMap(config Config) map[string]int {
+	// This logic is replicated in starlark, if changing logic here update starlark code too
+	// https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/common/api.bzl;l=30;drc=231c7e8c8038fd478a79eb68aa5b9f5c64e0e061
 	return config.Once(finalCodenamesMapKey, func() interface{} {
-		apiLevelsMap := map[string]int{
-			"G":        9,
-			"I":        14,
-			"J":        16,
-			"J-MR1":    17,
-			"J-MR2":    18,
-			"K":        19,
-			"L":        21,
-			"L-MR1":    22,
-			"M":        23,
-			"N":        24,
-			"N-MR1":    25,
-			"O":        26,
-			"O-MR1":    27,
-			"P":        28,
-			"Q":        29,
-			"R":        30,
-			"S":        31,
-			"S-V2":     32,
-			"Tiramisu": 33,
-		}
+		apiLevelsMap := getApiLevelsMapReleasedVersions()
 
 		// TODO: Differentiate "current" and "future".
 		// The code base calls it FutureApiLevel, but the spelling is "current",
@@ -349,29 +357,12 @@ func getFinalCodenamesMap(config Config) map[string]int {
 
 var apiLevelsMapKey = NewOnceKey("ApiLevelsMap")
 
+// ApiLevelsMap has entries for preview API levels
 func GetApiLevelsMap(config Config) map[string]int {
+	// This logic is replicated in starlark, if changing logic here update starlark code too
+	// https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/common/api.bzl;l=23;drc=231c7e8c8038fd478a79eb68aa5b9f5c64e0e061
 	return config.Once(apiLevelsMapKey, func() interface{} {
-		apiLevelsMap := map[string]int{
-			"G":        9,
-			"I":        14,
-			"J":        16,
-			"J-MR1":    17,
-			"J-MR2":    18,
-			"K":        19,
-			"L":        21,
-			"L-MR1":    22,
-			"M":        23,
-			"N":        24,
-			"N-MR1":    25,
-			"O":        26,
-			"O-MR1":    27,
-			"P":        28,
-			"Q":        29,
-			"R":        30,
-			"S":        31,
-			"S-V2":     32,
-			"Tiramisu": 33,
-		}
+		apiLevelsMap := getApiLevelsMapReleasedVersions()
 		for i, codename := range config.PlatformVersionActiveCodenames() {
 			apiLevelsMap[codename] = previewAPILevelBase + i
 		}
@@ -386,20 +377,11 @@ func (a *apiLevelsSingleton) GenerateBuildActions(ctx SingletonContext) {
 	createApiLevelsJson(ctx, apiLevelsJson, apiLevelsMap)
 }
 
-func printApiLevelsStarlarkDict(config Config) string {
-	apiLevelsMap := GetApiLevelsMap(config)
-	valDict := make(map[string]string, len(apiLevelsMap))
-	for k, v := range apiLevelsMap {
-		valDict[k] = strconv.Itoa(v)
-	}
-	return starlark_fmt.PrintDict(valDict, 0)
-}
-
 func StarlarkApiLevelConfigs(config Config) string {
 	return fmt.Sprintf(bazel.GeneratedBazelFileWarning+`
-_api_levels = %s
+_api_levels_released_versions = %s
 
-api_levels = _api_levels
-`, printApiLevelsStarlarkDict(config),
+api_levels_released_versions = _api_levels_released_versions
+`, starlark_fmt.PrintStringIntDict(getApiLevelsMapReleasedVersions(), 0),
 	)
 }

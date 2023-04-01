@@ -99,6 +99,10 @@ type apexBundleProperties struct {
 	// /system/sepolicy/apex/<module_name>_file_contexts.
 	File_contexts *string `android:"path"`
 
+	// By default, file_contexts is amended by force-labelling / and /apex_manifest.pb as system_file
+	// to avoid mistakes. When set as true, no force-labelling.
+	Use_file_contexts_as_is *bool
+
 	// Path to the canned fs config file for customizing file's uid/gid/mod/capabilities. The
 	// format is /<path_or_glob> <uid> <gid> <mode> [capabilities=0x<cap>], where path_or_glob is a
 	// path or glob pattern for a file or set of files, uid/gid are numerial values of user ID
@@ -110,6 +114,18 @@ type apexBundleProperties struct {
 	ApexNativeDependencies
 
 	Multilib apexMultilibProperties
+
+	// List of runtime resource overlays (RROs) that are embedded inside this APEX.
+	Rros []string
+
+	// List of bootclasspath fragments that are embedded inside this APEX bundle.
+	Bootclasspath_fragments []string
+
+	// List of systemserverclasspath fragments that are embedded inside this APEX bundle.
+	Systemserverclasspath_fragments []string
+
+	// List of java libraries that are embedded inside this APEX bundle.
+	Java_libs []string
 
 	// List of sh binaries that are embedded inside this APEX bundle.
 	Sh_binaries []string
@@ -326,20 +342,8 @@ type overridableProperties struct {
 	// List of prebuilt files that are embedded inside this APEX bundle.
 	Prebuilts []string
 
-	// List of runtime resource overlays (RROs) that are embedded inside this APEX.
-	Rros []string
-
 	// List of BPF programs inside this APEX bundle.
 	Bpfs []string
-
-	// List of bootclasspath fragments that are embedded inside this APEX bundle.
-	Bootclasspath_fragments []string
-
-	// List of systemserverclasspath fragments that are embedded inside this APEX bundle.
-	Systemserverclasspath_fragments []string
-
-	// List of java libraries that are embedded inside this APEX bundle.
-	Java_libs []string
 
 	// Names of modules to be overridden. Listed modules can only be other binaries (in Make or
 	// Soong). This does not completely prevent installation of the overridden binaries, but if
@@ -514,6 +518,7 @@ type apexFile struct {
 	// buildFile is put in the installDir inside the APEX.
 	builtFile  android.Path
 	installDir string
+	partition  string
 	customStem string
 	symlinks   []string // additional symlinks
 
@@ -553,6 +558,7 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 	}
 	if module != nil {
 		ret.moduleDir = ctx.OtherModuleDir(module)
+		ret.partition = module.PartitionTag(ctx.DeviceConfig())
 		ret.requiredModuleNames = module.RequiredModuleNames()
 		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
 		ret.hostRequiredModuleNames = module.HostRequiredModuleNames()
@@ -845,6 +851,10 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 	// Common-arch dependencies come next
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
+	ctx.AddFarVariationDependencies(commonVariation, rroTag, a.properties.Rros...)
+	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.properties.Bootclasspath_fragments...)
+	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.properties.Systemserverclasspath_fragments...)
+	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
 	ctx.AddFarVariationDependencies(commonVariation, compatConfigTag, a.properties.Compat_configs...)
 }
@@ -858,10 +868,6 @@ func (a *apexBundle) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
 	ctx.AddFarVariationDependencies(commonVariation, androidAppTag, a.overridableProperties.Apps...)
 	ctx.AddFarVariationDependencies(commonVariation, bpfTag, a.overridableProperties.Bpfs...)
-	ctx.AddFarVariationDependencies(commonVariation, rroTag, a.overridableProperties.Rros...)
-	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.overridableProperties.Bootclasspath_fragments...)
-	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.overridableProperties.Systemserverclasspath_fragments...)
-	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.overridableProperties.Java_libs...)
 	if prebuilts := a.overridableProperties.Prebuilts; len(prebuilts) > 0 {
 		// For prebuilt_etc, use the first variant (64 on 64/32bit device, 32 on 32bit device)
 		// regardless of the TARGET_PREFER_* setting. See b/144532908
@@ -1769,7 +1775,7 @@ func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaMod
 
 func apexFileForJavaModuleProfile(ctx android.BaseModuleContext, module javaModule) *apexFile {
 	if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
-		if profilePathOnHost := dexpreopter.ProfilePathOnHost(); profilePathOnHost != nil {
+		if profilePathOnHost := dexpreopter.OutputProfilePathOnHost(); profilePathOnHost != nil {
 			dirInApex := "javalib"
 			af := newApexFile(ctx, profilePathOnHost, module.BaseModuleName()+"-profile", dirInApex, etc, nil)
 			af.customStem = module.Stem() + ".jar.prof"
@@ -3107,9 +3113,9 @@ func isStaticExecutableAllowed(apex string, exec string) bool {
 
 // Collect information for opening IDE project files in java/jdeps.go.
 func (a *apexBundle) IDEInfo(dpInfo *android.IdeInfo) {
-	dpInfo.Deps = append(dpInfo.Deps, a.overridableProperties.Java_libs...)
-	dpInfo.Deps = append(dpInfo.Deps, a.overridableProperties.Bootclasspath_fragments...)
-	dpInfo.Deps = append(dpInfo.Deps, a.overridableProperties.Systemserverclasspath_fragments...)
+	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
+	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
+	dpInfo.Deps = append(dpInfo.Deps, a.properties.Systemserverclasspath_fragments...)
 	dpInfo.Paths = append(dpInfo.Paths, a.modulePaths...)
 }
 

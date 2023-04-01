@@ -1308,7 +1308,7 @@ cc_library {
 
 func TestCCLibraryNoCrtTrue(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_library - nocrt: true emits attribute",
+		Description:                "cc_library - nocrt: true disables feature",
 		ModuleTypeUnderTest:        "cc_library",
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Filesystem: map[string]string{
@@ -1323,7 +1323,7 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
-			"link_crt": `False`,
+			"features": `["-link_crt"]`,
 			"srcs":     `["impl.cpp"]`,
 		}),
 	},
@@ -1375,7 +1375,13 @@ cc_library {
     include_build_directory: false,
 }
 `,
-		ExpectedErr: fmt.Errorf("module \"foo-lib\": nocrt is not supported for arch variants"),
+		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
+			"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-link_crt"],
+        "//conditions:default": [],
+    })`,
+			"srcs": `["impl.cpp"]`,
+		}),
 	})
 }
 
@@ -1395,8 +1401,8 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
-			"srcs":       `["impl.cpp"]`,
-			"use_libcrt": `False`,
+			"features": `["-use_libcrt"]`,
+			"srcs":     `["impl.cpp"]`,
 		}),
 	})
 }
@@ -1445,8 +1451,7 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
-			"srcs":       `["impl.cpp"]`,
-			"use_libcrt": `True`,
+			"srcs": `["impl.cpp"]`,
 		}),
 	})
 }
@@ -1475,10 +1480,10 @@ cc_library {
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
 			"srcs": `["impl.cpp"]`,
-			"use_libcrt": `select({
-        "//build/bazel/platforms/arch:arm": False,
-        "//build/bazel/platforms/arch:x86": False,
-        "//conditions:default": None,
+			"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-use_libcrt"],
+        "//build/bazel/platforms/arch:x86": ["-use_libcrt"],
+        "//conditions:default": [],
     })`,
 		}),
 	})
@@ -1512,17 +1517,15 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
-			"srcs": `["impl.cpp"]`,
-			"use_libcrt": `select({
-        "//build/bazel/platforms/os_arch:android_arm": False,
-        "//build/bazel/platforms/os_arch:android_x86": False,
-        "//build/bazel/platforms/os_arch:darwin_arm64": False,
-        "//build/bazel/platforms/os_arch:darwin_x86_64": False,
-        "//build/bazel/platforms/os_arch:linux_glibc_x86": False,
-        "//build/bazel/platforms/os_arch:linux_musl_x86": False,
-        "//build/bazel/platforms/os_arch:windows_x86": False,
-        "//conditions:default": None,
+			"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-use_libcrt"],
+        "//build/bazel/platforms/arch:x86": ["-use_libcrt"],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/platforms/os:darwin": ["-use_libcrt"],
+        "//conditions:default": [],
     })`,
+			"srcs": `["impl.cpp"]`,
 		}),
 	})
 }
@@ -1557,16 +1560,10 @@ cc_library {
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
 			"srcs": `["impl.cpp"]`,
-			"use_libcrt": `select({
-        "//build/bazel/platforms/os_arch:android_arm": False,
-        "//build/bazel/platforms/os_arch:android_x86_64": False,
-        "//build/bazel/platforms/os_arch:darwin_arm64": True,
-        "//build/bazel/platforms/os_arch:darwin_x86_64": False,
-        "//build/bazel/platforms/os_arch:linux_bionic_x86_64": False,
-        "//build/bazel/platforms/os_arch:linux_glibc_x86_64": False,
-        "//build/bazel/platforms/os_arch:linux_musl_x86_64": False,
-        "//build/bazel/platforms/os_arch:windows_x86_64": False,
-        "//conditions:default": None,
+			"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-use_libcrt"],
+        "//build/bazel/platforms/arch:x86_64": ["-use_libcrt"],
+        "//conditions:default": [],
     })`,
 		}),
 	})
@@ -4082,6 +4079,228 @@ cc_library {
         "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
         "//conditions:default": [],
     })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryInApexWithStubSharedLibs(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library with in apex with stub shared_libs and export_shared_lib_headers",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "barlib",
+	stubs: { symbol_file: "bar.map.txt", versions: ["28", "29", "current"] },
+	bazel_module: { bp2build_available: false },
+}
+cc_library {
+	name: "bazlib",
+	stubs: { symbol_file: "bar.map.txt", versions: ["28", "29", "current"] },
+	bazel_module: { bp2build_available: false },
+}
+cc_library {
+    name: "foo",
+	  shared_libs: ["barlib", "bazlib"],
+    export_shared_lib_headers: ["bazlib"],
+    apex_available: [
+        "apex_available:platform",
+    ],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"implementation_dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":barlib_stub_libs_current"],
+        "//conditions:default": [":barlib"],
+    })`,
+				"dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":bazlib_stub_libs_current"],
+        "//conditions:default": [":bazlib"],
+    })`,
+				"local_includes": `["."]`,
+				"tags":           `["apex_available=apex_available:platform"]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"implementation_dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":barlib_stub_libs_current"],
+        "//conditions:default": [":barlib"],
+    })`,
+				"dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":bazlib_stub_libs_current"],
+        "//conditions:default": [":bazlib"],
+    })`,
+				"local_includes": `["."]`,
+				"tags":           `["apex_available=apex_available:platform"]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithThinLto(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when thin LTO is enabled",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features":       `["android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithLtoNever(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when LTO is explicitly disabled",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features":       `["-android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["-android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithThinLtoArchSpecific(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when LTO differs across arch and os variants",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	target: {
+		android: {
+			lto: {
+				thin: true,
+			},
+		},
+	},
+	arch: {
+		riscv64: {
+			lto: {
+				thin: false,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os_arch:android_arm": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_arm64": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_riscv64": ["-android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86_64": ["android_thin_lto"],
+        "//conditions:default": [],
+    })`}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os_arch:android_arm": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_arm64": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_riscv64": ["-android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86_64": ["android_thin_lto"],
+        "//conditions:default": [],
+    })`}),
+		},
+	})
+}
+
+func TestCcLibraryWithThinLtoDisabledDefaultEnabledVariant(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when LTO disabled by default but enabled on a particular variant",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+	target: {
+		android: {
+			lto: {
+				thin: true,
+				never: false,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_thin_lto"],
+        "//conditions:default": ["-android_thin_lto"],
+    })`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_thin_lto"],
+        "//conditions:default": ["-android_thin_lto"],
+    })`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithThinLtoWholeProgramVtables(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when thin LTO is enabled with whole_program_vtables",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+	whole_program_vtables: true,
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features": `[
+        "android_thin_lto",
+        "android_thin_lto_whole_program_vtables",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `[
+        "android_thin_lto",
+        "android_thin_lto_whole_program_vtables",
+    ]`,
 				"local_includes": `["."]`,
 			}),
 		},

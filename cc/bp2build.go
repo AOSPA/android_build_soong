@@ -817,6 +817,7 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 	compilerAttrs.hdrs.Prepend = true
 
 	features := compilerAttrs.features.Clone().Append(linkerAttrs.features).Append(bp2buildSanitizerFeatures(ctx, module))
+	features = features.Append(bp2buildLtoFeatures(ctx, module))
 	features.DeduplicateAxesFromBase()
 
 	addMuslSystemDynamicDeps(ctx, linkerAttrs)
@@ -965,8 +966,6 @@ type linkerAttributes struct {
 	systemDynamicDeps                bazel.LabelListAttribute
 	usedSystemDynamicDepAsDynamicDep map[string]bool
 
-	linkCrt                       bazel.BoolAttribute
-	useLibcrt                     bazel.BoolAttribute
 	useVersionLib                 bazel.BoolAttribute
 	linkopts                      bazel.StringListAttribute
 	additionalLinkerInputs        bazel.LabelListAttribute
@@ -1082,43 +1081,13 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 	la.resolveTargetApexProp(ctx, props)
 
 	if axis == bazel.NoConfigAxis || (axis == bazel.OsConfigurationAxis && config == bazel.OsAndroid) {
-		// If a dependency in la.implementationDynamicDeps has stubs, its stub variant should be
-		// used when the dependency is linked in a APEX. The dependencies in NoConfigAxis and
-		// OsConfigurationAxis/OsAndroid are grouped by having stubs or not, so Bazel select()
-		// statement can be used to choose source/stub variants of them.
-		depsWithStubs := []bazel.Label{}
-		for _, l := range sharedDeps.implementation.Includes {
-			dep, _ := ctx.ModuleFromName(l.OriginalModuleName)
-			if m, ok := dep.(*Module); ok && m.HasStubsVariants() {
-				depsWithStubs = append(depsWithStubs, l)
-			}
-		}
-		if len(depsWithStubs) > 0 {
-			implDynamicDeps := bazel.SubtractBazelLabelList(sharedDeps.implementation, bazel.MakeLabelList(depsWithStubs))
-			la.implementationDynamicDeps.SetSelectValue(axis, config, implDynamicDeps)
-
-			stubLibLabels := []bazel.Label{}
-			for _, l := range depsWithStubs {
-				l.Label = l.Label + stubsSuffix
-				stubLibLabels = append(stubLibLabels, l)
-			}
-			inApexSelectValue := la.implementationDynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex)
-			nonApexSelectValue := la.implementationDynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex)
-			defaultSelectValue := la.implementationDynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.ConditionsDefaultConfigKey)
-			if axis == bazel.NoConfigAxis {
-				(&inApexSelectValue).Append(bazel.MakeLabelList(stubLibLabels))
-				(&nonApexSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
-				(&defaultSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
-				la.implementationDynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex, bazel.FirstUniqueBazelLabelList(inApexSelectValue))
-				la.implementationDynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex, bazel.FirstUniqueBazelLabelList(nonApexSelectValue))
-				la.implementationDynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.ConditionsDefaultConfigKey, bazel.FirstUniqueBazelLabelList(defaultSelectValue))
-			} else if config == bazel.OsAndroid {
-				(&inApexSelectValue).Append(bazel.MakeLabelList(stubLibLabels))
-				(&nonApexSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
-				la.implementationDynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex, bazel.FirstUniqueBazelLabelList(inApexSelectValue))
-				la.implementationDynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex, bazel.FirstUniqueBazelLabelList(nonApexSelectValue))
-			}
-		}
+		// If a dependency in la.implementationDynamicDeps or la.dynamicDeps has stubs, its
+		// stub variant should be used when the dependency is linked in a APEX. The
+		// dependencies in NoConfigAxis and OsConfigurationAxis/OsAndroid are grouped by
+		// having stubs or not, so Bazel select() statement can be used to choose
+		// source/stub variants of them.
+		setStubsForDynamicDeps(ctx, axis, config, sharedDeps.export, &la.dynamicDeps, 0)
+		setStubsForDynamicDeps(ctx, axis, config, sharedDeps.implementation, &la.implementationDynamicDeps, 1)
 	}
 
 	if !BoolDefault(props.Pack_relocations, packRelocationsDefault) {
@@ -1136,6 +1105,13 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 		if isBinary && android.InList("-shared", linkerFlags) {
 			axisFeatures = append(axisFeatures, "-static_flag")
 		}
+	}
+
+	if !props.libCrt() {
+		axisFeatures = append(axisFeatures, "-use_libcrt")
+	}
+	if !props.crt() {
+		axisFeatures = append(axisFeatures, "-link_crt")
 	}
 
 	// This must happen before the addition of flags for Version Script and
@@ -1157,16 +1133,6 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 
 	la.additionalLinkerInputs.SetSelectValue(axis, config, additionalLinkerInputs)
 	la.linkopts.SetSelectValue(axis, config, linkerFlags)
-	la.useLibcrt.SetSelectValue(axis, config, props.libCrt())
-
-	// it's very unlikely for nocrt to be arch variant, so bp2build doesn't support it.
-	if props.crt() != nil {
-		if axis == bazel.NoConfigAxis {
-			la.linkCrt.SetSelectValue(axis, config, props.crt())
-		} else if axis == bazel.ArchConfigurationAxis {
-			ctx.ModuleErrorf("nocrt is not supported for arch variants")
-		}
-	}
 
 	if axisFeatures != nil {
 		la.features.SetSelectValue(axis, config, axisFeatures)
@@ -1175,6 +1141,43 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 	runtimeDeps := android.BazelLabelForModuleDepsExcludes(ctx, props.Runtime_libs, props.Exclude_runtime_libs)
 	if !runtimeDeps.IsEmpty() {
 		la.runtimeDeps.SetSelectValue(axis, config, runtimeDeps)
+	}
+}
+
+func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.ConfigurationAxis,
+	config string, dynamicLibs bazel.LabelList, dynamicDeps *bazel.LabelListAttribute, ind int) {
+	depsWithStubs := []bazel.Label{}
+	for _, l := range dynamicLibs.Includes {
+		dep, _ := ctx.ModuleFromName(l.OriginalModuleName)
+		if m, ok := dep.(*Module); ok && m.HasStubsVariants() {
+			depsWithStubs = append(depsWithStubs, l)
+		}
+	}
+	if len(depsWithStubs) > 0 {
+		implDynamicDeps := bazel.SubtractBazelLabelList(dynamicLibs, bazel.MakeLabelList(depsWithStubs))
+		dynamicDeps.SetSelectValue(axis, config, implDynamicDeps)
+
+		stubLibLabels := []bazel.Label{}
+		for _, l := range depsWithStubs {
+			l.Label = l.Label + stubsSuffix
+			stubLibLabels = append(stubLibLabels, l)
+		}
+		inApexSelectValue := dynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex)
+		nonApexSelectValue := dynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex)
+		defaultSelectValue := dynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.ConditionsDefaultConfigKey)
+		if axis == bazel.NoConfigAxis {
+			(&inApexSelectValue).Append(bazel.MakeLabelList(stubLibLabels))
+			(&nonApexSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
+			(&defaultSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
+			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex, bazel.FirstUniqueBazelLabelList(inApexSelectValue))
+			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex, bazel.FirstUniqueBazelLabelList(nonApexSelectValue))
+			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.ConditionsDefaultConfigKey, bazel.FirstUniqueBazelLabelList(defaultSelectValue))
+		} else if config == bazel.OsAndroid {
+			(&inApexSelectValue).Append(bazel.MakeLabelList(stubLibLabels))
+			(&nonApexSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
+			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex, bazel.FirstUniqueBazelLabelList(inApexSelectValue))
+			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex, bazel.FirstUniqueBazelLabelList(nonApexSelectValue))
+		}
 	}
 }
 
@@ -1261,7 +1264,7 @@ func (la *linkerAttributes) finalize(ctx android.BazelConversionPathContext) {
 	// result in duplicate library errors for bionic OSes. Here, we explicitly exclude those libraries
 	// from bionic OSes and the no config case as these libraries only build for bionic OSes.
 	if la.systemDynamicDeps.IsNil() && len(la.usedSystemDynamicDepAsDynamicDep) > 0 {
-		toRemove := bazelLabelForSharedDeps(ctx, android.SortedStringKeys(la.usedSystemDynamicDepAsDynamicDep))
+		toRemove := bazelLabelForSharedDeps(ctx, android.SortedKeys(la.usedSystemDynamicDepAsDynamicDep))
 		la.dynamicDeps.Exclude(bazel.NoConfigAxis, "", toRemove)
 		la.dynamicDeps.Exclude(bazel.OsConfigurationAxis, "android", toRemove)
 		la.dynamicDeps.Exclude(bazel.OsConfigurationAxis, "linux_bionic", toRemove)
@@ -1456,4 +1459,50 @@ func bp2buildSanitizerFeatures(ctx android.BazelConversionPathContext, m *Module
 		}
 	})
 	return sanitizerFeatures
+}
+
+func bp2buildLtoFeatures(ctx android.BazelConversionPathContext, m *Module) bazel.StringListAttribute {
+	lto_feature_name := "android_thin_lto"
+	ltoBoolFeatures := bazel.BoolAttribute{}
+	bp2BuildPropParseHelper(ctx, m, &LTOProperties{}, func(axis bazel.ConfigurationAxis, config string, props interface{}) {
+		if ltoProps, ok := props.(*LTOProperties); ok {
+			thinProp := ltoProps.Lto.Thin != nil && *ltoProps.Lto.Thin
+			thinPropSetToFalse := ltoProps.Lto.Thin != nil && !*ltoProps.Lto.Thin
+			neverProp := ltoProps.Lto.Never != nil && *ltoProps.Lto.Never
+			if thinProp {
+				ltoBoolFeatures.SetSelectValue(axis, config, BoolPtr(true))
+				return
+			}
+			if neverProp || thinPropSetToFalse {
+				if thinProp {
+					ctx.ModuleErrorf("lto.thin and lto.never are mutually exclusive but were specified together")
+				} else {
+					ltoBoolFeatures.SetSelectValue(axis, config, BoolPtr(false))
+				}
+				return
+			}
+		}
+		ltoBoolFeatures.SetSelectValue(axis, config, nil)
+	})
+
+	props := m.GetArchVariantProperties(ctx, &LTOProperties{})
+	ltoStringFeatures, err := ltoBoolFeatures.ToStringListAttribute(func(boolPtr *bool, axis bazel.ConfigurationAxis, config string) []string {
+		if boolPtr == nil {
+			return []string{}
+		}
+		if !*boolPtr {
+			return []string{"-" + lto_feature_name}
+		}
+		features := []string{lto_feature_name}
+		if ltoProps, ok := props[axis][config].(*LTOProperties); ok {
+			if ltoProps.Whole_program_vtables != nil && *ltoProps.Whole_program_vtables {
+				features = append(features, "android_thin_lto_whole_program_vtables")
+			}
+		}
+		return features
+	})
+	if err != nil {
+		ctx.ModuleErrorf("Error processing LTO attributes: %s", err)
+	}
+	return ltoStringFeatures
 }

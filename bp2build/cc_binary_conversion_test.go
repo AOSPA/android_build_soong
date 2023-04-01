@@ -365,7 +365,7 @@ func TestCcBinaryNocrtTests(t *testing.T) {
 		{
 			description:   "nocrt: true",
 			soongProperty: `nocrt: true,`,
-			bazelAttr:     AttrNameToString{"link_crt": `False`},
+			bazelAttr:     AttrNameToString{"features": `["-link_crt"]`},
 		},
 		{
 			description:   "nocrt: false",
@@ -408,12 +408,12 @@ func TestCcBinaryNo_libcrtTests(t *testing.T) {
 		{
 			description:   "no_libcrt: true",
 			soongProperty: `no_libcrt: true,`,
-			bazelAttr:     AttrNameToString{"use_libcrt": `False`},
+			bazelAttr:     AttrNameToString{"features": `["-use_libcrt"]`},
 		},
 		{
 			description:   "no_libcrt: false",
 			soongProperty: `no_libcrt: false,`,
-			bazelAttr:     AttrNameToString{"use_libcrt": `True`},
+			bazelAttr:     AttrNameToString{},
 		},
 		{
 			description: "no_libcrt: not set",
@@ -864,6 +864,134 @@ func TestCcBinaryWithUBSanPropertiesArchSpecific(t *testing.T) {
         "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
         "//conditions:default": [],
     })`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithThinLto(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct features when thin LTO is enabled",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features":       `["android_thin_lto"]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithLtoNever(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct features when LTO is explicitly disabled",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features":       `["-android_thin_lto"]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithThinLtoArchSpecific(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct features when LTO differs across arch and os variants",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	target: {
+		android: {
+			lto: {
+				thin: true,
+			},
+		},
+	},
+	arch: {
+		riscv64: {
+			lto: {
+				thin: false,
+			},
+		},
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os_arch:android_arm": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_arm64": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_riscv64": ["-android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86_64": ["android_thin_lto"],
+        "//conditions:default": [],
+    })`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithThinLtoDisabledDefaultEnabledVariant(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct features when LTO disabled by default but enabled on a particular variant",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+	target: {
+		android: {
+			lto: {
+				thin: true,
+				never: false,
+			},
+		},
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_thin_lto"],
+        "//conditions:default": ["-android_thin_lto"],
+    })`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithThinLtoAndWholeProgramVtables(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct features when thin LTO is enabled with whole_program_vtables",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+	whole_program_vtables: true,
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `[
+        "android_thin_lto",
+        "android_thin_lto_whole_program_vtables",
+    ]`,
 			}},
 		},
 	})

@@ -8,9 +8,11 @@ java\.beans
 java\.io
 java\.lang
 java\.lang\.annotation
+java\.lang\.constant
 java\.lang\.invoke
 java\.lang\.ref
 java\.lang\.reflect
+java\.lang\.runtime
 java\.math
 java\.net
 java\.nio

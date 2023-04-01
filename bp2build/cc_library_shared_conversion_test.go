@@ -15,7 +15,6 @@
 package bp2build
 
 import (
-	"fmt"
 	"testing"
 
 	"android/soong/android"
@@ -405,7 +404,7 @@ cc_library_shared {
 
 func TestCcLibrarySharedNoCrtTrue(t *testing.T) {
 	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_shared - nocrt: true emits attribute",
+		Description: "cc_library_shared - nocrt: true disables feature",
 		Filesystem: map[string]string{
 			"impl.cpp": "",
 		},
@@ -419,7 +418,7 @@ cc_library_shared {
 `,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_shared", "foo_shared", AttrNameToString{
-				"link_crt": `False`,
+				"features": `["-link_crt"]`,
 				"srcs":     `["impl.cpp"]`,
 			}),
 		},
@@ -428,7 +427,7 @@ cc_library_shared {
 
 func TestCcLibrarySharedNoCrtFalse(t *testing.T) {
 	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_shared - nocrt: false doesn't emit attribute",
+		Description: "cc_library_shared - nocrt: false doesn't disable feature",
 		Filesystem: map[string]string{
 			"impl.cpp": "",
 		},
@@ -469,7 +468,15 @@ cc_library_shared {
     include_build_directory: false,
 }
 `,
-		ExpectedErr: fmt.Errorf("module \"foo_shared\": nocrt is not supported for arch variants"),
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo_shared", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-link_crt"],
+        "//conditions:default": [],
+    })`,
+				"srcs": `["impl.cpp"]`,
+			}),
+		},
 	})
 }
 
@@ -962,6 +969,136 @@ cc_library_shared {
         "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
         "//conditions:default": [],
     })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedWithThinLto(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared has correct features when thin lto is enabled",
+		Blueprint: `
+cc_library_shared {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedWithLtoNever(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared has correct features when thin lto is enabled",
+		Blueprint: `
+cc_library_shared {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["-android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedWithThinLtoArchSpecific(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared has correct features when LTO differs across arch and os variants",
+		Blueprint: `
+cc_library_shared {
+	name: "foo",
+	target: {
+		android: {
+			lto: {
+				thin: true,
+			},
+		},
+	},
+	arch: {
+		riscv64: {
+			lto: {
+				thin: false,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os_arch:android_arm": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_arm64": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_riscv64": ["-android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86_64": ["android_thin_lto"],
+        "//conditions:default": [],
+    })`}),
+		},
+	})
+}
+
+func TestCcLibrarySharedWithThinLtoDisabledDefaultEnabledVariant(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared with thin lto disabled by default but enabled on a particular variant",
+		Blueprint: `
+cc_library_shared {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+	target: {
+		android: {
+			lto: {
+				thin: true,
+				never: false,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_thin_lto"],
+        "//conditions:default": ["-android_thin_lto"],
+    })`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedWithThinLtoAndWholeProgramVtables(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared has correct features when thin LTO is enabled with whole_program_vtables",
+		Blueprint: `
+cc_library_shared {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+	whole_program_vtables: true,
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `[
+        "android_thin_lto",
+        "android_thin_lto_whole_program_vtables",
+    ]`,
 				"local_includes": `["."]`,
 			}),
 		},
