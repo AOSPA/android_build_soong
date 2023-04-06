@@ -235,3 +235,8 @@ filegroup {
     srcs: ["rustfmt.toml"],
     visibility: ["//visibility:public"],
 }
+
+sh_binary_host {
+    name: "jars-to-module-info-java",
+    src: "jars-to-module-info-java.sh",
+}

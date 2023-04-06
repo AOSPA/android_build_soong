@@ -197,7 +197,7 @@ if androidmk_tag in p:
     local_whole_static_libs = androidmk_info.local_whole_static_libs
     local_shared_libs = androidmk_info.local_shared_libs
 
-return json_encode({
+return json.encode({
     "OutputFiles": outputFiles,
     "CcObjectFiles": ccObjectFiles,
     "CcSharedLibraryFiles": sharedLibraries,
@@ -266,7 +266,7 @@ clang_tidy_info = providers(target).get("//build/bazel/rules/cc:clang_tidy.bzl%C
 if clang_tidy_info:
     tidy_files = [v.path for v in clang_tidy_info.transitive_tidy_files.to_list()]
 
-return json_encode({
+return json.encode({
     "signed_output": info.signed_output.path,
     "signed_compressed_output": signed_compressed_output,
     "unsigned_output": info.unsigned_output.path,
@@ -281,6 +281,7 @@ return json_encode({
     "bundle_file": info.base_with_config_zip.path,
     "installed_files": info.installed_files.path,
     "make_modules_to_install": mk_info.make_modules_to_install,
+    "files_info": mk_info.files_info,
     "tidy_files": [t for t in tidy_files],
 })`
 }
@@ -303,7 +304,8 @@ type ApexInfo struct {
 	TidyFiles              []string `json:"tidy_files"`
 
 	// From the ApexMkInfo provider
-	MakeModulesToInstall []string `json:"make_modules_to_install"`
+	MakeModulesToInstall []string            `json:"make_modules_to_install"`
+	PayloadFilesInfo     []map[string]string `json:"files_info"`
 }
 
 // ParseResult returns a value obtained by parsing the result of the request's Starlark function.
@@ -333,7 +335,7 @@ unstripped = output_path
 unstripped_tag = "//build/bazel/rules/cc:stripped_cc_common.bzl%CcUnstrippedInfo"
 if unstripped_tag in p:
     unstripped_info = p[unstripped_tag]
-    unstripped = unstripped_info.unstripped.files.to_list()[0].path
+    unstripped = unstripped_info.unstripped[0].files.to_list()[0].path
 
 local_static_libs = []
 local_whole_static_libs = []
@@ -350,7 +352,7 @@ clang_tidy_info = p.get("//build/bazel/rules/cc:clang_tidy.bzl%ClangTidyInfo")
 if clang_tidy_info:
     tidy_files = [v.path for v in clang_tidy_info.transitive_tidy_files.to_list()]
 
-return json_encode({
+return json.encode({
     "OutputFile":  output_path,
     "UnstrippedOutput": unstripped,
     "LocalStaticLibs": [l for l in local_static_libs],

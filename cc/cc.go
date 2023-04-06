@@ -1285,6 +1285,17 @@ func (c *Module) IsVendorPublicLibrary() bool {
 	return c.VendorProperties.IsVendorPublicLibrary
 }
 
+func (c *Module) IsVndkPrebuiltLibrary() bool {
+	if _, ok := c.linker.(*vndkPrebuiltLibraryDecorator); ok {
+		return true
+	}
+	return false
+}
+
+func (c *Module) SdkAndPlatformVariantVisibleToMake() bool {
+	return c.Properties.SdkAndPlatformVariantVisibleToMake
+}
+
 func (c *Module) HasLlndkStubs() bool {
 	lib := moduleLibraryInterface(c)
 	return lib != nil && lib.hasLLNDKStubs()
@@ -1798,7 +1809,7 @@ func (c *Module) DataPaths() []android.DataPath {
 	return nil
 }
 
-func (c *Module) getNameSuffixWithVndkVersion(ctx android.ModuleContext) string {
+func getNameSuffixWithVndkVersion(ctx android.ModuleContext, c LinkableInterface) string {
 	// Returns the name suffix for product and vendor variants. If the VNDK version is not
 	// "current", it will append the VNDK version to the name suffix.
 	var vndkVersion string
@@ -1818,19 +1829,19 @@ func (c *Module) getNameSuffixWithVndkVersion(ctx android.ModuleContext) string 
 	if vndkVersion == "current" {
 		vndkVersion = ctx.DeviceConfig().PlatformVndkVersion()
 	}
-	if c.Properties.VndkVersion != vndkVersion && c.Properties.VndkVersion != "" {
+	if c.VndkVersion() != vndkVersion && c.VndkVersion() != "" {
 		// add version suffix only if the module is using different vndk version than the
 		// version in product or vendor partition.
-		nameSuffix += "." + c.Properties.VndkVersion
+		nameSuffix += "." + c.VndkVersion()
 	}
 	return nameSuffix
 }
 
-func (c *Module) setSubnameProperty(actx android.ModuleContext) {
-	c.Properties.SubName = ""
+func GetSubnameProperty(actx android.ModuleContext, c LinkableInterface) string {
+	var subName = ""
 
 	if c.Target().NativeBridge == android.NativeBridgeEnabled {
-		c.Properties.SubName += NativeBridgeSuffix
+		subName += NativeBridgeSuffix
 	}
 
 	llndk := c.IsLlndk()
@@ -1838,25 +1849,27 @@ func (c *Module) setSubnameProperty(actx android.ModuleContext) {
 		// .vendor.{version} suffix is added for vendor variant or .product.{version} suffix is
 		// added for product variant only when we have vendor and product variants with core
 		// variant. The suffix is not added for vendor-only or product-only module.
-		c.Properties.SubName += c.getNameSuffixWithVndkVersion(actx)
+		subName += getNameSuffixWithVndkVersion(actx, c)
 	} else if c.IsVendorPublicLibrary() {
-		c.Properties.SubName += vendorPublicLibrarySuffix
-	} else if _, ok := c.linker.(*vndkPrebuiltLibraryDecorator); ok {
+		subName += vendorPublicLibrarySuffix
+	} else if c.IsVndkPrebuiltLibrary() {
 		// .vendor suffix is added for backward compatibility with VNDK snapshot whose names with
 		// such suffixes are already hard-coded in prebuilts/vndk/.../Android.bp.
-		c.Properties.SubName += VendorSuffix
+		subName += VendorSuffix
 	} else if c.InRamdisk() && !c.OnlyInRamdisk() {
-		c.Properties.SubName += RamdiskSuffix
+		subName += RamdiskSuffix
 	} else if c.InVendorRamdisk() && !c.OnlyInVendorRamdisk() {
-		c.Properties.SubName += VendorRamdiskSuffix
+		subName += VendorRamdiskSuffix
 	} else if c.InRecovery() && !c.OnlyInRecovery() {
-		c.Properties.SubName += RecoverySuffix
-	} else if c.IsSdkVariant() && (c.Properties.SdkAndPlatformVariantVisibleToMake || c.SplitPerApiLevel()) {
-		c.Properties.SubName += sdkSuffix
+		subName += RecoverySuffix
+	} else if c.IsSdkVariant() && (c.SdkAndPlatformVariantVisibleToMake() || c.SplitPerApiLevel()) {
+		subName += sdkSuffix
 		if c.SplitPerApiLevel() {
-			c.Properties.SubName += "." + c.SdkVersion()
+			subName += "." + c.SdkVersion()
 		}
 	}
+
+	return subName
 }
 
 var _ android.MixedBuildBuildable = (*Module)(nil)
@@ -1935,7 +1948,6 @@ func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	bazelModuleLabel := c.getBazelModuleLabel(ctx)
 	c.bazelHandler.ProcessBazelQueryResponse(ctx, bazelModuleLabel)
 
-	c.setSubnameProperty(ctx)
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	if !apexInfo.IsForPlatform() {
 		c.hideApexVariantFromMake = true
@@ -1967,7 +1979,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		return
 	}
 
-	c.setSubnameProperty(actx)
+	c.Properties.SubName = GetSubnameProperty(actx, c)
 	apexInfo := actx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	if !apexInfo.IsForPlatform() {
 		c.hideApexVariantFromMake = true
@@ -2507,20 +2519,11 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	if c.isNDKStubLibrary() {
 		// NDK stubs depend on their implementation because the ABI dumps are
 		// generated from the implementation library.
-		apiImportName := c.BaseModuleName() + multitree.GetApiImportSuffix()
 
-		// If original library exists as imported API, set dependency on the imported library
-		if actx.OtherModuleExists(apiImportName) {
-			actx.AddFarVariationDependencies(append(ctx.Target().Variations(),
-				c.ImageVariation(),
-				blueprint.Variation{Mutator: "link", Variation: "shared"},
-			), stubImplementation, apiImportName)
-		} else {
-			actx.AddFarVariationDependencies(append(ctx.Target().Variations(),
-				c.ImageVariation(),
-				blueprint.Variation{Mutator: "link", Variation: "shared"},
-			), stubImplementation, c.BaseModuleName())
-		}
+		actx.AddFarVariationDependencies(append(ctx.Target().Variations(),
+			c.ImageVariation(),
+			blueprint.Variation{Mutator: "link", Variation: "shared"},
+		), stubImplementation, c.BaseModuleName())
 	}
 
 	for _, lib := range deps.WholeStaticLibs {
@@ -2979,7 +2982,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		ctx.VisitDirectDeps(func(dep android.Module) {
 			depName := ctx.OtherModuleName(dep)
 			if apiLibrary, ok := targetOrigModuleList[depName]; ok {
-				if shouldUseStubForApex(ctx, dep) {
+				if ShouldUseStubForApex(ctx, dep) {
 					skipModuleList[depName] = true
 				} else {
 					skipModuleList[apiLibrary] = true
@@ -3332,7 +3335,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	return depPaths
 }
 
-func shouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
+func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 	depName := ctx.OtherModuleName(dep)
 	thisModule, ok := ctx.Module().(android.ApexModule)
 	if !ok {
@@ -3434,7 +3437,7 @@ func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibr
 
 	if !libDepTag.explicitlyVersioned && len(sharedLibraryStubsInfo.SharedStubLibraries) > 0 {
 		// when to use (unspecified) stubs, use the latest one.
-		if shouldUseStubForApex(ctx, dep) {
+		if ShouldUseStubForApex(ctx, dep) {
 			stubs := sharedLibraryStubsInfo.SharedStubLibraries
 			toUse := stubs[len(stubs)-1]
 			sharedLibraryInfo = toUse.SharedLibraryInfo
@@ -3491,7 +3494,6 @@ func MakeLibName(ctx android.ModuleContext, c LinkableInterface, ccDep LinkableI
 	nonSystemVariantsExist := ccDep.HasNonSystemVariants() || isLLndk
 
 	if ccDepModule != nil {
-		// TODO(ivanlozano) Support snapshots for Rust-produced C library variants.
 		// Use base module name for snapshots when exporting to Makefile.
 		if snapshotPrebuilt, ok := ccDepModule.linker.(SnapshotInterface); ok {
 			baseName := ccDepModule.BaseModuleName()
@@ -3896,6 +3898,7 @@ func (c *Module) UniqueApexVariations() bool {
 	// When a vendor APEX needs a VNDK lib in it (use_vndk_as_stable: false), it should be a unique
 	// APEX variation. Otherwise, another vendor APEX with use_vndk_as_stable:true may use a wrong
 	// variation of the VNDK lib because APEX variations are merged/grouped.
+	// TODO(b/274401041) Find a way to merge APEX variations for vendor apexes.
 	return c.UseVndk() && c.IsVndk()
 }
 

@@ -509,6 +509,21 @@ const (
 	shBinary
 )
 
+var (
+	classes = map[string]apexFileClass{
+		"app":              app,
+		"appSet":           appSet,
+		"etc":              etc,
+		"goBinary":         goBinary,
+		"javaSharedLib":    javaSharedLib,
+		"nativeExecutable": nativeExecutable,
+		"nativeSharedLib":  nativeSharedLib,
+		"nativeTest":       nativeTest,
+		"pyBinary":         pyBinary,
+		"shBinary":         shBinary,
+	}
+)
+
 // apexFile represents a file in an APEX bundle. This is created during the first half of
 // GenerateAndroidBuildActions by traversing the dependencies of the APEX. Then in the second half
 // of the function, this is used to create commands that copies the files into a staging directory,
@@ -542,6 +557,10 @@ type apexFile struct {
 	isJniLib      bool
 
 	multilib string
+
+	isBazelPrebuilt     bool
+	unstrippedBuiltFile android.Path
+	arch                string
 
 	// TODO(jiyong): remove this
 	module android.Module
@@ -973,6 +992,9 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	if proptools.Bool(a.properties.Use_vndk_as_stable) {
 		if !useVndk {
 			mctx.PropertyErrorf("use_vndk_as_stable", "not supported for system/system_ext APEXes")
+		}
+		if a.minSdkVersionValue(mctx) != "" {
+			mctx.PropertyErrorf("use_vndk_as_stable", "not supported when min_sdk_version is set")
 		}
 		mctx.VisitDirectDepsWithTag(sharedLibTag, func(dep android.Module) {
 			if c, ok := dep.(*cc.Module); ok && c.IsVndk() {
@@ -1710,6 +1732,7 @@ func apexFileForGoBinary(ctx android.BaseModuleContext, depName string, gb boots
 	// NB: Since go binaries are static we don't need the module for anything here, which is
 	// good since the go tool is a blueprint.Module not an android.Module like we would
 	// normally use.
+	//
 	return newApexFile(ctx, fileToCopy, depName, dirInApex, goBinary, nil)
 }
 
@@ -1919,7 +1942,7 @@ func (f fsType) string() string {
 var _ android.MixedBuildBuildable = (*apexBundle)(nil)
 
 func (a *apexBundle) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	return ctx.ModuleType() == "apex" && a.properties.ApexType == imageApex
+	return a.properties.ApexType == imageApex
 }
 
 func (a *apexBundle) QueueBazelCall(ctx android.BaseModuleContext) {
@@ -2003,13 +2026,41 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		panic(fmt.Errorf("internal error: unexpected apex_type for the ProcessBazelQueryResponse: %v", a.properties.ApexType))
 	}
 
-	// filesInfo is not set in mixed mode, because all information about the
-	// apex's contents should completely come from the Starlark providers.
+	// filesInfo in mixed mode must retrieve all information about the apex's
+	// contents completely from the Starlark providers. It should never rely on
+	// Android.bp information, as they might not exist for fully migrated
+	// dependencies.
 	//
 	// Prevent accidental writes to filesInfo in the earlier parts Soong by
 	// asserting it to be nil.
 	if a.filesInfo != nil {
-		panic(fmt.Errorf("internal error: filesInfo must be nil for an apex handled by Bazel."))
+		panic(
+			fmt.Errorf("internal error: filesInfo must be nil for an apex handled by Bazel. " +
+				"Did something else set filesInfo before this line of code?"))
+	}
+	for _, f := range outputs.PayloadFilesInfo {
+		fileInfo := apexFile{
+			isBazelPrebuilt: true,
+
+			builtFile:           android.PathForBazelOut(ctx, f["built_file"]),
+			unstrippedBuiltFile: android.PathForBazelOut(ctx, f["unstripped_built_file"]),
+			androidMkModuleName: f["make_module_name"],
+			installDir:          f["install_dir"],
+			class:               classes[f["class"]],
+			customStem:          f["basename"],
+			moduleDir:           f["package"],
+		}
+
+		arch := f["arch"]
+		fileInfo.arch = arch
+		if len(arch) > 0 {
+			fileInfo.multilib = "lib32"
+			if strings.HasSuffix(arch, "64") {
+				fileInfo.multilib = "lib64"
+			}
+		}
+
+		a.filesInfo = append(a.filesInfo, fileInfo)
 	}
 }
 
@@ -2977,8 +3028,8 @@ func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
 		if a.UsePlatformApis() {
 			ctx.PropertyErrorf("updatable", "updatable APEXes can't use platform APIs")
 		}
-		if a.SocSpecific() || a.DeviceSpecific() {
-			ctx.PropertyErrorf("updatable", "vendor APEXes are not updatable")
+		if proptools.Bool(a.properties.Use_vndk_as_stable) {
+			ctx.PropertyErrorf("use_vndk_as_stable", "updatable APEXes can't use external VNDK libs")
 		}
 		if a.FutureUpdatable() {
 			ctx.PropertyErrorf("future_updatable", "Already updatable. Remove `future_updatable: true:`")

@@ -71,7 +71,7 @@ type staticOrSharedAttributes struct {
 }
 
 type tidyAttributes struct {
-	Tidy                  *bool
+	Tidy                  *string
 	Tidy_flags            []string
 	Tidy_checks           []string
 	Tidy_checks_as_errors []string
@@ -82,7 +82,15 @@ type tidyAttributes struct {
 func (m *Module) convertTidyAttributes(ctx android.BaseMutatorContext, moduleAttrs *tidyAttributes) {
 	for _, f := range m.features {
 		if tidy, ok := f.(*tidyFeature); ok {
-			moduleAttrs.Tidy = tidy.Properties.Tidy
+			var tidyAttr *string
+			if tidy.Properties.Tidy != nil {
+				if *tidy.Properties.Tidy {
+					tidyAttr = proptools.StringPtr("local")
+				} else {
+					tidyAttr = proptools.StringPtr("never")
+				}
+			}
+			moduleAttrs.Tidy = tidyAttr
 			moduleAttrs.Tidy_flags = tidy.Properties.Tidy_flags
 			moduleAttrs.Tidy_checks = tidy.Properties.Tidy_checks
 			moduleAttrs.Tidy_checks_as_errors = tidy.Properties.Tidy_checks_as_errors
@@ -909,15 +917,12 @@ func bp2buildCcAidlLibrary(
 
 		if !aidlLibs.IsEmpty() {
 			ccAidlLibrarylabel := m.Name() + "_cc_aidl_library"
-			// Since cc_aidl_library only needs the dynamic deps (aka shared libs) from the parent cc library for compiling,
-			// we err on the side of not re-exporting the headers of the dynamic deps from cc_aidl_lirary
-			// because the parent cc library already has all the dynamic deps
-			implementationDynamicDeps := bazel.MakeLabelListAttribute(
-				bazel.AppendBazelLabelLists(
-					linkerAttrs.dynamicDeps.Value,
-					linkerAttrs.implementationDynamicDeps.Value,
-				),
-			)
+			// Since parent cc_library already has these dependencies, we can add them as implementation
+			// deps so that they don't re-export
+			implementationDeps := linkerAttrs.deps.Clone()
+			implementationDeps.Append(linkerAttrs.implementationDeps)
+			implementationDynamicDeps := linkerAttrs.dynamicDeps.Clone()
+			implementationDynamicDeps.Append(linkerAttrs.implementationDynamicDeps)
 
 			ctx.CreateBazelTargetModule(
 				bazel.BazelTargetModuleProperties{
@@ -927,7 +932,8 @@ func bp2buildCcAidlLibrary(
 				android.CommonAttributes{Name: ccAidlLibrarylabel},
 				&ccAidlLibraryAttributes{
 					Deps:                        aidlLibs,
-					Implementation_dynamic_deps: implementationDynamicDeps,
+					Implementation_deps:         *implementationDeps,
+					Implementation_dynamic_deps: *implementationDynamicDeps,
 				},
 			)
 			label := &bazel.LabelAttribute{
@@ -1144,6 +1150,10 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 	}
 }
 
+var (
+	apiSurfaceModuleLibCurrentPackage = "@api_surfaces//" + android.ModuleLibApi.String() + "/current:"
+)
+
 func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.ConfigurationAxis,
 	config string, dynamicLibs bazel.LabelList, dynamicDeps *bazel.LabelListAttribute, ind int) {
 	depsWithStubs := []bazel.Label{}
@@ -1159,8 +1169,10 @@ func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.C
 
 		stubLibLabels := []bazel.Label{}
 		for _, l := range depsWithStubs {
-			l.Label = l.Label + stubsSuffix
-			stubLibLabels = append(stubLibLabels, l)
+			stubLabelInApiSurfaces := bazel.Label{
+				Label: apiSurfaceModuleLibCurrentPackage + l.OriginalModuleName,
+			}
+			stubLibLabels = append(stubLibLabels, stubLabelInApiSurfaces)
 		}
 		inApexSelectValue := dynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex)
 		nonApexSelectValue := dynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex)
@@ -1276,8 +1288,10 @@ func (la *linkerAttributes) finalize(ctx android.BazelConversionPathContext) {
 		la.implementationDynamicDeps.Exclude(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex, toRemove)
 		stubsToRemove := make([]bazel.Label, 0, len(la.usedSystemDynamicDepAsDynamicDep))
 		for _, lib := range toRemove.Includes {
-			lib.Label += stubsSuffix
-			stubsToRemove = append(stubsToRemove, lib)
+			stubLabelInApiSurfaces := bazel.Label{
+				Label: apiSurfaceModuleLibCurrentPackage + lib.OriginalModuleName,
+			}
+			stubsToRemove = append(stubsToRemove, stubLabelInApiSurfaces)
 		}
 		la.implementationDynamicDeps.Exclude(bazel.OsAndInApexAxis, bazel.AndroidAndInApex, bazel.MakeLabelList(stubsToRemove))
 	}
