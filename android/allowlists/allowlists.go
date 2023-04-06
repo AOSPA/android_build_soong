@@ -125,6 +125,7 @@ var (
 		"external/eigen":                         Bp2BuildDefaultTrueRecursively,
 		"external/erofs-utils":                   Bp2BuildDefaultTrueRecursively,
 		"external/error_prone":                   Bp2BuildDefaultTrueRecursively,
+		"external/escapevelocity":                Bp2BuildDefaultTrueRecursively,
 		"external/expat":                         Bp2BuildDefaultTrueRecursively,
 		"external/f2fs-tools":                    Bp2BuildDefaultTrue,
 		"external/flac":                          Bp2BuildDefaultTrueRecursively,
@@ -216,47 +217,51 @@ var (
 		"frameworks/native/services/batteryservice":          Bp2BuildDefaultTrue,
 		"frameworks/proto_logging/stats":                     Bp2BuildDefaultTrueRecursively,
 
-		"hardware/interfaces":                          Bp2BuildDefaultTrue,
-		"hardware/interfaces/audio/aidl":               Bp2BuildDefaultTrue,
-		"hardware/interfaces/audio/aidl/common":        Bp2BuildDefaultTrue,
-		"hardware/interfaces/common/aidl":              Bp2BuildDefaultTrue,
-		"hardware/interfaces/common/fmq/aidl":          Bp2BuildDefaultTrue,
-		"hardware/interfaces/configstore/1.0":          Bp2BuildDefaultTrue,
-		"hardware/interfaces/configstore/1.1":          Bp2BuildDefaultTrue,
-		"hardware/interfaces/configstore/utils":        Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/allocator/2.0":   Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/allocator/3.0":   Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/allocator/4.0":   Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/allocator/aidl":  Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/bufferqueue/1.0": Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/bufferqueue/2.0": Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/common/1.0":      Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/common/1.1":      Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/common/1.2":      Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/common/aidl":     Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/mapper/2.0":      Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/mapper/2.1":      Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/mapper/3.0":      Bp2BuildDefaultTrue,
-		"hardware/interfaces/graphics/mapper/4.0":      Bp2BuildDefaultTrue,
-		"hardware/interfaces/health/1.0":               Bp2BuildDefaultTrue,
-		"hardware/interfaces/health/1.0/default":       Bp2BuildDefaultTrue,
-		"hardware/interfaces/health/2.0":               Bp2BuildDefaultTrue,
-		"hardware/interfaces/health/2.0/default":       Bp2BuildDefaultTrue,
-		"hardware/interfaces/health/2.0/utils":         Bp2BuildDefaultTrueRecursively,
-		"hardware/interfaces/health/2.1":               Bp2BuildDefaultTrue,
-		"hardware/interfaces/health/aidl":              Bp2BuildDefaultTrue,
-		"hardware/interfaces/health/utils":             Bp2BuildDefaultTrueRecursively,
-		"hardware/interfaces/media/1.0":                Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/bufferpool/2.0":     Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/c2/1.0":             Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/c2/1.1":             Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/c2/1.2":             Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/omx/1.0":            Bp2BuildDefaultTrue,
-		"hardware/interfaces/neuralnetworks/1.0":       Bp2BuildDefaultTrue,
-		"hardware/interfaces/neuralnetworks/1.1":       Bp2BuildDefaultTrue,
-		"hardware/interfaces/neuralnetworks/1.2":       Bp2BuildDefaultTrue,
-		"hardware/interfaces/neuralnetworks/1.3":       Bp2BuildDefaultTrue,
-		"hardware/interfaces/neuralnetworks/aidl":      Bp2BuildDefaultTrue,
+		"hardware/interfaces":                                     Bp2BuildDefaultTrue,
+		"hardware/interfaces/audio/aidl":                          Bp2BuildDefaultTrue,
+		"hardware/interfaces/audio/aidl/common":                   Bp2BuildDefaultTrue,
+		"hardware/interfaces/common/aidl":                         Bp2BuildDefaultTrue,
+		"hardware/interfaces/common/fmq/aidl":                     Bp2BuildDefaultTrue,
+		"hardware/interfaces/common/support":                      Bp2BuildDefaultTrue,
+		"hardware/interfaces/configstore/1.0":                     Bp2BuildDefaultTrue,
+		"hardware/interfaces/configstore/1.1":                     Bp2BuildDefaultTrue,
+		"hardware/interfaces/configstore/utils":                   Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/allocator/2.0":              Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/allocator/3.0":              Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/allocator/4.0":              Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/allocator/aidl":             Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/bufferqueue/1.0":            Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/bufferqueue/2.0":            Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/common/1.0":                 Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/common/1.1":                 Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/common/1.2":                 Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/common/aidl":                Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/mapper/2.0":                 Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/mapper/2.1":                 Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/mapper/3.0":                 Bp2BuildDefaultTrue,
+		"hardware/interfaces/graphics/mapper/4.0":                 Bp2BuildDefaultTrue,
+		"hardware/interfaces/health/1.0":                          Bp2BuildDefaultTrue,
+		"hardware/interfaces/health/1.0/default":                  Bp2BuildDefaultTrue,
+		"hardware/interfaces/health/2.0":                          Bp2BuildDefaultTrue,
+		"hardware/interfaces/health/2.0/default":                  Bp2BuildDefaultTrue,
+		"hardware/interfaces/health/2.0/utils":                    Bp2BuildDefaultTrueRecursively,
+		"hardware/interfaces/health/2.1":                          Bp2BuildDefaultTrue,
+		"hardware/interfaces/health/aidl":                         Bp2BuildDefaultTrue,
+		"hardware/interfaces/health/utils":                        Bp2BuildDefaultTrueRecursively,
+		"hardware/interfaces/media/1.0":                           Bp2BuildDefaultTrue,
+		"hardware/interfaces/media/bufferpool":                    Bp2BuildDefaultTrueRecursively,
+		"hardware/interfaces/media/bufferpool/aidl/default/tests": Bp2BuildDefaultFalseRecursively,
+		"hardware/interfaces/media/c2/1.0":                        Bp2BuildDefaultTrue,
+		"hardware/interfaces/media/c2/1.1":                        Bp2BuildDefaultTrue,
+		"hardware/interfaces/media/c2/1.2":                        Bp2BuildDefaultTrue,
+		"hardware/interfaces/media/omx/1.0":                       Bp2BuildDefaultTrue,
+		"hardware/interfaces/neuralnetworks":                      Bp2BuildDefaultTrueRecursively,
+		"hardware/interfaces/neuralnetworks/aidl/vts":             Bp2BuildDefaultFalseRecursively,
+		"hardware/interfaces/neuralnetworks/1.0/vts":              Bp2BuildDefaultFalseRecursively,
+		"hardware/interfaces/neuralnetworks/1.1/vts":              Bp2BuildDefaultFalseRecursively,
+		"hardware/interfaces/neuralnetworks/1.2/vts":              Bp2BuildDefaultFalseRecursively,
+		"hardware/interfaces/neuralnetworks/1.3/vts":              Bp2BuildDefaultFalseRecursively,
+		"hardware/interfaces/neuralnetworks/1.4/vts":              Bp2BuildDefaultFalseRecursively,
 
 		"libnativehelper": Bp2BuildDefaultTrueRecursively,
 
@@ -398,7 +403,7 @@ var (
 		"prebuilts/clang-tools":/* recursive = */ true,
 		"prebuilts/gcc":/* recursive = */ true,
 		"prebuilts/build-tools":/* recursive = */ true,
-		"prebuilts/jdk/jdk11":/* recursive = */ false,
+		"prebuilts/jdk/jdk17":/* recursive = */ true,
 		"prebuilts/misc":/* recursive = */ false, // not recursive because we need bp2build converted build files in prebuilts/misc/common/asm
 		"prebuilts/sdk":/* recursive = */ false,
 		"prebuilts/sdk/tools":/* recursive = */ false,
@@ -437,7 +442,6 @@ var (
 		"gemmlowp_headers",
 		"gl_headers",
 		"ipconnectivity-proto-src",
-		"libaidlcommonsupport",
 		"libandroid_runtime_lazy",
 		"libandroid_runtime_vm_headers",
 		"libaudioclient_aidl_conversion_util",
@@ -499,13 +503,6 @@ var (
 		"mediaswcodec.policy",
 		"mediaswcodec.xml",
 		"neuralnetworks_types",
-		"neuralnetworks_utils_hal_aidl",
-		"neuralnetworks_utils_hal_common",
-		"neuralnetworks_utils_hal_service",
-		"neuralnetworks_utils_hal_1_0",
-		"neuralnetworks_utils_hal_1_1",
-		"neuralnetworks_utils_hal_1_2",
-		"neuralnetworks_utils_hal_1_3",
 		"libneuralnetworks_common",
 		// packagemanager_aidl_interface is created implicitly in packagemanager_aidl module
 		"packagemanager_aidl_interface",
@@ -699,6 +696,19 @@ var (
 
 		// for api_fingerprint.txt generation
 		"api_fingerprint",
+
+		// allowlisting for kotlinx_coroutines
+		"kotlinx_coroutines",
+		"annotations",
+		"kotlinx-coroutines-android-annotation-stubs",
+
+		// for building com.android.neuralnetworks
+		"libimapper_stablec",
+		"libimapper_providerutils",
+
+		// min_sdk_version in android_app
+		"CtsShimUpgrade",
+		"fake-framework",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -721,15 +731,6 @@ var (
 	// the "prebuilt_" prefix to the name, so that it's differentiable from
 	// the source versions within Soong's module graph.
 	Bp2buildModuleDoNotConvertList = []string{
-		// TODO(b/250876486): Created cc_aidl_library doesn't have static libs from parent cc module
-		"libgui_window_info_static",
-		"libgui",     // Depends on unconverted libgui_window_info_static
-		"libdisplay", // Depends on uncovnerted libgui
-		// Depends on unconverted libdisplay
-		"libdvr_static.google",
-		"libdvr.google",
-		"libvrsensor",
-		"dvr_api-test",
 		// Depends on unconverted libandroid, libgui
 		"dvr_buffer_queue-test",
 		"dvr_display-test",
@@ -858,6 +859,9 @@ var (
 		"android.hardware.health-translate-java",
 
 		// cc_test related.
+		// b/274164834 "Could not open Configuration file test.cfg"
+		"svcenc", "svcdec",
+
 		// Failing host cc_tests
 		"memunreachable_unit_test",
 		"libprocinfo_test",
@@ -1407,25 +1411,29 @@ var (
 		"unwind",
 		"unwind_info",
 		"unwind_symbols",
-		"libc_malloc_debug",
-		"libfdtrack",
-		"mediaswcodec",
-		"libcodec2_hidl@1.0",
 		"libEGL",
-		"libstagefright_bufferqueue_helper_novndk",
 		"libGLESv2",
+		"libc_malloc_debug",
+		"libcodec2_hidl@1.0",
 		"libcodec2_hidl@1.1",
-		"libmedia_codecserviceregistrant",
 		"libcodec2_hidl@1.2",
+		"libfdtrack",
+		"libgui",
+		"libgui_bufferqueue_static",
+		"libmedia_codecserviceregistrant",
+		"libstagefright_bufferqueue_helper_novndk",
 		"libutils_test",
 		"libutilscallstack",
+		"mediaswcodec",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel
 	// in either prod mode or staging mode.
 	ProdMixedBuildsEnabledList = []string{
+		// M5: tzdata launch
 		"com.android.tzdata",
 		"test1_com.android.tzdata",
+		// M7: adbd launch
 		"com.android.adbd",
 		"test_com.android.adbd",
 		"adbd_test",
@@ -1433,6 +1441,8 @@ var (
 		"adb_pairing_auth_test",
 		"adb_pairing_connection_test",
 		"adb_tls_connection_test",
+		// M9: mixed builds for mainline trains launch
+		"api_fingerprint",
 	}
 
 	// Staging-mode allowlist. Modules in this list are only built
@@ -1440,20 +1450,18 @@ var (
 	// which will soon be added to the prod allowlist.
 	// It is implicit that all modules in ProdMixedBuildsEnabledList will
 	// also be built - do not add them to this list.
-	StagingMixedBuildsEnabledList = []string{
-		"api_fingerprint",
-	}
+	StagingMixedBuildsEnabledList = []string{}
 
 	// These should be the libs that are included by the apexes in the ProdMixedBuildsEnabledList
-	ProdDclaMixedBuildsEnabledList = []string{}
-
-	// These should be the libs that are included by the apexes in the StagingMixedBuildsEnabledList
-	StagingDclaMixedBuildsEnabledList = []string{
+	ProdDclaMixedBuildsEnabledList = []string{
 		"libbase",
 		"libc++",
 		"libcrypto",
 		"libcutils",
 	}
+
+	// These should be the libs that are included by the apexes in the StagingMixedBuildsEnabledList
+	StagingDclaMixedBuildsEnabledList = []string{}
 
 	// TODO(b/269342245): Enable the rest of the DCLA libs
 	// "libssl",

@@ -550,6 +550,8 @@ func (p *snapshotLibraryDecorator) nativeCoverage() bool {
 	return false
 }
 
+var _ snapshotSanitizer = (*snapshotLibraryDecorator)(nil)
+
 func (p *snapshotLibraryDecorator) isSanitizerAvailable(t SanitizerType) bool {
 	switch t {
 	case cfi:
@@ -701,8 +703,6 @@ func RamdiskSnapshotHeaderFactory() android.Module {
 	prebuilt.libraryDecorator.HeaderOnly()
 	return module.Init()
 }
-
-var _ snapshotSanitizer = (*snapshotLibraryDecorator)(nil)
 
 // Module definitions for snapshots of executable binaries.
 //

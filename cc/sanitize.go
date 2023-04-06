@@ -77,7 +77,7 @@ var (
 		"-fno-sanitize-recover=integer,undefined"}
 	hwasanGlobalOptions = []string{"heap_history_size=1023", "stack_history_size=512",
 		"export_memory_stats=0", "max_malloc_fill_size=131072", "malloc_fill_byte=0"}
-	memtagStackCommonFlags = []string{"-march=armv8-a+memtag"}
+	memtagStackCommonFlags = []string{"-march=armv8-a+memtag", "-mllvm", "-dom-tree-reachability-max-bbs-to-explore=128"}
 
 	hostOnlySanitizeFlags   = []string{"-fno-sanitize-recover=all"}
 	deviceOnlySanitizeFlags = []string{"-fsanitize-trap=all", "-ftrap-function=abort"}
@@ -254,7 +254,7 @@ type SanitizeUserProps struct {
 	// This should not be used in Android 11+ : https://source.android.com/devices/tech/debug/scudo
 	// deprecated
 	Scudo *bool `android:"arch_variant"`
-	// shadow-call-stack sanitizer, only available on arm64
+	// shadow-call-stack sanitizer, only available on arm64/riscv64.
 	Scs *bool `android:"arch_variant"`
 	// Memory-tagging, only available on arm64
 	// if diag.memtag unset or false, enables async memory tagging
@@ -629,8 +629,8 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Hwaddress = nil
 	}
 
-	// SCS is only implemented on AArch64.
-	if ctx.Arch().ArchType != android.Arm64 || !ctx.toolchain().Bionic() {
+	// SCS is only implemented on AArch64/riscv64.
+	if (ctx.Arch().ArchType != android.Arm64 && ctx.Arch().ArchType != android.Riscv64) || !ctx.toolchain().Bionic() {
 		s.Scs = nil
 	}
 
