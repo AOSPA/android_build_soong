@@ -39,7 +39,6 @@ func init() {
 		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
 		ctx.BottomUp("rust_stdlinkage", LibstdMutator).Parallel()
 		ctx.BottomUp("rust_begin", BeginMutator).Parallel()
-
 	})
 	android.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
@@ -920,7 +919,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	// Calculate rustc flags
 	if mod.afdo != nil {
-		flags, deps = mod.afdo.flags(ctx, flags, deps)
+		flags, deps = mod.afdo.flags(actx, flags, deps)
 	}
 	if mod.compiler != nil {
 		flags = mod.compiler.compilerFlags(ctx, flags)
@@ -1413,7 +1412,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	depPaths.RLibs = append(depPaths.RLibs, rlibDepFiles...)
 	depPaths.DyLibs = append(depPaths.DyLibs, dylibDepFiles...)
-	depPaths.SharedLibs = append(depPaths.SharedLibs, sharedLibDepFiles...)
+	depPaths.SharedLibs = append(depPaths.SharedLibs, sharedLibFiles...)
 	depPaths.SharedLibDeps = append(depPaths.SharedLibDeps, sharedLibDepFiles...)
 	depPaths.StaticLibs = append(depPaths.StaticLibs, staticLibDepFiles...)
 	depPaths.ProcMacros = append(depPaths.ProcMacros, procMacroDepFiles...)
@@ -1516,7 +1515,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		for _, lib := range deps.Rustlibs {
 			if autoDep.depTag == rlibDepTag {
 				// Handle the rlib deptag case
-				addRlibDependency(actx, lib, mod, snapshotInfo, rlibDepVariations)
+				addRlibDependency(actx, lib, mod, &snapshotInfo, rlibDepVariations)
 			} else {
 				// autoDep.depTag is a dylib depTag. Not all rustlibs may be available as a dylib however.
 				// Check for the existence of the dylib deptag variant. Select it if available,
@@ -1527,7 +1526,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 					actx.AddVariationDependencies(autoDepVariations, autoDep.depTag, lib)
 				} else {
 					// If there's no dylib dependency available, try to add the rlib dependency instead.
-					addRlibDependency(actx, lib, mod, snapshotInfo, rlibDepVariations)
+					addRlibDependency(actx, lib, mod, &snapshotInfo, rlibDepVariations)
 				}
 			}
 		}
@@ -1613,11 +1612,13 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	// proc_macros are compiler plugins, and so we need the host arch variant as a dependendcy.
 	actx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(), procMacroDepTag, deps.ProcMacros...)
+
+	mod.afdo.addDep(ctx, actx)
 }
 
 // addRlibDependency will add an rlib dependency, rewriting to the snapshot library if available.
-func addRlibDependency(actx android.BottomUpMutatorContext, lib string, mod *Module, snapshotInfo *cc.SnapshotInfo, variations []blueprint.Variation) {
-	lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
+func addRlibDependency(actx android.BottomUpMutatorContext, lib string, mod *Module, snapshotInfo **cc.SnapshotInfo, variations []blueprint.Variation) {
+	lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, snapshotInfo, actx).Rlibs)
 	actx.AddVariationDependencies(variations, rlibDepTag, lib)
 }
 

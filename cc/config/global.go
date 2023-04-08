@@ -260,7 +260,6 @@ var (
 		"-Wno-error=deprecated",          // in external/googletest/googletest
 		// New warnings to be fixed after clang-r475365
 		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
-		"-Wno-error=incompatible-function-pointer-types",     // http://b/257101299
 		"-Wno-error=enum-constexpr-conversion",               // http://b/243964282
 
 		//Android T Vendor Compilation
@@ -322,12 +321,14 @@ var (
 		// http://b/191699019
 		"-Wno-format-insufficient-args",
 		"-Wno-sizeof-array-div",
+		"-Wno-incompatible-function-pointer-types",
 		"-Wno-unused-but-set-variable",
 		"-Wno-unused-but-set-parameter",
 		"-Wno-unqualified-std-cast-call",
 		"-Wno-bitwise-instead-of-logical",
 		"-Wno-misleading-indentation",
 		"-Wno-array-parameter",
+		"-Wno-gnu-offsetof-extensions",
 	}
 
 	// Extra cflags for external third-party projects to disable warnings that
@@ -391,6 +392,8 @@ var (
 		"vendor/",
 	}
 	QiifaAbiLibraryList = []string{}
+
+	VersionScriptFlagPrefix = "-Wl,--version-script,"
 )
 
 // BazelCcToolchainVars generates bzl file content containing variables for
@@ -486,6 +489,8 @@ func init() {
 	exportedVars.ExportString("CppStdVersion", CppStdVersion)
 	exportedVars.ExportString("ExperimentalCStdVersion", ExperimentalCStdVersion)
 	exportedVars.ExportString("ExperimentalCppStdVersion", ExperimentalCppStdVersion)
+
+	exportedVars.ExportString("VersionScriptFlagPrefix", VersionScriptFlagPrefix)
 
 	// Everything in these lists is a crime against abstraction and dependency tracking.
 	// Do not add anything to this list.

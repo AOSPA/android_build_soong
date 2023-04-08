@@ -1231,7 +1231,7 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 var _ android.ModuleWithMinSdkVersionCheck = (*SdkLibrary)(nil)
 
 func (module *SdkLibrary) CheckMinSdkVersion(ctx android.ModuleContext) {
-	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx).ApiLevel, func(c android.ModuleContext, do android.PayloadDepsCallback) {
+	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx), func(c android.ModuleContext, do android.PayloadDepsCallback) {
 		ctx.WalkDeps(func(child android.Module, parent android.Module) bool {
 			isExternal := !module.depIsInSameApex(ctx, child)
 			if am, ok := child.(android.ApexModule); ok {
@@ -1267,7 +1267,10 @@ var implLibraryTag = sdkLibraryComponentTag{name: "impl-library"}
 func (module *SdkLibrary) ComponentDepsMutator(ctx android.BottomUpMutatorContext) {
 	for _, apiScope := range module.getGeneratedApiScopes(ctx) {
 		// Add dependencies to the stubs library
-		ctx.AddVariationDependencies(nil, apiScope.stubsTag, module.stubsLibraryModuleName(apiScope))
+		stubModuleName := module.stubsLibraryModuleName(apiScope)
+		// Use JavaApiLibraryName function to be redirected to stubs generated from .txt if applicable
+		stubModuleName = android.JavaApiLibraryName(ctx.Config(), stubModuleName)
+		ctx.AddVariationDependencies(nil, apiScope.stubsTag, stubModuleName)
 
 		// Add a dependency on the stubs source in order to access both stubs source and api information.
 		ctx.AddVariationDependencies(nil, apiScope.stubsSourceAndApiTag, module.stubsSourceModuleName(apiScope))
@@ -1775,7 +1778,7 @@ func (module *SdkLibrary) UniqueApexVariations() bool {
 
 // Creates the xml file that publicizes the runtime library
 func (module *SdkLibrary) createXmlFile(mctx android.DefaultableHookContext) {
-	moduleMinApiLevel := module.Library.MinSdkVersion(mctx).ApiLevel
+	moduleMinApiLevel := module.Library.MinSdkVersion(mctx)
 	var moduleMinApiLevelStr = moduleMinApiLevel.String()
 	if moduleMinApiLevel == android.NoneApiLevel {
 		moduleMinApiLevelStr = "current"
@@ -2414,8 +2417,8 @@ func (module *SdkLibraryImport) UniqueApexVariations() bool {
 }
 
 // MinSdkVersion - Implements hiddenAPIModule
-func (module *SdkLibraryImport) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return android.SdkSpecNone
+func (module *SdkLibraryImport) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return android.NoneApiLevel
 }
 
 var _ hiddenAPIModule = (*SdkLibraryImport)(nil)

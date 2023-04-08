@@ -52,6 +52,7 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
 		ctx.BottomUp("version", versionMutator).Parallel()
 		ctx.BottomUp("begin", BeginMutator).Parallel()
+		ctx.BottomUp("fdo_profile", fdoProfileMutator)
 	})
 
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
@@ -770,6 +771,7 @@ var (
 	testPerSrcDepTag      = dependencyTag{name: "test_per_src"}
 	stubImplDepTag        = dependencyTag{name: "stub_impl"}
 	JniFuzzLibTag         = dependencyTag{name: "jni_fuzz_lib_tag"}
+	FdoProfileTag         = dependencyTag{name: "fdo_profile"}
 )
 
 func IsSharedDepTag(depTag blueprint.DependencyTag) bool {
@@ -1343,7 +1345,7 @@ func (c *Module) IsVndk() bool {
 
 func (c *Module) isAfdoCompile() bool {
 	if afdo := c.afdo; afdo != nil {
-		return afdo.Properties.AfdoTarget != nil
+		return afdo.Properties.FdoProfilePath != nil
 	}
 	return false
 }
@@ -2171,9 +2173,6 @@ func (c *Module) begin(ctx BaseModuleContext) {
 	if c.lto != nil {
 		c.lto.begin(ctx)
 	}
-	if c.afdo != nil {
-		c.afdo.begin(ctx)
-	}
 	if c.pgo != nil {
 		c.pgo.begin(ctx)
 	}
@@ -2247,6 +2246,10 @@ func (c *Module) beginMutator(actx android.BottomUpMutatorContext) {
 		},
 	}
 	ctx.ctx = ctx
+
+	if !actx.Host() || !ctx.static() || ctx.staticBinary() {
+		c.afdo.addDep(ctx, actx)
+	}
 
 	c.begin(ctx)
 }
