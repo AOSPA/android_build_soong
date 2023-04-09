@@ -88,6 +88,7 @@ type configImpl struct {
 	searchApiDir      bool // Scan the Android.bp files generated in out/api_surfaces
 	skipMetricsUpload bool
 	buildStartedTime  int64 // For metrics-upload-only - manually specify a build-started time
+	buildFromTextStub bool
 
 	// From the product config
 	katiArgs        []string
@@ -117,7 +118,8 @@ type configImpl struct {
 
 	bazelForceEnabledModules string
 
-	includeTags []string
+	includeTags    []string
+	sourceRootDirs []string
 
 	// Data source to write ninja weight list
 	ninjaWeightListSource NinjaWeightListSource
@@ -132,6 +134,10 @@ const (
 	NINJA_LOG
 	// ninja thinks every task has the same weight.
 	EVENLY_DISTRIBUTED
+	// ninja uses an external custom weight list
+	EXTERNAL_FILE
+	// ninja uses a prioritized module list from Soong
+	HINT_FROM_SOONG
 )
 const srcDirFileCheck = "build/soong/root.bp"
 
@@ -319,6 +325,10 @@ func NewConfig(ctx Context, args ...string) Config {
 
 	ret.totalRAM = detectTotalRAM(ctx)
 	ret.parseArgs(ctx, args)
+
+	if ret.ninjaWeightListSource == HINT_FROM_SOONG {
+		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "true")
+	}
 	// Make sure OUT_DIR is set appropriately
 	if outDir, ok := ret.environ.Get("OUT_DIR"); ok {
 		ret.environ.Set("OUT_DIR", filepath.Clean(outDir))
@@ -511,6 +521,11 @@ func NewConfig(ctx Context, args ...string) Config {
 		}
 	}
 
+	if ret.BuildFromTextStub() {
+		// TODO(b/271443071): support hidden api check for from-text stub build
+		ret.environ.Set("UNSAFE_DISABLE_HIDDENAPI_FLAGS", "true")
+	}
+
 	bpd := ret.BazelMetricsDir()
 	if err := os.RemoveAll(bpd); err != nil {
 		ctx.Fatalf("Unable to remove bazel profile directory %q: %v", bpd, err)
@@ -549,6 +564,10 @@ func getNinjaWeightListSourceInMetric(s NinjaWeightListSource) *smpb.BuildConfig
 		return smpb.BuildConfig_NINJA_LOG.Enum()
 	case EVENLY_DISTRIBUTED:
 		return smpb.BuildConfig_EVENLY_DISTRIBUTED.Enum()
+	case EXTERNAL_FILE:
+		return smpb.BuildConfig_EXTERNAL_FILE.Enum()
+	case HINT_FROM_SOONG:
+		return smpb.BuildConfig_HINT_FROM_SOONG.Enum()
 	default:
 		return smpb.BuildConfig_NOT_USED.Enum()
 	}
@@ -832,9 +851,24 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 				c.ninjaWeightListSource = EVENLY_DISTRIBUTED
 			} else if source == "not_used" {
 				c.ninjaWeightListSource = NOT_USED
+			} else if source == "soong" {
+				c.ninjaWeightListSource = HINT_FROM_SOONG
+			} else if strings.HasPrefix(source, "file,") {
+				c.ninjaWeightListSource = EXTERNAL_FILE
+				filePath := strings.TrimPrefix(source, "file,")
+				err := validateNinjaWeightList(filePath)
+				if err != nil {
+					ctx.Fatalf("Malformed weight list from %s: %s", filePath, err)
+				}
+				_, err = copyFile(filePath, filepath.Join(c.OutDir(), ".ninja_weight_list"))
+				if err != nil {
+					ctx.Fatalf("Error to copy ninja weight list from %s: %s", filePath, err)
+				}
 			} else {
 				ctx.Fatalf("unknown option for ninja_weight_source: %s", source)
 			}
+		} else if arg == "--build-from-text-stub" {
+			c.buildFromTextStub = true
 		} else if strings.HasPrefix(arg, "--build-command=") {
 			buildCmd := strings.TrimPrefix(arg, "--build-command=")
 			// remove quotations
@@ -903,6 +937,25 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 	if (!c.bazelProdMode) && (!c.bazelDevMode) && (!c.bazelStagingMode) {
 		c.bazelProdMode = defaultBazelProdMode(c)
 	}
+}
+
+func validateNinjaWeightList(weightListFilePath string) (err error) {
+	data, err := os.ReadFile(weightListFilePath)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	for _, line := range lines {
+		fields := strings.Split(line, ",")
+		if len(fields) != 2 {
+			return fmt.Errorf("wrong format, each line should have two fields, but '%s'", line)
+		}
+		_, err = strconv.Atoi(fields[1])
+		if err != nil {
+			return
+		}
+	}
+	return
 }
 
 func (c *configImpl) configureLocale(ctx Context) {
@@ -1157,6 +1210,10 @@ func (c *configImpl) SkipConfig() bool {
 	return c.skipConfig
 }
 
+func (c *configImpl) BuildFromTextStub() bool {
+	return c.buildFromTextStub
+}
+
 func (c *configImpl) TargetProduct() string {
 	if v, ok := c.environ.Get("TARGET_PRODUCT"); ok {
 		return v
@@ -1185,6 +1242,14 @@ func (c *configImpl) KatiArgs() []string {
 
 func (c *configImpl) Parallel() int {
 	return c.parallel
+}
+
+func (c *configImpl) GetSourceRootDirs() []string {
+	return c.sourceRootDirs
+}
+
+func (c *configImpl) SetSourceRootDirs(i []string) {
+	c.sourceRootDirs = i
 }
 
 func (c *configImpl) GetIncludeTags() []string {

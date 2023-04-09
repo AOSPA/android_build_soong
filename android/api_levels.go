@@ -185,6 +185,14 @@ func (l ApiLevel) EffectiveVersionString(ctx EarlyModuleContext) (string, error)
 	return ret.String(), nil
 }
 
+// Specified returns true if the module is targeting a recognzized api_level.
+// It returns false if either
+// 1. min_sdk_version is not an int or a recognized codename
+// 2. both min_sdk_version and sdk_version are empty. In this case, MinSdkVersion() defaults to SdkSpecPrivate.ApiLevel
+func (this ApiLevel) Specified() bool {
+	return !this.IsInvalid() && !this.IsPrivate()
+}
+
 // Returns -1 if the current API level is less than the argument, 0 if they
 // are equal, and 1 if it is greater than the argument.
 func (this ApiLevel) CompareTo(other ApiLevel) int {
@@ -289,6 +297,16 @@ func ReplaceFinalizedCodenames(config Config, raw string) string {
 	return strconv.Itoa(num)
 }
 
+// ApiLevelFrom converts the given string `raw` to an ApiLevel.
+// If `raw` is invalid (empty string, unrecognized codename etc.) it returns an invalid ApiLevel
+func ApiLevelFrom(ctx PathContext, raw string) ApiLevel {
+	ret, err := ApiLevelFromUser(ctx, raw)
+	if err != nil {
+		return NewInvalidApiLevel(raw)
+	}
+	return ret
+}
+
 // ApiLevelFromUser converts the given string `raw` to an ApiLevel, possibly returning an error.
 //
 // `raw` must be non-empty. Passing an empty string results in a panic.
@@ -326,14 +344,17 @@ func ApiLevelFromUserWithConfig(config Config, raw string) (ApiLevel, error) {
 		}
 	}
 
-	canonical := ReplaceFinalizedCodenames(config, raw)
-	asInt, err := strconv.Atoi(canonical)
-	if err != nil {
-		return NoneApiLevel, fmt.Errorf("%q could not be parsed as an integer and is not a recognized codename", canonical)
+	canonical, ok := getApiLevelsMapReleasedVersions()[raw]
+	if !ok {
+		asInt, err := strconv.Atoi(raw)
+		if err != nil {
+			return NoneApiLevel, fmt.Errorf("%q could not be parsed as an integer and is not a recognized codename", raw)
+		}
+		return uncheckedFinalApiLevel(asInt), nil
 	}
 
-	apiLevel := uncheckedFinalApiLevel(asInt)
-	return apiLevel, nil
+	return uncheckedFinalApiLevel(canonical), nil
+
 }
 
 // ApiLevelForTest returns an ApiLevel constructed from the supplied raw string.
@@ -448,7 +469,7 @@ func GetApiLevelsMap(config Config) map[string]int {
 	// https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/common/api.bzl;l=23;drc=231c7e8c8038fd478a79eb68aa5b9f5c64e0e061
 	return config.Once(apiLevelsMapKey, func() interface{} {
 		apiLevelsMap := getApiLevelsMapReleasedVersions()
-		for i, codename := range config.PlatformVersionActiveCodenames() {
+		for i, codename := range config.PlatformVersionAllPreviewCodenames() {
 			apiLevelsMap[codename] = previewAPILevelBase + i
 		}
 

@@ -1063,10 +1063,10 @@ func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
 		} else {
 			toMinSdkVersion := "(no version)"
 			if m, ok := to.(interface {
-				MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
+				MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel
 			}); ok {
-				if v := m.MinSdkVersion(ctx); !v.ApiLevel.IsNone() {
-					toMinSdkVersion = v.ApiLevel.String()
+				if v := m.MinSdkVersion(ctx); !v.IsNone() {
+					toMinSdkVersion = v.String()
 				}
 			} else if m, ok := to.(interface{ MinSdkVersion() string }); ok {
 				// TODO(b/175678607) eliminate the use of MinSdkVersion returning
@@ -1087,7 +1087,7 @@ func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
 		return !externalDep
 	})
 
-	a.ApexBundleDepsInfo.BuildDepsInfoLists(ctx, a.MinSdkVersion(ctx).Raw, depInfos)
+	a.ApexBundleDepsInfo.BuildDepsInfoLists(ctx, a.MinSdkVersion(ctx).String(), depInfos)
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:   android.Phony,
@@ -1167,7 +1167,7 @@ func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext) android.Outp
 	if a.properties.Canned_fs_config != nil {
 		cmd.Text("cat").Input(android.PathForModuleSrc(ctx, *a.properties.Canned_fs_config))
 	}
-	cmd.Text(") | LC_ALL=C sort ").FlagWithOutput("> ", cannedFsConfig)
+	cmd.Text(")").FlagWithOutput("> ", cannedFsConfig)
 	builder.Build("generateFsConfig", fmt.Sprintf("Generating canned fs config for %s", a.BaseModuleName()))
 
 	return cannedFsConfig.OutputPath
