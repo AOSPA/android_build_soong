@@ -64,13 +64,12 @@ var (
 
 	cfiBlocklistPath     = "external/compiler-rt/lib/cfi"
 	cfiBlocklistFilename = "cfi_blocklist.txt"
-	cfiCrossDsoFlag      = "-fsanitize-cfi-cross-dso"
-	cfiCflags            = []string{"-flto", cfiCrossDsoFlag,
+	cfiCflags            = []string{"-flto", "-fsanitize-cfi-cross-dso",
 		"-fsanitize-ignorelist=" + cfiBlocklistPath + "/" + cfiBlocklistFilename}
 	// -flto and -fvisibility are required by clang when -fsanitize=cfi is
 	// used, but have no effect on assembly files
 	cfiAsflags = []string{"-flto", "-fvisibility=default"}
-	cfiLdflags = []string{"-flto", cfiCrossDsoFlag, "-fsanitize=cfi",
+	cfiLdflags = []string{"-flto", "-fsanitize-cfi-cross-dso", "-fsanitize=cfi",
 		"-Wl,-plugin-opt,O1"}
 	cfiExportsMapPath      = "build/soong/cc/config"
 	cfiExportsMapFilename  = "cfi_exports.map"
@@ -394,13 +393,11 @@ func init() {
 	exportedVars.ExportStringList("DeviceOnlySanitizeFlags", deviceOnlySanitizeFlags)
 
 	// Leave out "-flto" from the slices exported to bazel, as we will use the
-	// dedicated LTO feature for this. For C Flags and Linker Flags, also leave
-	// out the cross DSO flag which will be added separately by transitions.
-	exportedVars.ExportStringList("CfiCFlags", cfiCflags[2:])
-	exportedVars.ExportStringList("CfiLdFlags", cfiLdflags[2:])
+	// dedicated LTO feature for this
+	exportedVars.ExportStringList("CfiCFlags", cfiCflags[1:])
 	exportedVars.ExportStringList("CfiAsFlags", cfiAsflags[1:])
+	exportedVars.ExportStringList("CfiLdFlags", cfiLdflags[1:])
 
-	exportedVars.ExportString("CfiCrossDsoFlag", cfiCrossDsoFlag)
 	exportedVars.ExportString("CfiBlocklistPath", cfiBlocklistPath)
 	exportedVars.ExportString("CfiBlocklistFilename", cfiBlocklistFilename)
 	exportedVars.ExportString("CfiExportsMapPath", cfiExportsMapPath)
@@ -614,10 +611,6 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	// SCS is only implemented on AArch64/riscv64.
 	if (ctx.Arch().ArchType != android.Arm64 && ctx.Arch().ArchType != android.Riscv64) || !ctx.toolchain().Bionic() {
-		s.Scs = nil
-	}
-	// ...but temporarily globally disabled on riscv64 (http://b/277909695).
-	if ctx.Arch().ArchType == android.Riscv64 {
 		s.Scs = nil
 	}
 

@@ -833,10 +833,6 @@ func (c *config) PlatformSdkVersion() ApiLevel {
 	return uncheckedFinalApiLevel(*c.productVariables.Platform_sdk_version)
 }
 
-func (c *config) RawPlatformSdkVersion() *int {
-	return c.productVariables.Platform_sdk_version
-}
-
 func (c *config) PlatformSdkFinal() bool {
 	return Bool(c.productVariables.Platform_sdk_final)
 }
