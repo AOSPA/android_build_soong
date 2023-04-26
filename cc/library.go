@@ -311,6 +311,11 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		asFlags = bazel.MakeStringListAttribute(nil)
 	}
 
+	sharedFeatures := baseAttributes.features.Clone().Append(sharedAttrs.Features)
+	sharedFeatures.DeduplicateAxesFromBase()
+	staticFeatures := baseAttributes.features.Clone().Append(staticAttrs.Features)
+	staticFeatures.DeduplicateAxesFromBase()
+
 	staticCommonAttrs := staticOrSharedAttributes{
 		Srcs:    *srcs.Clone().Append(staticAttrs.Srcs),
 		Srcs_c:  *compilerAttrs.cSrcs.Clone().Append(staticAttrs.Srcs_c),
@@ -366,7 +371,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Cpp_std:                  compilerAttrs.cppStd,
 		C_std:                    compilerAttrs.cStd,
 
-		Features: baseAttributes.features,
+		Features: *staticFeatures,
 	}
 
 	sharedTargetAttrs := &bazelCcLibrarySharedAttributes{
@@ -390,7 +395,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Additional_linker_inputs: linkerAttrs.additionalLinkerInputs,
 
 		Strip:                             stripAttrsFromLinkerAttrs(&linkerAttrs),
-		Features:                          baseAttributes.features,
+		Features:                          *sharedFeatures,
 		bazelCcHeaderAbiCheckerAttributes: bp2buildParseAbiCheckerProps(ctx, m),
 
 		Fdo_profile: compilerAttrs.fdoProfile,
@@ -931,9 +936,17 @@ func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx androi
 func (handler *ccLibraryBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
 	bazelCtx.QueueBazelRequest(label, cquery.GetCcInfo, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
+	if v := handler.module.library.stubsVersion(); v != "" {
+		stubsLabel := label + "_stub_libs-" + v
+		bazelCtx.QueueBazelRequest(stubsLabel, cquery.GetCcInfo, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
+	}
 }
 
 func (handler *ccLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
+	if v := handler.module.library.stubsVersion(); v != "" {
+		// if we are a stubs variant, just use the Bazel stubs target
+		label = label + "_stub_libs-" + v
+	}
 	bazelCtx := ctx.Config().BazelContext
 	ccInfo, err := bazelCtx.GetCcInfo(label, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 	if err != nil {
@@ -962,6 +975,9 @@ func (handler *ccLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.Modu
 	}
 
 	handler.module.setAndroidMkVariablesFromCquery(ccInfo.CcAndroidMkInfo)
+
+	cctx := moduleContextFromAndroidModuleContext(ctx, handler.module)
+	addStubDependencyProviders(cctx)
 }
 
 func (library *libraryDecorator) setFlagExporterInfoFromCcInfo(ctx android.ModuleContext, ccInfo cquery.CcInfo) {
@@ -1787,6 +1803,12 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 		Target:                               ctx.Target(),
 	})
 
+	addStubDependencyProviders(ctx)
+
+	return unstrippedOutputFile
+}
+
+func addStubDependencyProviders(ctx ModuleContext) {
 	stubs := ctx.GetDirectDepsWithTag(stubImplDepTag)
 	if len(stubs) > 0 {
 		var stubsInfo []SharedStubLibrary
@@ -1801,12 +1823,9 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 		}
 		ctx.SetProvider(SharedLibraryStubsProvider, SharedLibraryStubsInfo{
 			SharedStubLibraries: stubsInfo,
-
-			IsLLNDK: ctx.IsLlndk(),
+			IsLLNDK:             ctx.IsLlndk(),
 		})
 	}
-
-	return unstrippedOutputFile
 }
 
 func (library *libraryDecorator) unstrippedOutputFilePath() android.Path {
@@ -2392,7 +2411,10 @@ func (library *libraryDecorator) stubsVersions(ctx android.BaseMutatorContext) [
 	}
 
 	// Future API level is implicitly added if there isn't
-	vers := library.Properties.Stubs.Versions
+	return addCurrentVersionIfNotPresent(library.Properties.Stubs.Versions)
+}
+
+func addCurrentVersionIfNotPresent(vers []string) []string {
 	if inList(android.FutureApiLevel.String(), vers) {
 		return vers
 	}
@@ -2657,7 +2679,7 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 // normalizeVersions modifies `versions` in place, so that each raw version
 // string becomes its normalized canonical form.
 // Validates that the versions in `versions` are specified in least to greatest order.
-func normalizeVersions(ctx android.BaseModuleContext, versions []string) {
+func normalizeVersions(ctx android.BazelConversionPathContext, versions []string) {
 	var previous android.ApiLevel
 	for i, v := range versions {
 		ver, err := android.ApiLevelFromUser(ctx, v)
@@ -2881,6 +2903,9 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		asFlags = bazel.MakeStringListAttribute(nil)
 	}
 
+	features := baseAttributes.features.Clone().Append(libSharedOrStaticAttrs.Features)
+	features.DeduplicateAxesFromBase()
+
 	commonAttrs := staticOrSharedAttributes{
 		Srcs:    compilerAttrs.srcs,
 		Srcs_c:  compilerAttrs.cSrcs,
@@ -2922,7 +2947,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 			Conlyflags: compilerAttrs.conlyFlags,
 			Asflags:    asFlags,
 
-			Features: baseAttributes.features,
+			Features: *features,
 		}
 	} else {
 		commonAttrs.Dynamic_deps.Add(baseAttributes.protoDependency)
@@ -2951,7 +2976,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 
 			Strip: stripAttrsFromLinkerAttrs(&linkerAttrs),
 
-			Features: baseAttributes.features,
+			Features: *features,
 
 			Suffix: compilerAttrs.suffix,
 
