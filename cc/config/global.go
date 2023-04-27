@@ -290,7 +290,6 @@ var (
 		"-Wno-unused-comparison",
 		"-Wno-string-compare",
 		"-Wno-wrong-info",
-		"-Wno-thread-safety-analysis",
 		"-Wno-unsequenced",
 		"-Wno-unknown-warning-option",
 		"-Wno-unused-variable",
