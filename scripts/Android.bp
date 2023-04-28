@@ -193,6 +193,10 @@ python_binary_host {
     libs: [
         "linker_config_proto",
     ],
+    visibility: [
+        "//system/linkerconfig",
+        "//device/qcom/qssi/vsdk_tools:__subpackages__"
+    ],
 }
 
 python_test_host {

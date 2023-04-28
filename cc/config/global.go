@@ -130,6 +130,9 @@ var (
 
 		// Turn off FMA which got enabled by default in clang-r445002 (http://b/218805949)
 		"-ffp-contract=off",
+
+		// Turn off stack protector check for noreturn calls. (http://b/264965700)
+		// "-mllvm -disable-check-noreturn-call",
 	}
 
 	commonGlobalConlyflags = []string{}
@@ -166,6 +169,10 @@ var (
 	commonGlobalLldflags = []string{
 		"-fuse-ld=lld",
 		"-Wl,--icf=safe",
+
+		// KEYSTONE(I12d0bcd61de11c762805c535b8d0548eac2e2b66,b/278133889)
+		// Turn off stack protector check for noreturn calls. (http://b/264965700)
+		// "-Wl,-mllvm,-disable-check-noreturn-call",
 	}
 
 	deviceGlobalCppflags = []string{
@@ -394,6 +401,9 @@ var (
 	QiifaAbiLibraryList = []string{}
 
 	VersionScriptFlagPrefix = "-Wl,--version-script,"
+
+	VisibilityHiddenFlag  = "-fvisibility=hidden"
+	VisibilityDefaultFlag = "-fvisibility=default"
 )
 
 // BazelCcToolchainVars generates bzl file content containing variables for
@@ -491,6 +501,9 @@ func init() {
 	exportedVars.ExportString("ExperimentalCppStdVersion", ExperimentalCppStdVersion)
 
 	exportedVars.ExportString("VersionScriptFlagPrefix", VersionScriptFlagPrefix)
+
+	exportedVars.ExportString("VisibilityHiddenFlag", VisibilityHiddenFlag)
+	exportedVars.ExportString("VisibilityDefaultFlag", VisibilityDefaultFlag)
 
 	// Everything in these lists is a crime against abstraction and dependency tracking.
 	// Do not add anything to this list.
