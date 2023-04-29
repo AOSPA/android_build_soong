@@ -59,7 +59,7 @@ func registerTestMutators(ctx android.RegistrationContext) {
 func mixedBuildsPrepareMutator(ctx android.BottomUpMutatorContext) {
 	if m := ctx.Module(); m.Enabled() {
 		if mixedBuildMod, ok := m.(android.MixedBuildBuildable); ok {
-			if mixedBuildMod.IsMixedBuildSupported(ctx) && android.MixedBuildsEnabled(ctx) {
+			if mixedBuildMod.IsMixedBuildSupported(ctx) && android.MixedBuildsEnabled(ctx) == android.MixedBuildEnabled {
 				mixedBuildMod.QueueBazelCall(ctx)
 			}
 		}
@@ -3683,9 +3683,6 @@ func TestStubsForLibraryInMultipleApexes(t *testing.T) {
 }
 
 func TestMixedBuildUsesStubs(t *testing.T) {
-	// TODO(b/275313114): Test exposes non-determinism which should be corrected and the test
-	// reenabled.
-	t.Skip()
 	t.Parallel()
 	bp := `
 		cc_library_shared {
