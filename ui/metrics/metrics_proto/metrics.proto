@@ -128,9 +128,20 @@ message MetricsBase {
   // The branch on which the build occurred.
   // Example: refs/heads/master
   optional string branch = 32;
+
+  // The metric of critical path in build
+  optional CriticalPathInfo critical_path_info = 33;
 }
 
 message BuildConfig {
+  enum NinjaWeightListSource {
+    NOT_USED = 0;
+    NINJA_LOG = 1;
+    EVENLY_DISTRIBUTED = 2;
+    EXTERNAL_FILE = 3;
+    HINT_FROM_SOONG = 4;
+  }
+
   optional bool use_goma = 1;
 
   optional bool use_rbe = 2;
@@ -150,6 +161,13 @@ message BuildConfig {
 
   // Whether the user explicitly disabled bazel mixed builds for this build.
   optional bool force_disable_bazel_mixed_build = 7;
+
+  // NOT_USED - ninja doesn't use weight list.
+  // NINJA_LOG - ninja uses weight list based on previous builds by ninja log
+  // EVENLY_DISTRIBUTED - ninja thinks every task has the same weight.
+  // EXTERNAL_FILE - ninja uses an external custom weight list
+  // HINT_FROM_SOONG - ninja uses a prioritized module list from Soong
+  optional NinjaWeightListSource ninja_weight_list_source = 8 [default = NOT_USED];
 }
 
 message SystemResourceInfo {
@@ -313,4 +331,24 @@ message MixedBuildsInfo{
 
   // Modules that are not enabled for MixedBuilds
   repeated string mixed_build_disabled_modules = 2;
+}
+
+// CriticalPathInfo contains critical path nodes's information.
+// A critical path is a path determining the minimum time needed for the whole build given perfect parallelism.
+message CriticalPathInfo {
+  // Real time which the build system spent in microseconds
+  optional uint64 elapsed_time_micros = 1;
+  // The sum of execution time of the longest path from leave to the root in microseconds
+  optional uint64 critical_path_time_micros = 2;
+  // Detailed job information in a critical path.
+  repeated JobInfo critical_path = 4;
+  // Detailed job information for long running jobs (>30 seconds). These may or may not also be on a critical path.
+  repeated JobInfo long_running_jobs = 5;
+}
+
+message JobInfo {
+  // Real time which a job spent in microseconds
+  optional uint64 elapsed_time_micros = 1;
+  // Description of a job
+  optional string job_description = 2;
 }

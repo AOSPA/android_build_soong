@@ -16,7 +16,6 @@ package cc
 
 import (
 	"path/filepath"
-	"strings"
 
 	"android/soong/android"
 	"android/soong/bazel"
@@ -208,12 +207,13 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 			})
 
 			// TODO(b/220898484): Mainline module sdk prebuilts of stub libraries use a stub
-			// library as their source and must not be installed, but libclang_rt.* libraries
-			// have stubs because they are LLNDK libraries, but use an implementation library
-			// as their source and need to be installed.  This discrepancy should be resolved
-			// without the prefix hack below.
-			if p.hasStubsVariants() && !p.buildStubs() && !ctx.Host() &&
-				!strings.HasPrefix(ctx.baseModuleName(), "libclang_rt.") {
+			// library as their source and must not be installed, but other prebuilts like
+			// libclang_rt.* libraries set `stubs` property because they are LLNDK libraries,
+			// but use an implementation library as their source and need to be installed.
+			// This discrepancy should be resolved without the prefix hack below.
+			isModuleSdkPrebuilts := android.HasAnyPrefix(ctx.ModuleDir(), []string{
+				"prebuilts/runtime/mainline/", "prebuilts/module_sdk/"})
+			if p.hasStubsVariants() && !p.buildStubs() && !ctx.Host() && isModuleSdkPrebuilts {
 				ctx.Module().MakeUninstallable()
 			}
 
@@ -352,6 +352,7 @@ type bazelPrebuiltLibraryStaticAttributes struct {
 	Static_library         bazel.LabelAttribute
 	Export_includes        bazel.StringListAttribute
 	Export_system_includes bazel.StringListAttribute
+	Alwayslink             bazel.BoolAttribute
 }
 
 // TODO(b/228623543): The below is not entirely true until the bug is fixed. For now, both targets are always generated
@@ -389,6 +390,11 @@ func prebuiltLibraryStaticBp2Build(ctx android.TopDownMutatorContext, module *Mo
 
 	tags := android.ApexAvailableTags(module)
 	ctx.CreateBazelTargetModuleWithRestrictions(props, android.CommonAttributes{Name: name, Tags: tags}, attrs, prebuiltAttrs.Enabled)
+
+	_true := true
+	alwayslinkAttrs := *attrs
+	alwayslinkAttrs.Alwayslink.SetValue(&_true)
+	ctx.CreateBazelTargetModuleWithRestrictions(props, android.CommonAttributes{Name: name + "_alwayslink", Tags: tags}, &alwayslinkAttrs, prebuiltAttrs.Enabled)
 }
 
 type bazelPrebuiltLibrarySharedAttributes struct {

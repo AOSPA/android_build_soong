@@ -236,9 +236,9 @@ func hiddenAPIComputeMonolithicStubLibModules(config android.Config) map[*Hidden
 		testStubModules = append(testStubModules, "sdk_test_current_android")
 	} else {
 		// Use stub modules built from source
-		publicStubModules = append(publicStubModules, "android_stubs_current")
-		systemStubModules = append(systemStubModules, "android_system_stubs_current")
-		testStubModules = append(testStubModules, "android_test_stubs_current")
+		publicStubModules = append(publicStubModules, android.SdkPublic.JavaLibraryName(config))
+		systemStubModules = append(systemStubModules, android.SdkSystem.JavaLibraryName(config))
+		testStubModules = append(testStubModules, android.SdkTest.JavaLibraryName(config))
 	}
 	// We do not have prebuilts of the core platform api yet
 	corePlatformStubModules = append(corePlatformStubModules, "legacy.core.platform.api.stubs")
@@ -1278,7 +1278,7 @@ type bootDexInfo struct {
 	uncompressDex bool
 
 	// The minimum sdk version that the dex jar will be used on.
-	minSdkVersion android.SdkSpec
+	minSdkVersion android.ApiLevel
 }
 
 // bootDexInfoByModule is a map from module name (as returned by module.Name()) to the boot dex

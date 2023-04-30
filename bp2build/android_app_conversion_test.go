@@ -306,3 +306,88 @@ java_library{
 			}),
 		}})
 }
+
+func TestAndroidAppKotlinCflags(t *testing.T) {
+	runAndroidAppTestCase(t, Bp2buildTestCase{
+		Description:                "Android app with kotlincflags",
+		ModuleTypeUnderTest:        "android_app",
+		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
+		Filesystem: map[string]string{
+			"res/res.png": "",
+		},
+		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+android_app {
+        name: "foo",
+        srcs: ["a.java", "b.kt"],
+        certificate: ":foocert",
+        manifest: "fooManifest.xml",
+        kotlincflags: ["-flag1", "-flag2"],
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("android_library", "foo_kt", AttrNameToString{
+				"srcs": `[
+        "a.java",
+        "b.kt",
+    ]`,
+				"manifest":       `"fooManifest.xml"`,
+				"resource_files": `["res/res.png"]`,
+				"kotlincflags": `[
+        "-flag1",
+        "-flag2",
+    ]`,
+			}),
+			MakeBazelTarget("android_binary", "foo", AttrNameToString{
+				"deps":        `[":foo_kt"]`,
+				"certificate": `":foocert"`,
+				"manifest":    `"fooManifest.xml"`,
+			}),
+		}})
+}
+
+func TestAndroidAppMinSdkProvided(t *testing.T) {
+	runAndroidAppTestCase(t, Bp2buildTestCase{
+		Description:                "Android app with value for min_sdk_version",
+		ModuleTypeUnderTest:        "android_app",
+		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
+		Filesystem:                 map[string]string{},
+		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+android_app {
+        name: "foo",
+        sdk_version: "current",
+				min_sdk_version: "24",
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("android_binary", "foo", AttrNameToString{
+				"manifest":       `"AndroidManifest.xml"`,
+				"resource_files": `[]`,
+				"manifest_values": `{
+        "minSdkVersion": "24",
+    }`,
+			}),
+		}})
+}
+
+func TestAndroidAppMinSdkDefaultToSdkVersion(t *testing.T) {
+	runAndroidAppTestCase(t, Bp2buildTestCase{
+		Description:                "Android app with value for sdk_version",
+		ModuleTypeUnderTest:        "android_app",
+		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
+		Filesystem:                 map[string]string{},
+		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+android_app {
+        name: "foo",
+        sdk_version: "30",
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("android_binary", "foo", AttrNameToString{
+				"manifest":       `"AndroidManifest.xml"`,
+				"resource_files": `[]`,
+				"manifest_values": `{
+        "minSdkVersion": "30",
+    }`,
+			}),
+		}})
+}

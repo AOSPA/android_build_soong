@@ -807,7 +807,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 type appDepsInterface interface {
 	SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
-	MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
+	MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel
 	RequiresStableAPIs(ctx android.BaseModuleContext) bool
 }
 
@@ -920,10 +920,10 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 		} else {
 			toMinSdkVersion := "(no version)"
 			if m, ok := to.(interface {
-				MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
+				MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel
 			}); ok {
-				if v := m.MinSdkVersion(ctx); !v.ApiLevel.IsNone() {
-					toMinSdkVersion = v.ApiLevel.String()
+				if v := m.MinSdkVersion(ctx); !v.IsNone() {
+					toMinSdkVersion = v.String()
 				}
 			} else if m, ok := to.(interface{ MinSdkVersion() string }); ok {
 				// TODO(b/175678607) eliminate the use of MinSdkVersion returning
@@ -1550,6 +1550,10 @@ func androidAppCertificateBp2Build(ctx android.TopDownMutatorContext, module *An
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, attrs)
 }
 
+type manifestValueAttribute struct {
+	MinSdkVersion *string
+}
+
 type bazelAndroidAppAttributes struct {
 	*javaCommonAttributes
 	*bazelAapt
@@ -1557,6 +1561,7 @@ type bazelAndroidAppAttributes struct {
 	Custom_package   *string
 	Certificate      bazel.LabelAttribute
 	Certificate_name bazel.StringAttribute
+	Manifest_values  *manifestValueAttribute
 }
 
 // ConvertWithBp2build is used to convert android_app to Bazel.
@@ -1571,11 +1576,23 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 	certificate, certificateName := android.BazelStringOrLabelFromProp(ctx, a.overridableAppProperties.Certificate)
 
+	manifestValues := &manifestValueAttribute{}
+	// TODO(b/274474008 ): Directly convert deviceProperties.Min_sdk_version in bp2build
+	// MinSdkVersion(ctx) calls SdkVersion(ctx) if no value for min_sdk_version is set
+	minSdkVersion := a.MinSdkVersion(ctx)
+	if !minSdkVersion.IsPreview() && !minSdkVersion.IsInvalid() {
+		minSdkStr, err := minSdkVersion.EffectiveVersionString(ctx)
+		if err == nil {
+			manifestValues.MinSdkVersion = &minSdkStr
+		}
+	}
+
 	appAttrs := &bazelAndroidAppAttributes{
 		// TODO(b/209576404): handle package name override by product variable PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES
 		Custom_package:   a.overridableAppProperties.Package_name,
 		Certificate:      certificate,
 		Certificate_name: certificateName,
+		Manifest_values:  manifestValues,
 	}
 
 	props := bazel.BazelTargetModuleProperties{
@@ -1590,10 +1607,7 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	} else {
 		ktName := a.Name() + "_kt"
 		ctx.CreateBazelTargetModule(
-			bazel.BazelTargetModuleProperties{
-				Rule_class:        "android_library",
-				Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
-			},
+			AndroidLibraryBazelTargetModuleProperties(),
 			android.CommonAttributes{Name: ktName},
 			&bazelAndroidLibrary{
 				javaLibraryAttributes: &javaLibraryAttributes{

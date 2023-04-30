@@ -91,11 +91,14 @@ function create_mock_soong {
   symlink_directory prebuilts/go
   symlink_directory prebuilts/build-tools
   symlink_directory prebuilts/clang/host
+  symlink_directory external/compiler-rt
   symlink_directory external/go-cmp
   symlink_directory external/golang-protobuf
+  symlink_directory external/licenseclassifier
   symlink_directory external/starlark-go
   symlink_directory external/python
   symlink_directory external/sqlite
+  symlink_directory external/spdx-tools
 
   touch "$MOCK_TOP/Android.bp"
 }
@@ -164,5 +167,6 @@ function scan_and_run_tests {
   fi
   for f in ${test_fns[*]}; do
     $f
+    info "Completed test case \e[96;1m$f\e[0m"
   done
 }

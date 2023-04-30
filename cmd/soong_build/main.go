@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"android/soong/android"
+	"android/soong/android/allowlists"
 	"android/soong/bazel"
 	"android/soong/bp2build"
 	"android/soong/shared"
@@ -78,10 +79,12 @@ func init() {
 	flag.StringVar(&cmdlineArgs.OutFile, "o", "build.ninja", "the Ninja file to output")
 	flag.StringVar(&cmdlineArgs.BazelForceEnabledModules, "bazel-force-enabled-modules", "", "additional modules to build with Bazel. Comma-delimited")
 	flag.BoolVar(&cmdlineArgs.EmptyNinjaFile, "empty-ninja-file", false, "write out a 0-byte ninja file")
+	flag.BoolVar(&cmdlineArgs.MultitreeBuild, "multitree-build", false, "this is a multitree build")
 	flag.BoolVar(&cmdlineArgs.BazelMode, "bazel-mode", false, "use bazel for analysis of certain modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeStaging, "bazel-mode-staging", false, "use bazel for analysis of certain near-ready modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeDev, "bazel-mode-dev", false, "use bazel for analysis of a large number of modules (less stable)")
 	flag.BoolVar(&cmdlineArgs.UseBazelProxy, "use-bazel-proxy", false, "communicate with bazel using unix socket proxy instead of spawning subprocesses")
+	flag.BoolVar(&cmdlineArgs.BuildFromTextStub, "build-from-text-stub", false, "build Java stubs from API text files instead of source files")
 
 	// Flags that probably shouldn't be flags of soong_build, but we haven't found
 	// the time to remove them yet
@@ -103,6 +106,7 @@ func newContext(configuration android.Config) *android.Context {
 	ctx.SetNameInterface(newNameResolver(configuration))
 	ctx.SetAllowMissingDependencies(configuration.AllowMissingDependencies())
 	ctx.AddIncludeTags(configuration.IncludeTags()...)
+	ctx.AddSourceRootDirs(configuration.SourceRootDirs()...)
 	return ctx
 }
 
@@ -249,6 +253,29 @@ func apiBuildFileExcludes(ctx *android.Context) []string {
 	// dep for api_bp2build. Otherwise, api_bp2build will be run every single time
 	ret = append(ret, ctx.Config().OutDir())
 	return ret
+}
+
+func writeNinjaHint(ctx *android.Context) error {
+	wantModules := make([]string, len(allowlists.HugeModulesMap))
+	i := 0
+	for k := range allowlists.HugeModulesMap {
+		wantModules[i] = k
+		i += 1
+	}
+	outputsMap := ctx.Context.GetOutputsFromModuleNames(wantModules)
+	var outputBuilder strings.Builder
+	for k, v := range allowlists.HugeModulesMap {
+		for _, output := range outputsMap[k] {
+			outputBuilder.WriteString(fmt.Sprintf("%s,%d\n", output, v))
+		}
+	}
+	weightListFile := filepath.Join(topDir, ctx.Config().OutDir(), ".ninja_weight_list")
+
+	err := os.WriteFile(weightListFile, []byte(outputBuilder.String()), 0644)
+	if err != nil {
+		return fmt.Errorf("could not write ninja weight list file %s", err)
+	}
+	return nil
 }
 
 func writeMetrics(configuration android.Config, eventHandler *metrics.EventHandler, metricsDir string) {
@@ -410,6 +437,9 @@ func main() {
 			finalOutputFile = runMixedModeBuild(ctx, extraNinjaDeps)
 		} else {
 			finalOutputFile = runSoongOnlyBuild(ctx, extraNinjaDeps)
+		}
+		if ctx.Config().IsEnvTrue("SOONG_GENERATES_NINJA_HINT") {
+			writeNinjaHint(ctx)
 		}
 		writeMetrics(configuration, ctx.EventHandler, metricsDir)
 	}

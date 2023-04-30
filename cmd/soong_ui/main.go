@@ -169,7 +169,7 @@ func main() {
 
 	// Create a new Status instance, which manages action counts and event output channels.
 	stat := &status.Status{}
-	defer stat.Finish()
+
 	// Hook up the terminal output and tracer to Status.
 	stat.AddOutput(output)
 	stat.AddOutput(trace.StatusTracer())
@@ -180,14 +180,15 @@ func main() {
 		log.Cleanup()
 		stat.Finish()
 	})
-
+	criticalPath := status.NewCriticalPath()
 	buildCtx := build.Context{ContextImpl: &build.ContextImpl{
-		Context: ctx,
-		Logger:  log,
-		Metrics: met,
-		Tracer:  trace,
-		Writer:  output,
-		Status:  stat,
+		Context:      ctx,
+		Logger:       log,
+		Metrics:      met,
+		Tracer:       trace,
+		Writer:       output,
+		Status:       stat,
+		CriticalPath: criticalPath,
 	}}
 
 	config := c.config(buildCtx, args...)
@@ -220,11 +221,14 @@ func main() {
 
 	trace.SetOutput(filepath.Join(logsDir, c.logsPrefix+"build.trace"))
 
-	if !config.SkipMetricsUpload() {
-		defer build.UploadMetrics(buildCtx, config, c.simpleOutput, buildStarted, bazelProfileFile, bazelMetricsFile, metricsFiles...)
-	}
-	defer met.Dump(soongMetricsFile)
-
+	defer func() {
+		stat.Finish()
+		criticalPath.WriteToMetrics(met)
+		met.Dump(soongMetricsFile)
+		if !config.SkipMetricsUpload() {
+			build.UploadMetrics(buildCtx, config, c.simpleOutput, buildStarted, bazelProfileFile, bazelMetricsFile, metricsFiles...)
+		}
+	}()
 	c.run(buildCtx, config, args)
 
 }
@@ -254,7 +258,7 @@ func logAndSymlinkSetup(buildCtx build.Context, config build.Config) {
 	stat.AddOutput(status.NewVerboseLog(log, filepath.Join(logsDir, logsPrefix+"verbose.log")))
 	stat.AddOutput(status.NewErrorLog(log, filepath.Join(logsDir, logsPrefix+"error.log")))
 	stat.AddOutput(status.NewProtoErrorLog(log, buildErrorFile))
-	stat.AddOutput(status.NewCriticalPath(log))
+	stat.AddOutput(status.NewCriticalPathLogger(log, buildCtx.CriticalPath))
 	stat.AddOutput(status.NewBuildProgressLog(log, filepath.Join(logsDir, logsPrefix+"build_progress.pb")))
 
 	buildCtx.Verbosef("Detected %.3v GB total RAM", float32(config.TotalRAM())/(1024*1024*1024))

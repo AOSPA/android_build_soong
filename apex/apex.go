@@ -103,12 +103,13 @@ type apexBundleProperties struct {
 	// to avoid mistakes. When set as true, no force-labelling.
 	Use_file_contexts_as_is *bool
 
-	// Path to the canned fs config file for customizing file's uid/gid/mod/capabilities. The
-	// format is /<path_or_glob> <uid> <gid> <mode> [capabilities=0x<cap>], where path_or_glob is a
-	// path or glob pattern for a file or set of files, uid/gid are numerial values of user ID
-	// and group ID, mode is octal value for the file mode, and cap is hexadecimal value for the
-	// capability. If this property is not set, or a file is missing in the file, default config
-	// is used.
+	// Path to the canned fs config file for customizing file's
+	// uid/gid/mod/capabilities. The content of this file is appended to the
+	// default config, so that the custom entries are preferred. The format is
+	// /<path_or_glob> <uid> <gid> <mode> [capabilities=0x<cap>], where
+	// path_or_glob is a path or glob pattern for a file or set of files,
+	// uid/gid are numerial values of user ID and group ID, mode is octal value
+	// for the file mode, and cap is hexadecimal value for the capability.
 	Canned_fs_config *string `android:"path"`
 
 	ApexNativeDependencies
@@ -509,6 +510,21 @@ const (
 	shBinary
 )
 
+var (
+	classes = map[string]apexFileClass{
+		"app":              app,
+		"appSet":           appSet,
+		"etc":              etc,
+		"goBinary":         goBinary,
+		"javaSharedLib":    javaSharedLib,
+		"nativeExecutable": nativeExecutable,
+		"nativeSharedLib":  nativeSharedLib,
+		"nativeTest":       nativeTest,
+		"pyBinary":         pyBinary,
+		"shBinary":         shBinary,
+	}
+)
+
 // apexFile represents a file in an APEX bundle. This is created during the first half of
 // GenerateAndroidBuildActions by traversing the dependencies of the APEX. Then in the second half
 // of the function, this is used to create commands that copies the files into a staging directory,
@@ -542,6 +558,10 @@ type apexFile struct {
 	isJniLib      bool
 
 	multilib string
+
+	isBazelPrebuilt     bool
+	unstrippedBuiltFile android.Path
+	arch                string
 
 	// TODO(jiyong): remove this
 	module android.Module
@@ -973,6 +993,9 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	if proptools.Bool(a.properties.Use_vndk_as_stable) {
 		if !useVndk {
 			mctx.PropertyErrorf("use_vndk_as_stable", "not supported for system/system_ext APEXes")
+		}
+		if a.minSdkVersionValue(mctx) != "" {
+			mctx.PropertyErrorf("use_vndk_as_stable", "not supported when min_sdk_version is set")
 		}
 		mctx.VisitDirectDepsWithTag(sharedLibTag, func(dep android.Module) {
 			if c, ok := dep.(*cc.Module); ok && c.IsVndk() {
@@ -1710,6 +1733,7 @@ func apexFileForGoBinary(ctx android.BaseModuleContext, depName string, gb boots
 	// NB: Since go binaries are static we don't need the module for anything here, which is
 	// good since the go tool is a blueprint.Module not an android.Module like we would
 	// normally use.
+	//
 	return newApexFile(ctx, fileToCopy, depName, dirInApex, goBinary, nil)
 }
 
@@ -1919,7 +1943,7 @@ func (f fsType) string() string {
 var _ android.MixedBuildBuildable = (*apexBundle)(nil)
 
 func (a *apexBundle) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	return ctx.ModuleType() == "apex" && a.properties.ApexType == imageApex
+	return a.properties.ApexType == imageApex
 }
 
 func (a *apexBundle) QueueBazelCall(ctx android.BaseModuleContext) {
@@ -1962,9 +1986,9 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	// Set the output file to .apex or .capex depending on the compression configuration.
 	a.setCompression(ctx)
 	if a.isCompressed {
-		a.outputApexFile = android.PathForBazelOut(ctx, outputs.SignedCompressedOutput)
+		a.outputApexFile = android.PathForBazelOutRelative(ctx, ctx.ModuleDir(), outputs.SignedCompressedOutput)
 	} else {
-		a.outputApexFile = android.PathForBazelOut(ctx, outputs.SignedOutput)
+		a.outputApexFile = android.PathForBazelOutRelative(ctx, ctx.ModuleDir(), outputs.SignedOutput)
 	}
 	a.outputFile = a.outputApexFile
 
@@ -2003,13 +2027,41 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		panic(fmt.Errorf("internal error: unexpected apex_type for the ProcessBazelQueryResponse: %v", a.properties.ApexType))
 	}
 
-	// filesInfo is not set in mixed mode, because all information about the
-	// apex's contents should completely come from the Starlark providers.
+	// filesInfo in mixed mode must retrieve all information about the apex's
+	// contents completely from the Starlark providers. It should never rely on
+	// Android.bp information, as they might not exist for fully migrated
+	// dependencies.
 	//
 	// Prevent accidental writes to filesInfo in the earlier parts Soong by
 	// asserting it to be nil.
 	if a.filesInfo != nil {
-		panic(fmt.Errorf("internal error: filesInfo must be nil for an apex handled by Bazel."))
+		panic(
+			fmt.Errorf("internal error: filesInfo must be nil for an apex handled by Bazel. " +
+				"Did something else set filesInfo before this line of code?"))
+	}
+	for _, f := range outputs.PayloadFilesInfo {
+		fileInfo := apexFile{
+			isBazelPrebuilt: true,
+
+			builtFile:           android.PathForBazelOut(ctx, f["built_file"]),
+			unstrippedBuiltFile: android.PathForBazelOut(ctx, f["unstripped_built_file"]),
+			androidMkModuleName: f["make_module_name"],
+			installDir:          f["install_dir"],
+			class:               classes[f["class"]],
+			customStem:          f["basename"],
+			moduleDir:           f["package"],
+		}
+
+		arch := f["arch"]
+		fileInfo.arch = arch
+		if len(arch) > 0 {
+			fileInfo.multilib = "lib32"
+			if strings.HasSuffix(arch, "64") {
+				fileInfo.multilib = "lib64"
+			}
+		}
+
+		a.filesInfo = append(a.filesInfo, fileInfo)
 	}
 }
 
@@ -2780,7 +2832,7 @@ func (o *OverrideApex) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	if !baseModuleIsApex {
 		panic(fmt.Errorf("Base module is not apex module: %s", baseApexModuleName))
 	}
-	attrs, props := convertWithBp2build(a, ctx)
+	attrs, props, commonAttrs := convertWithBp2build(a, ctx)
 
 	// We just want the name, not module reference.
 	baseApexName := strings.TrimPrefix(baseApexModuleName, ":")
@@ -2854,7 +2906,9 @@ func (o *OverrideApex) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		}
 	}
 
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: o.Name()}, &attrs)
+	commonAttrs.Name = o.Name()
+
+	ctx.CreateBazelTargetModule(props, commonAttrs, &attrs)
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2898,12 +2952,8 @@ func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
 }
 
 // Returns apex's min_sdk_version SdkSpec, honoring overrides
-func (a *apexBundle) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return android.SdkSpec{
-		Kind:     android.SdkNone,
-		ApiLevel: a.minSdkVersion(ctx),
-		Raw:      a.minSdkVersionValue(ctx),
-	}
+func (a *apexBundle) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return a.minSdkVersion(ctx)
 }
 
 // Returns apex's min_sdk_version ApiLevel, honoring overrides
@@ -2977,8 +3027,8 @@ func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
 		if a.UsePlatformApis() {
 			ctx.PropertyErrorf("updatable", "updatable APEXes can't use platform APIs")
 		}
-		if a.SocSpecific() || a.DeviceSpecific() {
-			ctx.PropertyErrorf("updatable", "vendor APEXes are not updatable")
+		if proptools.Bool(a.properties.Use_vndk_as_stable) {
+			ctx.PropertyErrorf("use_vndk_as_stable", "updatable APEXes can't use external VNDK libs")
 		}
 		if a.FutureUpdatable() {
 			ctx.PropertyErrorf("future_updatable", "Already updatable. Remove `future_updatable: true:`")
@@ -3476,6 +3526,7 @@ type bazelApexBundleAttributes struct {
 	Manifest              bazel.LabelAttribute
 	Android_manifest      bazel.LabelAttribute
 	File_contexts         bazel.LabelAttribute
+	Canned_fs_config      bazel.LabelAttribute
 	Key                   bazel.LabelAttribute
 	Certificate           bazel.LabelAttribute  // used when the certificate prop is a module
 	Certificate_name      bazel.StringAttribute // used when the certificate prop is a string
@@ -3509,17 +3560,12 @@ func (a *apexBundle) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		return
 	}
 
-	attrs, props := convertWithBp2build(a, ctx)
-	commonAttrs := android.CommonAttributes{
-		Name: a.Name(),
-	}
-	if a.testApex {
-		commonAttrs.Testonly = proptools.BoolPtr(a.testApex)
-	}
+	attrs, props, commonAttrs := convertWithBp2build(a, ctx)
+	commonAttrs.Name = a.Name()
 	ctx.CreateBazelTargetModule(props, commonAttrs, &attrs)
 }
 
-func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (bazelApexBundleAttributes, bazel.BazelTargetModuleProperties) {
+func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (bazelApexBundleAttributes, bazel.BazelTargetModuleProperties, android.CommonAttributes) {
 	var manifestLabelAttribute bazel.LabelAttribute
 	manifestLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, proptools.StringDefault(a.properties.Manifest, "apex_manifest.json")))
 
@@ -3538,6 +3584,11 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 	} else {
 		// File_contexts is a file
 		fileContextsLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *a.properties.File_contexts))
+	}
+
+	var cannedFsConfigAttribute bazel.LabelAttribute
+	if a.properties.Canned_fs_config != nil {
+		cannedFsConfigAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *a.properties.Canned_fs_config))
 	}
 
 	productVariableProps := android.ProductVariableProperties(ctx, a)
@@ -3626,6 +3677,7 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		Manifest:              manifestLabelAttribute,
 		Android_manifest:      androidManifestLabelAttribute,
 		File_contexts:         fileContextsLabelAttribute,
+		Canned_fs_config:      cannedFsConfigAttribute,
 		Min_sdk_version:       minSdkVersion,
 		Key:                   keyLabelAttribute,
 		Certificate:           certificate,
@@ -3647,7 +3699,12 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		Bzl_load_location: "//build/bazel/rules/apex:apex.bzl",
 	}
 
-	return attrs, props
+	commonAttrs := android.CommonAttributes{}
+	if a.testApex {
+		commonAttrs.Testonly = proptools.BoolPtr(true)
+	}
+
+	return attrs, props, commonAttrs
 }
 
 // The following conversions are based on this table where the rows are the compile_multilib

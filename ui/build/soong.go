@@ -168,6 +168,13 @@ func (pb PrimaryBuilderFactory) primaryBuilderInvocation() bootstrap.PrimaryBuil
 		commonArgs = append(commonArgs, "-t")
 	}
 
+	if pb.config.multitreeBuild {
+		commonArgs = append(commonArgs, "--multitree-build")
+	}
+	if pb.config.buildFromTextStub {
+		commonArgs = append(commonArgs, "--build-from-text-stub")
+	}
+
 	commonArgs = append(commonArgs, "-l", filepath.Join(pb.config.FileListDir(), "Android.bp.list"))
 	invocationEnv := make(map[string]string)
 	if pb.debugPort != "" {
@@ -274,6 +281,12 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	}
 	if len(config.bazelForceEnabledModules) > 0 {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--bazel-force-enabled-modules="+config.bazelForceEnabledModules)
+	}
+	if config.MultitreeBuild() {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--multitree-build")
+	}
+	if config.buildFromTextStub {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--build-from-text-stub")
 	}
 
 	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
@@ -403,6 +416,7 @@ func bootstrapBlueprint(ctx Context, config Config) {
 
 	blueprintCtx := blueprint.NewContext()
 	blueprintCtx.AddIncludeTags(config.GetIncludeTags()...)
+	blueprintCtx.AddSourceRootDirs(config.GetSourceRootDirs()...)
 	blueprintCtx.SetIgnoreUnknownModuleTypes(true)
 	blueprintConfig := BlueprintConfig{
 		soongOutDir: config.SoongOutDir(),

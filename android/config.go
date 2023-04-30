@@ -52,6 +52,15 @@ var StringDefault = proptools.StringDefault
 // FutureApiLevelInt is a placeholder constant for unreleased API levels.
 const FutureApiLevelInt = 10000
 
+// PrivateApiLevel represents the api level of SdkSpecPrivate (sdk_version: "")
+// This api_level exists to differentiate user-provided "" from "current" sdk_version
+// The differentiation is necessary to enable different validation rules for these two possible values.
+var PrivateApiLevel = ApiLevel{
+	value:     "current",             // The value is current since aidl expects `current` as the default (TestAidlFlagsWithMinSdkVersion)
+	number:    FutureApiLevelInt + 1, // This is used to differentiate it from FutureApiLevel
+	isPreview: true,
+}
+
 // FutureApiLevel represents unreleased API levels.
 var FutureApiLevel = ApiLevel{
 	value:     "current",
@@ -83,12 +92,16 @@ type CmdArgs struct {
 	ModuleActionsFile   string
 	DocFile             string
 
+	MultitreeBuild bool
+
 	BazelMode                bool
 	BazelModeDev             bool
 	BazelModeStaging         bool
 	BazelForceEnabledModules string
 
 	UseBazelProxy bool
+
+	BuildFromTextStub bool
 }
 
 // Build modes that soong_build can run as.
@@ -229,6 +242,10 @@ type config struct {
 	Bp2buildPackageConfig          Bp2BuildConversionAllowlist
 	Bp2buildSoongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions
 
+	// If MultitreeBuild is true then this is one inner tree of a multitree
+	// build directed by the multitree orchestrator.
+	MultitreeBuild bool
+
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
 	// in tests when a path doesn't exist.
 	TestAllowNonExistentPaths bool
@@ -257,6 +274,10 @@ type config struct {
 	// If true, for any requests to Bazel, communicate with a Bazel proxy using
 	// unix sockets, instead of spawning Bazel as a subprocess.
 	UseBazelProxy bool
+
+	// If buildFromTextStub is true then the Java API stubs are
+	// built from the signature text files, not the source Java files.
+	buildFromTextStub bool
 }
 
 type deviceConfig struct {
@@ -449,7 +470,10 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		mixedBuildEnabledModules:  make(map[string]struct{}),
 		bazelForceEnabledModules:  make(map[string]struct{}),
 
-		UseBazelProxy: cmdArgs.UseBazelProxy,
+		MultitreeBuild: cmdArgs.MultitreeBuild,
+		UseBazelProxy:  cmdArgs.UseBazelProxy,
+
+		buildFromTextStub: cmdArgs.BuildFromTextStub,
 	}
 
 	config.deviceConfig = &deviceConfig{
@@ -889,8 +913,16 @@ func (c *config) DefaultAppTargetSdk(ctx EarlyModuleContext) ApiLevel {
 		return c.PlatformSdkVersion()
 	}
 	codename := c.PlatformSdkCodename()
+	hostOnlyBuild := c.productVariables.DeviceArch == nil
 	if codename == "" {
-		return NoneApiLevel
+		// There are some host-only builds (those are invoked by build-prebuilts.sh) which
+		// don't set platform sdk codename. Platform sdk codename makes sense only when we
+		// are building the platform. So we don't enforce the below panic for the host-only
+		// builds.
+		if hostOnlyBuild {
+			return NoneApiLevel
+		}
+		panic("Platform_sdk_codename must be set")
 	}
 	if codename == "REL" {
 		panic("Platform_sdk_codename should not be REL when Platform_sdk_final is true")
@@ -905,6 +937,11 @@ func (c *config) AppsDefaultVersionName() string {
 // Codenames that are active in the current lunch target.
 func (c *config) PlatformVersionActiveCodenames() []string {
 	return c.productVariables.Platform_version_active_codenames
+}
+
+// All unreleased codenames.
+func (c *config) PlatformVersionAllPreviewCodenames() []string {
+	return c.productVariables.Platform_version_all_preview_codenames
 }
 
 func (c *config) ProductAAPTConfig() []string {
@@ -1163,6 +1200,10 @@ func (c *config) ExportedNamespaces() []string {
 	return append([]string(nil), c.productVariables.NamespacesToExport...)
 }
 
+func (c *config) SourceRootDirs() []string {
+	return c.productVariables.SourceRootDirs
+}
+
 func (c *config) IncludeTags() []string {
 	return c.productVariables.IncludeTags
 }
@@ -1373,6 +1414,11 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 		}
 	}
 	if coverage && len(c.config.productVariables.NativeCoverageExcludePaths) > 0 {
+		// Workaround coverage boot failure.
+		// http://b/269981180
+		if strings.HasPrefix(path, "external/protobuf") {
+			coverage = false
+		}
 		if HasAnyPrefix(path, c.config.productVariables.NativeCoverageExcludePaths) {
 			coverage = false
 		}
@@ -1382,6 +1428,21 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 
 func (c *deviceConfig) PgoAdditionalProfileDirs() []string {
 	return c.config.productVariables.PgoAdditionalProfileDirs
+}
+
+// AfdoProfile returns fully qualified path associated to the given module name
+func (c *deviceConfig) AfdoProfile(name string) (*string, error) {
+	for _, afdoProfile := range c.config.productVariables.AfdoProfiles {
+		split := strings.Split(afdoProfile, ":")
+		if len(split) != 3 {
+			return nil, fmt.Errorf("AFDO_PROFILES has invalid value: %s. "+
+				"The expected format is <module>:<fully-qualified-path-to-fdo_profile>", afdoProfile)
+		}
+		if split[0] == name {
+			return proptools.StringPtr(strings.Join([]string{split[1], split[2]}, ":")), nil
+		}
+	}
+	return nil, nil
 }
 
 func (c *deviceConfig) VendorSepolicyDirs() []string {
@@ -1903,4 +1964,12 @@ func (c *config) ApiSurfacesDir(s ApiSurface, version string) string {
 		"api_surfaces",
 		s.String(),
 		version)
+}
+
+func (c *config) BuildFromTextStub() bool {
+	return c.buildFromTextStub
+}
+
+func (c *config) SetBuildFromTextStub(b bool) {
+	c.buildFromTextStub = b
 }

@@ -255,14 +255,11 @@ var (
 		// New warnings to be fixed after clang-r433403
 		"-Wno-error=unused-but-set-variable",  // http://b/197240255
 		"-Wno-error=unused-but-set-parameter", // http://b/197240255
-		// New warnings to be fixed after clang-r458507
-		"-Wno-error=unqualified-std-cast-call", // http://b/239662094
 		// New warnings to be fixed after clang-r468909
 		"-Wno-error=deprecated-builtins", // http://b/241601211
 		"-Wno-error=deprecated",          // in external/googletest/googletest
 		// New warnings to be fixed after clang-r475365
 		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
-		"-Wno-error=incompatible-function-pointer-types",     // http://b/257101299
 		"-Wno-error=enum-constexpr-conversion",               // http://b/243964282
 
 		//Android T Vendor Compilation
@@ -324,11 +321,14 @@ var (
 		// http://b/191699019
 		"-Wno-format-insufficient-args",
 		"-Wno-sizeof-array-div",
+		"-Wno-incompatible-function-pointer-types",
 		"-Wno-unused-but-set-variable",
 		"-Wno-unused-but-set-parameter",
+		"-Wno-unqualified-std-cast-call",
 		"-Wno-bitwise-instead-of-logical",
 		"-Wno-misleading-indentation",
 		"-Wno-array-parameter",
+		"-Wno-gnu-offsetof-extensions",
 	}
 
 	// Extra cflags for external third-party projects to disable warnings that
@@ -392,6 +392,8 @@ var (
 		"vendor/",
 	}
 	QiifaAbiLibraryList = []string{}
+
+	VersionScriptFlagPrefix = "-Wl,--version-script,"
 )
 
 // BazelCcToolchainVars generates bzl file content containing variables for
@@ -488,6 +490,8 @@ func init() {
 	exportedVars.ExportString("ExperimentalCStdVersion", ExperimentalCStdVersion)
 	exportedVars.ExportString("ExperimentalCppStdVersion", ExperimentalCppStdVersion)
 
+	exportedVars.ExportString("VersionScriptFlagPrefix", VersionScriptFlagPrefix)
+
 	// Everything in these lists is a crime against abstraction and dependency tracking.
 	// Do not add anything to this list.
 	commonGlobalIncludes := []string{
@@ -506,15 +510,12 @@ func init() {
 
 	setSdclangVars()
 
-	exportedVars.ExportStringStaticVariable("CLANG_DEFAULT_VERSION", ClangDefaultVersion)
-	exportedVars.ExportStringStaticVariable("CLANG_DEFAULT_SHORT_VERSION", ClangDefaultShortVersion)
-
 	pctx.StaticVariableWithEnvOverride("ClangBase", "LLVM_PREBUILTS_BASE", ClangDefaultBase)
-	pctx.StaticVariableWithEnvOverride("ClangVersion", "LLVM_PREBUILTS_VERSION", ClangDefaultVersion)
+	exportedVars.ExportStringStaticVariableWithEnvOverride("ClangVersion", "LLVM_PREBUILTS_VERSION", ClangDefaultVersion)
 	pctx.StaticVariable("ClangPath", "${ClangBase}/${HostPrebuiltTag}/${ClangVersion}")
 	pctx.StaticVariable("ClangBin", "${ClangPath}/bin")
 
-	pctx.StaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
+	exportedVars.ExportStringStaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
 	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib/clang/${ClangShortVersion}/lib/linux")
 
 	// These are tied to the version of LLVM directly in external/llvm, so they might trail the host prebuilts

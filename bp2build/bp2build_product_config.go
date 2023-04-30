@@ -53,7 +53,7 @@ package(default_visibility=[
     "@//build/bazel/product_config:__subpackages__",
 ])
 load(":soong.variables.bzl", _soong_variables = "variables")
-load("@//build/bazel/product_config:utils.bzl", "android_product")
+load("@//build/bazel/product_config:android_product.bzl", "android_product")
 
 android_product(
     name = "{PRODUCT}-{VARIANT}",
@@ -78,15 +78,18 @@ alias(
 	# currently lunched, product, turn this into a select with an arm for each product.
 	actual = "@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}",
 )
-
-alias(
-	name = "product_vars",
-	actual = select({
-		# TODO: When we start generating the platforms for more than just the
-		# currently lunched, product, this select should have an arm for each product.
-		"@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_constraint_value": "@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_product_vars",
-	}),
-)
+`)),
+		newFile(
+			"product_config_platforms",
+			"product_labels.bzl",
+			productReplacer.Replace(`
+# This file keeps a list of all the products in the android source tree, because they're
+# discovered as part of a preprocessing step before bazel runs.
+# TODO: When we start generating the platforms for more than just the
+# currently lunched product, they should all be listed here
+product_labels = [
+  "@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}"
+]
 `)),
 		newFile(
 			"product_config_platforms",
