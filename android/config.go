@@ -420,12 +420,21 @@ func saveToBazelConfigFile(config *productVariables, outDir string) error {
 		fmt.Sprintf(`_arch_variant_product_var_constraints = %s`, archVariantProductVariablesJson),
 		"\n", `
 product_vars = _product_vars
+
+# TODO(b/269577299) Remove these when everything switches over to loading them from product_variable_constants.bzl
 product_var_constraints = _product_var_constraints
 arch_variant_product_var_constraints = _arch_variant_product_var_constraints
 `,
 	}
 	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variables.bzl"),
 		[]byte(strings.Join(bzl, "\n")), 0644)
+	if err != nil {
+		return fmt.Errorf("Could not write .bzl config file %s", err)
+	}
+	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variable_constants.bzl"), []byte(fmt.Sprintf(`
+product_var_constraints = %s
+arch_variant_product_var_constraints = %s
+`, nonArchVariantProductVariablesJson, archVariantProductVariablesJson)), 0644)
 	if err != nil {
 		return fmt.Errorf("Could not write .bzl config file %s", err)
 	}
@@ -583,12 +592,11 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
 	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
 
-	config.BazelContext, err = NewBazelContext(config)
-	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
-
 	for _, module := range strings.Split(cmdArgs.BazelForceEnabledModules, ",") {
 		config.bazelForceEnabledModules[module] = struct{}{}
 	}
+	config.BazelContext, err = NewBazelContext(config)
+	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
 
 	return Config{config}, err
 }
@@ -822,6 +830,10 @@ func (c *config) PlatformVersionName() string {
 
 func (c *config) PlatformSdkVersion() ApiLevel {
 	return uncheckedFinalApiLevel(*c.productVariables.Platform_sdk_version)
+}
+
+func (c *config) RawPlatformSdkVersion() *int {
+	return c.productVariables.Platform_sdk_version
 }
 
 func (c *config) PlatformSdkFinal() bool {
@@ -1972,4 +1984,9 @@ func (c *config) BuildFromTextStub() bool {
 
 func (c *config) SetBuildFromTextStub(b bool) {
 	c.buildFromTextStub = b
+}
+func (c *config) AddForceEnabledModules(forceEnabled []string) {
+	for _, forceEnabledModule := range forceEnabled {
+		c.bazelForceEnabledModules[forceEnabledModule] = struct{}{}
+	}
 }

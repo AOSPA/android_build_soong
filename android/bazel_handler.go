@@ -84,8 +84,12 @@ func RegisterMixedBuildsMutator(ctx RegistrationContext) {
 func mixedBuildsPrepareMutator(ctx BottomUpMutatorContext) {
 	if m := ctx.Module(); m.Enabled() {
 		if mixedBuildMod, ok := m.(MixedBuildBuildable); ok {
-			if mixedBuildMod.IsMixedBuildSupported(ctx) && MixedBuildsEnabled(ctx) {
+			queueMixedBuild := mixedBuildMod.IsMixedBuildSupported(ctx) && MixedBuildsEnabled(ctx)
+			if queueMixedBuild {
 				mixedBuildMod.QueueBazelCall(ctx)
+			} else if _, ok := ctx.Config().bazelForceEnabledModules[m.Name()]; ok {
+				// TODO(b/273910287) - remove this once --ensure_allowlist_integrity is added
+				ctx.ModuleErrorf("Attempted to force enable an unready module: %s. Did you forget to Bp2BuildDefaultTrue its directory?\n", m.Name())
 			}
 		}
 	}
@@ -960,9 +964,13 @@ func indent(original string) string {
 // request type.
 func (context *mixedBuildBazelContext) cqueryStarlarkFileContents() []byte {
 	requestTypeToCqueryIdEntries := map[cqueryRequest][]string{}
+	requestTypes := []cqueryRequest{}
 	for _, val := range context.requests {
 		cqueryId := getCqueryId(val)
 		mapEntryString := fmt.Sprintf("%q : True", cqueryId)
+		if _, seenKey := requestTypeToCqueryIdEntries[val.requestType]; !seenKey {
+			requestTypes = append(requestTypes, val.requestType)
+		}
 		requestTypeToCqueryIdEntries[val.requestType] =
 			append(requestTypeToCqueryIdEntries[val.requestType], mapEntryString)
 	}
@@ -984,7 +992,7 @@ def %s(target, id_string):
     return id_string + ">>" + %s(target, id_string)
 `
 
-	for requestType := range requestTypeToCqueryIdEntries {
+	for _, requestType := range requestTypes {
 		labelMapName := requestType.Name() + "_Labels"
 		functionName := requestType.Name() + "_Fn"
 		labelRegistrationMapSection += fmt.Sprintf(mapDeclarationFormatString,
