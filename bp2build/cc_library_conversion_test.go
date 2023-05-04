@@ -153,10 +153,10 @@ cc_library {
         "//build/bazel/platforms/os:linux_glibc": ["linux.cpp"],
         "//conditions:default": [],
     })`,
-			"sdk_version":                       `"current"`,
-			"min_sdk_version":                   `"29"`,
-			"use_version_lib":                   `True`,
-			"implementation_whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
+			"sdk_version":        `"current"`,
+			"min_sdk_version":    `"29"`,
+			"use_version_lib":    `True`,
+			"whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
 		}),
 	})
 }
@@ -4482,4 +4482,44 @@ cc_library {
 			),
 		},
 	})
+}
+
+func TestCcLibraryCppFlagsInProductVariables(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library cppflags in product variables",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: soongCcLibraryPreamble + `cc_library {
+    name: "a",
+    srcs: ["a.cpp"],
+    cppflags: [
+        "-Wextra",
+        "-DDEBUG_ONLY_CODE=0",
+    ],
+    product_variables: {
+        eng: {
+            cppflags: [
+                "-UDEBUG_ONLY_CODE",
+                "-DDEBUG_ONLY_CODE=1",
+            ],
+        },
+    },
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: makeCcLibraryTargets("a", AttrNameToString{
+			"cppflags": `[
+        "-Wextra",
+        "-DDEBUG_ONLY_CODE=0",
+    ] + select({
+        "//build/bazel/product_variables:eng": [
+            "-UDEBUG_ONLY_CODE",
+            "-DDEBUG_ONLY_CODE=1",
+        ],
+        "//conditions:default": [],
+    })`,
+			"srcs": `["a.cpp"]`,
+		}),
+	},
+	)
 }
