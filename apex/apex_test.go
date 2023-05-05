@@ -33,6 +33,7 @@ import (
 	"android/soong/cc"
 	"android/soong/dexpreopt"
 	prebuilt_etc "android/soong/etc"
+	"android/soong/filesystem"
 	"android/soong/java"
 	"android/soong/rust"
 	"android/soong/sh"
@@ -6045,6 +6046,8 @@ func TestApexWithApps(t *testing.T) {
 			sdk_version: "current",
 			system_modules: "none",
 			privileged: true,
+			privapp_allowlist: "perms.xml",
+			package_name: "com.android.AppFooPriv",
 			stl: "none",
 			apex_available: [ "myapex" ],
 		}
@@ -6074,6 +6077,7 @@ func TestApexWithApps(t *testing.T) {
 
 	ensureContains(t, copyCmds, "image.apex/app/AppFoo@TEST.BUILD_ID/AppFoo.apk")
 	ensureContains(t, copyCmds, "image.apex/priv-app/AppFooPriv@TEST.BUILD_ID/AppFooPriv.apk")
+	ensureContains(t, copyCmds, "image.apex/etc/permissions/privapp_allowlist_com.android.AppFooPriv.xml")
 
 	appZipRule := ctx.ModuleForTests("AppFoo", "android_common_apex10000").Description("zip jni libs")
 	// JNI libraries are uncompressed
@@ -10374,4 +10378,55 @@ func TestStubLibrariesMultipleApexViolation(t *testing.T) {
 			testApexError(t, tc.expectedError, bp, mockFsFixturePreparer)
 		}
 	}
+}
+
+func TestFileSystemShouldSkipApexLibraries(t *testing.T) {
+	context := android.GroupFixturePreparers(
+		android.PrepareForIntegrationTestWithAndroid,
+		cc.PrepareForIntegrationTestWithCc,
+		PrepareForTestWithApexBuildComponents,
+		prepareForTestWithMyapex,
+		filesystem.PrepareForTestWithFilesystemBuildComponents,
+	)
+	result := context.RunTestWithBp(t, `
+		android_system_image {
+			name: "myfilesystem",
+			deps: [
+				"libfoo",
+			],
+			linker_config_src: "linker.config.json",
+		}
+
+		cc_library {
+			name: "libfoo",
+			shared_libs: [
+				"libbar",
+			],
+			stl: "none",
+		}
+
+		cc_library {
+			name: "libbar",
+			stl: "none",
+			apex_available: ["myapex"],
+		}
+
+		apex {
+			name: "myapex",
+			native_shared_libs: ["libbar"],
+			key: "myapex.key",
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("deps.zip").Implicits
+	android.AssertStringListDoesNotContain(t, "filesystem should not have libbar",
+		inputs.Strings(),
+		"out/soong/.intermediates/libbar/android_arm64_armv8-a_shared/libbar.so")
 }
