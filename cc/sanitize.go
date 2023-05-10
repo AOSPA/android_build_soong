@@ -593,6 +593,12 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
+	// Enable HWASan for all components in the include paths (for Aarch64 only)
+	if s.Hwaddress == nil && ctx.Config().HWASanEnabledForPath(ctx.ModuleDir()) &&
+		ctx.Arch().ArchType == android.Arm64 && ctx.toolchain().Bionic() {
+		s.Hwaddress = proptools.BoolPtr(true)
+	}
+
 	if s.Integer_overflow == nil && ctx.Config().IntegerOverflowEnabledForPath(ctx.ModuleDir()) && ctx.Arch().ArchType == android.Arm64 {
 		s.Integer_overflow = proptools.BoolPtr(true)
 	}
@@ -901,7 +907,6 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		// TODO(fmayer): remove once https://reviews.llvm.org/D127917 is in Android toolchain.
 		flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,--no-fatal-warnings")
 	}
-
 
 	// TODO(b/249094918) re-enable after clang version brought back in-line with upstream
 	/*
