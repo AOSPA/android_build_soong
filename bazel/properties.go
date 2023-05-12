@@ -334,7 +334,7 @@ func (la *LabelAttribute) Collapse() error {
 			if containsArch {
 				allProductVariablesAreArchVariant := true
 				for k := range la.ConfigurableValues {
-					if k.configurationType == productVariables && k.outerAxisType != arch {
+					if k.configurationType == productVariables && !k.archVariant {
 						allProductVariablesAreArchVariant = false
 					}
 				}
@@ -1434,4 +1434,6 @@ type StringMapAttribute map[string]string
 type ConfigSettingAttributes struct {
 	// Each key in Flag_values is a label to a custom string_setting
 	Flag_values StringMapAttribute
+	// Each element in Constraint_values is a label to a constraint_value
+	Constraint_values LabelListAttribute
 }
