@@ -203,23 +203,24 @@ var (
 		"frameworks/av/media/audioaidlconversion":            Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/codec2/components/aom":          Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/codecs":                         Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/module/codecs":                  Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/module/foundation":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/liberror":                       Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/libmediahelper":                 Bp2BuildDefaultTrue,
 		"frameworks/av/media/libshmem":                       Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/module/codecs":                  Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/module/foundation":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/module/minijail":                Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/services/minijail":                    Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/libs/androidfw":                     Bp2BuildDefaultTrue,
 		"frameworks/base/media/tests/MediaDump":              Bp2BuildDefaultTrue,
-		"frameworks/base/services/tests/servicestests/aidl":  Bp2BuildDefaultTrue,
 		"frameworks/base/proto":                              Bp2BuildDefaultTrue,
+		"frameworks/base/services/tests/servicestests/aidl":  Bp2BuildDefaultTrue,
 		"frameworks/base/startop/apps/test":                  Bp2BuildDefaultTrue,
 		"frameworks/base/tests/appwidgets/AppWidgetHostTest": Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/tools/aapt2":                        Bp2BuildDefaultTrue,
 		"frameworks/base/tools/codegen":                      Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/tools/streaming_proto":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/hardware/interfaces/stats/aidl":          Bp2BuildDefaultTrue,
+		"frameworks/libs/modules-utils/build":                Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/arect":                       Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/gui":                         Bp2BuildDefaultTrue,
@@ -1555,9 +1556,10 @@ var (
 	// also be built - do not add them to this list.
 	StagingMixedBuildsEnabledList = []string{
 		// M13: media.swcodec launch
-		"com.android.media.swcodec",
-		"test_com.android.media.swcodec",
-		"libstagefright_foundation",
+		// TODO(b/282042844): reenable
+		// "com.android.media.swcodec",
+		// "test_com.android.media.swcodec",
+		// "libstagefright_foundation",
 	}
 
 	// These should be the libs that are included by the apexes in the ProdMixedBuildsEnabledList
