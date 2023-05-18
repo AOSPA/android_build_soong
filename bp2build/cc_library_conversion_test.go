@@ -3221,10 +3221,7 @@ func TestCcLibraryWithInstructionSet(t *testing.T) {
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo", AttrNameToString{
 			"features": `select({
-        "//build/bazel/platforms/arch:arm": [
-            "arm_isa_arm",
-            "-arm_isa_thumb",
-        ],
+        "//build/bazel/platforms/arch:arm": ["arm_isa_arm"],
         "//conditions:default": [],
     })`,
 			"local_includes": `["."]`,
@@ -3333,7 +3330,8 @@ cc_library {
 	name: "foo",
 	aidl: {
 		libs: ["A_aidl"],
-	}
+	},
+	export_include_dirs: ["include"],
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTargetNoRestrictions("aidl_library", "A_aidl", AttrNameToString{
@@ -3343,15 +3341,19 @@ cc_library {
 				"tags":                `["apex_available=//apex_available:anyapex"]`,
 			}),
 			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
-				"deps": `[":A_aidl"]`,
+				"deps":            `[":A_aidl"]`,
+				"local_includes":  `["."]`,
+				"export_includes": `["include"]`,
 			}),
 			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
 				"implementation_whole_archive_deps": `[":foo_cc_aidl_library"]`,
 				"local_includes":                    `["."]`,
+				"export_includes":                   `["include"]`,
 			}),
 			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
 				"implementation_whole_archive_deps": `[":foo_cc_aidl_library"]`,
 				"local_includes":                    `["."]`,
+				"export_includes":                   `["include"]`,
 			}),
 		},
 	})
@@ -3385,6 +3387,7 @@ cc_library {
 				"srcs": `["B.aidl"]`,
 			}),
 			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
+				"local_includes": `["."]`,
 				"deps": `[
         ":A_aidl",
         ":foo_aidl_library",
@@ -3424,7 +3427,8 @@ cc_library {
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
-				"deps": `["//path/to/A:A_aidl"]`,
+				"local_includes": `["."]`,
+				"deps":           `["//path/to/A:A_aidl"]`,
 			}),
 			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
 				"implementation_whole_archive_deps": `[":foo_cc_aidl_library"]`,
@@ -3443,7 +3447,8 @@ func TestCcLibraryWithExportAidlHeaders(t *testing.T) {
 
 	expectedBazelTargets := []string{
 		MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
-			"deps": `[":foo_aidl_library"]`,
+			"local_includes": `["."]`,
+			"deps":           `[":foo_aidl_library"]`,
 		}),
 		MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
 			"whole_archive_deps": `[":foo_cc_aidl_library"]`,
@@ -3724,7 +3729,8 @@ cc_library_static {
 				"srcs": `["Foo.aidl"]`,
 			}),
 			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
-				"deps": `[":foo_aidl_library"]`,
+				"local_includes": `["."]`,
+				"deps":           `[":foo_aidl_library"]`,
 				"implementation_deps": `[
         ":baz-static",
         ":bar-static",
@@ -4653,6 +4659,52 @@ cc_library {
 				"implementation_dynamic_deps":       `[":sharedlib"]`,
 				"implementation_whole_archive_deps": `[":a_yacc"]`,
 				"local_includes":                    `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryHostLdLibs(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_binary linker flags for host_ldlibs",
+		ModuleTypeUnderTest:        "cc_binary",
+		ModuleTypeUnderTestFactory: cc.BinaryFactory,
+		Blueprint: soongCcLibraryPreamble + `cc_binary {
+    name: "a",
+    host_supported: true,
+    ldflags: ["-lcommon"],
+    target: {
+	linux: {
+		host_ldlibs: [
+			"-llinux",
+		],
+	},
+	darwin: {
+		ldflags: ["-ldarwinadditional"],
+		host_ldlibs: [
+			"-ldarwin",
+		],
+	},
+	windows: {
+		host_ldlibs: [
+			"-lwindows",
+		],
+	},
+    },
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions("cc_binary", "a", AttrNameToString{
+				"linkopts": `["-lcommon"] + select({
+        "//build/bazel/platforms/os:darwin": [
+            "-ldarwinadditional",
+            "-ldarwin",
+        ],
+        "//build/bazel/platforms/os:linux_glibc": ["-llinux"],
+        "//build/bazel/platforms/os:windows": ["-lwindows"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
 			}),
 		},
 	})
