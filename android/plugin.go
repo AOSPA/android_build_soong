@@ -51,6 +51,7 @@ var allowedPluginsByName = map[string]bool{
 	"soong-api":                              true,
 	"soong-art":                              true,
 	"soong-ca-certificates":                  true,
+	"soong-ca-certificates-apex":             true,
 	"soong-clang":                            true,
 	"soong-clang-prebuilts":                  true,
 	"soong-csuite":                           true,

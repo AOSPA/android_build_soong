@@ -212,6 +212,7 @@ var (
 		"frameworks/av/media/module/minijail":                Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/services/minijail":                    Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/libs/androidfw":                     Bp2BuildDefaultTrue,
+		"frameworks/base/libs/services":                      Bp2BuildDefaultTrue,
 		"frameworks/base/media/tests/MediaDump":              Bp2BuildDefaultTrue,
 		"frameworks/base/proto":                              Bp2BuildDefaultTrue,
 		"frameworks/base/services/tests/servicestests/aidl":  Bp2BuildDefaultTrue,
@@ -570,6 +571,9 @@ var (
 
 		//external/fec
 		"libfec_rs",
+
+		//frameworks/base/core/java
+		"IDropBoxManagerService_aidl",
 
 		//system/core/libsparse
 		"libsparse",
@@ -1561,10 +1565,10 @@ var (
 	// also be built - do not add them to this list.
 	StagingMixedBuildsEnabledList = []string{
 		// M13: media.swcodec launch
-		// TODO(b/282042844): reenable
-		// "com.android.media.swcodec",
-		// "test_com.android.media.swcodec",
-		// "libstagefright_foundation",
+		"com.android.media.swcodec",
+		"test_com.android.media.swcodec",
+		"libstagefright_foundation",
+		"libcodec2_hidl@1.0",
 	}
 
 	// These should be the libs that are included by the apexes in the ProdMixedBuildsEnabledList
