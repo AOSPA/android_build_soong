@@ -166,6 +166,7 @@ var (
 	commonGlobalLldflags = []string{
 		"-fuse-ld=lld",
 		"-Wl,--icf=safe",
+                "-Xclang -opaque-pointers",
 	}
 
 	deviceGlobalCppflags = []string{
