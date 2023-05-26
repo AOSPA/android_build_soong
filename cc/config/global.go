@@ -169,10 +169,7 @@ var (
 	commonGlobalLldflags = []string{
 		"-fuse-ld=lld",
 		"-Wl,--icf=safe",
-
-		// KEYSTONE(I12d0bcd61de11c762805c535b8d0548eac2e2b66,b/278133889)
-		// Turn off stack protector check for noreturn calls. (http://b/264965700)
-		// "-Wl,-mllvm,-disable-check-noreturn-call",
+                "-Xclang -opaque-pointers",
 	}
 
 	deviceGlobalCppflags = []string{
