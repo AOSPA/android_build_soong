@@ -15,7 +15,6 @@
 package build
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -39,9 +38,6 @@ import (
 const (
 	envConfigDir = "vendor/google/tools/soong_config"
 	jsonSuffix   = "json"
-
-	configFetcher         = "vendor/google/tools/soong/expconfigfetcher"
-	envConfigFetchTimeout = 10 * time.Second
 )
 
 var (
@@ -170,87 +166,6 @@ func checkTopDir(ctx Context) {
 	}
 }
 
-// fetchEnvConfig optionally fetches a configuration file that can then subsequently be
-// loaded into Soong environment to control certain aspects of build behavior (e.g., enabling RBE).
-// If a configuration file already exists on disk, the fetch is run in the background
-// so as to NOT block the rest of the build execution.
-func fetchEnvConfig(ctx Context, config *configImpl, envConfigName string) error {
-	configName := envConfigName + "." + jsonSuffix
-	expConfigFetcher := &smpb.ExpConfigFetcher{Filename: &configName}
-	defer func() {
-		ctx.Metrics.ExpConfigFetcher(expConfigFetcher)
-	}()
-	if !config.GoogleProdCredsExist() {
-		status := smpb.ExpConfigFetcher_MISSING_GCERT
-		expConfigFetcher.Status = &status
-		return nil
-	}
-
-	s, err := os.Stat(configFetcher)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if s.Mode()&0111 == 0 {
-		status := smpb.ExpConfigFetcher_ERROR
-		expConfigFetcher.Status = &status
-		return fmt.Errorf("configuration fetcher binary %v is not executable: %v", configFetcher, s.Mode())
-	}
-
-	configExists := false
-	outConfigFilePath := filepath.Join(config.OutDir(), configName)
-	if _, err := os.Stat(outConfigFilePath); err == nil {
-		configExists = true
-	}
-
-	tCtx, cancel := context.WithTimeout(ctx, envConfigFetchTimeout)
-	fetchStart := time.Now()
-	cmd := exec.CommandContext(tCtx, configFetcher, "-output_config_dir", config.OutDir(),
-		"-output_config_name", configName)
-	if err := cmd.Start(); err != nil {
-		status := smpb.ExpConfigFetcher_ERROR
-		expConfigFetcher.Status = &status
-		return err
-	}
-
-	fetchCfg := func() error {
-		if err := cmd.Wait(); err != nil {
-			status := smpb.ExpConfigFetcher_ERROR
-			expConfigFetcher.Status = &status
-			return err
-		}
-		fetchEnd := time.Now()
-		expConfigFetcher.Micros = proto.Uint64(uint64(fetchEnd.Sub(fetchStart).Microseconds()))
-		expConfigFetcher.Filename = proto.String(outConfigFilePath)
-
-		if _, err := os.Stat(outConfigFilePath); err != nil {
-			status := smpb.ExpConfigFetcher_NO_CONFIG
-			expConfigFetcher.Status = &status
-			return err
-		}
-		status := smpb.ExpConfigFetcher_CONFIG
-		expConfigFetcher.Status = &status
-		return nil
-	}
-
-	// If a config file does not exist, wait for the config file to be fetched. Otherwise
-	// fetch the config file in the background and return immediately.
-	if !configExists {
-		defer cancel()
-		return fetchCfg()
-	}
-
-	go func() {
-		defer cancel()
-		if err := fetchCfg(); err != nil {
-			ctx.Verbosef("Failed to fetch config file %v: %v\n", configName, err)
-		}
-	}()
-	return nil
-}
-
 func loadEnvConfig(ctx Context, config *configImpl, bc string) error {
 	if bc == "" {
 		return nil
@@ -350,9 +265,6 @@ func NewConfig(ctx Context, args ...string) Config {
 	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
 
 	if bc != "" {
-		if err := fetchEnvConfig(ctx, ret, bc); err != nil {
-			ctx.Verbosef("Failed to fetch config file: %v\n", err)
-		}
 		if err := loadEnvConfig(ctx, ret, bc); err != nil {
 			ctx.Fatalln("Failed to parse env config files: %v", err)
 		}
@@ -1229,6 +1141,13 @@ func (c *configImpl) TargetProduct() string {
 	panic("TARGET_PRODUCT is not defined")
 }
 
+func (c *configImpl) TargetProductOrErr() (string, error) {
+	if v, ok := c.environ.Get("TARGET_PRODUCT"); ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("TARGET_PRODUCT is not defined")
+}
+
 func (c *configImpl) TargetDevice() string {
 	return c.targetDevice
 }
@@ -1486,7 +1405,7 @@ func (c *configImpl) GoogleProdCredsExist() bool {
 	if googleProdCredsExistCache {
 		return googleProdCredsExistCache
 	}
-	if _, err := exec.Command("/usr/bin/prodcertstatus", "--simple_output", "--nocheck_loas").Output(); err != nil {
+	if _, err := exec.Command("/usr/bin/gcertstatus").Output(); err != nil {
 		return false
 	}
 	googleProdCredsExistCache = true
@@ -1554,11 +1473,21 @@ func (c *configImpl) KatiPackageNinjaFile() string {
 }
 
 func (c *configImpl) SoongVarsFile() string {
-	return filepath.Join(c.SoongOutDir(), "soong.variables")
+	targetProduct, err := c.TargetProductOrErr()
+	if err != nil {
+		return filepath.Join(c.SoongOutDir(), "soong.variables")
+	} else {
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".variables")
+	}
 }
 
 func (c *configImpl) SoongNinjaFile() string {
-	return filepath.Join(c.SoongOutDir(), "build.ninja")
+	targetProduct, err := c.TargetProductOrErr()
+	if err != nil {
+		return filepath.Join(c.SoongOutDir(), "build.ninja")
+	} else {
+		return filepath.Join(c.SoongOutDir(), "build."+targetProduct+".ninja")
+	}
 }
 
 func (c *configImpl) CombinedNinjaFile() string {
