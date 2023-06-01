@@ -926,6 +926,7 @@ license_kind {
     visibility: [
         "//external/libbpf:__subpackages__",
         "//prebuilts/vsdk:__subpackages__",
+        "//vendor:__subpackages__",
     ],
     conditions: ["permissive"],
     url: "https://spdx.org/licenses/Linux-syscall-note.html",
