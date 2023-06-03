@@ -18,6 +18,7 @@ package java
 // related module types, including their override variants.
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -795,8 +796,9 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	shouldInstallAppPackage := (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() && !a.appProperties.PreventInstall
 	if shouldInstallAppPackage {
 		if a.privAppAllowlist.Valid() {
-			installPath := android.PathForModuleInstall(ctx, "etc", "permissions")
-			ctx.InstallFile(installPath, a.privAppAllowlist.Path().Base(), a.privAppAllowlist.Path())
+			allowlistInstallPath := android.PathForModuleInstall(ctx, "etc", "permissions")
+			allowlistInstallFilename := a.installApkName + ".xml"
+			ctx.InstallFile(allowlistInstallPath, allowlistInstallFilename, a.privAppAllowlist.Path())
 		}
 
 		var extraInstalledPaths android.Paths
@@ -1390,10 +1392,15 @@ func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, addCompatDeps boo
 	}
 }
 
-// presentOptionalUsesLibs returns optional_uses_libs after filtering out MissingUsesLibraries, which don't exist in the
-// build.
+// presentOptionalUsesLibs returns optional_uses_libs after filtering out libraries that don't exist in the source tree.
 func (u *usesLibrary) presentOptionalUsesLibs(ctx android.BaseModuleContext) []string {
-	optionalUsesLibs, _ := android.FilterList(u.usesLibraryProperties.Optional_uses_libs, ctx.Config().MissingUsesLibraries())
+	optionalUsesLibs := android.FilterListPred(u.usesLibraryProperties.Optional_uses_libs, func(s string) bool {
+		exists := ctx.OtherModuleExists(s)
+		if !exists {
+			fmt.Printf("Warning: Module '%s' depends on non-existing optional_uses_libs '%s'\n", ctx.ModuleName(), s)
+		}
+		return exists
+	})
 	return optionalUsesLibs
 }
 

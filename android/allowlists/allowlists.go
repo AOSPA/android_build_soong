@@ -477,6 +477,7 @@ var (
 		"code_coverage.policy",
 		"code_coverage.policy.other",
 		"codec2_soft_exports",
+		"compatibility_matrix_schema",
 		"flatbuffer_headers",
 		"framework-connectivity-protos",
 		"gemmlowp_headers",
@@ -781,6 +782,7 @@ var (
 		"java_import_host",
 		"java_sdk_library",
 		"sysprop_library",
+		"xsd_config",
 	}
 
 	// Add the names of modules that bp2build should never convert, if it is
@@ -1470,6 +1472,13 @@ var (
 
 		// python_test_host with test data
 		"sbom_writers_test",
+
+		// TODO(B/283193845): tradefed and its java_test_host dependents
+		"tradefed",
+		"permissive_mte_test",
+		"ICU4CTestRunner",
+
+		"HelloWorldHostTest",  // TODO(b/280452825): Convert HelloWorldHostTest to b test
 	}
 
 	MixedBuildsDisabledList = []string{

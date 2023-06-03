@@ -2644,9 +2644,6 @@ func TestUsesLibraries(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("runtime-library", "foo", "quuz", "qux", "bar", "fred"),
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.MissingUsesLibraries = []string{"baz"}
-		}),
 	).RunTestWithBp(t, bp)
 
 	app := result.ModuleForTests("app", "android_common")
@@ -3545,8 +3542,8 @@ func TestPrivappAllowlist(t *testing.T) {
 	}
 
 	// verify that permissions are copied to device
-	app.Output("out/soong/target/product/test_device/system/etc/permissions/privapp_allowlist_com.android.foo.xml")
-	overrideApp.Output("out/soong/target/product/test_device/system/etc/permissions/privapp_allowlist_com.google.android.foo.xml")
+	app.Output("out/soong/target/product/test_device/system/etc/permissions/foo.xml")
+	overrideApp.Output("out/soong/target/product/test_device/system/etc/permissions/bar.xml")
 }
 
 func TestPrivappAllowlistAndroidMk(t *testing.T) {
@@ -3597,7 +3594,7 @@ func TestPrivappAllowlistAndroidMk(t *testing.T) {
 		t,
 		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include privapp_allowlist",
 		baseEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
-		"privapp_allowlist_com.android.foo.xml:\\S+/target/product/test_device/system/etc/permissions/privapp_allowlist_com.android.foo.xml",
+		"privapp_allowlist_com.android.foo.xml:\\S+/target/product/test_device/system/etc/permissions/foo.xml",
 	)
 
 	overrideAndroidApp := overrideApp.Module().(*AndroidApp)
@@ -3624,6 +3621,6 @@ func TestPrivappAllowlistAndroidMk(t *testing.T) {
 		t,
 		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include privapp_allowlist",
 		overrideEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
-		"\\S+soong/.intermediates/foo/android_common_bar/privapp_allowlist_com.google.android.foo.xml:\\S+/target/product/test_device/system/etc/permissions/privapp_allowlist_com.google.android.foo.xml",
+		"\\S+soong/.intermediates/foo/android_common_bar/privapp_allowlist_com.google.android.foo.xml:\\S+/target/product/test_device/system/etc/permissions/bar.xml",
 	)
 }
