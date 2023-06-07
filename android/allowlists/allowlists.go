@@ -770,6 +770,24 @@ var (
 
 		// Used by xsd_config
 		"xsdc",
+
+		// cc_test that can be run by b test
+		"binderRpcWireProtocolTest",
+		"binderUnitTest",
+		"cpu_features-bit_utils_test",
+		"liblp_test",
+		"android.hardware.audio.common.test.utility_tests",
+		"HalAudioStreamWorkerTest",
+		"libjavacore-unit-tests",
+		"NeuralNetworksTest_utils",
+		"NeuralNetworksTest_logtag",
+		"NeuralNetworksTest_operations",
+		"nanoapp_chqts_shared_tests",
+		"fakeservicemanager_test",
+		"tristate_test",
+		"binderUtilsHostTest",
+		"run_dex2oat_test",
+		"bluetooth-address-unit-tests",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -852,9 +870,6 @@ var (
 		"host_bionic_linker_asm",    // depends on extract_linker, a go binary.
 		"host_bionic_linker_script", // depends on extract_linker, a go binary.
 
-		// in cmd attribute of genrule rule //system/timezone/output_data:robolectric_tzdata: label '//system/timezone/output_data:iana/tzdata' in $(location) expression is not a declared prerequisite of this rule
-		"robolectric_tzdata",
-
 		// rust support
 		"libtombstoned_client_rust_bridge_code", "libtombstoned_client_wrapper", // rust conversions are not supported
 
@@ -902,8 +917,6 @@ var (
 		"static_crasher",                // depends on unconverted modules: libdebuggerd_handler
 		"test_fips",                     // depends on unconverted modules: adb
 		"timezone-host",                 // depends on unconverted modules: art.module.api.annotations
-		"truth-host-prebuilt",           // depends on unconverted modules: truth-prebuilt
-		"truth-prebuilt",                // depends on unconverted modules: asm-7.0, guava
 
 		// '//bionic/libc:libc_bp2build_cc_library_static' is duplicated in the 'deps' attribute of rule
 		"toybox-static",
@@ -950,12 +963,10 @@ var (
 		"svcenc", "svcdec",
 
 		// Failing host cc_tests
-		"memunreachable_unit_test",
 		"libprocinfo_test",
 		"ziparchive-tests",
 		"gtest_isolated_tests",
 		"libunwindstack_unit_test",
-		"task_profiles_test",
 		"power_tests", // failing test on server, but not on host
 
 		// reflect: call of reflect.Value.NumField on interface Value
@@ -1035,7 +1046,6 @@ var (
 		"libBionicLoaderTests",  // depends on unconverted modules: libmeminfo
 		"libapexutil_tests",     // depends on unconverted modules: apex-info-list-tinyxml, libapexutil
 		"libcutils_sockets_test",
-		"libexpectedutils_test",
 		"libhwbinder_latency",
 		"liblog-host-test", // failing tests
 		"libminijail_test",
@@ -1072,7 +1082,6 @@ var (
 		"scudo_unit_tests",
 		"stats-log-api-gen-test", // depends on unconverted modules: libstats_proto_host
 		"syscall_filter_unittest_gtest",
-		"sysprop_test", // depends on unconverted modules: libcom.android.sysprop.tests
 		"thread_exit_cb_helper",
 		"tls_properties_helper",
 		"ulp",
@@ -1478,7 +1487,7 @@ var (
 		"permissive_mte_test",
 		"ICU4CTestRunner",
 
-		"HelloWorldHostTest",  // TODO(b/280452825): Convert HelloWorldHostTest to b test
+		"HelloWorldHostTest", // TODO(b/280452825): Convert HelloWorldHostTest to b test
 	}
 
 	MixedBuildsDisabledList = []string{
@@ -1597,12 +1606,13 @@ var (
 	}
 
 	// These should be the libs that are included by the apexes in the StagingMixedBuildsEnabledList
-	StagingDclaMixedBuildsEnabledList = []string{}
+	StagingDclaMixedBuildsEnabledList = []string{
+		"libstagefright_flacdec",
+		"libutils",
+	}
 
 	// TODO(b/269342245): Enable the rest of the DCLA libs
 	// "libssl",
-	// "libstagefright_flacdec",
-	// "libutils",
 
 	// The list of module types which are expected to spend lots of build time.
 	// With `--ninja_weight_source=soong`, ninja builds these module types and deps first.

@@ -524,6 +524,7 @@ type ModuleContextIntf interface {
 	isAfdoCompile() bool
 	isPgoCompile() bool
 	isCfi() bool
+	isFuzzer() bool
 	isNDKStubLibrary() bool
 	useClangLld(actx ModuleContext) bool
 	isForPlatform() bool
@@ -1365,6 +1366,13 @@ func (c *Module) isCfi() bool {
 	return false
 }
 
+func (c *Module) isFuzzer() bool {
+	if sanitize := c.sanitize; sanitize != nil {
+		return Bool(sanitize.Properties.SanitizeMutated.Fuzzer)
+	}
+	return false
+}
+
 func (c *Module) isNDKStubLibrary() bool {
 	if _, ok := c.compiler.(*stubDecorator); ok {
 		return true
@@ -1660,6 +1668,10 @@ func (ctx *moduleContextImpl) isCfi() bool {
 	return ctx.mod.isCfi()
 }
 
+func (ctx *moduleContextImpl) isFuzzer() bool {
+	return ctx.mod.isFuzzer()
+}
+
 func (ctx *moduleContextImpl) isNDKStubLibrary() bool {
 	return ctx.mod.isNDKStubLibrary()
 }
@@ -1916,7 +1928,6 @@ func allEnabledSanitizersSupportedByBazel(c *Module) bool {
 
 	unsupportedSanitizers := []*bool{
 		sanitizeProps.Safestack,
-		sanitizeProps.Cfi,
 		sanitizeProps.Scudo,
 		BoolPtr(len(c.sanitize.Properties.Sanitize.Recover) > 0),
 		BoolPtr(c.sanitize.Properties.Sanitize.Blocklist != nil),
@@ -1935,6 +1946,8 @@ func allEnabledSanitizersSupportedByBazel(c *Module) bool {
 			if ubsanEnabled && !c.MinimalRuntimeNeeded() {
 				return false
 			}
+		} else if san == cfi {
+			continue
 		} else if c.sanitize.isSanitizerEnabled(san) {
 			return false
 		}
