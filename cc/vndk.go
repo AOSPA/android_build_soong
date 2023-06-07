@@ -241,7 +241,7 @@ var (
 func vndkModuleLister(predicate func(*Module) bool) moduleListerFunc {
 	return func(ctx android.SingletonContext) (moduleNames, fileNames []string) {
 		ctx.VisitAllModules(func(m android.Module) {
-			if c, ok := m.(*Module); ok && predicate(c) {
+			if c, ok := m.(*Module); ok && predicate(c) && !c.IsVndkPrebuiltLibrary() {
 				filename, err := getVndkFileName(c)
 				if err != nil {
 					ctx.ModuleErrorf(m, "%s", err)
@@ -400,6 +400,11 @@ func VndkMutator(mctx android.BottomUpMutatorContext) {
 	if m.UseVndk() && isPrebuiltLib && prebuiltLib.hasLLNDKStubs() {
 		m.VendorProperties.IsLLNDK = true
 		m.VendorProperties.IsVNDKPrivate = Bool(prebuiltLib.Properties.Llndk.Private)
+	}
+
+	if m.IsVndkPrebuiltLibrary() && !m.IsVndk() {
+		m.VendorProperties.IsLLNDK = true
+		// TODO(b/280697209): copy "llndk.private" flag to vndk_prebuilt_shared
 	}
 
 	if (isLib && lib.buildShared()) || (isPrebuiltLib && prebuiltLib.buildShared()) {
@@ -706,6 +711,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 
 		// json struct to export snapshot information
 		prop := struct {
+			MinSdkVersion       string   `json:",omitempty"`
 			LicenseKinds        []string `json:",omitempty"`
 			LicenseTexts        []string `json:",omitempty"`
 			ExportedDirs        []string `json:",omitempty"`
@@ -716,6 +722,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 
 		prop.LicenseKinds = m.EffectiveLicenseKinds()
 		prop.LicenseTexts = m.EffectiveLicenseFiles().Strings()
+		prop.MinSdkVersion = m.MinSdkVersion()
 
 		if ctx.Config().VndkSnapshotBuildArtifacts() {
 			exportedInfo := ctx.ModuleProvider(m, FlagExporterInfoProvider).(FlagExporterInfo)

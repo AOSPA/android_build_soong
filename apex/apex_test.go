@@ -146,7 +146,7 @@ var prepareForApexTest = android.GroupFixturePreparers(
 	android.PrepareForTestWithAndroidBuildComponents,
 	bpf.PrepareForTestWithBpf,
 	cc.PrepareForTestWithCcBuildComponents,
-	java.PrepareForTestWithJavaDefaultModules,
+	java.PrepareForTestWithDexpreopt,
 	prebuilt_etc.PrepareForTestWithPrebuiltEtc,
 	rust.PrepareForTestWithRustDefaultModules,
 	sh.PrepareForTestWithShBuildComponents,
@@ -4102,6 +4102,174 @@ func TestVndkApexShouldNotProvideNativeLibs(t *testing.T) {
 	})
 }
 
+func TestVendorApexWithVndkPrebuilts(t *testing.T) {
+	ctx := testApex(t, "",
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.DeviceVndkVersion = proptools.StringPtr("27")
+		}),
+		android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
+			cc.RegisterVendorSnapshotModules(ctx)
+		}),
+		withFiles(map[string][]byte{
+			"vendor/foo/Android.bp": []byte(`
+				apex {
+					name: "myapex",
+					binaries: ["foo"],
+					key: "myapex.key",
+					min_sdk_version: "27",
+					vendor: true,
+				}
+
+				cc_binary {
+					name: "foo",
+					vendor: true,
+					srcs: ["abc.cpp"],
+					shared_libs: [
+						"libllndk",
+						"libvndk",
+					],
+					nocrt: true,
+					system_shared_libs: [],
+					min_sdk_version: "27",
+				}
+
+				apex_key {
+					name: "myapex.key",
+					public_key: "testkey.avbpubkey",
+					private_key: "testkey.pem",
+				}
+			`),
+			// Simulate VNDK prebuilts with vendor_snapshot
+			"prebuilts/vndk/Android.bp": []byte(`
+				vndk_prebuilt_shared {
+					name: "libllndk",
+					version: "27",
+					vendor_available: true,
+					product_available: true,
+					target_arch: "arm64",
+					arch: {
+						arm64: {
+							srcs: ["libllndk.so"],
+						},
+					},
+				}
+
+				vndk_prebuilt_shared {
+					name: "libvndk",
+					version: "27",
+					vendor_available: true,
+					product_available: true,
+					target_arch: "arm64",
+					arch: {
+						arm64: {
+							srcs: ["libvndk.so"],
+						},
+					},
+					vndk: {
+						enabled: true,
+					},
+					min_sdk_version: "27",
+				}
+
+				vndk_prebuilt_shared {
+					name: "libc++",
+					version: "27",
+					target_arch: "arm64",
+					vendor_available: true,
+					product_available: true,
+					vndk: {
+						enabled: true,
+						support_system_process: true,
+					},
+					arch: {
+						arm64: {
+							srcs: ["libc++.so"],
+						},
+					},
+					min_sdk_version: "apex_inherit",
+				}
+
+				vendor_snapshot {
+					name: "vendor_snapshot",
+					version: "27",
+					arch: {
+						arm64: {
+							vndk_libs: [
+								"libc++",
+								"libllndk",
+								"libvndk",
+							],
+							static_libs: [
+								"libc++demangle",
+								"libclang_rt.builtins",
+								"libunwind",
+							],
+						},
+					}
+				}
+
+				vendor_snapshot_static {
+					name: "libclang_rt.builtins",
+					version: "27",
+					target_arch: "arm64",
+					vendor: true,
+					arch: {
+						arm64: {
+							src: "libclang_rt.builtins-aarch64-android.a",
+						},
+					},
+				}
+
+				vendor_snapshot_static {
+					name: "libc++demangle",
+					version: "27",
+					target_arch: "arm64",
+					compile_multilib: "64",
+					vendor: true,
+					arch: {
+						arm64: {
+							src: "libc++demangle.a",
+						},
+					},
+					min_sdk_version: "apex_inherit",
+				}
+
+				vendor_snapshot_static {
+					name: "libunwind",
+					version: "27",
+					target_arch: "arm64",
+					compile_multilib: "64",
+					vendor: true,
+					arch: {
+						arm64: {
+							src: "libunwind.a",
+						},
+					},
+					min_sdk_version: "apex_inherit",
+				}
+			`),
+		}))
+
+	// Should embed the prebuilt VNDK libraries in the apex
+	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
+		"bin/foo",
+		"prebuilts/vndk/libc++.so:lib64/libc++.so",
+		"prebuilts/vndk/libvndk.so:lib64/libvndk.so",
+	})
+
+	// Should link foo with prebuilt libraries (shared/static)
+	ldRule := ctx.ModuleForTests("foo", "android_vendor.27_arm64_armv8-a_myapex").Rule("ld")
+	android.AssertStringDoesContain(t, "should link to prebuilt llndk", ldRule.Args["libFlags"], "prebuilts/vndk/libllndk.so")
+	android.AssertStringDoesContain(t, "should link to prebuilt vndk", ldRule.Args["libFlags"], "prebuilts/vndk/libvndk.so")
+	android.AssertStringDoesContain(t, "should link to prebuilt libc++demangle", ldRule.Args["libFlags"], "prebuilts/vndk/libc++demangle.a")
+	android.AssertStringDoesContain(t, "should link to prebuilt libunwind", ldRule.Args["libFlags"], "prebuilts/vndk/libunwind.a")
+
+	// Should declare the LLNDK library as a "required" external dependency
+	manifestRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexManifestRule")
+	requireNativeLibs := names(manifestRule.Args["requireNativeLibs"])
+	ensureListContains(t, requireNativeLibs, "libllndk.so")
+}
+
 func TestDependenciesInApexManifest(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -5281,7 +5449,16 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		apex_set {
 			name: "myapex",
 			set: "myapex.apks",
+			exported_java_libs: ["myjavalib"],
 			exported_bootclasspath_fragments: ["my-bootclasspath-fragment"],
+			exported_systemserverclasspath_fragments: ["my-systemserverclasspath-fragment"],
+		}
+
+		java_import {
+			name: "myjavalib",
+			jars: ["myjavalib.jar"],
+			apex_available: ["myapex"],
+			permitted_packages: ["javalib"],
 		}
 
 		prebuilt_bootclasspath_fragment {
@@ -5296,6 +5473,12 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 				filtered_stub_flags: "my-bootclasspath-fragment/filtered-stub-flags.csv",
 				filtered_flags: "my-bootclasspath-fragment/filtered-flags.csv",
 			},
+		}
+
+		prebuilt_systemserverclasspath_fragment {
+			name: "my-systemserverclasspath-fragment",
+			contents: ["libbaz"],
+			apex_available: ["myapex"],
 		}
 
 		java_import {
@@ -5314,6 +5497,16 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			shared_library: false,
 			permitted_packages: ["bar"],
 		}
+
+		java_sdk_library_import {
+			name: "libbaz",
+			public: {
+				jars: ["libbaz.jar"],
+			},
+			apex_available: ["myapex"],
+			shared_library: false,
+			permitted_packages: ["baz"],
+		}
 	`
 
 		ctx := testDexpreoptWithApexes(t, bp, "", preparer, fragment)
@@ -5326,6 +5519,24 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
 		`)
+
+		myApex := ctx.ModuleForTests("myapex", "android_common_myapex").Module()
+
+		overrideNames := []string{
+			"",
+			"myjavalib.myapex",
+			"libfoo.myapex",
+			"libbar.myapex",
+			"libbaz.myapex",
+		}
+		mkEntries := android.AndroidMkEntriesForTest(t, ctx, myApex)
+		for i, e := range mkEntries {
+			g := e.OverrideName
+			if w := overrideNames[i]; w != g {
+				t.Errorf("Expected override name %q, got %q", w, g)
+			}
+		}
+
 	})
 
 	t.Run("prebuilt with source library preferred", func(t *testing.T) {
@@ -5673,6 +5884,7 @@ func TestPrebuiltSkipsSymbols(t *testing.T) {
 				// Source module
 				apex {
 					name: "myapex",
+					binaries: ["foo"],
 					key: "myapex.key",
 					updatable: false,
 				}
@@ -5688,11 +5900,19 @@ func TestPrebuiltSkipsSymbols(t *testing.T) {
 					set: "myapex.apks",
 					`+preferProperty+`
 				}
+
+				cc_binary {
+					name: "foo",
+					srcs: ["mylib.cpp"],
+					system_shared_libs: [],
+					stl: "none",
+					apex_available: [ "myapex" ],
+				}
 			`)
 			// Symbol files are installed by installing entries under ${OUT}/apex/{apex name}
-			android.AssertStringListContainsEquals(t, "Implicits",
-				ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexRule").Implicits.Strings(),
-				"out/soong/target/product/test_device/apex/myapex/apex_manifest.pb",
+			android.AssertStringListContainsEquals(t, "Installs",
+				ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().FilesToInstall().Strings(),
+				filepath.Join(ctx.Config().SoongOutDir(), "target/product/test_device/apex/myapex/bin/foo"),
 				tc.installSymbolFiles)
 		})
 	}
@@ -8069,8 +8289,8 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, "", preparer, fragments...)
 	})
 
-	t.Run("updatable jar from ART apex in the framework boot image => error", func(t *testing.T) {
-		err := `module "some-art-lib" from updatable apexes \["com.android.art.debug"\] is not allowed in the framework boot image`
+	t.Run("updatable jar from ART apex in the platform bootclasspath => error", func(t *testing.T) {
+		err := `module "some-art-lib" from updatable apexes \["com.android.art.debug"\] is not allowed in the platform bootclasspath`
 		// Update the dexpreopt BootJars directly.
 		preparer := android.GroupFixturePreparers(
 			prepareSetBootJars("com.android.art.debug:some-art-lib"),
@@ -8093,8 +8313,8 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("updatable jar from some other apex in the framework boot image => error", func(t *testing.T) {
-		err := `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the framework boot image`
+	t.Run("updatable jar from some other apex in the platform bootclasspath => error", func(t *testing.T) {
+		err := `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the platform bootclasspath`
 		preparer := android.GroupFixturePreparers(
 			java.FixtureConfigureBootJars("some-updatable-apex:some-updatable-apex-lib"),
 			java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib"),
@@ -8102,7 +8322,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("non-updatable jar from some other apex in the framework boot image => ok", func(t *testing.T) {
+	t.Run("non-updatable jar from some other apex in the platform bootclasspath => ok", func(t *testing.T) {
 		preparer := java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib")
 		fragment := java.ApexVariantReference{
 			Apex:   proptools.StringPtr("some-non-updatable-apex"),
@@ -8117,7 +8337,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("nonexistent jar in the framework boot image => error", func(t *testing.T) {
+	t.Run("nonexistent jar in the platform bootclasspath => error", func(t *testing.T) {
 		err := `"platform-bootclasspath" depends on undefined module "nonexistent"`
 		preparer := java.FixtureConfigureBootJars("platform:nonexistent")
 		testNoUpdatableJarsInBootImage(t, err, preparer)
@@ -8130,7 +8350,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("platform jar in the framework boot image => ok", func(t *testing.T) {
+	t.Run("platform jar in the platform bootclasspath => ok", func(t *testing.T) {
 		preparer := android.GroupFixturePreparers(
 			java.FixtureConfigureBootJars("platform:some-platform-lib"),
 			java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib"),

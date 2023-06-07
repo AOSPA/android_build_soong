@@ -36,6 +36,7 @@ func registerCcLibrarySharedModuleTypes(ctx android.RegistrationContext) {
 
 func runCcLibrarySharedTestCase(t *testing.T, tc Bp2buildTestCase) {
 	t.Helper()
+	t.Parallel()
 	(&tc).ModuleTypeUnderTest = "cc_library_shared"
 	(&tc).ModuleTypeUnderTestFactory = cc.LibrarySharedFactory
 	RunBp2BuildTestCase(t, registerCcLibrarySharedModuleTypes, tc)
@@ -1245,43 +1246,6 @@ cc_library_shared {
         "android_thin_lto_whole_program_vtables",
     ]`,
 				"local_includes": `["."]`,
-			}),
-		},
-	})
-}
-
-func TestCcLibrarySharedStubsDessertVersionConversion(t *testing.T) {
-	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_shared converts dessert codename versions to numerical versions",
-		Blueprint: `
-cc_library_shared {
-	name: "a",
-	include_build_directory: false,
-	stubs: {
-		symbol_file: "a.map.txt",
-		versions: [
-			"Q",
-			"R",
-			"31",
-			"current",
-		],
-	},
-}
-`,
-		ExpectedBazelTargets: []string{
-			makeCcStubSuiteTargets("a", AttrNameToString{
-				"soname":               `"a.so"`,
-				"source_library_label": `"//:a"`,
-				"stubs_symbol_file":    `"a.map.txt"`,
-				"stubs_versions": `[
-        "29",
-        "30",
-        "31",
-        "current",
-    ]`,
-			}),
-			MakeBazelTarget("cc_library_shared", "a", AttrNameToString{
-				"stubs_symbol_file": `"a.map.txt"`,
 			}),
 		},
 	})

@@ -169,10 +169,7 @@ var (
 	commonGlobalLldflags = []string{
 		"-fuse-ld=lld",
 		"-Wl,--icf=safe",
-
-		// KEYSTONE(I12d0bcd61de11c762805c535b8d0548eac2e2b66,b/278133889)
-		// Turn off stack protector check for noreturn calls. (http://b/264965700)
-		// "-Wl,-mllvm,-disable-check-noreturn-call",
+                "-Xclang -opaque-pointers",
 	}
 
 	deviceGlobalCppflags = []string{
@@ -389,8 +386,8 @@ var (
 	// prebuilts/clang default settings.
 	ClangDefaultBase = "prebuilts/clang/host"
 	// TODO(b/243545528) Match upstream version
-	ClangDefaultVersion      = "clang-r450784d"
-	ClangDefaultShortVersion = "14.0.6"
+	ClangDefaultVersion      = "clang-r475365b"
+	ClangDefaultShortVersion = "16.0.2"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{

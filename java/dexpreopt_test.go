@@ -212,7 +212,7 @@ func TestDexpreoptEnabled(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			preparers := android.GroupFixturePreparers(
-				PrepareForTestWithJavaDefaultModules,
+				PrepareForTestWithDexpreopt,
 				PrepareForTestWithFakeApexMutator,
 				dexpreopt.FixtureSetApexSystemServerJars("com.android.apex1:service-foo"),
 			)
@@ -257,7 +257,7 @@ func TestDex2oatToolDeps(t *testing.T) {
 
 	preparers := android.GroupFixturePreparers(
 		cc.PrepareForTestWithCcDefaultModules,
-		PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd,
+		PrepareForTestWithDexpreoptWithoutFakeDex2oatd,
 		dexpreopt.PrepareForTestByEnablingDexpreopt)
 
 	testDex2oatToolDep := func(sourceEnabled, prebuiltEnabled, prebuiltPreferred bool,
@@ -299,7 +299,7 @@ func TestDex2oatToolDeps(t *testing.T) {
 
 func TestDexpreoptBuiltInstalledForApex(t *testing.T) {
 	preparers := android.GroupFixturePreparers(
-		PrepareForTestWithJavaDefaultModules,
+		PrepareForTestWithDexpreopt,
 		PrepareForTestWithFakeApexMutator,
 		dexpreopt.FixtureSetApexSystemServerJars("com.android.apex1:service-foo"),
 	)
@@ -386,7 +386,7 @@ func verifyEntries(t *testing.T, message string, expectedModule string,
 
 func TestAndroidMkEntriesForApex(t *testing.T) {
 	preparers := android.GroupFixturePreparers(
-		PrepareForTestWithJavaDefaultModules,
+		PrepareForTestWithDexpreopt,
 		PrepareForTestWithFakeApexMutator,
 		dexpreopt.FixtureSetApexSystemServerJars("com.android.apex1:service-foo"),
 	)
@@ -437,4 +437,29 @@ func TestAndroidMkEntriesForApex(t *testing.T) {
 	entriesList = filterDexpreoptEntriesList(entriesList)
 
 	android.AssertIntEquals(t, "entries count", 0, len(entriesList))
+}
+
+func TestGenerateProfileEvenIfDexpreoptIsDisabled(t *testing.T) {
+	preparers := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		PrepareForTestWithFakeApexMutator,
+		dexpreopt.FixtureDisableDexpreopt(true),
+	)
+
+	result := preparers.RunTestWithBp(t, `
+		java_library {
+			name: "foo",
+			installable: true,
+			dex_preopt: {
+				profile: "art-profile",
+			},
+			srcs: ["a.java"],
+		}`)
+
+	ctx := result.TestContext
+	dexpreopt := ctx.ModuleForTests("foo", "android_common").MaybeRule("dexpreopt")
+
+	expected := []string{"out/soong/.intermediates/foo/android_common/dexpreopt/profile.prof"}
+
+	android.AssertArrayString(t, "outputs", expected, dexpreopt.AllOutputs())
 }
