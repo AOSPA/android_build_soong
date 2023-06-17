@@ -30,6 +30,7 @@ import (
 	"text/scanner"
 
 	"android/soong/bazel"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -483,6 +484,7 @@ type ModuleContext interface {
 	TargetRequiredModuleNames() []string
 
 	ModuleSubDir() string
+	SoongConfigTraceHash() string
 
 	Variable(pctx PackageContext, name, value string)
 	Rule(pctx PackageContext, name string, params blueprint.RuleParams, argNames ...string) blueprint.Rule
@@ -565,6 +567,8 @@ type Module interface {
 
 	// IsConvertedByBp2build returns whether this module was converted via bp2build
 	IsConvertedByBp2build() bool
+	GetUnconvertedReason() *UnconvertedReason
+
 	// Bp2buildTargets returns the target(s) generated for Bazel via bp2build for this module
 	Bp2buildTargets() []bp2buildInfo
 	GetUnconvertedBp2buildDeps() []string
@@ -987,7 +991,11 @@ type commonProperties struct {
 	// Bazel conversion status
 	BazelConversionStatus BazelConversionStatus `blueprint:"mutated"`
 
-	// SoongConfigTrace records accesses to VendorVars (soong_config)
+	// SoongConfigTrace records accesses to VendorVars (soong_config). The trace will be hashed
+	// and used as a subdir of PathForModuleOut.  Note that we mainly focus on incremental
+	// builds among similar products (e.g. aosp_cf_x86_64_phone and aosp_cf_x86_64_foldable),
+	// and there are variables other than soong_config, which isn't captured by soong config
+	// trace, but influence modules among products.
 	SoongConfigTrace     soongConfigTrace `blueprint:"mutated"`
 	SoongConfigTraceHash string           `blueprint:"mutated"`
 }
@@ -1591,12 +1599,29 @@ func (b bp2buildInfo) BazelAttributes() []interface{} {
 }
 
 func (m *ModuleBase) addBp2buildInfo(info bp2buildInfo) {
+	if m.commonProperties.BazelConversionStatus.UnconvertedReason != nil {
+		panic(fmt.Errorf("bp2build: module '%s' marked unconvertible and also is converted", m.Name()))
+	}
 	m.commonProperties.BazelConversionStatus.Bp2buildInfo = append(m.commonProperties.BazelConversionStatus.Bp2buildInfo, info)
+}
+
+func (m *ModuleBase) setBp2buildUnconvertible(reasonType bp2build_metrics_proto.UnconvertedReasonType, detail string) {
+	if len(m.commonProperties.BazelConversionStatus.Bp2buildInfo) > 0 {
+		panic(fmt.Errorf("bp2build: module '%s' marked unconvertible and also is converted", m.Name()))
+	}
+	m.commonProperties.BazelConversionStatus.UnconvertedReason = &UnconvertedReason{
+		ReasonType: int(reasonType),
+		Detail:     detail,
+	}
 }
 
 // IsConvertedByBp2build returns whether this module was converted via bp2build.
 func (m *ModuleBase) IsConvertedByBp2build() bool {
 	return len(m.commonProperties.BazelConversionStatus.Bp2buildInfo) > 0
+}
+
+func (m *ModuleBase) GetUnconvertedReason() *UnconvertedReason {
+	return m.commonProperties.BazelConversionStatus.UnconvertedReason
 }
 
 // Bp2buildTargets returns the Bazel targets bp2build generated for this module.
@@ -3192,7 +3217,7 @@ func (m *moduleContext) ModuleSubDir() string {
 	return m.bp.ModuleSubDir()
 }
 
-func (m *moduleContext) ModuleSoongConfigHash() string {
+func (m *moduleContext) SoongConfigTraceHash() string {
 	return m.module.base().commonProperties.SoongConfigTraceHash
 }
 

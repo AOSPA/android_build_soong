@@ -86,7 +86,6 @@ func init() {
 	flag.BoolVar(&cmdlineArgs.MultitreeBuild, "multitree-build", false, "this is a multitree build")
 	flag.BoolVar(&cmdlineArgs.BazelMode, "bazel-mode", false, "use bazel for analysis of certain modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeStaging, "bazel-mode-staging", false, "use bazel for analysis of certain near-ready modules")
-	flag.BoolVar(&cmdlineArgs.BazelModeDev, "bazel-mode-dev", false, "use bazel for analysis of a large number of modules (less stable)")
 	flag.BoolVar(&cmdlineArgs.UseBazelProxy, "use-bazel-proxy", false, "communicate with bazel using unix socket proxy instead of spawning subprocesses")
 	flag.BoolVar(&cmdlineArgs.BuildFromTextStub, "build-from-text-stub", false, "build Java stubs from API text files instead of source files")
 	flag.BoolVar(&cmdlineArgs.EnsureAllowlistIntegrity, "ensure-allowlist-integrity", false, "verify that allowlisted modules are mixed-built")
@@ -532,8 +531,6 @@ func main() {
 
 	var finalOutputFile string
 
-	writeSymlink := false
-
 	// Run Soong for a specific activity, like bp2build, queryview
 	// or the actual Soong build for the build.ninja file.
 	switch configuration.BuildMode {
@@ -556,13 +553,8 @@ func main() {
 					maybeQuit(err, "")
 				}
 			}
-			writeSymlink = true
 		} else {
 			finalOutputFile = runSoongOnlyBuild(ctx, extraNinjaDeps)
-
-			if configuration.BuildMode == android.AnalysisNoBazel {
-				writeSymlink = true
-			}
 		}
 		writeMetrics(configuration, ctx.EventHandler, metricsDir)
 	}
@@ -579,24 +571,6 @@ func main() {
 	// are ninja inputs to the main output file, then ninja would superfluously
 	// rebuild this output file on the next build invocation.
 	touch(shared.JoinPath(topDir, finalOutputFile))
-
-	// TODO(b/277029044): Remove this function once build.<product>.ninja lands
-	if writeSymlink {
-		writeBuildNinjaSymlink(configuration, finalOutputFile)
-	}
-}
-
-// TODO(b/277029044): Remove this function once build.<product>.ninja lands
-func writeBuildNinjaSymlink(config android.Config, source string) {
-	targetPath := shared.JoinPath(topDir, config.SoongOutDir(), "build.ninja")
-	sourcePath := shared.JoinPath(topDir, source)
-
-	if targetPath == sourcePath {
-		return
-	}
-
-	os.Remove(targetPath)
-	os.Symlink(sourcePath, targetPath)
 }
 
 func writeUsedEnvironmentFile(configuration android.Config) {
