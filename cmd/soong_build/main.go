@@ -124,8 +124,7 @@ func runMixedModeBuild(ctx *android.Context, extraNinjaDeps []string) string {
 		return ctx.Config().BazelContext.InvokeBazel(ctx.Config(), ctx)
 	}
 	ctx.SetBeforePrepareBuildActionsHook(bazelHook)
-	ninjaDeps, err := bootstrap.RunBlueprint(cmdlineArgs.Args, bootstrap.DoEverything, ctx.Context, ctx.Config())
-	maybeQuit(err, "")
+	ninjaDeps := bootstrap.RunBlueprint(cmdlineArgs.Args, bootstrap.DoEverything, ctx.Context, ctx.Config())
 	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
 
 	bazelPaths, err := readFileLines(ctx.Config().Getenv("BAZEL_DEPS_FILE"))
@@ -186,11 +185,10 @@ func runApiBp2build(ctx *android.Context, extraNinjaDeps []string) string {
 	}
 
 	// Run the loading and analysis phase
-	ninjaDeps, err := bootstrap.RunBlueprint(cmdlineArgs.Args,
+	ninjaDeps := bootstrap.RunBlueprint(cmdlineArgs.Args,
 		bootstrap.StopBeforePrepareBuildActions,
 		ctx.Context,
 		ctx.Config())
-	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
 
 	// Add the globbed dependencies
@@ -220,7 +218,7 @@ func runApiBp2build(ctx *android.Context, extraNinjaDeps []string) string {
 	// }
 	//
 	// If we don't generate f/b/api/BUILD, foo.contribution will be unbuildable.
-	err = createBazelWorkspace(codegenContext, absoluteApiBp2buildDir, true)
+	err := createBazelWorkspace(codegenContext, absoluteApiBp2buildDir, true)
 	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, codegenContext.AdditionalNinjaDeps()...)
 
@@ -414,13 +412,12 @@ func writeBuildGlobsNinjaFile(ctx *android.Context) []string {
 	defer ctx.EventHandler.End("globs_ninja_file")
 
 	globDir := bootstrap.GlobDirectory(ctx.Config().SoongOutDir(), globListDir)
-	err := bootstrap.WriteBuildGlobsNinjaFile(&bootstrap.GlobSingleton{
+	bootstrap.WriteBuildGlobsNinjaFile(&bootstrap.GlobSingleton{
 		GlobLister: ctx.Globs,
 		GlobFile:   globFile,
 		GlobDir:    globDir,
 		SrcDir:     ctx.SrcDir(),
 	}, ctx.Config())
-	maybeQuit(err, "")
 	return bootstrap.GlobFileListFiles(globDir)
 }
 
@@ -447,8 +444,7 @@ func runSoongOnlyBuild(ctx *android.Context, extraNinjaDeps []string) string {
 		stopBefore = bootstrap.DoEverything
 	}
 
-	ninjaDeps, err := bootstrap.RunBlueprint(cmdlineArgs.Args, stopBefore, ctx.Context, ctx.Config())
-	maybeQuit(err, "")
+	ninjaDeps := bootstrap.RunBlueprint(cmdlineArgs.Args, stopBefore, ctx.Context, ctx.Config())
 	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
 
 	globListFiles := writeBuildGlobsNinjaFile(ctx)
@@ -807,9 +803,8 @@ func runBp2Build(ctx *android.Context, extraNinjaDeps []string, metricsDir strin
 		// from the regular Modules.
 		ctx.EventHandler.Do("bootstrap", func() {
 			blueprintArgs := cmdlineArgs
-			bootstrapDeps, err := bootstrap.RunBlueprint(blueprintArgs.Args,
+			bootstrapDeps := bootstrap.RunBlueprint(blueprintArgs.Args,
 				bootstrap.StopBeforePrepareBuildActions, ctx.Context, ctx.Config())
-			maybeQuit(err, "")
 			ninjaDeps = append(ninjaDeps, bootstrapDeps...)
 		})
 

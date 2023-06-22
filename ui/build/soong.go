@@ -445,10 +445,7 @@ func bootstrapBlueprint(ctx Context, config Config) {
 
 	// since `bootstrap.ninja` is regenerated unconditionally, we ignore the deps, i.e. little
 	// reason to write a `bootstrap.ninja.d` file
-	_, err := bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
-	if err != nil {
-		ctx.Fatal(err)
-	}
+	_ = bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
 }
 
 func checkEnvironmentFile(ctx Context, currentEnv *Environment, envFile string) {

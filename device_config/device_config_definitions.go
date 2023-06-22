@@ -122,7 +122,7 @@ func (module *DefinitionsModule) GenerateAndroidBuildActions(ctx android.ModuleC
 
 	// Intermediate format
 	inputFiles := android.PathsForModuleSrc(ctx, module.properties.Srcs)
-	intermediatePath := android.PathForModuleOut(ctx, "intermediate.pb")
+	intermediatePath := android.PathForModuleOut(ctx, "intermediate.json")
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        aconfigRule,
 		Inputs:      inputFiles,
