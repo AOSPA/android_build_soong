@@ -31,11 +31,11 @@ const (
 
 	// OsType names in arch.go
 	OsAndroid     = "android"
-	osDarwin      = "darwin"
-	osLinux       = "linux_glibc"
+	OsDarwin      = "darwin"
+	OsLinux       = "linux_glibc"
 	osLinuxMusl   = "linux_musl"
 	osLinuxBionic = "linux_bionic"
-	osWindows     = "windows"
+	OsWindows     = "windows"
 
 	// Targets in arch.go
 	osArchAndroidArm        = "android_arm"
@@ -69,8 +69,8 @@ const (
 
 	productVariableBazelPackage = "//build/bazel/product_variables"
 
-	AndroidAndInApex  = "android-in_apex"
-	AndroidAndNonApex = "android-non_apex"
+	AndroidAndInApex = "android-in_apex"
+	AndroidPlatform  = "system"
 
 	InApex  = "in_apex"
 	NonApex = "non_apex"
@@ -156,11 +156,11 @@ var (
 	// constraint_value for the @platforms//os:os constraint_setting
 	platformOsMap = map[string]string{
 		OsAndroid:                  "//build/bazel/platforms/os:android",
-		osDarwin:                   "//build/bazel/platforms/os:darwin",
-		osLinux:                    "//build/bazel/platforms/os:linux_glibc",
+		OsDarwin:                   "//build/bazel/platforms/os:darwin",
+		OsLinux:                    "//build/bazel/platforms/os:linux_glibc",
 		osLinuxMusl:                "//build/bazel/platforms/os:linux_musl",
 		osLinuxBionic:              "//build/bazel/platforms/os:linux_bionic",
-		osWindows:                  "//build/bazel/platforms/os:windows",
+		OsWindows:                  "//build/bazel/platforms/os:windows",
 		ConditionsDefaultConfigKey: ConditionsDefaultSelectKey, // The default condition of an os select map.
 	}
 
@@ -192,22 +192,22 @@ var (
 	// in a cyclic dependency.
 	osToArchMap = map[string][]string{
 		OsAndroid:     {archArm, archArm64, archRiscv64, archX86, archX86_64},
-		osLinux:       {archX86, archX86_64},
+		OsLinux:       {archX86, archX86_64},
 		osLinuxMusl:   {archX86, archX86_64},
-		osDarwin:      {archArm64, archX86_64},
+		OsDarwin:      {archArm64, archX86_64},
 		osLinuxBionic: {archArm64, archX86_64},
 		// TODO(cparsons): According to arch.go, this should contain archArm, archArm64, as well.
-		osWindows: {archX86, archX86_64},
+		OsWindows: {archX86, archX86_64},
 	}
 
 	osAndInApexMap = map[string]string{
 		AndroidAndInApex:           "//build/bazel/rules/apex:android-in_apex",
-		AndroidAndNonApex:          "//build/bazel/rules/apex:android-non_apex",
-		osDarwin:                   "//build/bazel/platforms/os:darwin",
-		osLinux:                    "//build/bazel/platforms/os:linux_glibc",
+		AndroidPlatform:            "//build/bazel/rules/apex:system",
+		OsDarwin:                   "//build/bazel/platforms/os:darwin",
+		OsLinux:                    "//build/bazel/platforms/os:linux_glibc",
 		osLinuxMusl:                "//build/bazel/platforms/os:linux_musl",
 		osLinuxBionic:              "//build/bazel/platforms/os:linux_bionic",
-		osWindows:                  "//build/bazel/platforms/os:windows",
+		OsWindows:                  "//build/bazel/platforms/os:windows",
 		ConditionsDefaultConfigKey: ConditionsDefaultSelectKey,
 	}
 
@@ -268,9 +268,8 @@ func (ct configurationType) validateConfig(config string) {
 	case productVariables:
 		// do nothing
 	case osAndInApex:
-		if _, ok := osAndInApexMap[config]; !ok {
-			panic(fmt.Errorf("Unknown os+in_apex config: %s", config))
-		}
+		// do nothing
+		// this axis can contain additional per-apex keys
 	case inApex:
 		if _, ok := inApexMap[config]; !ok {
 			panic(fmt.Errorf("Unknown in_apex config: %s", config))
@@ -293,13 +292,15 @@ func (ca ConfigurationAxis) SelectKey(config string) string {
 	case osArch:
 		return platformOsArchMap[config]
 	case productVariables:
-		if strings.HasSuffix(config, ConditionsDefaultConfigKey) {
-			// e.g. "acme__feature1__conditions_default" or "android__board__conditions_default"
+		if config == ConditionsDefaultConfigKey {
 			return ConditionsDefaultSelectKey
 		}
 		return fmt.Sprintf("%s:%s", productVariableBazelPackage, config)
 	case osAndInApex:
-		return osAndInApexMap[config]
+		if ret, exists := osAndInApexMap[config]; exists {
+			return ret
+		}
+		return config
 	case inApex:
 		return inApexMap[config]
 	default:
@@ -323,11 +324,11 @@ var (
 )
 
 // ProductVariableConfigurationAxis returns an axis for the given product variable
-func ProductVariableConfigurationAxis(variable string, outerAxis ConfigurationAxis) ConfigurationAxis {
+func ProductVariableConfigurationAxis(archVariant bool, variable string) ConfigurationAxis {
 	return ConfigurationAxis{
 		configurationType: productVariables,
 		subType:           variable,
-		outerAxisType:     outerAxis.configurationType,
+		archVariant:       archVariant,
 	}
 }
 
@@ -338,8 +339,8 @@ type ConfigurationAxis struct {
 	// some configuration types (e.g. productVariables) have multiple independent axes, subType helps
 	// distinguish between them without needing to list all 17 product variables.
 	subType string
-	// used to keep track of which product variables are arch variant
-	outerAxisType configurationType
+
+	archVariant bool
 }
 
 func (ca *ConfigurationAxis) less(other ConfigurationAxis) bool {

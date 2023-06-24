@@ -18,7 +18,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"android/soong/aidl_library"
 	"android/soong/bazel"
+
 	"github.com/google/blueprint"
 
 	"android/soong/android"
@@ -105,7 +107,14 @@ func genYacc(ctx android.ModuleContext, rule *android.RuleBuilder, yaccFile andr
 	return ret
 }
 
-func genAidl(ctx android.ModuleContext, rule *android.RuleBuilder, aidlFile android.Path, aidlFlags string) (cppFile android.OutputPath, headerFiles android.Paths) {
+func genAidl(
+	ctx android.ModuleContext,
+	rule *android.RuleBuilder,
+	outDirBase string,
+	aidlFile android.Path,
+	aidlHdrs android.Paths,
+	aidlFlags string,
+) (cppFile android.OutputPath, headerFiles android.Paths) {
 	aidlPackage := strings.TrimSuffix(aidlFile.Rel(), aidlFile.Base())
 	baseName := strings.TrimSuffix(aidlFile.Base(), aidlFile.Ext())
 	shortName := baseName
@@ -117,20 +126,17 @@ func genAidl(ctx android.ModuleContext, rule *android.RuleBuilder, aidlFile andr
 		shortName = strings.TrimPrefix(baseName, "I")
 	}
 
-	outDir := android.PathForModuleGen(ctx, "aidl")
+	outDir := android.PathForModuleGen(ctx, outDirBase)
 	cppFile = outDir.Join(ctx, aidlPackage, baseName+".cpp")
 	depFile := outDir.Join(ctx, aidlPackage, baseName+".cpp.d")
 	headerI := outDir.Join(ctx, aidlPackage, baseName+".h")
 	headerBn := outDir.Join(ctx, aidlPackage, "Bn"+shortName+".h")
 	headerBp := outDir.Join(ctx, aidlPackage, "Bp"+shortName+".h")
 
-	baseDir := strings.TrimSuffix(aidlFile.String(), aidlFile.Rel())
-	if baseDir != "" {
-		aidlFlags += " -I" + baseDir
-	}
-
 	cmd := rule.Command()
 	cmd.BuiltTool("aidl-cpp").
+		// libc++ is default stl for aidl-cpp (a cc_binary_host module)
+		ImplicitTool(ctx.Config().HostCcSharedLibPath(ctx, "libc++")).
 		FlagWithDepFile("-d", depFile).
 		Flag("--ninja").
 		Flag(aidlFlags).
@@ -142,6 +148,10 @@ func genAidl(ctx android.ModuleContext, rule *android.RuleBuilder, aidlFile andr
 			headerBn,
 			headerBp,
 		})
+
+	if aidlHdrs != nil {
+		cmd.Implicits(aidlHdrs)
+	}
 
 	return cppFile, android.Paths{
 		headerI,
@@ -282,15 +292,23 @@ type generatedSourceInfo struct {
 	syspropOrderOnlyDeps android.Paths
 }
 
-func genSources(ctx android.ModuleContext, srcFiles android.Paths,
-	buildFlags builderFlags) (android.Paths, android.Paths, generatedSourceInfo) {
+func genSources(
+	ctx android.ModuleContext,
+	aidlLibraryInfos []aidl_library.AidlLibraryInfo,
+	srcFiles android.Paths,
+	buildFlags builderFlags,
+) (android.Paths, android.Paths, generatedSourceInfo) {
 
 	var info generatedSourceInfo
 
 	var deps android.Paths
 	var rsFiles android.Paths
 
+	// aidlRule supports compiling aidl files from srcs prop while aidlLibraryRule supports
+	// compiling aidl files from aidl_library modules specified in aidl.libs prop.
+	// The rules are separated so that they don't wipe out the other's outputDir
 	var aidlRule *android.RuleBuilder
+	var aidlLibraryRule *android.RuleBuilder
 
 	var yaccRule_ *android.RuleBuilder
 	yaccRule := func() *android.RuleBuilder {
@@ -330,7 +348,15 @@ func genSources(ctx android.ModuleContext, srcFiles android.Paths,
 				aidlRule = android.NewRuleBuilder(pctx, ctx).Sbox(android.PathForModuleGen(ctx, "aidl"),
 					android.PathForModuleGen(ctx, "aidl.sbox.textproto"))
 			}
-			cppFile, aidlHeaders := genAidl(ctx, aidlRule, srcFile, buildFlags.aidlFlags)
+			baseDir := strings.TrimSuffix(srcFile.String(), srcFile.Rel())
+			cppFile, aidlHeaders := genAidl(
+				ctx,
+				aidlRule,
+				"aidl",
+				srcFile,
+				nil,
+				buildFlags.aidlFlags+" -I"+baseDir,
+			)
 			srcFiles[i] = cppFile
 
 			info.aidlHeaders = append(info.aidlHeaders, aidlHeaders...)
@@ -352,8 +378,38 @@ func genSources(ctx android.ModuleContext, srcFiles android.Paths,
 		}
 	}
 
+	for _, aidlLibraryInfo := range aidlLibraryInfos {
+		if aidlLibraryRule == nil {
+			aidlLibraryRule = android.NewRuleBuilder(pctx, ctx).Sbox(
+				android.PathForModuleGen(ctx, "aidl_library"),
+				android.PathForModuleGen(ctx, "aidl_library.sbox.textproto"),
+			).SandboxInputs()
+		}
+		for _, aidlSrc := range aidlLibraryInfo.Srcs {
+			cppFile, aidlHeaders := genAidl(
+				ctx,
+				aidlLibraryRule,
+				"aidl_library",
+				aidlSrc,
+				aidlLibraryInfo.Hdrs.ToList(),
+				buildFlags.aidlFlags,
+			)
+
+			srcFiles = append(srcFiles, cppFile)
+			info.aidlHeaders = append(info.aidlHeaders, aidlHeaders...)
+			// Use the generated headers as order only deps to ensure that they are up to date when
+			// needed.
+			// TODO: Reduce the size of the ninja file by using one order only dep for the whole rule
+			info.aidlOrderOnlyDeps = append(info.aidlOrderOnlyDeps, aidlHeaders...)
+		}
+	}
+
 	if aidlRule != nil {
 		aidlRule.Build("aidl", "gen aidl")
+	}
+
+	if aidlLibraryRule != nil {
+		aidlLibraryRule.Build("aidl_library", "gen aidl_library")
 	}
 
 	if yaccRule_ != nil {

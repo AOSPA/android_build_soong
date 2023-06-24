@@ -657,6 +657,29 @@ func TestAndroidTestImport_Preprocessed(t *testing.T) {
 	}
 }
 
+func TestAndroidAppImport_Preprocessed(t *testing.T) {
+	ctx, _ := testJava(t, `
+		android_app_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			presigned: true,
+			preprocessed: true,
+		}
+		`)
+
+	apkName := "foo.apk"
+	variant := ctx.ModuleForTests("foo", "android_common")
+	outputBuildParams := variant.Output("validated-prebuilt/" + apkName).BuildParams
+	if outputBuildParams.Rule.String() != android.Cp.String() {
+		t.Errorf("Unexpected prebuilt android_app_import rule: " + outputBuildParams.Rule.String())
+	}
+
+	// Make sure compression and aligning were validated.
+	if len(outputBuildParams.Validations) != 2 {
+		t.Errorf("Expected compression/alignment validation rules, found %d validations", len(outputBuildParams.Validations))
+	}
+}
+
 func TestAndroidTestImport_UncompressDex(t *testing.T) {
 	testCases := []struct {
 		name string

@@ -58,9 +58,6 @@ type LTOProperties struct {
 	ThinDep      bool `blueprint:"mutated"`
 	NoLtoDep     bool `blueprint:"mutated"`
 
-	// Use clang lld instead of gnu ld.
-	Use_clang_lld *bool
-
 	// Use -fwhole-program-vtables cflag.
 	Whole_program_vtables *bool
 }
@@ -79,22 +76,10 @@ func (lto *lto) begin(ctx BaseModuleContext) {
 	}
 }
 
-func (lto *lto) useClangLld(ctx BaseModuleContext) bool {
-	if lto.Properties.Use_clang_lld != nil {
-		return Bool(lto.Properties.Use_clang_lld)
-	}
-	return true
-}
-
 func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 	// TODO(b/131771163): Disable LTO when using explicit fuzzing configurations.
 	// LTO breaks fuzzer builds.
 	if inList("-fsanitize=fuzzer-no-link", flags.Local.CFlags) {
-		return flags
-	}
-
-	// TODO(b/254713216): LTO doesn't work on riscv64 yet.
-	if ctx.Arch().ArchType == android.Riscv64 {
 		return flags
 	}
 
@@ -125,7 +110,7 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fwhole-program-vtables")
 		}
 
-		if (lto.DefaultThinLTO(ctx) || lto.ThinLTO()) && ctx.Config().IsEnvTrue("USE_THINLTO_CACHE") && lto.useClangLld(ctx) {
+		if (lto.DefaultThinLTO(ctx) || lto.ThinLTO()) && ctx.Config().IsEnvTrue("USE_THINLTO_CACHE") {
 			// Set appropriate ThinLTO cache policy
 			cacheDirFormat := "-Wl,--thinlto-cache-dir="
 			cacheDir := android.PathForOutput(ctx, "thinlto-cache").String()

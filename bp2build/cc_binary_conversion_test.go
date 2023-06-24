@@ -222,6 +222,7 @@ func TestCcBinaryVersionScriptAndDynamicList(t *testing.T) {
         "-Wl,--version-script,$(location vs)",
         "-Wl,--dynamic-list,$(location dynamic.list)",
     ]`,
+				"features": `["android_cfi_exports_map"]`,
 			},
 			},
 		},
@@ -249,6 +250,7 @@ func TestCcBinaryLdflagsSplitBySpaceExceptSoongAdded(t *testing.T) {
         "version_script",
         "dynamic.list",
     ]`,
+				"features": `["android_cfi_exports_map"]`,
 				"linkopts": `[
         "--nospace_flag",
         "-z",
@@ -644,10 +646,7 @@ func TestCcBinaryWithInstructionSet(t *testing.T) {
 		targets: []testBazelTarget{
 			{"cc_binary", "foo", AttrNameToString{
 				"features": `select({
-        "//build/bazel/platforms/arch:arm": [
-            "arm_isa_arm",
-            "-arm_isa_thumb",
-        ],
+        "//build/bazel/platforms/arch:arm": ["arm_isa_arm"],
         "//conditions:default": [],
     })`,
 				"local_includes": `["."]`,
@@ -992,6 +991,47 @@ func TestCcBinaryWithThinLtoAndWholeProgramVtables(t *testing.T) {
         "android_thin_lto",
         "android_thin_lto_whole_program_vtables",
     ]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryHiddenVisibilityConvertedToFeature(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary changes hidden visibility to feature",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	cflags: ["-fvisibility=hidden"],
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features":       `["visibility_hidden"]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryHiddenVisibilityConvertedToFeatureOsSpecific(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary changes hidden visibility to feature for specific os",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	target: {
+		android: {
+			cflags: ["-fvisibility=hidden"],
+		},
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["visibility_hidden"],
+        "//conditions:default": [],
+    })`,
 			}},
 		},
 	})

@@ -404,7 +404,7 @@ type apexBundle struct {
 	///////////////////////////////////////////////////////////////////////////////////////////
 	// Inputs
 
-	// Keys for apex_paylaod.img
+	// Keys for apex_payload.img
 	publicKeyFile  android.Path
 	privateKeyFile android.Path
 
@@ -1064,6 +1064,10 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 
 	apexVariationName := mctx.ModuleName() // could be com.android.foo
 	a.properties.ApexVariationName = apexVariationName
+	testApexes := []string{}
+	if a.testApex {
+		testApexes = []string{apexVariationName}
+	}
 	apexInfo := android.ApexInfo{
 		ApexVariationName: apexVariationName,
 		MinSdkVersion:     minSdkVersion,
@@ -1072,6 +1076,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		InApexVariants:    []string{apexVariationName},
 		InApexModules:     []string{a.Name()}, // could be com.mycompany.android.foo
 		ApexContents:      []*android.ApexContents{apexContents},
+		TestApexes:        testApexes,
 	}
 	mctx.WalkDeps(func(child, parent android.Module) bool {
 		if !continueApexDepsWalk(child, parent) {
@@ -1823,6 +1828,7 @@ type androidApp interface {
 	Certificate() java.Certificate
 	BaseModuleName() string
 	LintDepSets() java.LintDepSets
+	PrivAppAllowlist() android.OptionalPath
 }
 
 var _ androidApp = (*java.AndroidApp)(nil)
@@ -1843,7 +1849,7 @@ func sanitizedBuildIdForPath(ctx android.BaseModuleContext) string {
 	return buildId
 }
 
-func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) apexFile {
+func apexFilesForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) []apexFile {
 	appDir := "app"
 	if aapp.Privileged() {
 		appDir = "priv-app"
@@ -1865,7 +1871,18 @@ func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) apexF
 	}); ok {
 		af.overriddenPackageName = app.OverriddenManifestPackageName()
 	}
-	return af
+
+	apexFiles := []apexFile{}
+
+	if allowlist := aapp.PrivAppAllowlist(); allowlist.Valid() {
+		dirInApex := filepath.Join("etc", "permissions")
+		privAppAllowlist := newApexFile(ctx, allowlist.Path(), aapp.BaseModuleName()+"_privapp", dirInApex, etc, aapp)
+		apexFiles = append(apexFiles, privAppAllowlist)
+	}
+
+	apexFiles = append(apexFiles, af)
+
+	return apexFiles
 }
 
 func apexFileForRuntimeResourceOverlay(ctx android.BaseModuleContext, rro java.RuntimeResourceOverlayModule) apexFile {
@@ -1959,9 +1976,6 @@ func (a *apexBundle) QueueBazelCall(ctx android.BaseModuleContext) {
 // overridden by different override_apex modules (e.g. Google or Go variants),
 // which is handled by the overrides mutators.
 func (a *apexBundle) GetBazelLabel(ctx android.BazelConversionPathContext, module blueprint.Module) string {
-	if _, ok := ctx.Module().(android.OverridableModule); ok {
-		return android.MaybeBp2buildLabelOfOverridingModule(ctx)
-	}
 	return a.BazelModuleBase.GetBazelLabel(ctx, a)
 }
 
@@ -2310,12 +2324,12 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		case androidAppTag:
 			switch ap := child.(type) {
 			case *java.AndroidApp:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 				return true // track transitive dependencies
 			case *java.AndroidAppImport:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 			case *java.AndroidTestHelperApp:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 			case *java.AndroidAppSet:
 				appDir := "app"
 				if ap.Privileged() {
@@ -2595,8 +2609,45 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.WalkDepsBlueprint(func(child, parent blueprint.Module) bool { return a.depVisitor(&vctx, ctx, child, parent) })
 	vctx.normalizeFileInfo(ctx)
 	if a.privateKeyFile == nil {
-		ctx.PropertyErrorf("key", "private_key for %q could not be found", String(a.overridableProperties.Key))
-		return
+		if ctx.Config().AllowMissingDependencies() {
+			// TODO(b/266099037): a better approach for slim manifests.
+			ctx.AddMissingDependencies([]string{String(a.overridableProperties.Key)})
+			// Create placeholder paths for later stages that expect to see those paths,
+			// though they won't be used.
+			var unusedPath = android.PathForModuleOut(ctx, "nonexistentprivatekey")
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   android.ErrorRule,
+				Output: unusedPath,
+				Args: map[string]string{
+					"error": "Private key not available",
+				},
+			})
+			a.privateKeyFile = unusedPath
+		} else {
+			ctx.PropertyErrorf("key", "private_key for %q could not be found", String(a.overridableProperties.Key))
+			return
+		}
+	}
+
+	if a.publicKeyFile == nil {
+		if ctx.Config().AllowMissingDependencies() {
+			// TODO(b/266099037): a better approach for slim manifests.
+			ctx.AddMissingDependencies([]string{String(a.overridableProperties.Key)})
+			// Create placeholder paths for later stages that expect to see those paths,
+			// though they won't be used.
+			var unusedPath = android.PathForModuleOut(ctx, "nonexistentpublickey")
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   android.ErrorRule,
+				Output: unusedPath,
+				Args: map[string]string{
+					"error": "Public key not available",
+				},
+			})
+			a.publicKeyFile = unusedPath
+		} else {
+			ctx.PropertyErrorf("key", "public_key for %q could not be found", String(a.overridableProperties.Key))
+			return
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////
@@ -3215,7 +3266,6 @@ func makeApexAvailableBaseline() map[string][]string {
 	//
 	m["com.android.appsearch"] = []string{
 		"icing-java-proto-lite",
-		"libprotobuf-java-lite",
 	}
 	//
 	// Module separator
@@ -3226,16 +3276,13 @@ func makeApexAvailableBaseline() map[string][]string {
 	//
 	// Module separator
 	//
-	m["com.android.cellbroadcast"] = []string{"CellBroadcastApp", "CellBroadcastServiceModule"}
+	m["com.android.cellbroadcast"] = []string{}
 	//
 	// Module separator
 	//
 	m["com.android.extservices"] = []string{
-		"error_prone_annotations",
 		"ExtServices-core",
-		"ExtServices",
 		"libtextclassifier-java",
-		"libz_current",
 		"textclassifier-statsd",
 		"TextClassifierNotificationLibNoManifest",
 		"TextClassifierServiceLibNoManifest",
@@ -3253,8 +3300,6 @@ func makeApexAvailableBaseline() map[string][]string {
 		"android.hidl.memory@1.0",
 		"android.hidl.safe_union@1.0",
 		"libarect",
-		"libbuildversion",
-		"libmath",
 		"libprocpartition",
 	}
 	//
@@ -3284,15 +3329,12 @@ func makeApexAvailableBaseline() map[string][]string {
 	// Module separator
 	//
 	m["com.android.runtime"] = []string{
-		"bionic_libc_platform_headers",
-		"libarm-optimized-routines-math",
 		"libc_aeabi",
 		"libc_bionic",
 		"libc_bionic_ndk",
 		"libc_bootstrap",
 		"libc_common",
 		"libc_common_shared",
-		"libc_common_static",
 		"libc_dns",
 		"libc_dynamic_dispatch",
 		"libc_fortify",
@@ -3309,19 +3351,16 @@ func makeApexAvailableBaseline() map[string][]string {
 		"libc_openbsd_large_stack",
 		"libc_openbsd_ndk",
 		"libc_pthread",
-		"libc_static_dispatch",
 		"libc_syscalls",
 		"libc_tzcode",
 		"libc_unwind_static",
 		"libdebuggerd",
 		"libdebuggerd_common_headers",
 		"libdebuggerd_handler_core",
-		"libdebuggerd_handler_fallback",
 		"libdl_static",
 		"libjemalloc5",
 		"liblinker_main",
 		"liblinker_malloc",
-		"liblz4",
 		"liblzma",
 		"libprocinfo",
 		"libpropertyinfoparser",
@@ -3339,17 +3378,7 @@ func makeApexAvailableBaseline() map[string][]string {
 	m["com.android.tethering"] = []string{
 		"android.hardware.tetheroffload.config-V1.0-java",
 		"android.hardware.tetheroffload.control-V1.0-java",
-		"android.hidl.base-V1.0-java",
-		"libcgrouprc",
-		"libcgrouprc_format",
-		"libtetherutilsjni",
-		"libvndksupport",
 		"net-utils-framework-common",
-		"netd_aidl_interface-V3-java",
-		"netlink-client",
-		"networkstack-aidl-interfaces-java",
-		"tethering-aidl-interfaces-java",
-		"TetheringApiCurrentLib",
 	}
 	//
 	// Module separator
@@ -3369,10 +3398,6 @@ func makeApexAvailableBaseline() map[string][]string {
 		"android.hardware.wifi.supplicant-V1.1-java",
 		"android.hardware.wifi.supplicant-V1.2-java",
 		"android.hardware.wifi.supplicant-V1.3-java",
-		"android.hidl.base-V1.0-java",
-		"android.hidl.manager-V1.0-java",
-		"android.hidl.manager-V1.1-java",
-		"android.hidl.manager-V1.2-java",
 		"vendor.qti.hardware.wifi.hostapd-V1.0-java",
 		"vendor.qti.hardware.wifi.hostapd-V1.1-java",
 		"vendor.qti.hardware.wifi.hostapd-V1.2-java",
@@ -3381,52 +3406,21 @@ func makeApexAvailableBaseline() map[string][]string {
 		"vendor.qti.hardware.wifi.supplicant-V2.2-java",
 		"vendor.qti.hardware.fstman-V1.0-java",
 		"bouncycastle-unbundled",
-		"dnsresolver_aidl_interface-V2-java",
-		"error_prone_annotations",
-		"framework-wifi-pre-jarjar",
 		"framework-wifi-util-lib",
-		"ipmemorystore-aidl-interfaces-V3-java",
-		"ipmemorystore-aidl-interfaces-java",
 		"ksoap2",
 		"libnanohttpd",
-		"libwifi-jni",
-		"net-utils-services-common",
-		"netd_aidl_interface-V2-java",
-		"netd_aidl_interface-unstable-java",
-		"netd_event_listener_interface-java",
-		"netlink-client",
-		"networkstack-client",
-		"services.net",
 		"wifi-lite-protos",
 		"wifi-nano-protos",
 		"wifi-service-pre-jarjar",
-		"wifi-service-resources",
-	}
-	//
-	// Module separator
-	//
-	m["com.android.os.statsd"] = []string{
-		"libstatssocket",
 	}
 	//
 	// Module separator
 	//
 	m[android.AvailableToAnyApex] = []string{
-		// TODO(b/156996905) Set apex_available/min_sdk_version for androidx/extras support libraries
-		"androidx",
-		"androidx-constraintlayout_constraintlayout",
-		"androidx-constraintlayout_constraintlayout-nodeps",
-		"androidx-constraintlayout_constraintlayout-solver",
-		"androidx-constraintlayout_constraintlayout-solver-nodeps",
-		"com.google.android.material_material",
-		"com.google.android.material_material-nodeps",
-
-		"libclang_rt",
 		"libprofile-clang-extras",
 		"libprofile-clang-extras_ndk",
 		"libprofile-extras",
 		"libprofile-extras_ndk",
-		"libunwind",
 	}
 	return m
 }
@@ -3689,6 +3683,8 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 	commonAttrs := android.CommonAttributes{}
 	if a.testApex {
 		commonAttrs.Testonly = proptools.BoolPtr(true)
+		// Set the api_domain of the test apex
+		attrs.Base_apex_name = proptools.StringPtr(cc.GetApiDomain(a.Name()))
 	}
 
 	return attrs, props, commonAttrs
@@ -3796,4 +3792,8 @@ func makeSharedLibsAttributes(config string, libsLabelList bazel.LabelList,
 
 func invalidCompileMultilib(ctx android.TopDownMutatorContext, value string) {
 	ctx.PropertyErrorf("compile_multilib", "Invalid value: %s", value)
+}
+
+func (a *apexBundle) IsTestApex() bool {
+	return a.testApex
 }

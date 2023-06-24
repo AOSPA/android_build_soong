@@ -163,6 +163,21 @@ var ignoredDefines = map[string]bool{
 
 var identifierFullMatchRegex = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
 
+func RelativeToCwd(path string) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	path, err = filepath.Rel(cwd, path)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(path, "../") {
+		return "", fmt.Errorf("Could not make path relative to current working directory: " + path)
+	}
+	return path, nil
+}
+
 // Conversion request parameters
 type Request struct {
 	MkFile          string    // file to convert
@@ -320,6 +335,14 @@ func (gctx *generationContext) emitPreamble() {
 	loadedSubConfigs := make(map[string]string)
 	for _, mi := range gctx.starScript.inherited {
 		uri := mi.path
+		if strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "//") {
+			var err error
+			uri, err = RelativeToCwd(uri)
+			if err != nil {
+				panic(err)
+			}
+			uri = "//" + uri
+		}
 		if m, ok := loadedSubConfigs[uri]; ok {
 			// No need to emit load statement, but fix module name.
 			mi.moduleLocalName = m
@@ -847,7 +870,7 @@ func (ctx *parseContext) handleSubConfig(
 	}
 
 	// Safeguard against $(call inherit-product,$(PRODUCT_PATH))
-	const maxMatchingFiles = 150
+	const maxMatchingFiles = 155 // temporarily increased to 155 for b/284854738
 	if len(matchingPaths) > maxMatchingFiles {
 		return []starlarkNode{ctx.newBadNode(v, "there are >%d files matching the pattern, please rewrite it", maxMatchingFiles)}
 	}

@@ -104,20 +104,51 @@ func prebuiltApiModuleName(mctx android.LoadHookContext, module, scope, version 
 	return fmt.Sprintf("%s_%s_%s_%s", mctx.ModuleName(), scope, version, module)
 }
 
+func hasBazelPrebuilt(module string) bool {
+	return module == "android" || module == "core-for-system-modules"
+}
+
+func bazelPrebuiltApiModuleName(module, scope, version string) string {
+	bazelModule := module
+	switch module {
+	case "android":
+		bazelModule = "android_jar"
+	case "core-for-system-modules":
+		bazelModule = "core_jar"
+	}
+	bazelVersion := version
+	if version == "current" {
+		bazelVersion = strconv.Itoa(android.FutureApiLevelInt)
+	}
+	bazelScope := scope
+	switch scope {
+	case "module-lib":
+		bazelScope = "module"
+	case "system-server":
+		bazelScope = "system_server"
+	}
+	return fmt.Sprintf("//prebuilts/sdk:%s_%s_%s", bazelScope, bazelVersion, bazelModule)
+}
+
 func createImport(mctx android.LoadHookContext, module, scope, version, path, sdkVersion string, compileDex bool) {
 	props := struct {
-		Name        *string
-		Jars        []string
-		Sdk_version *string
-		Installable *bool
-		Compile_dex *bool
-	}{}
-	props.Name = proptools.StringPtr(prebuiltApiModuleName(mctx, module, scope, version))
-	props.Jars = append(props.Jars, path)
-	props.Sdk_version = proptools.StringPtr(sdkVersion)
-	props.Installable = proptools.BoolPtr(false)
-	props.Compile_dex = proptools.BoolPtr(compileDex)
-
+		Name         *string
+		Jars         []string
+		Sdk_version  *string
+		Installable  *bool
+		Compile_dex  *bool
+		Bazel_module android.BazelModuleProperties
+	}{
+		Name:        proptools.StringPtr(prebuiltApiModuleName(mctx, module, scope, version)),
+		Jars:        []string{path},
+		Sdk_version: proptools.StringPtr(sdkVersion),
+		Installable: proptools.BoolPtr(false),
+		Compile_dex: proptools.BoolPtr(compileDex),
+	}
+	if hasBazelPrebuilt(module) {
+		props.Bazel_module = android.BazelModuleProperties{
+			Label: proptools.StringPtr(bazelPrebuiltApiModuleName(module, scope, version))}
+	}
 	mctx.CreateModule(ImportFactory, &props)
 }
 
@@ -132,6 +163,19 @@ func createApiModule(mctx android.LoadHookContext, name string, path string) {
 	genruleProps.Srcs = []string{path}
 	genruleProps.Out = []string{name}
 	genruleProps.Cmd = proptools.StringPtr("cp $(in) $(out)")
+	mctx.CreateModule(genrule.GenRuleFactory, &genruleProps)
+}
+
+func createLatestApiModuleExtensionVersionFile(mctx android.LoadHookContext, name string, version string) {
+	genruleProps := struct {
+		Name *string
+		Srcs []string
+		Out  []string
+		Cmd  *string
+	}{}
+	genruleProps.Name = proptools.StringPtr(name)
+	genruleProps.Out = []string{name}
+	genruleProps.Cmd = proptools.StringPtr("echo " + version + " > $(out)")
 	mctx.CreateModule(genrule.GenRuleFactory, &genruleProps)
 }
 
@@ -233,9 +277,10 @@ func prebuiltApiFiles(mctx android.LoadHookContext, p *prebuiltApis) {
 	type latestApiInfo struct {
 		module, scope, path string
 		version             int
+		isExtensionApiFile  bool
 	}
 
-	getLatest := func(files []string) map[string]latestApiInfo {
+	getLatest := func(files []string, isExtensionApiFile bool) map[string]latestApiInfo {
 		m := make(map[string]latestApiInfo)
 		for _, f := range files {
 			module, version, scope := parseFinalizedPrebuiltPath(mctx, f)
@@ -245,16 +290,16 @@ func prebuiltApiFiles(mctx android.LoadHookContext, p *prebuiltApis) {
 			key := module + "." + scope
 			info, exists := m[key]
 			if !exists || version > info.version {
-				m[key] = latestApiInfo{module, scope, f, version}
+				m[key] = latestApiInfo{module, scope, f, version, isExtensionApiFile}
 			}
 		}
 		return m
 	}
 
-	latest := getLatest(apiLevelFiles)
+	latest := getLatest(apiLevelFiles, false)
 	if p.properties.Extensions_dir != nil {
 		extensionApiFiles := globExtensionDirs(mctx, p, "api/*.txt")
-		for k, v := range getLatest(extensionApiFiles) {
+		for k, v := range getLatest(extensionApiFiles, true) {
 			if _, exists := latest[k]; !exists {
 				mctx.ModuleErrorf("Module %v finalized for extension %d but never during an API level; likely error", v.module, v.version)
 			}
@@ -267,6 +312,12 @@ func prebuiltApiFiles(mctx android.LoadHookContext, p *prebuiltApis) {
 	for _, k := range android.SortedKeys(latest) {
 		info := latest[k]
 		name := PrebuiltApiModuleName(info.module, info.scope, "latest")
+		latestExtensionVersionModuleName := PrebuiltApiModuleName(info.module, info.scope, "latest.extension_version")
+		if info.isExtensionApiFile {
+			createLatestApiModuleExtensionVersionFile(mctx, latestExtensionVersionModuleName, strconv.Itoa(info.version))
+		} else {
+			createLatestApiModuleExtensionVersionFile(mctx, latestExtensionVersionModuleName, "-1")
+		}
 		createApiModule(mctx, name, info.path)
 	}
 

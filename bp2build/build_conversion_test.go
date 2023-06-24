@@ -21,6 +21,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/android/allowlists"
+	"android/soong/bazel"
 	"android/soong/python"
 )
 
@@ -1897,4 +1898,51 @@ func TestGenerateApiBazelTargets(t *testing.T) {
 		ExpectedBazelTargets: []string{expectedBazelTarget},
 		Description:          "Generating API contribution Bazel targets for custom module",
 	})
+}
+
+func TestGenerateConfigSetting(t *testing.T) {
+	bp := `
+	custom {
+		name: "foo",
+		test_config_setting: true,
+	}
+	`
+	expectedBazelTargets := []string{
+		MakeBazelTargetNoRestrictions(
+			"config_setting",
+			"foo_config_setting",
+			AttrNameToString{
+				"flag_values": `{
+        "//build/bazel/rules/my_string_setting": "foo",
+    }`,
+			},
+		),
+		MakeBazelTarget(
+			"custom",
+			"foo",
+			AttrNameToString{},
+		),
+	}
+	registerCustomModule := func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("custom", customModuleFactoryHostAndDevice)
+	}
+	RunBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		Blueprint:            bp,
+		ExpectedBazelTargets: expectedBazelTargets,
+		Description:          "Generating API contribution Bazel targets for custom module",
+	})
+}
+
+// If values of all keys in an axis are equal to //conditions:default, drop the axis and print the common value
+func TestPrettyPrintSelectMapEqualValues(t *testing.T) {
+	lla := bazel.LabelListAttribute{
+		Value: bazel.LabelList{},
+	}
+	libFooImplLabel := bazel.Label{
+		Label: ":libfoo.impl",
+	}
+	lla.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidPlatform, bazel.MakeLabelList([]bazel.Label{libFooImplLabel}))
+	lla.SetSelectValue(bazel.OsAndInApexAxis, bazel.ConditionsDefaultConfigKey, bazel.MakeLabelList([]bazel.Label{libFooImplLabel}))
+	actual, _ := prettyPrintAttribute(lla, 0)
+	android.AssertStringEquals(t, "Print the common value if all keys in an axis have the same value", `[":libfoo.impl"]`, actual)
 }

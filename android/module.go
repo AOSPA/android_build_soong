@@ -15,6 +15,9 @@
 package android
 
 import (
+	"crypto/md5"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -353,6 +356,10 @@ type BaseModuleContext interface {
 	GetPathString(skipFirst bool) string
 
 	AddMissingDependencies(missingDeps []string)
+
+	// getMissingDependencies returns the list of missing dependencies.
+	// Calling this function prevents adding new dependencies.
+	getMissingDependencies() []string
 
 	// AddUnconvertedBp2buildDep stores module name of a direct dependency that was not converted via bp2build
 	AddUnconvertedBp2buildDep(dep string)
@@ -710,6 +717,31 @@ func SortedUniqueNamedPaths(l NamedPaths) NamedPaths {
 	return l[:k+1]
 }
 
+// soongConfigTrace holds all references to VendorVars. Uses []string for blueprint:"mutated"
+type soongConfigTrace struct {
+	Bools   []string `json:",omitempty"`
+	Strings []string `json:",omitempty"`
+	IsSets  []string `json:",omitempty"`
+}
+
+func (c *soongConfigTrace) isEmpty() bool {
+	return len(c.Bools) == 0 && len(c.Strings) == 0 && len(c.IsSets) == 0
+}
+
+// Returns hash of serialized trace records (empty string if there's no trace recorded)
+func (c *soongConfigTrace) hash() string {
+	// Use MD5 for speed. We don't care collision or preimage attack
+	if c.isEmpty() {
+		return ""
+	}
+	j, err := json.Marshal(c)
+	if err != nil {
+		panic(fmt.Errorf("json marshal of %#v failed: %#v", *c, err))
+	}
+	hash := md5.Sum(j)
+	return hex.EncodeToString(hash[:])
+}
+
 type nameProperties struct {
 	// The name of the module.  Must be unique across all modules.
 	Name *string
@@ -925,6 +957,12 @@ type commonProperties struct {
 	// and don't create a rule to install the file.
 	SkipInstall bool `blueprint:"mutated"`
 
+	// UninstallableApexPlatformVariant is set by MakeUninstallable called by the apex
+	// mutator.  MakeUninstallable also sets HideFromMake.  UninstallableApexPlatformVariant
+	// is used to avoid adding install or packaging dependencies into libraries provided
+	// by apexes.
+	UninstallableApexPlatformVariant bool `blueprint:"mutated"`
+
 	// Whether the module has been replaced by a prebuilt
 	ReplacedByPrebuilt bool `blueprint:"mutated"`
 
@@ -933,7 +971,8 @@ type commonProperties struct {
 
 	NamespaceExportedToMake bool `blueprint:"mutated"`
 
-	MissingDeps []string `blueprint:"mutated"`
+	MissingDeps        []string `blueprint:"mutated"`
+	CheckedMissingDeps bool     `blueprint:"mutated"`
 
 	// Name and variant strings stored by mutators to enable Module.String()
 	DebugName       string   `blueprint:"mutated"`
@@ -947,6 +986,10 @@ type commonProperties struct {
 
 	// Bazel conversion status
 	BazelConversionStatus BazelConversionStatus `blueprint:"mutated"`
+
+	// SoongConfigTrace records accesses to VendorVars (soong_config)
+	SoongConfigTrace     soongConfigTrace `blueprint:"mutated"`
+	SoongConfigTraceHash string           `blueprint:"mutated"`
 }
 
 // CommonAttributes represents the common Bazel attributes from which properties
@@ -2009,6 +2052,7 @@ func (m *ModuleBase) IsSkipInstall() bool {
 // have other side effects, in particular when it adds a NOTICE file target,
 // which other install targets might depend on.
 func (m *ModuleBase) MakeUninstallable() {
+	m.commonProperties.UninstallableApexPlatformVariant = true
 	m.HideFromMake()
 }
 
@@ -2038,18 +2082,35 @@ func (m *ModuleBase) EffectiveLicenseFiles() Paths {
 }
 
 // computeInstallDeps finds the installed paths of all dependencies that have a dependency
-// tag that is annotated as needing installation via the IsInstallDepNeeded method.
+// tag that is annotated as needing installation via the isInstallDepNeeded method.
 func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*installPathsDepSet, []*packagingSpecsDepSet) {
 	var installDeps []*installPathsDepSet
 	var packagingSpecs []*packagingSpecsDepSet
 	ctx.VisitDirectDeps(func(dep Module) {
-		if IsInstallDepNeeded(ctx.OtherModuleDependencyTag(dep)) && !dep.IsHideFromMake() && !dep.IsSkipInstall() {
-			installDeps = append(installDeps, dep.base().installFilesDepSet)
+		if isInstallDepNeeded(dep, ctx.OtherModuleDependencyTag(dep)) {
+			// Installation is still handled by Make, so anything hidden from Make is not
+			// installable.
+			if !dep.IsHideFromMake() && !dep.IsSkipInstall() {
+				installDeps = append(installDeps, dep.base().installFilesDepSet)
+			}
+			// Add packaging deps even when the dependency is not installed so that uninstallable
+			// modules can still be packaged.  Often the package will be installed instead.
 			packagingSpecs = append(packagingSpecs, dep.base().packagingSpecsDepSet)
 		}
 	})
 
 	return installDeps, packagingSpecs
+}
+
+// isInstallDepNeeded returns true if installing the output files of the current module
+// should also install the output files of the given dependency and dependency tag.
+func isInstallDepNeeded(dep Module, tag blueprint.DependencyTag) bool {
+	// Don't add a dependency from the platform to a library provided by an apex.
+	if dep.base().commonProperties.UninstallableApexPlatformVariant {
+		return false
+	}
+	// Only install modules if the dependency tag is an InstallDepNeeded tag.
+	return IsInstallDepNeededTag(tag)
 }
 
 func (m *ModuleBase) FilesToInstall() InstallPaths {
@@ -2438,7 +2499,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 func (m *ModuleBase) isHandledByBazel(ctx ModuleContext) (MixedBuildBuildable, bool) {
 	if mixedBuildMod, ok := m.module.(MixedBuildBuildable); ok {
-		if mixedBuildMod.IsMixedBuildSupported(ctx) && MixedBuildsEnabled(ctx) {
+		if mixedBuildMod.IsMixedBuildSupported(ctx) && (MixedBuildsEnabled(ctx) == MixedBuildEnabled) {
 			return mixedBuildMod, true
 		}
 	}
@@ -2838,6 +2899,20 @@ func (b *baseModuleContext) AddMissingDependencies(deps []string) {
 	}
 }
 
+func (b *baseModuleContext) checkedMissingDeps() bool {
+	return b.Module().base().commonProperties.CheckedMissingDeps
+}
+
+func (b *baseModuleContext) getMissingDependencies() []string {
+	checked := &b.Module().base().commonProperties.CheckedMissingDeps
+	*checked = true
+	var missingDeps []string
+	missingDeps = append(missingDeps, b.Module().base().commonProperties.MissingDeps...)
+	missingDeps = append(missingDeps, b.bp.EarlyGetMissingDependencies()...)
+	missingDeps = FirstUniqueStrings(missingDeps)
+	return missingDeps
+}
+
 type AllowDisabledModuleDependency interface {
 	blueprint.DependencyTag
 	AllowDisabledModuleDependency(target Module) bool
@@ -3115,6 +3190,10 @@ func (b *baseModuleContext) GetPathString(skipFirst bool) string {
 
 func (m *moduleContext) ModuleSubDir() string {
 	return m.bp.ModuleSubDir()
+}
+
+func (m *moduleContext) ModuleSoongConfigHash() string {
+	return m.module.base().commonProperties.SoongConfigTraceHash
 }
 
 func (b *baseModuleContext) Target() Target {
@@ -3700,7 +3779,9 @@ func (m *moduleContext) TargetRequiredModuleNames() []string {
 }
 
 func init() {
-	RegisterSingletonType("buildtarget", BuildTargetSingleton)
+	RegisterParallelSingletonType("buildtarget", BuildTargetSingleton)
+	RegisterParallelSingletonType("soongconfigtrace", soongConfigTraceSingletonFunc)
+	FinalDepsMutators(registerSoongConfigTraceMutator)
 }
 
 func BuildTargetSingleton() Singleton {
@@ -3881,4 +3962,55 @@ func (d *installPathsDepSet) ToList() InstallPaths {
 		return nil
 	}
 	return d.depSet.ToList().(InstallPaths)
+}
+
+func registerSoongConfigTraceMutator(ctx RegisterMutatorsContext) {
+	ctx.BottomUp("soongconfigtrace", soongConfigTraceMutator).Parallel()
+}
+
+// soongConfigTraceMutator accumulates recorded soong_config trace from children. Also it normalizes
+// SoongConfigTrace to make it consistent.
+func soongConfigTraceMutator(ctx BottomUpMutatorContext) {
+	trace := &ctx.Module().base().commonProperties.SoongConfigTrace
+	ctx.VisitDirectDeps(func(m Module) {
+		childTrace := &m.base().commonProperties.SoongConfigTrace
+		trace.Bools = append(trace.Bools, childTrace.Bools...)
+		trace.Strings = append(trace.Strings, childTrace.Strings...)
+		trace.IsSets = append(trace.IsSets, childTrace.IsSets...)
+	})
+	trace.Bools = SortedUniqueStrings(trace.Bools)
+	trace.Strings = SortedUniqueStrings(trace.Strings)
+	trace.IsSets = SortedUniqueStrings(trace.IsSets)
+
+	ctx.Module().base().commonProperties.SoongConfigTraceHash = trace.hash()
+}
+
+// soongConfigTraceSingleton writes a map from each module's config hash value to trace data.
+func soongConfigTraceSingletonFunc() Singleton {
+	return &soongConfigTraceSingleton{}
+}
+
+type soongConfigTraceSingleton struct {
+}
+
+func (s *soongConfigTraceSingleton) GenerateBuildActions(ctx SingletonContext) {
+	outFile := PathForOutput(ctx, "soong_config_trace.json")
+
+	traces := make(map[string]*soongConfigTrace)
+	ctx.VisitAllModules(func(module Module) {
+		trace := &module.base().commonProperties.SoongConfigTrace
+		if !trace.isEmpty() {
+			hash := module.base().commonProperties.SoongConfigTraceHash
+			traces[hash] = trace
+		}
+	})
+
+	j, err := json.Marshal(traces)
+	if err != nil {
+		ctx.Errorf("json marshal to %q failed: %#v", outFile, err)
+		return
+	}
+
+	WriteFileRule(ctx, outFile, string(j))
+	ctx.Phony("soong_config_trace", outFile)
 }

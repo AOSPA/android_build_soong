@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -61,6 +60,8 @@ var (
 		"AUTO_UNINITIALIZE",
 		"USE_CCACHE",
 		"LLVM_NEXT",
+		"LLVM_PREBUILTS_VERSION",
+		"LLVM_RELEASE_VERSION",
 		"ALLOW_UNKNOWN_WARNING_OPTION",
 
 		"UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT",
@@ -73,25 +74,21 @@ var (
 	}
 )
 
-func init() {
-	RegisterMixedBuildsMutator(InitRegistrationContext)
+func registerMixedBuildsMutator(ctx RegisterMutatorsContext) {
+	ctx.BottomUp("mixed_builds_prep", mixedBuildsPrepareMutator).Parallel()
 }
 
 func RegisterMixedBuildsMutator(ctx RegistrationContext) {
-	ctx.FinalDepsMutators(func(ctx RegisterMutatorsContext) {
-		ctx.BottomUp("mixed_builds_prep", mixedBuildsPrepareMutator).Parallel()
-	})
+	ctx.FinalDepsMutators(registerMixedBuildsMutator)
 }
 
 func mixedBuildsPrepareMutator(ctx BottomUpMutatorContext) {
 	if m := ctx.Module(); m.Enabled() {
 		if mixedBuildMod, ok := m.(MixedBuildBuildable); ok {
-			queueMixedBuild := mixedBuildMod.IsMixedBuildSupported(ctx) && MixedBuildsEnabled(ctx)
+			mixedBuildEnabled := MixedBuildsEnabled(ctx)
+			queueMixedBuild := mixedBuildMod.IsMixedBuildSupported(ctx) && mixedBuildEnabled == MixedBuildEnabled
 			if queueMixedBuild {
 				mixedBuildMod.QueueBazelCall(ctx)
-			} else if _, ok := ctx.Config().bazelForceEnabledModules[m.Name()]; ok {
-				// TODO(b/273910287) - remove this once --ensure_allowlist_integrity is added
-				ctx.ModuleErrorf("Attempted to force enable an unready module: %s. Did you forget to Bp2BuildDefaultTrue its directory?\n", m.Name())
 			}
 		}
 	}
@@ -184,10 +181,6 @@ type BazelContext interface {
 	// Returns the results of GetOutputFiles and GetCcObjectFiles in a single query (in that order).
 	GetCcInfo(label string, cfgKey configKey) (cquery.CcInfo, error)
 
-	// Returns the executable binary resultant from building together the python sources
-	// TODO(b/232976601): Remove.
-	GetPythonBinary(label string, cfgKey configKey) (string, error)
-
 	// Returns the results of the GetApexInfo query (including output files)
 	GetApexInfo(label string, cfgkey configKey) (cquery.ApexInfo, error)
 
@@ -220,8 +213,7 @@ type BazelContext interface {
 }
 
 type bazelRunner interface {
-	createBazelCommand(config Config, paths *bazelPaths, runName bazel.RunName, command bazelCommand, extraFlags ...string) *exec.Cmd
-	issueBazelCommand(bazelCmd *exec.Cmd, eventHandler *metrics.EventHandler) (output string, errorMessage string, error error)
+	issueBazelCommand(cmdRequest bazel.CmdRequest, paths *bazelPaths, eventHandler *metrics.EventHandler) (output string, errorMessage string, error error)
 }
 
 type bazelPaths struct {
@@ -313,14 +305,6 @@ func (m MockBazelContext) GetCcInfo(label string, cfgKey configKey) (cquery.CcIn
 		if !ok {
 			return cquery.CcInfo{}, fmt.Errorf("no target with label %q in LabelToCcInfo", label)
 		}
-	}
-	return result, nil
-}
-
-func (m MockBazelContext) GetPythonBinary(label string, _ configKey) (string, error) {
-	result, ok := m.LabelToPythonBinary[label]
-	if !ok {
-		return "", fmt.Errorf("no target with label %q in LabelToPythonBinary", label)
 	}
 	return result, nil
 }
@@ -433,15 +417,6 @@ func (bazelCtx *mixedBuildBazelContext) GetCcInfo(label string, cfgKey configKey
 	return cquery.CcInfo{}, fmt.Errorf("no bazel response found for %v", key)
 }
 
-func (bazelCtx *mixedBuildBazelContext) GetPythonBinary(label string, cfgKey configKey) (string, error) {
-	key := makeCqueryKey(label, cquery.GetPythonBinary, cfgKey)
-	if rawString, ok := bazelCtx.results[key]; ok {
-		bazelOutput := strings.TrimSpace(rawString)
-		return cquery.GetPythonBinary.ParseResult(bazelOutput), nil
-	}
-	return "", fmt.Errorf("no bazel response found for %v", key)
-}
-
 func (bazelCtx *mixedBuildBazelContext) GetApexInfo(label string, cfgKey configKey) (cquery.ApexInfo, error) {
 	key := makeCqueryKey(label, cquery.GetApexInfo, cfgKey)
 	if rawString, ok := bazelCtx.results[key]; ok {
@@ -467,10 +442,6 @@ func (n noopBazelContext) GetOutputFiles(_ string, _ configKey) ([]string, error
 }
 
 func (n noopBazelContext) GetCcInfo(_ string, _ configKey) (cquery.CcInfo, error) {
-	panic("unimplemented")
-}
-
-func (n noopBazelContext) GetPythonBinary(_ string, _ configKey) (string, error) {
 	panic("unimplemented")
 }
 
@@ -507,7 +478,7 @@ func (m noopBazelContext) AqueryDepsets() []bazel.AqueryDepset {
 	return []bazel.AqueryDepset{}
 }
 
-func addToStringSet(set map[string]bool, items []string) {
+func AddToStringSet(set map[string]bool, items []string) {
 	for _, item := range items {
 		set[item] = true
 	}
@@ -519,19 +490,19 @@ func GetBazelEnabledAndDisabledModules(buildMode SoongBuildMode, forceEnabled ma
 
 	switch buildMode {
 	case BazelProdMode:
-		addToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
+		AddToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
 		for enabledAdHocModule := range forceEnabled {
 			enabledModules[enabledAdHocModule] = true
 		}
 	case BazelStagingMode:
 		// Staging mode includes all prod modules plus all staging modules.
-		addToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
-		addToStringSet(enabledModules, allowlists.StagingMixedBuildsEnabledList)
+		AddToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
+		AddToStringSet(enabledModules, allowlists.StagingMixedBuildsEnabledList)
 		for enabledAdHocModule := range forceEnabled {
 			enabledModules[enabledAdHocModule] = true
 		}
 	case BazelDevMode:
-		addToStringSet(disabledModules, allowlists.MixedBuildsDisabledList)
+		AddToStringSet(disabledModules, allowlists.MixedBuildsDisabledList)
 	default:
 		panic("Expected BazelProdMode, BazelStagingMode, or BazelDevMode")
 	}
@@ -611,7 +582,7 @@ func NewBazelContext(c *config) (BazelContext, error) {
 			allowlists.StagingDclaMixedBuildsEnabledList...)
 	}
 	dclaEnabledModules := map[string]bool{}
-	addToStringSet(dclaEnabledModules, dclaMixedBuildsEnabledList)
+	AddToStringSet(dclaEnabledModules, dclaMixedBuildsEnabledList)
 	return &mixedBuildBazelContext{
 		bazelRunner:             &builtinBazelRunner{c.UseBazelProxy, absolutePath(c.outDir)},
 		paths:                   &paths,
@@ -660,36 +631,6 @@ type bazelCommand struct {
 	expression string
 }
 
-type mockBazelRunner struct {
-	bazelCommandResults map[bazelCommand]string
-	// use *exec.Cmd as a key to get the bazelCommand, the map will be used in issueBazelCommand()
-	// Register createBazelCommand() invocations. Later, an
-	// issueBazelCommand() invocation can be mapped to the *exec.Cmd instance
-	// and then to the expected result via bazelCommandResults
-	tokens     map[*exec.Cmd]bazelCommand
-	commands   []bazelCommand
-	extraFlags []string
-}
-
-func (r *mockBazelRunner) createBazelCommand(_ Config, _ *bazelPaths, _ bazel.RunName,
-	command bazelCommand, extraFlags ...string) *exec.Cmd {
-	r.commands = append(r.commands, command)
-	r.extraFlags = append(r.extraFlags, strings.Join(extraFlags, " "))
-	cmd := &exec.Cmd{}
-	if r.tokens == nil {
-		r.tokens = make(map[*exec.Cmd]bazelCommand)
-	}
-	r.tokens[cmd] = command
-	return cmd
-}
-
-func (r *mockBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd, _ *metrics.EventHandler) (string, string, error) {
-	if command, ok := r.tokens[bazelCmd]; ok {
-		return r.bazelCommandResults[command], "", nil
-	}
-	return "", "", nil
-}
-
 type builtinBazelRunner struct {
 	useBazelProxy bool
 	outDir        string
@@ -699,17 +640,12 @@ type builtinBazelRunner struct {
 // Returns (stdout, stderr, error). The first and second return values are strings
 // containing the stdout and stderr of the run command, and an error is returned if
 // the invocation returned an error code.
-func (r *builtinBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd, eventHandler *metrics.EventHandler) (string, string, error) {
+func (r *builtinBazelRunner) issueBazelCommand(cmdRequest bazel.CmdRequest, paths *bazelPaths, eventHandler *metrics.EventHandler) (string, string, error) {
 	if r.useBazelProxy {
 		eventHandler.Begin("client_proxy")
 		defer eventHandler.End("client_proxy")
 		proxyClient := bazel.NewProxyClient(r.outDir)
-		// Omit the arg containing the Bazel binary, as that is handled by the proxy
-		// server.
-		bazelFlags := bazelCmd.Args[1:]
-		// TODO(b/270989498): Refactor these functions to not take exec.Cmd, as its
-		// not actually executed for client proxying.
-		resp, err := proxyClient.IssueCommand(bazel.CmdRequest{bazelFlags, bazelCmd.Env})
+		resp, err := proxyClient.IssueCommand(cmdRequest)
 
 		if err != nil {
 			return "", "", err
@@ -721,32 +657,34 @@ func (r *builtinBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd, eventHandler 
 	} else {
 		eventHandler.Begin("bazel command")
 		defer eventHandler.End("bazel command")
-		stderr := &bytes.Buffer{}
-		bazelCmd.Stderr = stderr
-		if output, err := bazelCmd.Output(); err != nil {
-			return "", string(stderr.Bytes()),
-				fmt.Errorf("bazel command failed: %s\n---command---\n%s\n---env---\n%s\n---stderr---\n%s---",
-					err, bazelCmd, strings.Join(bazelCmd.Env, "\n"), stderr)
-		} else {
-			return string(output), string(stderr.Bytes()), nil
-		}
+
+		stdout, stderr, err := bazel.ExecBazel(paths.bazelPath, absolutePath(paths.syntheticWorkspaceDir()), cmdRequest)
+		return string(stdout), string(stderr), err
 	}
 }
 
-func (r *builtinBazelRunner) createBazelCommand(config Config, paths *bazelPaths, runName bazel.RunName, command bazelCommand,
-	extraFlags ...string) *exec.Cmd {
+func (context *mixedBuildBazelContext) createBazelCommand(config Config, runName bazel.RunName, command bazelCommand,
+	extraFlags ...string) bazel.CmdRequest {
 	cmdFlags := []string{
-		"--output_base=" + absolutePath(paths.outputBase),
+		"--output_base=" + absolutePath(context.paths.outputBase),
 		command.command,
 		command.expression,
-		// TODO(asmundak): is it needed in every build?
-		"--profile=" + shared.BazelMetricsFilename(paths, runName),
+		"--profile=" + shared.BazelMetricsFilename(context.paths, runName),
 
 		// We don't need to set --host_platforms because it's set in bazelrc files
 		// that the bazel shell script wrapper passes
 
-		// Explicitly disable downloading rules (such as canonical C++ and Java rules) from the network.
-		"--experimental_repository_disable_download",
+		// Optimize Ninja rebuilds by ensuring Bazel write into product-agnostic
+		// output paths for the configured targets that shouldn't be affected by
+		// TARGET_PRODUCT. Otherwise product agnostic modules will be rebuilt by
+		// Ninja when the product changes, unconditionally.
+		//
+		// For example, Mainline APEXes should be identical regardless of the
+		// product (modulo arch/cpu).
+		//
+		// This flag forcibly disables the platform prefix in the intermediate
+		// outputs during a mixed build.
+		"--noexperimental_platform_in_output_dir",
 
 		// Suppress noise
 		"--ui_event_filters=-INFO",
@@ -755,15 +693,13 @@ func (r *builtinBazelRunner) createBazelCommand(config Config, paths *bazelPaths
 	}
 	cmdFlags = append(cmdFlags, extraFlags...)
 
-	bazelCmd := exec.Command(paths.bazelPath, cmdFlags...)
-	bazelCmd.Dir = absolutePath(paths.syntheticWorkspaceDir())
 	extraEnv := []string{
-		"HOME=" + paths.homeDir,
+		"HOME=" + context.paths.homeDir,
 		pwdPrefix(),
-		"BUILD_DIR=" + absolutePath(paths.soongOutDir),
+		"BUILD_DIR=" + absolutePath(context.paths.soongOutDir),
 		// Make OUT_DIR absolute here so build/bazel/bin/bazel uses the correct
 		// OUT_DIR at <root>/out, instead of <root>/out/soong/workspace/out.
-		"OUT_DIR=" + absolutePath(paths.outDir()),
+		"OUT_DIR=" + absolutePath(context.paths.outDir()),
 		// Disables local host detection of gcc; toolchain information is defined
 		// explicitly in BUILD files.
 		"BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1",
@@ -775,15 +711,15 @@ func (r *builtinBazelRunner) createBazelCommand(config Config, paths *bazelPaths
 		}
 		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", envvar, val))
 	}
-	bazelCmd.Env = append(os.Environ(), extraEnv...)
+	envVars := append(os.Environ(), extraEnv...)
 
-	return bazelCmd
+	return bazel.CmdRequest{cmdFlags, envVars}
 }
 
-func printableCqueryCommand(bazelCmd *exec.Cmd) string {
-	outputString := strings.Join(bazelCmd.Env, " ") + " \"" + strings.Join(bazelCmd.Args, "\" \"") + "\""
+func (context *mixedBuildBazelContext) printableCqueryCommand(bazelCmd bazel.CmdRequest) string {
+	args := append([]string{context.paths.bazelPath}, bazelCmd.Argv...)
+	outputString := strings.Join(bazelCmd.Env, " ") + " \"" + strings.Join(args, "\" \"") + "\""
 	return outputString
-
 }
 
 func (context *mixedBuildBazelContext) mainBzlFileContents() []byte {
@@ -795,9 +731,9 @@ func (context *mixedBuildBazelContext) mainBzlFileContents() []byte {
 #####################################################
 def _config_node_transition_impl(settings, attr):
     if attr.os == "android" and attr.arch == "target":
-        target = "{PRODUCT}-{VARIANT}"
+        target = "current_product-{VARIANT}"
     else:
-        target = "{PRODUCT}-{VARIANT}_%s_%s" % (attr.os, attr.arch)
+        target = "current_product-{VARIANT}_%s_%s" % (attr.os, attr.arch)
     apex_name = ""
     if attr.within_apex:
         # //build/bazel/rules/apex:apex_name has to be set to a non_empty value,
@@ -808,7 +744,7 @@ def _config_node_transition_impl(settings, attr):
         # value here.
         apex_name = "dcla_apex"
     outputs = {
-        "//command_line_option:platforms": "@soong_injection//product_config_platforms/products/{PRODUCT}-{VARIANT}:%s" % target,
+        "//command_line_option:platforms": "@soong_injection//product_config_platforms:%s" % target,
         "@//build/bazel/rules/apex:within_apex": attr.within_apex,
         "@//build/bazel/rules/apex:min_sdk_version": attr.apex_sdk_version,
         "@//build/bazel/rules/apex:apex_name": apex_name,
@@ -1034,9 +970,9 @@ def get_arch(target):
   platform_name = platforms[0].name
   if platform_name == "host":
     return "HOST"
-  if not platform_name.startswith("{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}"):
-    fail("expected platform name of the form '{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}_android_<arch>' or '{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
-  platform_name = platform_name.removeprefix("{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}").removeprefix("_")
+  if not platform_name.startswith("current_product-{TARGET_BUILD_VARIANT}"):
+    fail("expected platform name of the form 'current_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'current_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
+  platform_name = platform_name.removeprefix("current_product-{TARGET_BUILD_VARIANT}").removeprefix("_")
   config_key = ""
   if not platform_name:
     config_key = "target|android"
@@ -1045,7 +981,7 @@ def get_arch(target):
   elif platform_name.startswith("linux_"):
     config_key = platform_name.removeprefix("linux_") + "|linux"
   else:
-    fail("expected platform name of the form '{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}_android_<arch>' or '{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
+    fail("expected platform name of the form 'current_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'current_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
 
   within_apex = buildoptions.get("//build/bazel/rules/apex:within_apex")
   apex_sdk_version = buildoptions.get("//build/bazel/rules/apex:min_sdk_version")
@@ -1106,9 +1042,10 @@ func (p *bazelPaths) outDir() string {
 const buildrootLabel = "@soong_injection//mixed_builds:buildroot"
 
 var (
-	cqueryCmd = bazelCommand{"cquery", fmt.Sprintf("deps(%s, 2)", buildrootLabel)}
-	aqueryCmd = bazelCommand{"aquery", fmt.Sprintf("deps(%s)", buildrootLabel)}
-	buildCmd  = bazelCommand{"build", "@soong_injection//mixed_builds:phonyroot"}
+	cqueryCmd        = bazelCommand{"cquery", fmt.Sprintf("deps(%s, 2)", buildrootLabel)}
+	aqueryCmd        = bazelCommand{"aquery", fmt.Sprintf("deps(%s)", buildrootLabel)}
+	buildCmd         = bazelCommand{"build", "@soong_injection//mixed_builds:phonyroot"}
+	allBazelCommands = []bazelCommand{aqueryCmd, cqueryCmd, buildCmd}
 )
 
 // Issues commands to Bazel to receive results for all cquery requests
@@ -1170,12 +1107,12 @@ func (context *mixedBuildBazelContext) runCquery(config Config, ctx invokeBazelC
 		extraFlags = append(extraFlags, "--collect_code_coverage")
 	}
 
-	cqueryCommandWithFlag := context.createBazelCommand(config, context.paths, bazel.CqueryBuildRootRunName, cqueryCmd, extraFlags...)
-	cqueryOutput, cqueryErrorMessage, cqueryErr := context.issueBazelCommand(cqueryCommandWithFlag, eventHandler)
+	cqueryCmdRequest := context.createBazelCommand(config, bazel.CqueryBuildRootRunName, cqueryCmd, extraFlags...)
+	cqueryOutput, cqueryErrorMessage, cqueryErr := context.issueBazelCommand(cqueryCmdRequest, context.paths, eventHandler)
 	if cqueryErr != nil {
 		return cqueryErr
 	}
-	cqueryCommandPrint := fmt.Sprintf("cquery command line:\n  %s \n\n\n", printableCqueryCommand(cqueryCommandWithFlag))
+	cqueryCommandPrint := fmt.Sprintf("cquery command line:\n  %s \n\n\n", context.printableCqueryCommand(cqueryCmdRequest))
 	if err := os.WriteFile(filepath.Join(soongInjectionPath, "cquery.out"), []byte(cqueryCommandPrint+cqueryOutput), 0666); err != nil {
 		return err
 	}
@@ -1233,8 +1170,8 @@ func (context *mixedBuildBazelContext) runAquery(config Config, ctx invokeBazelC
 			extraFlags = append(extraFlags, "--instrumentation_filter="+strings.Join(paths, ","))
 		}
 	}
-	aqueryOutput, _, err := context.issueBazelCommand(context.createBazelCommand(config, context.paths, bazel.AqueryBuildRootRunName, aqueryCmd,
-		extraFlags...), eventHandler)
+	aqueryOutput, _, err := context.issueBazelCommand(context.createBazelCommand(config, bazel.AqueryBuildRootRunName, aqueryCmd,
+		extraFlags...), context.paths, eventHandler)
 	if err != nil {
 		return err
 	}
@@ -1249,7 +1186,7 @@ func (context *mixedBuildBazelContext) generateBazelSymlinks(config Config, ctx 
 	// Issue a build command of the phony root to generate symlink forests for dependencies of the
 	// Bazel build. This is necessary because aquery invocations do not generate this symlink forest,
 	// but some of symlinks may be required to resolve source dependencies of the build.
-	_, _, err := context.issueBazelCommand(context.createBazelCommand(config, context.paths, bazel.BazelBuildPhonyRootRunName, buildCmd), eventHandler)
+	_, _, err := context.issueBazelCommand(context.createBazelCommand(config, bazel.BazelBuildPhonyRootRunName, buildCmd), context.paths, eventHandler)
 	return err
 }
 

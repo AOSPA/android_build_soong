@@ -120,6 +120,9 @@ type BaseCompilerProperties struct {
 	Lex  *LexProperties
 
 	Aidl struct {
+		// List of aidl_library modules
+		Libs []string
+
 		// list of directories that will be added to the aidl include paths.
 		Include_dirs []string
 
@@ -289,6 +292,7 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.GeneratedSources = append(deps.GeneratedSources, compiler.Properties.Generated_sources...)
 	deps.GeneratedSources = removeListFromList(deps.GeneratedSources, compiler.Properties.Exclude_generated_sources)
 	deps.GeneratedHeaders = append(deps.GeneratedHeaders, compiler.Properties.Generated_headers...)
+	deps.AidlLibs = append(deps.AidlLibs, compiler.Properties.Aidl.Libs...)
 
 	android.ProtoDeps(ctx, &compiler.Proto)
 	if compiler.hasSrcExt(".proto") {
@@ -587,7 +591,12 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			"-I"+android.PathForModuleGen(ctx, "yacc", ctx.ModuleDir()).String())
 	}
 
-	if compiler.hasSrcExt(".aidl") {
+	if len(compiler.Properties.Aidl.Libs) > 0 &&
+		(len(compiler.Properties.Aidl.Include_dirs) > 0 || len(compiler.Properties.Aidl.Local_include_dirs) > 0) {
+		ctx.ModuleErrorf("aidl.libs and (aidl.include_dirs or aidl.local_include_dirs) can't be set at the same time. For aidl headers, please only use aidl.libs prop")
+	}
+
+	if compiler.hasAidl(deps) {
 		flags.aidlFlags = append(flags.aidlFlags, compiler.Properties.Aidl.Flags...)
 		if len(compiler.Properties.Aidl.Local_include_dirs) > 0 {
 			localAidlIncludeDirs := android.PathsForModuleSrc(ctx, compiler.Properties.Aidl.Local_include_dirs)
@@ -595,6 +604,14 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		if len(compiler.Properties.Aidl.Include_dirs) > 0 {
 			rootAidlIncludeDirs := android.PathsForSource(ctx, compiler.Properties.Aidl.Include_dirs)
+			flags.aidlFlags = append(flags.aidlFlags, includeDirsToFlags(rootAidlIncludeDirs))
+		}
+
+		var rootAidlIncludeDirs android.Paths
+		for _, aidlLibraryInfo := range deps.AidlLibraryInfos {
+			rootAidlIncludeDirs = append(rootAidlIncludeDirs, aidlLibraryInfo.IncludeDirs.ToList()...)
+		}
+		if len(rootAidlIncludeDirs) > 0 {
 			flags.aidlFlags = append(flags.aidlFlags, includeDirsToFlags(rootAidlIncludeDirs))
 		}
 
@@ -608,8 +625,14 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		flags.aidlFlags = append(flags.aidlFlags, "--min_sdk_version="+aidlMinSdkVersion)
 
-		flags.Local.CommonFlags = append(flags.Local.CommonFlags,
-			"-I"+android.PathForModuleGen(ctx, "aidl").String())
+		if compiler.hasSrcExt(".aidl") {
+			flags.Local.CommonFlags = append(flags.Local.CommonFlags,
+				"-I"+android.PathForModuleGen(ctx, "aidl").String())
+		}
+		if len(deps.AidlLibraryInfos) > 0 {
+			flags.Local.CommonFlags = append(flags.Local.CommonFlags,
+				"-I"+android.PathForModuleGen(ctx, "aidl_library").String())
+		}
 	}
 
 	if compiler.hasSrcExt(".rscript") || compiler.hasSrcExt(".fs") {
@@ -686,6 +709,10 @@ func ndkPathDeps(ctx ModuleContext) android.Paths {
 	return nil
 }
 
+func (compiler *baseCompiler) hasAidl(deps PathDeps) bool {
+	return len(deps.AidlLibraryInfos) > 0 || compiler.hasSrcExt(".aidl")
+}
+
 func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	pathDeps := deps.GeneratedDeps
 	pathDeps = append(pathDeps, ndkPathDeps(ctx)...)
@@ -694,7 +721,7 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 
 	srcs := append(android.Paths(nil), compiler.srcsBeforeGen...)
 
-	srcs, genDeps, info := genSources(ctx, srcs, buildFlags)
+	srcs, genDeps, info := genSources(ctx, deps.AidlLibraryInfos, srcs, buildFlags)
 	pathDeps = append(pathDeps, genDeps...)
 
 	compiler.pathDeps = pathDeps

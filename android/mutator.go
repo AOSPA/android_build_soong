@@ -67,6 +67,8 @@ func registerMutatorsForBazelConversion(ctx *Context, bp2buildMutators []Registe
 // collateGloballyRegisteredMutators constructs the list of mutators that have been registered
 // with the InitRegistrationContext and will be used at runtime.
 func collateGloballyRegisteredMutators() sortableComponents {
+	// ensure mixed builds mutator is the last mutator
+	finalDeps = append(finalDeps, registerMixedBuildsMutator)
 	return collateRegisteredMutators(preArch, preDeps, postDeps, finalDeps)
 }
 
@@ -273,6 +275,12 @@ type TopDownMutatorContext interface {
 	// This function can be used to create alias definitions in a directory that is different
 	// from the directory of the visited Soong module.
 	CreateBazelTargetAliasInDir(dir string, name string, actual bazel.Label)
+
+	// CreateBazelConfigSetting creates a config_setting in <dir>/BUILD.bazel
+	// build/bazel has several static config_setting(s) that are used in Bazel builds.
+	// This function can be used to createa additional config_setting(s) based on the build graph
+	// (e.g. a config_setting specific to an apex variant)
+	CreateBazelConfigSetting(csa bazel.ConfigSettingAttributes, ca CommonAttributes, dir string)
 }
 
 type topDownMutatorContext struct {
@@ -738,6 +746,23 @@ func (t *topDownMutatorContext) CreateBazelTargetAliasInDir(
 	mod.base().addBp2buildInfo(info)
 }
 
+func (t *topDownMutatorContext) CreateBazelConfigSetting(
+	csa bazel.ConfigSettingAttributes,
+	ca CommonAttributes,
+	dir string) {
+	mod := t.Module()
+	info := bp2buildInfo{
+		Dir: dir,
+		BazelProps: bazel.BazelTargetModuleProperties{
+			Rule_class: "config_setting",
+		},
+		CommonAttrs:     ca,
+		ConstraintAttrs: constraintAttributes{},
+		Attrs:           &csa,
+	}
+	mod.base().addBp2buildInfo(info)
+}
+
 // ApexAvailableTags converts the apex_available property value of an ApexModule
 // module and returns it as a list of keyed tags.
 func ApexAvailableTags(mod Module) bazel.StringListAttribute {
@@ -758,6 +783,35 @@ func ApexAvailableTags(mod Module) bazel.StringListAttribute {
 	return attr
 }
 
+func ApexAvailableTagsWithoutTestApexes(ctx BaseModuleContext, mod Module) bazel.StringListAttribute {
+	attr := bazel.StringListAttribute{}
+	if am, ok := mod.(ApexModule); ok {
+		apexAvailableWithoutTestApexes := removeTestApexes(ctx, am.apexModuleBase().ApexAvailable())
+		// If a user does not specify apex_available in Android.bp, then soong provides a default.
+		// To avoid verbosity of BUILD files, remove this default from user-facing BUILD files.
+		if len(am.apexModuleBase().ApexProperties.Apex_available) == 0 {
+			apexAvailableWithoutTestApexes = []string{}
+		}
+		attr.Value = ConvertApexAvailableToTags(apexAvailableWithoutTestApexes)
+	}
+	return attr
+}
+
+func removeTestApexes(ctx BaseModuleContext, apex_available []string) []string {
+	testApexes := []string{}
+	for _, aa := range apex_available {
+		// ignore the wildcards
+		if InList(aa, AvailableToRecognziedWildcards) {
+			continue
+		}
+		mod, _ := ctx.ModuleFromName(aa)
+		if apex, ok := mod.(ApexTestInterface); ok && apex.IsTestApex() {
+			testApexes = append(testApexes, aa)
+		}
+	}
+	return RemoveListFromList(CopyOf(apex_available), testApexes)
+}
+
 func ConvertApexAvailableToTags(apexAvailable []string) []string {
 	if len(apexAvailable) == 0 {
 		// We need nil specifically to make bp2build not add the tags property at all,
@@ -769,6 +823,13 @@ func ConvertApexAvailableToTags(apexAvailable []string) []string {
 		result = append(result, "apex_available="+a)
 	}
 	return result
+}
+
+// ConvertApexAvailableToTagsWithoutTestApexes converts a list of apex names to a list of bazel tags
+// This function drops any test apexes from the input.
+func ConvertApexAvailableToTagsWithoutTestApexes(ctx BaseModuleContext, apexAvailable []string) []string {
+	noTestApexes := removeTestApexes(ctx, apexAvailable)
+	return ConvertApexAvailableToTags(noTestApexes)
 }
 
 func (t *topDownMutatorContext) createBazelTargetModule(
@@ -826,10 +887,16 @@ func (b *bottomUpMutatorContext) Rename(name string) {
 }
 
 func (b *bottomUpMutatorContext) AddDependency(module blueprint.Module, tag blueprint.DependencyTag, name ...string) []blueprint.Module {
+	if b.baseModuleContext.checkedMissingDeps() {
+		panic("Adding deps not allowed after checking for missing deps")
+	}
 	return b.bp.AddDependency(module, tag, name...)
 }
 
 func (b *bottomUpMutatorContext) AddReverseDependency(module blueprint.Module, tag blueprint.DependencyTag, name string) {
+	if b.baseModuleContext.checkedMissingDeps() {
+		panic("Adding deps not allowed after checking for missing deps")
+	}
 	b.bp.AddReverseDependency(module, tag, name)
 }
 
@@ -879,11 +946,17 @@ func (b *bottomUpMutatorContext) SetDefaultDependencyVariation(variation *string
 
 func (b *bottomUpMutatorContext) AddVariationDependencies(variations []blueprint.Variation, tag blueprint.DependencyTag,
 	names ...string) []blueprint.Module {
+	if b.baseModuleContext.checkedMissingDeps() {
+		panic("Adding deps not allowed after checking for missing deps")
+	}
 	return b.bp.AddVariationDependencies(variations, tag, names...)
 }
 
 func (b *bottomUpMutatorContext) AddFarVariationDependencies(variations []blueprint.Variation,
 	tag blueprint.DependencyTag, names ...string) []blueprint.Module {
+	if b.baseModuleContext.checkedMissingDeps() {
+		panic("Adding deps not allowed after checking for missing deps")
+	}
 
 	return b.bp.AddFarVariationDependencies(variations, tag, names...)
 }
@@ -893,10 +966,16 @@ func (b *bottomUpMutatorContext) AddInterVariantDependency(tag blueprint.Depende
 }
 
 func (b *bottomUpMutatorContext) ReplaceDependencies(name string) {
+	if b.baseModuleContext.checkedMissingDeps() {
+		panic("Adding deps not allowed after checking for missing deps")
+	}
 	b.bp.ReplaceDependencies(name)
 }
 
 func (b *bottomUpMutatorContext) ReplaceDependenciesIf(name string, predicate blueprint.ReplaceDependencyPredicate) {
+	if b.baseModuleContext.checkedMissingDeps() {
+		panic("Adding deps not allowed after checking for missing deps")
+	}
 	b.bp.ReplaceDependenciesIf(name, predicate)
 }
 

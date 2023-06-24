@@ -226,7 +226,7 @@ func objectBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Bzl_load_location: "//build/bazel/rules/cc:cc_object.bzl",
 	}
 
-	tags := android.ApexAvailableTags(m)
+	tags := android.ApexAvailableTagsWithoutTestApexes(ctx, m)
 
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{
 		Name: m.Name(),
@@ -309,6 +309,8 @@ func (object *objectLinker) link(ctx ModuleContext,
 			})
 		}
 	} else {
+		outputAddrSig := android.PathForModuleOut(ctx, "addrsig", outputName)
+
 		if String(object.Properties.Prefix_symbols) != "" {
 			input := android.PathForModuleOut(ctx, "unprefixed", outputName)
 			transformBinaryPrefixSymbols(ctx, String(object.Properties.Prefix_symbols), input,
@@ -316,7 +318,12 @@ func (object *objectLinker) link(ctx ModuleContext,
 			output = input
 		}
 
-		transformObjsToObj(ctx, objs.objFiles, builderFlags, output, flags.LdFlagsDeps)
+		transformObjsToObj(ctx, objs.objFiles, builderFlags, outputAddrSig, flags.LdFlagsDeps)
+
+		// ld -r reorders symbols and invalidates the .llvm_addrsig section, which then causes warnings
+		// if the resulting object is used with ld --icf=safe.  Strip the .llvm_addrsig section to
+		// prevent the warnings.
+		transformObjectNoAddrSig(ctx, outputAddrSig, output)
 	}
 
 	ctx.CheckbuildFile(outputFile)

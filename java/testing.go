@@ -71,7 +71,12 @@ var prepareForTestWithFrameworkDeps = android.GroupFixturePreparers(
 		// Needed for framework
 		defaultJavaDir + "/framework/aidl": nil,
 		// Needed for various deps defined in GatherRequiredDepsForTest()
-		defaultJavaDir + "/a.java": nil,
+		defaultJavaDir + "/a.java":                        nil,
+		defaultJavaDir + "/api/current.txt":               nil,
+		defaultJavaDir + "/api/system-current.txt":        nil,
+		defaultJavaDir + "/api/test-current.txt":          nil,
+		defaultJavaDir + "/api/module-lib-current.txt":    nil,
+		defaultJavaDir + "/api/system-server-current.txt": nil,
 
 		// Needed for R8 rules on apps
 		"build/make/core/proguard.flags":             nil,
@@ -395,16 +400,20 @@ func gatherRequiredDepsForTest() string {
 	}
 
 	extraApiLibraryModules := map[string]string{
-		"android_stubs_current.from-text":                 "api/current.txt",
-		"android_system_stubs_current.from-text":          "api/system-current.txt",
-		"android_test_stubs_current.from-text":            "api/test-current.txt",
-		"android_module_lib_stubs_current.from-text":      "api/module-lib-current.txt",
-		"android_module_lib_stubs_current_full.from-text": "api/module-lib-current.txt",
-		"android_system_server_stubs_current.from-text":   "api/system-server-current.txt",
-		"core.current.stubs.from-text":                    "api/current.txt",
-		"legacy.core.platform.api.stubs.from-text":        "api/current.txt",
-		"stable.core.platform.api.stubs.from-text":        "api/current.txt",
-		"core-lambda-stubs.from-text":                     "api/current.txt",
+		"android_stubs_current.from-text":                  "api/current.txt",
+		"android_system_stubs_current.from-text":           "api/system-current.txt",
+		"android_test_stubs_current.from-text":             "api/test-current.txt",
+		"android_module_lib_stubs_current.from-text":       "api/module-lib-current.txt",
+		"android_module_lib_stubs_current_full.from-text":  "api/module-lib-current.txt",
+		"android_system_server_stubs_current.from-text":    "api/system-server-current.txt",
+		"core.current.stubs.from-text":                     "api/current.txt",
+		"legacy.core.platform.api.stubs.from-text":         "api/current.txt",
+		"stable.core.platform.api.stubs.from-text":         "api/current.txt",
+		"core-lambda-stubs.from-text":                      "api/current.txt",
+		"android-non-updatable.stubs.from-text":            "api/current.txt",
+		"android-non-updatable.stubs.system.from-text":     "api/system-current.txt",
+		"android-non-updatable.stubs.test.from-text":       "api/test-current.txt",
+		"android-non-updatable.stubs.module_lib.from-text": "api/module-lib-current.txt",
 	}
 
 	for libName, apiFile := range extraApiLibraryModules {

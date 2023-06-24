@@ -283,21 +283,25 @@ func TestJavaLibraryLogTags(t *testing.T) {
 
 func TestJavaLibraryResources(t *testing.T) {
 	runJavaLibraryTestCase(t, Bp2buildTestCase{
+		Dir: "adir",
 		Filesystem: map[string]string{
-			"res/a.res":      "",
-			"res/b.res":      "",
-			"res/dir1/b.res": "",
-		},
-		Blueprint: `java_library {
+			"adir/res/a.res":      "",
+			"adir/res/b.res":      "",
+			"adir/res/dir1/b.res": "",
+			"adir/Android.bp": `java_library {
     name: "java-lib-1",
-	java_resources: ["res/a.res", "res/b.res"],
+    java_resources: ["res/a.res", "res/b.res"],
+    bazel_module: { bp2build_available: true },
 }`,
+		},
+		Blueprint: "",
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
 				"resources": `[
         "res/a.res",
         "res/b.res",
     ]`,
+				"resource_strip_prefix": `"adir"`,
 			}),
 			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
 		},
@@ -820,5 +824,45 @@ func TestJavaLibraryArchVariantSrcsWithExcludes(t *testing.T) {
 			}),
 			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
 		},
+	})
+}
+
+func TestJavaLibraryJavaResourcesSingleFilegroup(t *testing.T) {
+	runJavaLibraryTestCaseWithRegistrationCtxFunc(t, Bp2buildTestCase{
+		Filesystem: map[string]string{
+			"res/a.res":      "",
+			"res/b.res":      "",
+			"res/dir1/b.res": "",
+		},
+		Description: "java_library",
+		Blueprint: `java_library {
+    name: "java-lib-1",
+    srcs: ["a.java"],
+    java_resources: [":filegroup1"],
+    bazel_module: { bp2build_available: true },
+}
+
+filegroup {
+    name: "filegroup1",
+    path: "foo",
+    srcs: ["foo/a", "foo/b"],
+}
+
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
+				"srcs":                  `["a.java"]`,
+				"resources":             `[":filegroup1"]`,
+				"resource_strip_prefix": `"foo"`,
+			}),
+			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
+			MakeBazelTargetNoRestrictions("filegroup", "filegroup1", AttrNameToString{
+				"srcs": `[
+        "foo/a",
+        "foo/b",
+    ]`}),
+		},
+	}, func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	})
 }

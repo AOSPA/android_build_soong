@@ -200,6 +200,53 @@ custom_cc_library_static {
 )`}})
 }
 
+func TestSoongConfigModuleType_MultipleBoolVar_PartialUseNotPanic(t *testing.T) {
+	bp := `
+soong_config_bool_variable {
+	name: "feature1",
+}
+
+soong_config_bool_variable {
+	name: "feature2",
+}
+
+soong_config_module_type {
+	name: "custom_cc_library_static",
+	module_type: "cc_library_static",
+	config_namespace: "acme",
+	variables: ["feature1", "feature2",],
+	properties: ["cflags"],
+}
+
+custom_cc_library_static {
+	name: "foo",
+	bazel_module: { bp2build_available: true },
+	host_supported: true,
+	soong_config_variables: {
+		feature1: {
+			conditions_default: {
+				cflags: ["-DDEFAULT1"],
+			},
+			cflags: ["-DFEATURE1"],
+		},
+	},
+}`
+
+	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
+		Description:                "soong config variables - used part of multiple bool variable do not panic",
+		ModuleTypeUnderTest:        "cc_library_static",
+		ModuleTypeUnderTestFactory: cc.LibraryStaticFactory,
+		Blueprint:                  bp,
+		ExpectedBazelTargets: []string{`cc_library_static(
+    name = "foo",
+    copts = select({
+        "//build/bazel/product_variables:acme__feature1": ["-DFEATURE1"],
+        "//conditions:default": ["-DDEFAULT1"],
+    }),
+    local_includes = ["."],
+)`}})
+}
+
 func TestSoongConfigModuleType_StringAndBoolVar(t *testing.T) {
 	bp := `
 soong_config_bool_variable {
@@ -1249,5 +1296,113 @@ cc_binary {
     name = "alphabet_binary",
     local_includes = ["."],
     srcs = ["main.cc"],
+)`}})
+}
+
+func TestSoongConfigModuleType_CombinedWithArchVariantProperties(t *testing.T) {
+	bp := `
+soong_config_bool_variable {
+    name: "my_bool_variable",
+}
+
+soong_config_string_variable {
+    name: "my_string_variable",
+    values: [
+        "value1",
+        "value2",
+    ],
+}
+
+soong_config_module_type {
+    name: "special_build_cc_defaults",
+    module_type: "cc_defaults",
+    config_namespace: "my_namespace",
+    bool_variables: ["my_bool_variable"],
+    variables: ["my_string_variable"],
+    properties: ["target.android.cflags", "cflags"],
+}
+
+special_build_cc_defaults {
+    name: "sample_cc_defaults",
+    target: {
+        android: {
+            cflags: ["-DFOO"],
+        },
+    },
+    soong_config_variables: {
+        my_bool_variable: {
+            target: {
+                android: {
+                    cflags: ["-DBAR"],
+                },
+            },
+            conditions_default: {
+                target: {
+                    android: {
+                        cflags: ["-DBAZ"],
+                    },
+                },
+            },
+        },
+        my_string_variable: {
+            value1: {
+                cflags: ["-DVALUE1_NOT_ANDROID"],
+                target: {
+                    android: {
+                        cflags: ["-DVALUE1"],
+                    },
+                },
+            },
+            value2: {
+                target: {
+                    android: {
+                        cflags: ["-DVALUE2"],
+                    },
+                },
+            },
+            conditions_default: {
+                target: {
+                    android: {
+                        cflags: ["-DSTRING_VAR_CONDITIONS_DEFAULT"],
+                    },
+                },
+            },
+        },
+    },
+}
+
+cc_binary {
+    name: "my_binary",
+    srcs: ["main.cc"],
+    defaults: ["sample_cc_defaults"],
+}`
+
+	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
+		Description:                "soong config variables - generates selects for library_linking_strategy",
+		ModuleTypeUnderTest:        "cc_binary",
+		ModuleTypeUnderTestFactory: cc.BinaryFactory,
+		Blueprint:                  bp,
+		Filesystem:                 map[string]string{},
+		ExpectedBazelTargets: []string{`cc_binary(
+    name = "my_binary",
+    copts = select({
+        "//build/bazel/platforms/os:android": ["-DFOO"],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/product_variables:my_namespace__my_bool_variable__android": ["-DBAR"],
+        "//build/bazel/product_variables:my_namespace__my_bool_variable__conditions_default__android": ["-DBAZ"],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/product_variables:my_namespace__my_string_variable__value1": ["-DVALUE1_NOT_ANDROID"],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/product_variables:my_namespace__my_string_variable__conditions_default__android": ["-DSTRING_VAR_CONDITIONS_DEFAULT"],
+        "//build/bazel/product_variables:my_namespace__my_string_variable__value1__android": ["-DVALUE1"],
+        "//build/bazel/product_variables:my_namespace__my_string_variable__value2__android": ["-DVALUE2"],
+        "//conditions:default": [],
+    }),
+    local_includes = ["."],
+    srcs = ["main.cc"],
+    target_compatible_with = ["//build/bazel/platforms/os:android"],
 )`}})
 }

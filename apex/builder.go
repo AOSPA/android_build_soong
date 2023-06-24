@@ -231,7 +231,7 @@ var (
 
 	apexSepolicyTestsRule = pctx.StaticRule("apexSepolicyTestsRule", blueprint.RuleParams{
 		Command: `${deapexer} --debugfs_path ${debugfs_static} list -Z ${in} > ${out}.fc` +
-			`&& ${apex_sepolicy_tests} -f ${out}.fc && touch ${out}`,
+			` && ${apex_sepolicy_tests} -f ${out}.fc && touch ${out}`,
 		CommandDeps: []string{"${apex_sepolicy_tests}", "${deapexer}", "${debugfs_static}"},
 		Description: "run apex_sepolicy_tests",
 	})
@@ -468,10 +468,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	imageDir := android.PathForModuleOut(ctx, "image"+suffix)
 
 	installSymbolFiles := (!ctx.Config().KatiEnabled() || a.ExportedToMake()) && a.installable()
-	// We can't install symbol files when prebuilt is used.
-	if a.IsReplacedByPrebuilt() {
-		installSymbolFiles = false
-	}
 
 	// set of dependency module:location mappings
 	installMapSet := make(map[string]bool)
@@ -876,7 +872,8 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		args["outCommaList"] = signedOutputFile.String()
 	}
 	var validations android.Paths
-	if suffix == imageApexSuffix {
+	// TODO(b/279688635) deapexer supports [ext4]
+	if suffix == imageApexSuffix && ext4 == a.payloadFsType {
 		validations = append(validations, runApexSepolicyTests(ctx, unsignedOutputFile.OutputPath))
 	}
 	ctx.Build(pctx, android.BuildParams{

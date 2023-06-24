@@ -313,45 +313,6 @@ var neverallowTests = []struct {
 			"module \"outside_art_libraries\": violates neverallow",
 		},
 	},
-	{
-		name: "disallowed makefile_goal",
-		fs: map[string][]byte{
-			"Android.bp": []byte(`
-				makefile_goal {
-					name: "foo",
-					product_out_path: "boot/trap.img"
-				}
-			`),
-		},
-		expectedErrors: []string{
-			"Only boot images.* may be imported as a makefile goal",
-		},
-	},
-	{
-		name: "disallowed makefile_goal outside external",
-		fs: map[string][]byte{
-			"project/Android.bp": []byte(`
-				makefile_goal {
-					name: "foo",
-					product_out_path: "obj/EXE/foo",
-				}
-			`),
-		},
-		expectedErrors: []string{
-			"not in allowed projects",
-		},
-	},
-	{
-		name: "allow makefile_goal within external",
-		fs: map[string][]byte{
-			"frameworks/opt/net/wifi/libwifi_hal/Android.bp": []byte(`
-				makefile_goal {
-					name: "foo",
-					product_out_path: "obj/EXE/foo",
-				}
-			`),
-		},
-	},
 	// Test for the rule restricting use of implementation_installable
 	{
 		name: `"implementation_installable" outside allowed list`,
@@ -376,7 +337,6 @@ var prepareForNeverAllowTest = GroupFixturePreparers(
 		ctx.RegisterModuleType("java_library", newMockJavaLibraryModule)
 		ctx.RegisterModuleType("java_library_host", newMockJavaLibraryModule)
 		ctx.RegisterModuleType("java_device_for_host", newMockJavaLibraryModule)
-		ctx.RegisterModuleType("makefile_goal", newMockMakefileGoalModule)
 	}),
 )
 
@@ -473,23 +433,4 @@ func newMockJavaLibraryModule() Module {
 }
 
 func (p *mockJavaLibraryModule) GenerateAndroidBuildActions(ModuleContext) {
-}
-
-type mockMakefileGoalProperties struct {
-	Product_out_path *string
-}
-
-type mockMakefileGoalModule struct {
-	ModuleBase
-	properties mockMakefileGoalProperties
-}
-
-func newMockMakefileGoalModule() Module {
-	m := &mockMakefileGoalModule{}
-	m.AddProperties(&m.properties)
-	InitAndroidModule(m)
-	return m
-}
-
-func (p *mockMakefileGoalModule) GenerateAndroidBuildActions(ModuleContext) {
 }

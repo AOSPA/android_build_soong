@@ -1504,6 +1504,7 @@ cc_library {
         versions: ["current"],
     },
     bazel_module: { bp2build_available: false },
+    apex_available: ["com.android.runtime"],
 }
 
 cc_library_static {
@@ -1561,7 +1562,8 @@ cc_library_static {
 			}),
 			MakeBazelTarget("cc_library_static", "keep_with_stubs", AttrNameToString{
 				"implementation_dynamic_deps": `select({
-        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:libm"],
+        "//build/bazel/rules/apex:foo": ["@api_surfaces//module-libapi/current:libm"],
+        "//build/bazel/rules/apex:system": ["@api_surfaces//module-libapi/current:libm"],
         "//conditions:default": [":libm"],
     })`,
 				"system_dynamic_deps": `[]`,
@@ -1613,7 +1615,7 @@ func TestCcLibraryStaticUseVersionLib(t *testing.T) {
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
-				"implementation_whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
+				"whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
 			}),
 		},
 	})
@@ -2027,6 +2029,47 @@ cc_library_static {
         "android_thin_lto",
         "android_thin_lto_whole_program_vtables",
     ]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticHiddenVisibilityConvertedToFeature(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static changes hidden visibility flag to feature",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	cflags: ["-fvisibility=hidden"],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["visibility_hidden"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticHiddenVisibilityConvertedToFeatureOsSpecific(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static changes hidden visibility flag to feature for specific os",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	target: {
+		android: {
+			cflags: ["-fvisibility=hidden"],
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["visibility_hidden"],
+        "//conditions:default": [],
+    })`,
 				"local_includes": `["."]`,
 			}),
 		},

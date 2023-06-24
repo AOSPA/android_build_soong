@@ -38,7 +38,7 @@ func init() {
 
 func RegisterJavaFuzzBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("java_fuzz", JavaFuzzFactory)
-	ctx.RegisterSingletonType("java_fuzz_packaging", javaFuzzPackagingFactory)
+	ctx.RegisterParallelSingletonType("java_fuzz_packaging", javaFuzzPackagingFactory)
 }
 
 type JavaFuzzTest struct {
@@ -150,7 +150,9 @@ func (s *javaFuzzPackager) GenerateBuildActions(ctx android.SingletonContext) {
 		}
 
 		hostOrTargetString := "target"
-		if javaFuzzModule.Host() {
+		if javaFuzzModule.Target().HostCross {
+			hostOrTargetString = "host_cross"
+		} else if javaFuzzModule.Host() {
 			hostOrTargetString = "host"
 		}
 
@@ -175,11 +177,15 @@ func (s *javaFuzzPackager) GenerateBuildActions(ctx android.SingletonContext) {
 		files = s.PackageArtifacts(ctx, module, javaFuzzModule.fuzzPackagedModule, archDir, builder)
 
 		// Add .jar
-		files = append(files, fuzz.FileToZip{javaFuzzModule.implementationJarFile, ""})
+		if !javaFuzzModule.Host() {
+			files = append(files, fuzz.FileToZip{SourceFilePath: javaFuzzModule.implementationJarFile, DestinationPathPrefix: "classes"})
+		}
+
+		files = append(files, fuzz.FileToZip{SourceFilePath: javaFuzzModule.outputFile})
 
 		// Add jni .so files
 		for _, fPath := range javaFuzzModule.jniFilePaths {
-			files = append(files, fuzz.FileToZip{fPath, ""})
+			files = append(files, fuzz.FileToZip{SourceFilePath: fPath})
 		}
 
 		archDirs[archOs], ok = s.BuildZipFile(ctx, module, javaFuzzModule.fuzzPackagedModule, files, builder, archDir, archString, hostOrTargetString, archOs, archDirs)

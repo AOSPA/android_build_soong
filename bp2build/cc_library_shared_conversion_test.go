@@ -362,6 +362,7 @@ cc_library_shared {
         "-Wl,--version-script,$(location version_script)",
         "-Wl,--dynamic-list,$(location dynamic.list)",
     ]`,
+				"features": `["android_cfi_exports_map"]`,
 			}),
 		},
 	})
@@ -398,6 +399,7 @@ cc_library_shared {
         "-Wl,--version-script,$(location version_script)",
         "-Wl,--dynamic-list,$(location dynamic.list)",
     ]`,
+				"features": `["android_cfi_exports_map"]`,
 			}),
 		},
 	})
@@ -516,8 +518,8 @@ func TestCcLibrarySharedUseVersionLib(t *testing.T) {
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
-				"use_version_lib":                   "True",
-				"implementation_whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
+				"use_version_lib":    "True",
+				"whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
 			}),
 		},
 	})
@@ -609,10 +611,69 @@ cc_library_shared {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_shared", "b", AttrNameToString{
 				"implementation_dynamic_deps": `select({
-        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:a"],
+        "//build/bazel/rules/apex:apex_b": ["@api_surfaces//module-libapi/current:a"],
+        "//build/bazel/rules/apex:system": ["@api_surfaces//module-libapi/current:a"],
         "//conditions:default": [":a"],
     })`,
 				"tags": `["apex_available=apex_b"]`,
+			}),
+		},
+	})
+}
+
+// Tests that library in apexfoo links against stubs of platform_lib and otherapex_lib
+func TestCcLibrarySharedStubs_UseStubsFromMultipleApiDomains(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library_shared stubs",
+		ModuleTypeUnderTest:        "cc_library_shared",
+		ModuleTypeUnderTestFactory: cc.LibrarySharedFactory,
+		Blueprint: soongCcLibrarySharedPreamble + `
+cc_library_shared {
+	name: "libplatform_stable",
+	stubs: { symbol_file: "libplatform_stable.map.txt", versions: ["28", "29", "current"] },
+	apex_available: ["//apex_available:platform"],
+	bazel_module: { bp2build_available: false },
+	include_build_directory: false,
+}
+cc_library_shared {
+	name: "libapexfoo_stable",
+	stubs: { symbol_file: "libapexfoo_stable.map.txt", versions: ["28", "29", "current"] },
+	apex_available: ["apexfoo"],
+	bazel_module: { bp2build_available: false },
+	include_build_directory: false,
+}
+cc_library_shared {
+	name: "libutils",
+	shared_libs: ["libplatform_stable", "libapexfoo_stable",],
+	apex_available: ["//apex_available:platform", "apexfoo", "apexbar"],
+	include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "libutils", AttrNameToString{
+				"implementation_dynamic_deps": `select({
+        "//build/bazel/rules/apex:apexbar": [
+            "@api_surfaces//module-libapi/current:libplatform_stable",
+            "@api_surfaces//module-libapi/current:libapexfoo_stable",
+        ],
+        "//build/bazel/rules/apex:apexfoo": [
+            "@api_surfaces//module-libapi/current:libplatform_stable",
+            ":libapexfoo_stable",
+        ],
+        "//build/bazel/rules/apex:system": [
+            "@api_surfaces//module-libapi/current:libplatform_stable",
+            "@api_surfaces//module-libapi/current:libapexfoo_stable",
+        ],
+        "//conditions:default": [
+            ":libplatform_stable",
+            ":libapexfoo_stable",
+        ],
+    })`,
+				"tags": `[
+        "apex_available=//apex_available:platform",
+        "apex_available=apexfoo",
+        "apex_available=apexbar",
+    ]`,
 			}),
 		},
 	})
@@ -641,13 +702,42 @@ cc_library_shared {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_shared", "b", AttrNameToString{
 				"implementation_dynamic_deps": `select({
-        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:a"],
+        "//build/bazel/rules/apex:apex_b": ["@api_surfaces//module-libapi/current:a"],
+        "//build/bazel/rules/apex:system": ["@api_surfaces//module-libapi/current:a"],
         "//conditions:default": [":a"],
     })`,
 				"tags": `[
         "apex_available=//apex_available:platform",
         "apex_available=apex_b",
     ]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryDoesNotDropStubDepIfNoVariationAcrossAxis(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library depeends on impl for all configurations",
+		ModuleTypeUnderTest:        "cc_library_shared",
+		ModuleTypeUnderTestFactory: cc.LibrarySharedFactory,
+		Blueprint: soongCcLibrarySharedPreamble + `
+cc_library_shared {
+	name: "a",
+	stubs: { symbol_file: "a.map.txt", versions: ["28", "29", "current"] },
+	bazel_module: { bp2build_available: false },
+	apex_available: ["//apex_available:platform"],
+}
+cc_library_shared {
+	name: "b",
+	shared_libs: [":a"],
+	include_build_directory: false,
+	apex_available: ["//apex_available:platform"],
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "b", AttrNameToString{
+				"implementation_dynamic_deps": `[":a"]`,
+				"tags":                        `["apex_available=//apex_available:platform"]`,
 			}),
 		},
 	})
@@ -682,7 +772,7 @@ cc_library_shared {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_shared", "b", AttrNameToString{
 				"implementation_dynamic_deps": `select({
-        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:a"],
+        "//build/bazel/rules/apex:system": ["@api_surfaces//module-libapi/current:a"],
         "//conditions:default": [":a"],
     })`,
 				"tags": `[
@@ -825,6 +915,7 @@ func TestCCLibraryFlagSpaceSplitting(t *testing.T) {
         "header.h",
     ]`,
 				"linkopts": `["-Wl,--version-script,$(location version_script)"]`,
+				"features": `["android_cfi_exports_map"]`,
 			}),
 		},
 	})
@@ -1245,6 +1336,47 @@ cc_library_shared {
         "android_thin_lto",
         "android_thin_lto_whole_program_vtables",
     ]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedHiddenVisibilityConvertedToFeature(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared changes hidden visibility flag to feature",
+		Blueprint: `
+cc_library_shared{
+	name: "foo",
+	cflags: ["-fvisibility=hidden"],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["visibility_hidden"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedHiddenVisibilityConvertedToFeatureOsSpecific(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared changes hidden visibility flag to feature for specific os",
+		Blueprint: `
+cc_library_shared{
+	name: "foo",
+	target: {
+		android: {
+			cflags: ["-fvisibility=hidden"],
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["visibility_hidden"],
+        "//conditions:default": [],
+    })`,
 				"local_includes": `["."]`,
 			}),
 		},
