@@ -239,7 +239,9 @@ func createUncompressDexRules() []Rule {
 func createInitFirstStageRules() []Rule {
 	return []Rule{
 		NeverAllow().
+			Without("name", "init_first_stage_defaults").
 			Without("name", "init_first_stage").
+			Without("name", "init_first_stage.microdroid").
 			With("install_in_root", "true").
 			Because("install_in_root is only for init_first_stage."),
 	}
@@ -256,10 +258,10 @@ func createProhibitFrameworkAccessRules() []Rule {
 
 func createJavaExcludeStaticLibsRule() Rule {
 	return NeverAllow().
-		NotIn("build/soong").
+		NotIn("build/soong", "libcore", "frameworks/base/api").
 		ModuleType("java_library").
 		WithMatcher("exclude_static_libs", isSetMatcherInstance).
-		Because("exclude_static_libs property is only allowed for java modules defined in build/soong")
+		Because("exclude_static_libs property is only allowed for java modules defined in build/soong, libcore, and frameworks/base/api")
 }
 
 func neverallowMutator(ctx BottomUpMutatorContext) {

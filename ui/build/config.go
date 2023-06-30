@@ -90,8 +90,9 @@ type configImpl struct {
 	skipMetricsUpload        bool
 	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
 	buildFromTextStub        bool
-	ensureAllowlistIntegrity bool  // For CI builds - make sure modules are mixed-built
-	bazelExitCode            int32 // For b-runs - necessary for updating NonZeroExit
+	ensureAllowlistIntegrity bool   // For CI builds - make sure modules are mixed-built
+	bazelExitCode            int32  // For b runs - necessary for updating NonZeroExit
+	besId                    string // For b runs, to identify the BuildEventService logs
 
 	// From the product config
 	katiArgs        []string
@@ -908,6 +909,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			} else {
 				ctx.Fatalf("Error parsing bazel-exit-code", err)
 			}
+		} else if strings.HasPrefix(arg, "--bes-id=") {
+			c.besId = strings.TrimPrefix(arg, "--bes-id=")
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
 				if len(arg) > 2 {
@@ -1372,6 +1375,12 @@ func (c *configImpl) StartGoma() bool {
 }
 
 func (c *configImpl) UseRBE() bool {
+	authType, _ := c.rbeAuth()
+	// Do not use RBE with prod credentials in scenarios when stubby doesn't exist, since
+	// its unlikely that we will be able to obtain necessary creds without stubby.
+	if !c.StubbyExists() && strings.Contains(authType, "use_google_prod_creds"){
+		return false
+	}
 	if v, ok := c.Environment().Get("USE_RBE"); ok {
 		v = strings.TrimSpace(v)
 		if v != "" && v != "false" {
@@ -1511,7 +1520,7 @@ func (c *configImpl) GoogleProdCredsExist() bool {
 	if googleProdCredsExistCache {
 		return googleProdCredsExistCache
 	}
-	if _, err := exec.Command("/usr/bin/gcertstatus").Output(); err != nil {
+	if _, err := exec.Command("/usr/bin/gcertstatus", "-nocheck_ssh").Output(); err != nil {
 		return false
 	}
 	googleProdCredsExistCache = true

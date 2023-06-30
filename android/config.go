@@ -184,8 +184,8 @@ func (c Config) ReleaseVersion() string {
 }
 
 // The flag values files passed to aconfig, derived from RELEASE_VERSION
-func (c Config) ReleaseDeviceConfigValueSets() []string {
-	return c.config.productVariables.ReleaseDeviceConfigValueSets
+func (c Config) ReleaseAconfigValueSets() []string {
+	return c.config.productVariables.ReleaseAconfigValueSets
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -1648,10 +1648,6 @@ func (c *config) AmlAbis() bool {
 	return Bool(c.productVariables.Aml_abis)
 }
 
-func (c *config) FlattenApex() bool {
-	return Bool(c.productVariables.Flatten_apex)
-}
-
 func (c *config) ForceApexSymlinkOptimization() bool {
 	return Bool(c.productVariables.ForceApexSymlinkOptimization)
 }
@@ -1682,10 +1678,6 @@ func (c *config) EnforceInterPartitionJavaSdkLibrary() bool {
 
 func (c *config) InterPartitionJavaLibraryAllowList() []string {
 	return c.productVariables.InterPartitionJavaLibraryAllowList
-}
-
-func (c *config) InstallExtraFlattenedApexes() bool {
-	return Bool(c.productVariables.InstallExtraFlattenedApexes)
 }
 
 func (c *config) ProductHiddenAPIStubs() []string {
