@@ -1905,6 +1905,26 @@ cc_library_static {
 	})
 }
 
+func TestCcLibraryStaticWithSanitizerBlocklist(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when sanitize.blocklist is provided",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	sanitize: {
+		blocklist: "foo_blocklist.txt",
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["ubsan_blocklist_foo_blocklist_txt"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
 func TestCcLibraryStaticWithThinLto(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
 		Description: "cc_library_static has correct features when thin lto is enabled",
@@ -2070,6 +2090,96 @@ cc_library_static {
         "//build/bazel/platforms/os:android": ["visibility_hidden"],
         "//conditions:default": [],
     })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithCfi(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when cfi is enabled",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	sanitize: {
+		cfi: true,
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["android_cfi"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithCfiOsSpecific(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when cfi is enabled for specific variants",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	target: {
+		android: {
+			sanitize: {
+				cfi: true,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_cfi"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithCfiAndCfiAssemblySupport(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when cfi is enabled with cfi_assembly_support",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	sanitize: {
+		cfi: true,
+		config: {
+			cfi_assembly_support: true,
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features": `[
+        "android_cfi",
+        "android_cfi_assembly_support",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticExplicitlyDisablesCfiWhenFalse(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static disables cfi when explciitly set to false in the bp",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	sanitize: {
+		cfi: false,
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["-android_cfi"]`,
 				"local_includes": `["."]`,
 			}),
 		},
