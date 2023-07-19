@@ -42,6 +42,7 @@ import (
 func init() {
 	RegisterCCBuildComponents(android.InitRegistrationContext)
 
+	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/cc/config")
 }
 
@@ -1077,6 +1078,10 @@ func (c *Module) CcLibraryInterface() bool {
 		return true
 	}
 	return false
+}
+
+func (c *Module) RlibStd() bool {
+	panic(fmt.Errorf("RlibStd called on non-Rust module: %q", c.BaseModuleName()))
 }
 
 func (c *Module) RustLibraryInterface() bool {
