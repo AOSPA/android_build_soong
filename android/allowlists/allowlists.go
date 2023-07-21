@@ -429,6 +429,7 @@ var (
 		// external/bazelbuild-rules_android/... is needed by mixed builds, otherwise mixed builds analysis fails
 		// e.g. ERROR: Analysis of target '@soong_injection//mixed_builds:buildroot' failed
 		"external/bazelbuild-rules_android":/* recursive = */ true,
+		"external/bazelbuild-rules_java":/* recursive = */ true,
 		"external/bazelbuild-rules_license":/* recursive = */ true,
 		"external/bazelbuild-rules_go":/* recursive = */ true,
 		"external/bazelbuild-kotlin-rules":/* recursive = */ true,
@@ -1013,6 +1014,7 @@ var (
 		"bionic-unit-tests-static",
 		"boringssl_crypto_test",
 		"boringssl_ssl_test",
+		"boringssl_test_support", //b/244431896
 		"cfi_test_helper",
 		"cfi_test_helper2",
 		"cintltst32",
