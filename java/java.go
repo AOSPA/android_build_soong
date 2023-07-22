@@ -274,7 +274,14 @@ type JavaInfo struct {
 	// instrumented by jacoco.
 	JacocoReportClassesFile android.Path
 
-	// TODO: Add device config declarations here?
+	// set of aconfig flags for all transitive libs deps
+	// TODO(joeo): It would be nice if this were over in the aconfig package instead of here.
+	// In order to do that, generated_java_library would need a way doing
+	// collectTransitiveAconfigFiles with one of the callbacks, and having that automatically
+	// propagated. If we were to clean up more of the stuff on JavaInfo that's not part of
+	// core java rules (e.g. AidlIncludeDirs), then maybe adding more framework to do that would be
+	// worth it.
+	TransitiveAconfigFiles *android.DepSet[android.Path]
 }
 
 var JavaInfoProvider = blueprint.NewProvider(JavaInfo{})
@@ -730,6 +737,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 	})
 	j.exportedProguardFlagFiles = android.FirstUniquePaths(j.exportedProguardFlagFiles)
+
 }
 
 func (j *Library) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -1916,6 +1924,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ImplementationAndResourcesJars: android.PathsIfNonNil(al.stubsJar),
 		ImplementationJars:             android.PathsIfNonNil(al.stubsJar),
 		AidlIncludeDirs:                android.Paths{},
+		// No aconfig libraries on api libraries
 	})
 }
 
@@ -2237,6 +2246,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ImplementationAndResourcesJars: android.PathsIfNonNil(j.combinedClasspathFile),
 		ImplementationJars:             android.PathsIfNonNil(j.combinedClasspathFile),
 		AidlIncludeDirs:                j.exportAidlIncludeDirs,
+		// TODO(b/289117800): LOCAL_ACONFIG_FILES for prebuilts
 	})
 }
 
@@ -3155,6 +3165,7 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 
 type javaTestHostAttributes struct {
 	*javaCommonAttributes
+	Srcs         bazel.LabelListAttribute
 	Deps         bazel.LabelListAttribute
 	Runtime_deps bazel.LabelListAttribute
 }
@@ -3191,8 +3202,10 @@ func javaTestHostBp2Build(ctx android.TopDownMutatorContext, m *TestHost) {
 		hasKotlin: bp2BuildInfo.hasKotlin,
 	}
 	libName := createLibraryTarget(ctx, libInfo)
-	attrs.Runtime_deps.Add(&bazel.LabelAttribute{Value: &bazel.Label{Label: ":" + libName}})
 
+	attrs.Srcs = commonAttrs.Srcs
+	attrs.Deps = deps
+	attrs.Runtime_deps.Add(&bazel.LabelAttribute{Value: &bazel.Label{Label: ":" + libName}})
 	// Create the BazelTargetModule.
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: m.Name()}, attrs)
 }
@@ -3305,7 +3318,8 @@ func (i *Import) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		HeaderJars:                     android.PathsIfNonNil(i.combinedClasspathFile),
 		ImplementationAndResourcesJars: android.PathsIfNonNil(i.combinedClasspathFile),
 		ImplementationJars:             android.PathsIfNonNil(i.combinedClasspathFile),
-		//TODO(b/240308299) include AIDL information from Bazel
+		// TODO(b/240308299) include AIDL information from Bazel
+		// TODO: aconfig files?
 	})
 
 	i.maybeInstall(ctx, jarName, outputFile)
