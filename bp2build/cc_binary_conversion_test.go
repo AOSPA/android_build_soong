@@ -868,6 +868,25 @@ func TestCcBinaryWithUBSanPropertiesArchSpecific(t *testing.T) {
 	})
 }
 
+func TestCcBinaryWithSanitizerBlocklist(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has the correct feature when sanitize.blocklist is provided",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	sanitize: {
+		blocklist: "foo_blocklist.txt",
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features":       `["ubsan_blocklist_foo_blocklist_txt"]`,
+			}},
+		},
+	})
+}
+
 func TestCcBinaryWithThinLto(t *testing.T) {
 	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
 		description: "cc_binary has correct features when thin LTO is enabled",
@@ -1032,6 +1051,133 @@ func TestCcBinaryHiddenVisibilityConvertedToFeatureOsSpecific(t *testing.T) {
         "//build/bazel/platforms/os:android": ["visibility_hidden"],
         "//conditions:default": [],
     })`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithCfi(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct features when cfi is enabled",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	sanitize: {
+		cfi: true,
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"features":       `["android_cfi"]`,
+				"local_includes": `["."]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithCfiOsSpecific(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct features when cfi is enabled for specific variants",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	target: {
+		android: {
+			sanitize: {
+				cfi: true,
+			},
+		},
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_cfi"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithCfiAndCfiAssemblySupport(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct features when cfi is enabled with cfi assembly support",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	sanitize: {
+		cfi: true,
+		config: {
+			cfi_assembly_support: true,
+		},
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"features": `[
+        "android_cfi",
+        "android_cfi_assembly_support",
+    ]`,
+				"local_includes": `["."]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryExplicitlyDisablesCfiWhenFalse(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary disables cfi when explciitly set to false in the bp",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	sanitize: {
+		cfi: false,
+	},
+}
+`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"features":       `["-android_cfi"]`,
+				"local_includes": `["."]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryStem(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary with stem property",
+		blueprint: `
+cc_binary {
+	name: "foo_with_stem_simple",
+	stem: "foo",
+}
+cc_binary {
+	name: "foo_with_arch_variant_stem",
+	arch: {
+		arm: {
+			stem: "foo-arm",
+		},
+		arm64: {
+			stem: "foo-arm64",
+		},
+	},
+}
+`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo_with_stem_simple", AttrNameToString{
+				"stem":           `"foo"`,
+				"local_includes": `["."]`,
+			}},
+			{"cc_binary", "foo_with_arch_variant_stem", AttrNameToString{
+				"stem": `select({
+        "//build/bazel/platforms/arch:arm": "foo-arm",
+        "//build/bazel/platforms/arch:arm64": "foo-arm64",
+        "//conditions:default": None,
+    })`,
+				"local_includes": `["."]`,
 			}},
 		},
 	})

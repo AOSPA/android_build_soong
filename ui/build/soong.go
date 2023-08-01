@@ -272,9 +272,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	if config.bazelProdMode {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--bazel-mode")
 	}
-	if config.bazelDevMode {
-		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--bazel-mode-dev")
-	}
 	if config.bazelStagingMode {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--bazel-mode-staging")
 	}
@@ -448,16 +445,23 @@ func bootstrapBlueprint(ctx Context, config Config) {
 
 	// since `bootstrap.ninja` is regenerated unconditionally, we ignore the deps, i.e. little
 	// reason to write a `bootstrap.ninja.d` file
-	_ = bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
+	_, err := bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
+	if err != nil {
+		ctx.Fatal(err)
+	}
 }
 
-func checkEnvironmentFile(currentEnv *Environment, envFile string) {
+func checkEnvironmentFile(ctx Context, currentEnv *Environment, envFile string) {
 	getenv := func(k string) string {
 		v, _ := currentEnv.Get(k)
 		return v
 	}
 
-	if stale, _ := shared.StaleEnvFile(envFile, getenv); stale {
+	// Log the changed environment variables to ChangedEnvironmentVariable field
+	if stale, changedEnvironmentVariableList, _ := shared.StaleEnvFile(envFile, getenv); stale {
+		for _, changedEnvironmentVariable := range changedEnvironmentVariableList {
+			ctx.Metrics.AddChangedEnvironmentVariable(changedEnvironmentVariable)
+		}
 		os.Remove(envFile)
 	}
 }
@@ -502,26 +506,26 @@ func runSoong(ctx Context, config Config) {
 		ctx.BeginTrace(metrics.RunSoong, "environment check")
 		defer ctx.EndTrace()
 
-		checkEnvironmentFile(soongBuildEnv, config.UsedEnvFile(soongBuildTag))
+		checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(soongBuildTag))
 
 		if config.BazelBuildEnabled() || config.Bp2Build() {
-			checkEnvironmentFile(soongBuildEnv, config.UsedEnvFile(bp2buildFilesTag))
+			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(bp2buildFilesTag))
 		}
 
 		if config.JsonModuleGraph() {
-			checkEnvironmentFile(soongBuildEnv, config.UsedEnvFile(jsonModuleGraphTag))
+			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(jsonModuleGraphTag))
 		}
 
 		if config.Queryview() {
-			checkEnvironmentFile(soongBuildEnv, config.UsedEnvFile(queryviewTag))
+			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(queryviewTag))
 		}
 
 		if config.ApiBp2build() {
-			checkEnvironmentFile(soongBuildEnv, config.UsedEnvFile(apiBp2buildTag))
+			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(apiBp2buildTag))
 		}
 
 		if config.SoongDocs() {
-			checkEnvironmentFile(soongBuildEnv, config.UsedEnvFile(soongDocsTag))
+			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(soongDocsTag))
 		}
 	}()
 
@@ -533,7 +537,7 @@ func runSoong(ctx Context, config Config) {
 		defer ctx.EndTrace()
 
 		if config.IsPersistentBazelEnabled() {
-			bazelProxy := bazel.NewProxyServer(ctx.Logger, config.OutDir(), filepath.Join(config.SoongOutDir(), "workspace"))
+			bazelProxy := bazel.NewProxyServer(ctx.Logger, config.OutDir(), filepath.Join(config.SoongOutDir(), "workspace"), config.GetBazeliskBazelVersion())
 			bazelProxy.Start()
 			defer bazelProxy.Close()
 		}

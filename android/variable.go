@@ -109,6 +109,11 @@ type variableProperties struct {
 			Cflags []string
 		}
 
+		Build_from_text_stub struct {
+			Static_libs         []string
+			Exclude_static_libs []string
+		}
+
 		// debuggable is true for eng and userdebug builds, and can be used to turn on additional
 		// debugging features that don't significantly impact runtime behavior.  userdebug builds
 		// are used for dogfooding and performance testing, and should be as similar to user builds
@@ -321,6 +326,7 @@ type productVariables struct {
 	Uml                              *bool    `json:",omitempty"`
 	Arc                              *bool    `json:",omitempty"`
 	MinimizeJavaDebugInfo            *bool    `json:",omitempty"`
+	Build_from_text_stub         *bool    `json:",omitempty"`
 
 	Check_elf_files *bool `json:",omitempty"`
 
@@ -464,14 +470,10 @@ type productVariables struct {
 
 	TargetFSConfigGen []string `json:",omitempty"`
 
-	MissingUsesLibraries []string `json:",omitempty"`
-
 	EnforceProductPartitionInterface *bool `json:",omitempty"`
 
 	EnforceInterPartitionJavaSdkLibrary *bool    `json:",omitempty"`
 	InterPartitionJavaLibraryAllowList  []string `json:",omitempty"`
-
-	InstallExtraFlattenedApexes *bool `json:",omitempty"`
 
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
 	BoardUsesRamdiskAsBoot *bool `json:",omitempty"`
@@ -496,13 +498,13 @@ type productVariables struct {
 	BuildBrokenVendorPropertyNamespace bool     `json:",omitempty"`
 	BuildBrokenInputDirModules         []string `json:",omitempty"`
 
+	BuildWarningBadOptionalUsesLibsAllowlist []string `json:",omitempty"`
+
 	BuildDebugfsRestrictionsEnabled bool `json:",omitempty"`
 
 	RequiresInsecureExecmemForSwiftshader bool `json:",omitempty"`
 
 	SelinuxIgnoreNeverallows bool `json:",omitempty"`
-
-	SepolicySplit bool `json:",omitempty"`
 
 	SepolicyFreezeTestExtraDirs         []string `json:",omitempty"`
 	SepolicyFreezeTestExtraPrebuiltDirs []string `json:",omitempty"`
@@ -573,6 +575,7 @@ func (v *productVariables) SetDefaultConfig() {
 		Malloc_pattern_fill_contents: boolPtr(false),
 		Safestack:                    boolPtr(false),
 		TrimmedApex:                  boolPtr(false),
+		Build_from_text_stub:         boolPtr(false),
 
 		BootJars:     ConfiguredJarList{apexes: []string{}, jars: []string{}},
 		ApexBootJars: ConfiguredJarList{apexes: []string{}, jars: []string{}},

@@ -2298,3 +2298,58 @@ java_test_host {
 		t.Errorf("Expected args[\"extraConfigs\"] to equal %q, was %q", expected, args["extraConfigs"])
 	}
 }
+
+func TestTestRunnerOptions(t *testing.T) {
+	result := PrepareForTestWithJavaBuildComponents.RunTestWithBp(t, `
+java_test_host {
+	name: "foo",
+	test_options: {
+		test_runner_options: [
+			{
+				name: "test-timeout",
+				value: "10m"
+			}
+		]
+	}
+}
+`)
+
+	buildOS := result.Config.BuildOS.String()
+	args := result.ModuleForTests("foo", buildOS+"_common").
+		Output("out/soong/.intermediates/foo/" + buildOS + "_common/foo.config").Args
+	expected := proptools.NinjaAndShellEscape("<option name=\"test-timeout\" value=\"10m\" />\\n        ")
+	if args["extraTestRunnerConfigs"] != expected {
+		t.Errorf("Expected args[\"extraTestRunnerConfigs\"] to equal %q, was %q", expected, args["extraTestRunnerConfigs"])
+	}
+}
+
+func TestJavaExcludeStaticLib(t *testing.T) {
+	ctx, _ := testJava(t, `
+	java_library {
+		name: "bar",
+	}
+	java_library {
+		name: "foo",
+	}
+	java_library {
+		name: "baz",
+		static_libs: [
+			"foo",
+			"bar",
+		],
+		exclude_static_libs: [
+			"bar",
+		],
+	}
+	`)
+
+	// "bar" not included as dependency of "baz"
+	CheckModuleDependencies(t, ctx, "baz", "android_common", []string{
+		`core-lambda-stubs`,
+		`ext`,
+		`foo`,
+		`framework`,
+		`stable-core-platform-api-stubs-system-modules`,
+		`stable.core.platform.api.stubs`,
+	})
+}

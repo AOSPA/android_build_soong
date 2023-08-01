@@ -15,7 +15,9 @@
 package build
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -38,6 +40,9 @@ import (
 const (
 	envConfigDir = "vendor/google/tools/soong_config"
 	jsonSuffix   = "json"
+
+	configFetcher         = "vendor/google/tools/soong/expconfigfetcher"
+	envConfigFetchTimeout = 20 * time.Second
 )
 
 var (
@@ -106,7 +111,6 @@ type configImpl struct {
 	pathReplaced bool
 
 	bazelProdMode    bool
-	bazelDevMode     bool
 	bazelStagingMode bool
 
 	// Set by multiproduct_kati
@@ -136,6 +140,9 @@ const (
 	EXTERNAL_FILE
 	// ninja uses a prioritized module list from Soong
 	HINT_FROM_SOONG
+	// If ninja log exists, use NINJA_LOG, if not, use HINT_FROM_SOONG instead.
+	// We can assume it is an incremental build if ninja log exists.
+	DEFAULT
 )
 const srcDirFileCheck = "build/soong/root.bp"
 
@@ -164,6 +171,87 @@ func checkTopDir(ctx Context) {
 		}
 		ctx.Fatalln("Error verifying tree state:", err)
 	}
+}
+
+// fetchEnvConfig optionally fetches a configuration file that can then subsequently be
+// loaded into Soong environment to control certain aspects of build behavior (e.g., enabling RBE).
+// If a configuration file already exists on disk, the fetch is run in the background
+// so as to NOT block the rest of the build execution.
+func fetchEnvConfig(ctx Context, config *configImpl, envConfigName string) error {
+	configName := envConfigName + "." + jsonSuffix
+	expConfigFetcher := &smpb.ExpConfigFetcher{Filename: &configName}
+	defer func() {
+		ctx.Metrics.ExpConfigFetcher(expConfigFetcher)
+	}()
+	if !config.GoogleProdCredsExist() {
+		status := smpb.ExpConfigFetcher_MISSING_GCERT
+		expConfigFetcher.Status = &status
+		return nil
+	}
+
+	s, err := os.Stat(configFetcher)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if s.Mode()&0111 == 0 {
+		status := smpb.ExpConfigFetcher_ERROR
+		expConfigFetcher.Status = &status
+		return fmt.Errorf("configuration fetcher binary %v is not executable: %v", configFetcher, s.Mode())
+	}
+
+	configExists := false
+	outConfigFilePath := filepath.Join(config.OutDir(), configName)
+	if _, err := os.Stat(outConfigFilePath); err == nil {
+		configExists = true
+	}
+
+	tCtx, cancel := context.WithTimeout(ctx, envConfigFetchTimeout)
+	fetchStart := time.Now()
+	cmd := exec.CommandContext(tCtx, configFetcher, "-output_config_dir", config.OutDir(),
+		"-output_config_name", configName)
+	if err := cmd.Start(); err != nil {
+		status := smpb.ExpConfigFetcher_ERROR
+		expConfigFetcher.Status = &status
+		return err
+	}
+
+	fetchCfg := func() error {
+		if err := cmd.Wait(); err != nil {
+			status := smpb.ExpConfigFetcher_ERROR
+			expConfigFetcher.Status = &status
+			return err
+		}
+		fetchEnd := time.Now()
+		expConfigFetcher.Micros = proto.Uint64(uint64(fetchEnd.Sub(fetchStart).Microseconds()))
+		expConfigFetcher.Filename = proto.String(outConfigFilePath)
+
+		if _, err := os.Stat(outConfigFilePath); err != nil {
+			status := smpb.ExpConfigFetcher_NO_CONFIG
+			expConfigFetcher.Status = &status
+			return err
+		}
+		status := smpb.ExpConfigFetcher_CONFIG
+		expConfigFetcher.Status = &status
+		return nil
+	}
+
+	// If a config file does not exist, wait for the config file to be fetched. Otherwise
+	// fetch the config file in the background and return immediately.
+	if !configExists {
+		defer cancel()
+		return fetchCfg()
+	}
+
+	go func() {
+		defer cancel()
+		if err := fetchCfg(); err != nil {
+			ctx.Verbosef("Failed to fetch config file %v: %v\n", configName, err)
+		}
+	}()
+	return nil
 }
 
 func loadEnvConfig(ctx Context, config *configImpl, bc string) error {
@@ -233,8 +321,9 @@ func UploadOnlyConfig(ctx Context, args ...string) Config {
 
 func NewConfig(ctx Context, args ...string) Config {
 	ret := &configImpl{
-		environ:       OsEnvironment(),
-		sandboxConfig: &SandboxConfig{},
+		environ:               OsEnvironment(),
+		sandboxConfig:         &SandboxConfig{},
+		ninjaWeightListSource: NOT_USED,
 	}
 
 	// Default matching ninja
@@ -245,8 +334,21 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.parseArgs(ctx, args)
 
 	if ret.ninjaWeightListSource == HINT_FROM_SOONG {
-		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "true")
+		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "always")
+	} else if ret.ninjaWeightListSource == DEFAULT {
+		defaultNinjaWeightListSource := NINJA_LOG
+		if _, err := os.Stat(filepath.Join(ret.OutDir(), ninjaLogFileName)); errors.Is(err, os.ErrNotExist) {
+			ctx.Verboseln("$OUT/.ninja_log doesn't exist, use HINT_FROM_SOONG instead")
+			defaultNinjaWeightListSource = HINT_FROM_SOONG
+		} else {
+			ctx.Verboseln("$OUT/.ninja_log exist, use NINJA_LOG")
+		}
+		ret.ninjaWeightListSource = defaultNinjaWeightListSource
+		// soong_build generates ninja hint depending on ninja log existence.
+		// Set it "depend" to avoid soong re-run due to env variable change.
+		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "depend")
 	}
+
 	// Make sure OUT_DIR is set appropriately
 	if outDir, ok := ret.environ.Get("OUT_DIR"); ok {
 		ret.environ.Set("OUT_DIR", filepath.Clean(outDir))
@@ -267,6 +369,9 @@ func NewConfig(ctx Context, args ...string) Config {
 	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
 
 	if bc != "" {
+		if err := fetchEnvConfig(ctx, ret, bc); err != nil {
+			ctx.Verbosef("Failed to fetch config file: %v\n", err)
+		}
 		if err := loadEnvConfig(ctx, ret, bc); err != nil {
 			ctx.Fatalln("Failed to parse env config files: %v", err)
 		}
@@ -749,8 +854,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.multitreeBuild = true
 		} else if arg == "--bazel-mode" {
 			c.bazelProdMode = true
-		} else if arg == "--bazel-mode-dev" {
-			c.bazelDevMode = true
 		} else if arg == "--bazel-mode-staging" {
 			c.bazelStagingMode = true
 		} else if arg == "--search-api-dir" {
@@ -856,7 +959,7 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.arguments = append(c.arguments, arg)
 		}
 	}
-	if (!c.bazelProdMode) && (!c.bazelDevMode) && (!c.bazelStagingMode) {
+	if (!c.bazelProdMode) && (!c.bazelStagingMode) {
 		c.bazelProdMode = defaultBazelProdMode(c)
 	}
 }
@@ -1020,6 +1123,9 @@ func (c *configImpl) NamedGlobFile(name string) string {
 }
 
 func (c *configImpl) UsedEnvFile(tag string) string {
+	if v, ok := c.environ.Get("TARGET_PRODUCT"); ok {
+		return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+v+"."+tag)
+	}
 	return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+tag)
 }
 
@@ -1278,7 +1384,7 @@ func (c *configImpl) UseRBE() bool {
 }
 
 func (c *configImpl) BazelBuildEnabled() bool {
-	return c.bazelProdMode || c.bazelDevMode || c.bazelStagingMode
+	return c.bazelProdMode || c.bazelStagingMode
 }
 
 func (c *configImpl) StartRBE() bool {
@@ -1641,6 +1747,16 @@ func (c *configImpl) IsBazelMixedBuildForceDisabled() bool {
 
 func (c *configImpl) IsPersistentBazelEnabled() bool {
 	return c.Environment().IsEnvTrue("USE_PERSISTENT_BAZEL")
+}
+
+// GetBazeliskBazelVersion returns the Bazel version to use for this build,
+// or the empty string if the current canonical prod Bazel should be used.
+// This environment variable should only be set to debug the build system.
+// The Bazel version, if set, will be passed to Bazelisk, and Bazelisk will
+// handle downloading and invoking the correct Bazel binary.
+func (c *configImpl) GetBazeliskBazelVersion() string {
+	value, _ := c.Environment().Get("USE_BAZEL_VERSION")
+	return value
 }
 
 func (c *configImpl) BazelModulesForceEnabledByFlag() string {

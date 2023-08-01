@@ -5017,7 +5017,7 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 	cppOnly := []string{"-fPIC", "${config.CommonGlobalCppflags}", "${config.DeviceGlobalCppflags}", "${config.ArmCppflags}"}
 
 	cflags := []string{"-Werror", "-std=candcpp"}
-	cstd := []string{"-std=gnu11", "-std=conly"}
+	cstd := []string{"-std=gnu17", "-std=conly"}
 	cppstd := []string{"-std=gnu++17", "-std=cpp", "-fno-rtti"}
 
 	lastIncludes := []string{
@@ -5525,7 +5525,7 @@ func TestDisableSanitizerVariantsInMixedBuilds(t *testing.T) {
 			name:    "foo_cfi",
 			variant: "android_arm64_armv8-a_static_cfi_apex28",
 			expectedOutputPaths: []string{
-				"out/soong/.intermediates/foo_cfi/android_arm64_armv8-a_static_cfi_apex28/foo_cfi.a",
+				"outputbase/execroot/__main__/foo_cfi.a",
 			},
 		},
 		{

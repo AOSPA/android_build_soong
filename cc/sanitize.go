@@ -62,15 +62,18 @@ var (
 		"-fast-isel=false",
 	}
 
+	sanitizeIgnorelistPrefix = "-fsanitize-ignorelist="
+
 	cfiBlocklistPath     = "external/compiler-rt/lib/cfi"
 	cfiBlocklistFilename = "cfi_blocklist.txt"
+	cfiEnableFlag        = "-fsanitize=cfi"
 	cfiCrossDsoFlag      = "-fsanitize-cfi-cross-dso"
 	cfiCflags            = []string{"-flto", cfiCrossDsoFlag,
-		"-fsanitize-ignorelist=" + cfiBlocklistPath + "/" + cfiBlocklistFilename}
+		sanitizeIgnorelistPrefix + cfiBlocklistPath + "/" + cfiBlocklistFilename}
 	// -flto and -fvisibility are required by clang when -fsanitize=cfi is
 	// used, but have no effect on assembly files
 	cfiAsflags = []string{"-flto", "-fvisibility=default"}
-	cfiLdflags = []string{"-flto", cfiCrossDsoFlag, "-fsanitize=cfi",
+	cfiLdflags = []string{"-flto", cfiCrossDsoFlag, cfiEnableFlag,
 		"-Wl,-plugin-opt,O1"}
 	cfiExportsMapPath      = "build/soong/cc/config"
 	cfiExportsMapFilename  = "cfi_exports.map"
@@ -395,11 +398,12 @@ func init() {
 
 	// Leave out "-flto" from the slices exported to bazel, as we will use the
 	// dedicated LTO feature for this. For C Flags and Linker Flags, also leave
-	// out the cross DSO flag which will be added separately by transitions.
-	exportedVars.ExportStringList("CfiCFlags", cfiCflags[2:])
+	// out the cross DSO flag which will be added separately under the correct conditions.
+	exportedVars.ExportStringList("CfiCFlags", append(cfiCflags[2:], cfiEnableFlag))
 	exportedVars.ExportStringList("CfiLdFlags", cfiLdflags[2:])
 	exportedVars.ExportStringList("CfiAsFlags", cfiAsflags[1:])
 
+	exportedVars.ExportString("SanitizeIgnorelistPrefix", sanitizeIgnorelistPrefix)
 	exportedVars.ExportString("CfiCrossDsoFlag", cfiCrossDsoFlag)
 	exportedVars.ExportString("CfiBlocklistPath", cfiBlocklistPath)
 	exportedVars.ExportString("CfiBlocklistFilename", cfiBlocklistFilename)
@@ -1003,7 +1007,7 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 	blocklist := android.OptionalPathForModuleSrc(ctx, s.Properties.Sanitize.Blocklist)
 	if blocklist.Valid() {
-		flags.Local.CFlags = append(flags.Local.CFlags, "-fsanitize-ignorelist="+blocklist.String())
+		flags.Local.CFlags = append(flags.Local.CFlags, sanitizeIgnorelistPrefix+blocklist.String())
 		flags.CFlagsDeps = append(flags.CFlagsDeps, blocklist.Path())
 	}
 

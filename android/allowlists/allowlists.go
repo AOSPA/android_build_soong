@@ -141,6 +141,7 @@ var (
 		"external/f2fs-tools":                    Bp2BuildDefaultTrue,
 		"external/flac":                          Bp2BuildDefaultTrueRecursively,
 		"external/fmtlib":                        Bp2BuildDefaultTrueRecursively,
+		"external/fsverity-utils":                Bp2BuildDefaultTrueRecursively,
 		"external/guava":                         Bp2BuildDefaultTrueRecursively,
 		"external/google-benchmark":              Bp2BuildDefaultTrueRecursively,
 		"external/googletest":                    Bp2BuildDefaultTrueRecursively,
@@ -189,6 +190,7 @@ var (
 		"external/python/six":                    Bp2BuildDefaultTrueRecursively,
 		"external/rappor":                        Bp2BuildDefaultTrueRecursively,
 		"external/scudo":                         Bp2BuildDefaultTrueRecursively,
+		"external/selinux/checkpolicy":           Bp2BuildDefaultTrueRecursively,
 		"external/selinux/libselinux":            Bp2BuildDefaultTrueRecursively,
 		"external/selinux/libsepol":              Bp2BuildDefaultTrueRecursively,
 		"external/speex":                         Bp2BuildDefaultTrueRecursively,
@@ -333,6 +335,7 @@ var (
 		"system/apex":                                            Bp2BuildDefaultFalse, // TODO(b/207466993): flaky failures
 		"system/apex/apexer":                                     Bp2BuildDefaultTrue,
 		"system/apex/libs":                                       Bp2BuildDefaultTrueRecursively,
+		"system/apex/libs/libapexsupport":                        Bp2BuildDefaultFalseRecursively, // TODO(b/267572288): depends on rust
 		"system/apex/proto":                                      Bp2BuildDefaultTrueRecursively,
 		"system/apex/tools":                                      Bp2BuildDefaultTrueRecursively,
 		"system/core/debuggerd":                                  Bp2BuildDefaultTrueRecursively,
@@ -346,6 +349,7 @@ var (
 		"system/core/libprocessgroup":                            Bp2BuildDefaultTrue,
 		"system/core/libprocessgroup/cgrouprc":                   Bp2BuildDefaultTrue,
 		"system/core/libprocessgroup/cgrouprc_format":            Bp2BuildDefaultTrue,
+		"system/core/libsparse":                                  Bp2BuildDefaultTrueRecursively,
 		"system/core/libsuspend":                                 Bp2BuildDefaultTrue,
 		"system/core/libsystem":                                  Bp2BuildDefaultTrueRecursively,
 		"system/core/libsysutils":                                Bp2BuildDefaultTrueRecursively,
@@ -354,7 +358,9 @@ var (
 		"system/core/mkbootfs":                                   Bp2BuildDefaultTrueRecursively,
 		"system/core/property_service/libpropertyinfoparser":     Bp2BuildDefaultTrueRecursively,
 		"system/core/property_service/libpropertyinfoserializer": Bp2BuildDefaultTrueRecursively,
+		"system/extras/f2fs_utils":                               Bp2BuildDefaultTrueRecursively,
 		"system/extras/toolchain-extras":                         Bp2BuildDefaultTrue,
+		"system/extras/verity":                                   Bp2BuildDefaultTrueRecursively,
 		"system/hardware/interfaces/media":                       Bp2BuildDefaultTrueRecursively,
 		"system/incremental_delivery/incfs":                      Bp2BuildDefaultTrue,
 		"system/libartpalette":                                   Bp2BuildDefaultTrueRecursively,
@@ -384,6 +390,7 @@ var (
 		"system/memory/libion":                                   Bp2BuildDefaultTrueRecursively,
 		"system/memory/libmemunreachable":                        Bp2BuildDefaultTrueRecursively,
 		"system/sepolicy/apex":                                   Bp2BuildDefaultTrueRecursively,
+		"system/security/fsverity":                               Bp2BuildDefaultTrueRecursively,
 		"system/testing/gtest_extras":                            Bp2BuildDefaultTrueRecursively,
 		"system/timezone/apex":                                   Bp2BuildDefaultTrueRecursively,
 		"system/timezone/output_data":                            Bp2BuildDefaultTrueRecursively,
@@ -456,6 +463,9 @@ var (
 
 		// TODO(b/266459895): remove this and the placeholder BUILD file after re-enabling libunwindstack
 		"external/rust/crates/rustc-demangle-capi":/* recursive = */ false,
+
+		// Used for testing purposes only. Should not actually exist in the real source tree.
+		"testpkg/keep_build_file":/* recursive = */ false,
 	}
 
 	Bp2buildModuleAlwaysConvertList = []string{
@@ -477,6 +487,7 @@ var (
 		"code_coverage.policy",
 		"code_coverage.policy.other",
 		"codec2_soft_exports",
+		"compatibility_matrix_schema",
 		"flatbuffer_headers",
 		"framework-connectivity-protos",
 		"gemmlowp_headers",
@@ -576,22 +587,17 @@ var (
 		//frameworks/base/core/java
 		"IDropBoxManagerService_aidl",
 
-		//system/core/libsparse
-		"libsparse",
-
 		//system/extras/ext4_utils
 		"libext4_utils",
 		"mke2fs_conf",
+		"mkuserimg_mke2fs",
+		"blk_alloc_to_base_fs",
 
 		//system/extras/libfec
 		"libfec",
 
 		//system/extras/squashfs_utils
 		"libsquashfs_utils",
-
-		//system/extras/verity/fec
-		"fec",
-		"boot_signer",
 
 		//packages/apps/Car/libs/car-ui-lib/car-ui-androidx
 		// genrule dependencies for java_imports
@@ -769,6 +775,27 @@ var (
 
 		// Used by xsd_config
 		"xsdc",
+
+		// cc_test that can be run by b test
+		"binderRpcWireProtocolTest",
+		"binderUnitTest",
+		"cpu_features-bit_utils_test",
+		"liblp_test",
+		"android.hardware.audio.common.test.utility_tests",
+		"HalAudioStreamWorkerTest",
+		"libjavacore-unit-tests",
+		"NeuralNetworksTest_utils",
+		"NeuralNetworksTest_logtag",
+		"NeuralNetworksTest_operations",
+		"nanoapp_chqts_shared_tests",
+		"fakeservicemanager_test",
+		"tristate_test",
+		"binderUtilsHostTest",
+		"run_dex2oat_test",
+		"bluetooth-address-unit-tests",
+
+		// for platform_compat_config
+		"process-compat-config",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -781,6 +808,7 @@ var (
 		"java_import_host",
 		"java_sdk_library",
 		"sysprop_library",
+		"xsd_config",
 	}
 
 	// Add the names of modules that bp2build should never convert, if it is
@@ -814,7 +842,6 @@ var (
 
 		"linker",    // TODO(b/228316882): cc_binary uses link_crt
 		"versioner", // TODO(b/228313961):  depends on prebuilt shared library libclang-cpp_host as a shared library, which does not supply expected providers for a shared library
-		"tjbench",   // TODO(b/240563612): Stem property
 
 		// requires host tools for apexer
 		"apexer_test", "apexer_test_host_tools", "host_apex_verifier",
@@ -822,9 +849,6 @@ var (
 		// java bugs
 		"libbase_ndk",  // TODO(b/186826477): fails to link libctscamera2_jni for device (required for CtsCameraTestCases)
 		"bouncycastle", // TODO(b/274474005): Need support for custom system_modules.
-
-		// python protos
-		"libprotobuf-python", // Has a handcrafted alternative
 
 		// genrule incompatibilities
 		"brotli-fuzzer-corpus",                                       // TODO(b/202015218): outputs are in location incompatible with bazel genrule handling.
@@ -849,9 +873,6 @@ var (
 		"analyze_bcpf_test",         // depends on bpmodify a blueprint_go_binary.
 		"host_bionic_linker_asm",    // depends on extract_linker, a go binary.
 		"host_bionic_linker_script", // depends on extract_linker, a go binary.
-
-		// in cmd attribute of genrule rule //system/timezone/output_data:robolectric_tzdata: label '//system/timezone/output_data:iana/tzdata' in $(location) expression is not a declared prerequisite of this rule
-		"robolectric_tzdata",
 
 		// rust support
 		"libtombstoned_client_rust_bridge_code", "libtombstoned_client_wrapper", // rust conversions are not supported
@@ -900,8 +921,6 @@ var (
 		"static_crasher",                // depends on unconverted modules: libdebuggerd_handler
 		"test_fips",                     // depends on unconverted modules: adb
 		"timezone-host",                 // depends on unconverted modules: art.module.api.annotations
-		"truth-host-prebuilt",           // depends on unconverted modules: truth-prebuilt
-		"truth-prebuilt",                // depends on unconverted modules: asm-7.0, guava
 
 		// '//bionic/libc:libc_bp2build_cc_library_static' is duplicated in the 'deps' attribute of rule
 		"toybox-static",
@@ -948,12 +967,10 @@ var (
 		"svcenc", "svcdec",
 
 		// Failing host cc_tests
-		"memunreachable_unit_test",
 		"libprocinfo_test",
 		"ziparchive-tests",
 		"gtest_isolated_tests",
 		"libunwindstack_unit_test",
-		"task_profiles_test",
 		"power_tests", // failing test on server, but not on host
 
 		// reflect: call of reflect.Value.NumField on interface Value
@@ -1033,7 +1050,6 @@ var (
 		"libBionicLoaderTests",  // depends on unconverted modules: libmeminfo
 		"libapexutil_tests",     // depends on unconverted modules: apex-info-list-tinyxml, libapexutil
 		"libcutils_sockets_test",
-		"libexpectedutils_test",
 		"libhwbinder_latency",
 		"liblog-host-test", // failing tests
 		"libminijail_test",
@@ -1070,7 +1086,6 @@ var (
 		"scudo_unit_tests",
 		"stats-log-api-gen-test", // depends on unconverted modules: libstats_proto_host
 		"syscall_filter_unittest_gtest",
-		"sysprop_test", // depends on unconverted modules: libcom.android.sysprop.tests
 		"thread_exit_cb_helper",
 		"tls_properties_helper",
 		"ulp",
@@ -1414,16 +1429,12 @@ var (
 		"merge_ota",
 
 		// releasetools
-		"releasetools_fsverity_metadata_generator",
 		"verity_utils",
 		"check_ota_package_signature",
 		"check_target_files_vintf",
 		"releasetools_check_target_files_vintf",
-		"releasetools_verity_utils",
-		"build_image",
 		"ota_from_target_files",
 		"releasetools_ota_from_target_files",
-		"releasetools_build_image",
 		"add_img_to_target_files",
 		"releasetools_add_img_to_target_files",
 		"fsverity_metadata_generator",
@@ -1470,6 +1481,27 @@ var (
 
 		// python_test_host with test data
 		"sbom_writers_test",
+
+		// TODO(B/283193845): tradefed and its java_test_host dependents
+		"tradefed",
+		"permissive_mte_test",
+		"ICU4CTestRunner",
+		"DeviceLongPollingStubTest",
+
+		"HelloWorldHostTest", // TODO(b/280452825): Convert HelloWorldHostTest to b test
+
+		"libprotobuf-full-test", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+		"libprotobuf-lite-test", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		"logcat", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		"expresscatalogvalidator", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		// depends on other //art modules
+		"libart-for-test",
+		"libart_generated_headers",
+		"libart-runtime-gtest",
+		"libartd-runtime-gtest",
 	}
 
 	MixedBuildsDisabledList = []string{
@@ -1488,9 +1520,6 @@ var (
 		"libadb_pairing_connection",
 		"libadb_pairing_connection_static",
 		"libadb_pairing_server", "libadb_pairing_server_static",
-
-		// TODO(b/240563612) Needing `stem` selection support for cc_binary
-		"crasher",
 
 		// java_import[_host] issues
 		// tradefed prebuilts depend on libprotobuf
@@ -1588,12 +1617,13 @@ var (
 	}
 
 	// These should be the libs that are included by the apexes in the StagingMixedBuildsEnabledList
-	StagingDclaMixedBuildsEnabledList = []string{}
+	StagingDclaMixedBuildsEnabledList = []string{
+		"libstagefright_flacdec",
+		"libutils",
+	}
 
 	// TODO(b/269342245): Enable the rest of the DCLA libs
 	// "libssl",
-	// "libstagefright_flacdec",
-	// "libutils",
 
 	// The list of module types which are expected to spend lots of build time.
 	// With `--ninja_weight_source=soong`, ninja builds these module types and deps first.

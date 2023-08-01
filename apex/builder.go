@@ -275,6 +275,22 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 
 	manifestJsonFullOut := android.PathForModuleOut(ctx, "apex_manifest_full.json")
 	defaultVersion := android.DefaultUpdatableModuleVersion
+	if a.properties.Variant_version != nil {
+		defaultVersionInt, err := strconv.Atoi(defaultVersion)
+		if err != nil {
+			ctx.ModuleErrorf("expected DefaultUpdatableModuleVersion to be an int, but got %s", defaultVersion)
+		}
+		if defaultVersionInt%10 != 0 {
+			ctx.ModuleErrorf("expected DefaultUpdatableModuleVersion to end in a zero, but got %s", defaultVersion)
+		}
+		variantVersion := []rune(*a.properties.Variant_version)
+		if len(variantVersion) != 1 || variantVersion[0] < '0' || variantVersion[0] > '9' {
+			ctx.PropertyErrorf("variant_version", "expected an integer between 0-9; got %s", *a.properties.Variant_version)
+		}
+		defaultVersionRunes := []rune(defaultVersion)
+		defaultVersionRunes[len(defaultVersion)-1] = []rune(variantVersion)[0]
+		defaultVersion = string(defaultVersionRunes)
+	}
 	if override := ctx.Config().Getenv("OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION"); override != "" {
 		defaultVersion = override
 	}
@@ -314,7 +330,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 // buildFileContexts create build rules to append an entry for apex_manifest.pb to the file_contexts
 // file for this APEX which is either from /systme/sepolicy/apex/<apexname>-file_contexts or from
 // the file_contexts property of this APEX. This is to make sure that the manifest file is correctly
-// labeled as system_file.
+// labeled as system_file or vendor_apex_metadata_file.
 func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.OutputPath {
 	var fileContexts android.Path
 	var fileContextsDir string
@@ -346,6 +362,13 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 	output := android.PathForModuleOut(ctx, "file_contexts")
 	rule := android.NewRuleBuilder(pctx, ctx)
 
+	forceLabel := "u:object_r:system_file:s0"
+	if a.SocSpecific() && !a.vndkApex {
+		// APEX on /vendor should label ./ and ./apex_manifest.pb as vendor_apex_metadata_file.
+		// The reason why we skip VNDK APEX is that aosp_{pixel device} targets install VNDK APEX on /vendor
+		// even though VNDK APEX is supposed to be installed on /system. (See com.android.vndk.current.on_vendor)
+		forceLabel = "u:object_r:vendor_apex_metadata_file:s0"
+	}
 	switch a.properties.ApexType {
 	case imageApex:
 		// remove old file
@@ -355,9 +378,9 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		// new line
 		rule.Command().Text("echo").Text(">>").Output(output)
 		if !useFileContextsAsIs {
-			// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-			rule.Command().Text("echo").Flag("/apex_manifest\\\\.pb u:object_r:system_file:s0").Text(">>").Output(output)
-			rule.Command().Text("echo").Flag("/ u:object_r:system_file:s0").Text(">>").Output(output)
+			// force-label /apex_manifest.pb and /
+			rule.Command().Text("echo").Text("/apex_manifest\\\\.pb").Text(forceLabel).Text(">>").Output(output)
+			rule.Command().Text("echo").Text("/").Text(forceLabel).Text(">>").Output(output)
 		}
 	case flattenedApex:
 		// For flattened apexes, install path should be prepended.
@@ -372,9 +395,9 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		// new line
 		rule.Command().Text("echo").Text(">>").Output(output)
 		if !useFileContextsAsIs {
-			// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-			rule.Command().Text("echo").Flag(apexPath + `/apex_manifest\\.pb u:object_r:system_file:s0`).Text(">>").Output(output)
-			rule.Command().Text("echo").Flag(apexPath + "/ u:object_r:system_file:s0").Text(">>").Output(output)
+			// force-label /apex_manifest.pb and /
+			rule.Command().Text("echo").Text(apexPath + "/apex_manifest\\\\.pb").Text(forceLabel).Text(">>").Output(output)
+			rule.Command().Text("echo").Text(apexPath + "/").Text(forceLabel).Text(">>").Output(output)
 		}
 	default:
 		panic(fmt.Errorf("unsupported type %v", a.properties.ApexType))

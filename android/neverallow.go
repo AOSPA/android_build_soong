@@ -58,6 +58,7 @@ func init() {
 	AddNeverAllowRules(createInitFirstStageRules()...)
 	AddNeverAllowRules(createBp2BuildRule())
 	AddNeverAllowRules(createCcStubsRule())
+	AddNeverAllowRules(createJavaExcludeStaticLibsRule())
 }
 
 // Add a NeverAllow rule to the set of rules to apply.
@@ -241,6 +242,14 @@ func createInitFirstStageRules() []Rule {
 			With("install_in_root", "true").
 			Because("install_in_root is only for init_first_stage."),
 	}
+}
+
+func createJavaExcludeStaticLibsRule() Rule {
+	return NeverAllow().
+		NotIn("build/soong").
+		ModuleType("java_library").
+		WithMatcher("exclude_static_libs", isSetMatcherInstance).
+		Because("exclude_static_libs property is only allowed for java modules defined in build/soong")
 }
 
 func neverallowMutator(ctx BottomUpMutatorContext) {
