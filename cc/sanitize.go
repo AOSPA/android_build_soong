@@ -56,10 +56,6 @@ var (
 		// higher number of "optimized out" stack variables.
 		// b/112437883.
 		"-instcombine-lower-dbg-declare=0",
-		// TODO(b/159343917): HWASan and GlobalISel don't play nicely, and
-		// GlobalISel is the default at -O0 on aarch64.
-		"--aarch64-enable-global-isel-at-O=-1",
-		"-fast-isel=false",
 		"-hwasan-use-after-scope=1",
 		"-dom-tree-reachability-max-bbs-to-explore=128",
 	}
@@ -673,6 +669,12 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Undefined = nil
 		s.All_undefined = nil
 		s.Integer_overflow = nil
+	}
+
+	// TODO(b/254713216): CFI doesn't work for riscv64 yet because LTO doesn't work.
+	if ctx.Arch().ArchType == android.Riscv64 {
+		s.Cfi = nil
+		s.Diag.Cfi = nil
 	}
 
 	// Disable CFI for musl
