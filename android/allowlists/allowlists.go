@@ -121,6 +121,7 @@ var (
 		"development/sdk":                             Bp2BuildDefaultTrueRecursively,
 
 		"external/aac":                           Bp2BuildDefaultTrueRecursively,
+		"external/abseil-cpp":                    Bp2BuildDefaultTrueRecursively,
 		"external/arm-optimized-routines":        Bp2BuildDefaultTrueRecursively,
 		"external/auto":                          Bp2BuildDefaultTrue,
 		"external/auto/android-annotation-stubs": Bp2BuildDefaultTrueRecursively,
@@ -189,7 +190,11 @@ var (
 		"external/ow2-asm":                       Bp2BuildDefaultTrueRecursively,
 		"external/pcre":                          Bp2BuildDefaultTrueRecursively,
 		"external/protobuf":                      Bp2BuildDefaultTrueRecursively,
+		"external/python/pyyaml/lib/yaml":        Bp2BuildDefaultTrueRecursively,
 		"external/python/six":                    Bp2BuildDefaultTrueRecursively,
+		"external/python/jinja/src":              Bp2BuildDefaultTrueRecursively,
+		"external/python/markupsafe/src":         Bp2BuildDefaultTrueRecursively,
+		"external/python/setuptools":             Bp2BuildDefaultTrueRecursively,
 		"external/rappor":                        Bp2BuildDefaultTrueRecursively,
 		"external/scudo":                         Bp2BuildDefaultTrueRecursively,
 		"external/selinux/checkpolicy":           Bp2BuildDefaultTrueRecursively,
@@ -813,6 +818,8 @@ var (
 		"chre_flatbuffers",
 		"event_logger",
 		"hal_unit_tests",
+
+		"merge_annotation_zips_test",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -836,6 +843,10 @@ var (
 	// the "prebuilt_" prefix to the name, so that it's differentiable from
 	// the source versions within Soong's module graph.
 	Bp2buildModuleDoNotConvertList = []string{
+		// TODO(b/263326760): Failed already.
+		"minijail_compiler_unittest",
+		"minijail_parser_unittest",
+
 		// Depends on unconverted libandroid, libgui
 		"dvr_buffer_queue-test",
 		"dvr_display-test",
@@ -1516,73 +1527,6 @@ var (
 		"libartd-runtime-gtest",
 	}
 
-	MixedBuildsDisabledList = []string{
-		"libruy_static", "libtflite_kernel_utils", // TODO(b/237315968); Depend on prebuilt stl, not from source
-
-		"art_libdexfile_dex_instruction_list_header", // breaks libart_mterp.armng, header not found
-
-		"libbrotli",               // http://b/198585397, ld.lld: error: bionic/libc/arch-arm64/generic/bionic/memmove.S:95:(.text+0x10): relocation R_AARCH64_CONDBR19 out of range: -1404176 is not in [-1048576, 1048575]; references __memcpy
-		"minijail_constants_json", // http://b/200899432, bazel-built cc_genrule does not work in mixed build when it is a dependency of another soong module.
-
-		"cap_names.h",                                  // TODO(b/204913827) runfiles need to be handled in mixed builds
-		"libcap",                                       // TODO(b/204913827) runfiles need to be handled in mixed builds
-		"libprotobuf-cpp-full", "libprotobuf-cpp-lite", // Unsupported product&vendor suffix. b/204811222 and b/204810610.
-
-		// Depends on libprotobuf-cpp-*
-		"libadb_pairing_connection",
-		"libadb_pairing_connection_static",
-		"libadb_pairing_server", "libadb_pairing_server_static",
-
-		// java_import[_host] issues
-		// tradefed prebuilts depend on libprotobuf
-		"prebuilt_tradefed",
-		"prebuilt_tradefed-test-framework",
-		// handcrafted BUILD.bazel files in //prebuilts/...
-		"prebuilt_r8lib-prebuilt",
-		"prebuilt_sdk-core-lambda-stubs",
-		"prebuilt_android-support-collections-nodeps",
-		"prebuilt_android-arch-core-common-nodeps",
-		"prebuilt_android-arch-lifecycle-common-java8-nodeps",
-		"prebuilt_android-arch-lifecycle-common-nodeps",
-		"prebuilt_android-support-annotations-nodeps",
-		"prebuilt_android-arch-paging-common-nodeps",
-		"prebuilt_android-arch-room-common-nodeps",
-		// TODO(b/217750501) exclude_dirs property not supported
-		"prebuilt_kotlin-reflect",
-		"prebuilt_kotlin-stdlib",
-		"prebuilt_kotlin-stdlib-jdk7",
-		"prebuilt_kotlin-stdlib-jdk8",
-		"prebuilt_kotlin-test",
-		// TODO(b/217750501) exclude_files property not supported
-		"prebuilt_currysrc_org.eclipse",
-
-		// TODO(b/266459895): re-enable libunwindstack
-		"libunwindstack",
-		"libunwindstack_stdout_log",
-		"libunwindstack_no_dex",
-		"libunwindstack_utils",
-		"unwind_reg_info",
-		"libunwindstack_local",
-		"unwind_for_offline",
-		"unwind",
-		"unwind_info",
-		"unwind_symbols",
-		"libEGL",
-		"libGLESv2",
-		"libc_malloc_debug",
-		"libcodec2_hidl@1.0",
-		"libcodec2_hidl@1.1",
-		"libcodec2_hidl@1.2",
-		"libfdtrack",
-		"libgui",
-		"libgui_bufferqueue_static",
-		"libmedia_codecserviceregistrant",
-		"libstagefright_bufferqueue_helper_novndk",
-		"libutils_test",
-		"libutilscallstack",
-		"mediaswcodec",
-	}
-
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel
 	// in either prod mode or staging mode.
 	ProdMixedBuildsEnabledList = []string{
@@ -1642,5 +1586,15 @@ var (
 		"droidstubs":  DEFAULT_PRIORITIZED_WEIGHT,
 		"art_":        DEFAULT_PRIORITIZED_WEIGHT,
 		"ndk_library": DEFAULT_PRIORITIZED_WEIGHT,
+	}
+
+	BazelSandwichTargets = []struct {
+		Label string
+		Host  bool
+	}{
+		{
+			Label: "//build/bazel/examples/partitions:system_image",
+			Host:  false,
+		},
 	}
 )
