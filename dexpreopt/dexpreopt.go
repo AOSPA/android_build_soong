@@ -353,7 +353,7 @@ func dexpreoptCommand(ctx android.BuilderContext, globalSoong *GlobalSoongConfig
 		}
 
 		// Generate command that saves host and target class loader context in shell variables.
-		paths := ComputeClassLoaderContextDependencies(module.ClassLoaderContexts)
+		_, paths := ComputeClassLoaderContextDependencies(module.ClassLoaderContexts)
 		rule.Command().
 			Text(`eval "$(`).Tool(globalSoong.ConstructContext).
 			Text(` --target-sdk-version ${target_sdk_version}`).
@@ -630,5 +630,3 @@ func contains(l []string, s string) bool {
 	}
 	return false
 }
-
-var copyOf = android.CopyOf

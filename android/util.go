@@ -25,12 +25,12 @@ import (
 )
 
 // CopyOf returns a new slice that has the same contents as s.
-func CopyOf(s []string) []string {
+func CopyOf[T any](s []T) []T {
 	// If the input is nil, return nil and not an empty list
 	if s == nil {
 		return s
 	}
-	return append([]string{}, s...)
+	return append([]T{}, s...)
 }
 
 // Concat returns a new slice concatenated from the two input slices. It does not change the input
@@ -40,6 +40,16 @@ func Concat[T any](s1, s2 []T) []T {
 	res = append(res, s1...)
 	res = append(res, s2...)
 	return res
+}
+
+// JoinPathsWithPrefix converts the paths to strings, prefixes them
+// with prefix and then joins them separated by " ".
+func JoinPathsWithPrefix(paths []Path, prefix string) string {
+	strs := make([]string, len(paths))
+	for i := range paths {
+		strs[i] = paths[i].String()
+	}
+	return JoinWithPrefixAndSeparator(strs, prefix, " ")
 }
 
 // JoinWithPrefix prepends the prefix to each string in the list and
@@ -278,44 +288,83 @@ func RemoveFromList(s string, list []string) (bool, []string) {
 }
 
 // FirstUniqueStrings returns all unique elements of a slice of strings, keeping the first copy of
-// each.  It modifies the slice contents in place, and returns a subslice of the original slice.
+// each.  It does not modify the input slice.
 func FirstUniqueStrings(list []string) []string {
-	// Do not moodify the input in-place, operate on a copy instead.
-	list = CopyOf(list)
-	// 128 was chosen based on BenchmarkFirstUniqueStrings results.
-	if len(list) > 128 {
-		return firstUniqueStringsMap(list)
-	}
-	return firstUniqueStringsList(list)
+	return firstUnique(list)
 }
 
-func firstUniqueStringsList(list []string) []string {
-	k := 0
+// firstUnique returns all unique elements of a slice, keeping the first copy of each.  It
+// does not modify the input slice.
+func firstUnique[T comparable](slice []T) []T {
+	// Do not modify the input in-place, operate on a copy instead.
+	slice = CopyOf(slice)
+	return firstUniqueInPlace(slice)
+}
+
+// firstUniqueInPlace returns all unique elements of a slice, keeping the first copy of
+// each.  It modifies the slice contents in place, and returns a subslice of the original
+// slice.
+func firstUniqueInPlace[T comparable](slice []T) []T {
+	// 128 was chosen based on BenchmarkFirstUniqueStrings results.
+	if len(slice) > 128 {
+		return firstUniqueMap(slice)
+	}
+	return firstUniqueList(slice)
+}
+
+// firstUniqueList is an implementation of firstUnique using an O(N^2) list comparison to look for
+// duplicates.
+func firstUniqueList[T any](in []T) []T {
+	writeIndex := 0
 outer:
-	for i := 0; i < len(list); i++ {
-		for j := 0; j < k; j++ {
-			if list[i] == list[j] {
+	for readIndex := 0; readIndex < len(in); readIndex++ {
+		for compareIndex := 0; compareIndex < writeIndex; compareIndex++ {
+			if interface{}(in[readIndex]) == interface{}(in[compareIndex]) {
+				// The value at readIndex already exists somewhere in the output region
+				// of the slice before writeIndex, skip it.
 				continue outer
 			}
 		}
-		list[k] = list[i]
-		k++
+		if readIndex != writeIndex {
+			in[writeIndex] = in[readIndex]
+		}
+		writeIndex++
 	}
-	return list[:k]
+	return in[0:writeIndex]
 }
 
-func firstUniqueStringsMap(list []string) []string {
-	k := 0
-	seen := make(map[string]bool, len(list))
-	for i := 0; i < len(list); i++ {
-		if seen[list[i]] {
+// firstUniqueMap is an implementation of firstUnique using an O(N) hash set lookup to look for
+// duplicates.
+func firstUniqueMap[T comparable](in []T) []T {
+	writeIndex := 0
+	seen := make(map[T]bool, len(in))
+	for readIndex := 0; readIndex < len(in); readIndex++ {
+		if _, exists := seen[in[readIndex]]; exists {
 			continue
 		}
-		seen[list[i]] = true
-		list[k] = list[i]
-		k++
+		seen[in[readIndex]] = true
+		if readIndex != writeIndex {
+			in[writeIndex] = in[readIndex]
+		}
+		writeIndex++
 	}
-	return list[:k]
+	return in[0:writeIndex]
+}
+
+// reverseSliceInPlace reverses the elements of a slice in place.
+func reverseSliceInPlace[T any](in []T) {
+	for i, j := 0, len(in)-1; i < j; i, j = i+1, j-1 {
+		in[i], in[j] = in[j], in[i]
+	}
+}
+
+// reverseSlice returns a copy of a slice in reverse order.
+func reverseSlice[T any](in []T) []T {
+	out := make([]T, len(in))
+	for i := 0; i < len(in); i++ {
+		out[i] = in[len(in)-1-i]
+	}
+	return out
 }
 
 // LastUniqueStrings returns all unique elements of a slice of strings, keeping the last copy of

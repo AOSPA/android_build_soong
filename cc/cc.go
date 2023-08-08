@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"android/soong/ui/metrics/bp2build_metrics_proto"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -151,7 +152,7 @@ type PathDeps struct {
 	StaticLibs, LateStaticLibs, WholeStaticLibs android.Paths
 
 	// Transitive static library dependencies of static libraries for use in ordering.
-	TranstiveStaticLibrariesForOrdering *android.DepSet
+	TranstiveStaticLibrariesForOrdering *android.DepSet[android.Path]
 
 	// Paths to .o files
 	Objs Objects
@@ -1933,7 +1934,35 @@ func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
 		//TODO(b/278772861) support sanitizers in Bazel rules
 		return false
 	}
+	if !imageVariantSupportedByBazel(c) {
+		return false
+	}
+	if c.IsSdkVariant() {
+		return false
+	}
 	return c.bazelHandler != nil
+}
+
+func imageVariantSupportedByBazel(c *Module) bool {
+	if c.IsLlndk() {
+		return false
+	}
+	if c.InVendor() {
+		return false
+	}
+	if c.InProduct() {
+		return false
+	}
+	if c.InRamdisk() {
+		return false
+	}
+	if c.InVendorRamdisk() {
+		return false
+	}
+	if c.InRecovery() {
+		return false
+	}
+	return true
 }
 
 func allEnabledSanitizersSupportedByBazel(ctx android.BaseModuleContext, c *Module) bool {
@@ -1979,17 +2008,39 @@ func allEnabledSanitizersSupportedByBazel(ctx android.BaseModuleContext, c *Modu
 func GetApexConfigKey(ctx android.BaseModuleContext) *android.ApexConfigKey {
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	if !apexInfo.IsForPlatform() {
-		if !ctx.Config().BazelContext.IsModuleDclaAllowed(ctx.Module().Name()) {
-			return nil
-		}
 		apexKey := android.ApexConfigKey{
 			WithinApex:     true,
 			ApexSdkVersion: findApexSdkVersion(ctx, apexInfo).String(),
+			ApiDomain:      findApiDomain(apexInfo),
 		}
 		return &apexKey
 	}
 
 	return nil
+}
+
+// Returns the api domain of a module for an apexInfo group
+// Input:
+// ai.InApexModules: [com.android.foo, test_com.android.foo, com.google.android.foo]
+// Return:
+// com.android.foo
+
+// If a module is included in multiple api domains (collated by min_sdk_version), it will return
+// the first match. The other matches have the same build actions since they share a min_sdk_version, so returning
+// the first match is fine.
+func findApiDomain(ai android.ApexInfo) string {
+	// Remove any test apexes
+	matches, _ := android.FilterList(ai.InApexModules, ai.TestApexes)
+	// Remove any google apexes. Rely on naming convention.
+	pred := func(s string) bool { return !strings.HasPrefix(s, "com.google") }
+	matches = android.FilterListPred(matches, pred)
+	if len(matches) > 0 {
+		// Return the first match
+		return android.SortedUniqueStrings(matches)[0]
+	} else {
+		// No apex in the tree has a dependency on this module
+		return ""
+	}
 }
 
 func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
@@ -3578,8 +3629,8 @@ func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibr
 // to match the topological order of the dependency tree, including any static analogues of
 // direct shared libraries.  It returns the ordered static dependencies, and an android.DepSet
 // of the transitive dependencies.
-func orderStaticModuleDeps(staticDeps []StaticLibraryInfo, sharedDeps []SharedLibraryInfo) (ordered android.Paths, transitive *android.DepSet) {
-	transitiveStaticLibsBuilder := android.NewDepSetBuilder(android.TOPOLOGICAL)
+func orderStaticModuleDeps(staticDeps []StaticLibraryInfo, sharedDeps []SharedLibraryInfo) (ordered android.Paths, transitive *android.DepSet[android.Path]) {
+	transitiveStaticLibsBuilder := android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL)
 	var staticPaths android.Paths
 	for _, staticDep := range staticDeps {
 		staticPaths = append(staticPaths, staticDep.StaticLibrary)

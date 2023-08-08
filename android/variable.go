@@ -175,10 +175,6 @@ type variableProperties struct {
 			Whole_static_libs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
 
-		Flatten_apex struct {
-			Enabled *bool
-		}
-
 		Native_coverage struct {
 			Src          *string  `android:"arch_variant"`
 			Srcs         []string `android:"arch_variant"`
@@ -441,7 +437,6 @@ type productVariables struct {
 	Ndk_abis *bool `json:",omitempty"`
 
 	TrimmedApex                  *bool `json:",omitempty"`
-	Flatten_apex                 *bool `json:",omitempty"`
 	ForceApexSymlinkOptimization *bool `json:",omitempty"`
 	CompressedApex               *bool `json:",omitempty"`
 	Aml_abis                     *bool `json:",omitempty"`
@@ -522,8 +517,8 @@ type productVariables struct {
 	ProductBrand        string   `json:",omitempty"`
 	BuildVersionTags    []string `json:",omitempty"`
 
-	ReleaseVersion               string   `json:",omitempty"`
-	ReleaseDeviceConfigValueSets []string `json:",omitempty"`
+	ReleaseVersion          string   `json:",omitempty"`
+	ReleaseAconfigValueSets []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

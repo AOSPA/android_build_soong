@@ -74,10 +74,10 @@ func TestFirstUniqueStrings(t *testing.T) {
 
 	for _, testCase := range firstUniqueStringsTestCases {
 		t.Run("list", func(t *testing.T) {
-			f(t, firstUniqueStringsList, testCase.in, testCase.out)
+			f(t, firstUniqueList[string], testCase.in, testCase.out)
 		})
 		t.Run("map", func(t *testing.T) {
-			f(t, firstUniqueStringsMap, testCase.in, testCase.out)
+			f(t, firstUniqueMap[string], testCase.in, testCase.out)
 		})
 	}
 }
@@ -385,7 +385,7 @@ func TestCopyOfEmptyAndNil(t *testing.T) {
 	emptyList := []string{}
 	copyOfEmptyList := CopyOf(emptyList)
 	AssertBoolEquals(t, "Copy of an empty list should be an empty list and not nil", true, copyOfEmptyList != nil)
-	copyOfNilList := CopyOf(nil)
+	copyOfNilList := CopyOf([]string(nil))
 	AssertBoolEquals(t, "Copy of a nil list should be a nil list and not an empty list", true, copyOfNilList == nil)
 }
 
@@ -604,11 +604,11 @@ func BenchmarkFirstUniqueStrings(b *testing.B) {
 	}{
 		{
 			name: "list",
-			f:    firstUniqueStringsList,
+			f:    firstUniqueList[string],
 		},
 		{
 			name: "map",
-			f:    firstUniqueStringsMap,
+			f:    firstUniqueMap[string],
 		},
 		{
 			name: "optimal",

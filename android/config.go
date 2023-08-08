@@ -184,8 +184,8 @@ func (c Config) ReleaseVersion() string {
 }
 
 // The flag values files passed to aconfig, derived from RELEASE_VERSION
-func (c Config) ReleaseDeviceConfigValueSets() []string {
-	return c.config.productVariables.ReleaseDeviceConfigValueSets
+func (c Config) ReleaseAconfigValueSets() []string {
+	return c.config.productVariables.ReleaseAconfigValueSets
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -702,6 +702,10 @@ func (c *config) mockFileSystem(bp string, fs map[string][]byte) {
 func (c *config) IsMixedBuildsEnabled() bool {
 	globalMixedBuildsSupport := c.Once(OnceKey{"globalMixedBuildsSupport"}, func() interface{} {
 		if c.productVariables.DeviceArch != nil && *c.productVariables.DeviceArch == "riscv64" {
+			return false
+		}
+		// Disable Bazel when Kythe is running
+		if c.EmitXrefRules() {
 			return false
 		}
 		if c.IsEnvTrue("GLOBAL_THINLTO") {
@@ -1671,10 +1675,6 @@ func (c *config) NdkAbis() bool {
 
 func (c *config) AmlAbis() bool {
 	return Bool(c.productVariables.Aml_abis)
-}
-
-func (c *config) FlattenApex() bool {
-	return Bool(c.productVariables.Flatten_apex)
 }
 
 func (c *config) ForceApexSymlinkOptimization() bool {
