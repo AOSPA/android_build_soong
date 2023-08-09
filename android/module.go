@@ -1021,6 +1021,11 @@ type CommonAttributes struct {
 	Applicable_licenses bazel.LabelListAttribute
 
 	Testonly *bool
+
+	// Dir is neither a Soong nor Bazel target attribute
+	// If set, the bazel target will be created in this directory
+	// If unset, the bazel target will default to be created in the directory of the visited soong module
+	Dir *string
 }
 
 // constraintAttributes represents Bazel attributes pertaining to build constraints,
@@ -1429,10 +1434,17 @@ func productVariableConfigEnableAttribute(ctx *topDownMutatorContext) bazel.Labe
 				ctx.ModuleErrorf("Could not convert product variable enabled property")
 			}
 
-			if *flag {
+			if flag == nil {
+				// soong config var is not used to set `enabled`. nothing to do.
+				continue
+			} else if *flag {
 				axis := productConfigProp.ConfigurationAxis()
 				result.SetSelectValue(axis, bazel.ConditionsDefaultConfigKey, bazel.MakeLabelList([]bazel.Label{{Label: "@platforms//:incompatible"}}))
 				result.SetSelectValue(axis, productConfigProp.SelectKey(), bazel.LabelList{Includes: []bazel.Label{}})
+			} else if scp, isSoongConfigProperty := productConfigProp.(SoongConfigProperty); isSoongConfigProperty && scp.value == bazel.ConditionsDefaultConfigKey {
+				// productVariableConfigEnableAttribute runs only if `enabled: false` is set at the top-level outside soong_config_variables
+				// conditions_default { enabled: false} is a no-op in this case
+				continue
 			} else {
 				// TODO(b/210546943): handle negative case where `enabled: false`
 				ctx.ModuleErrorf("`enabled: false` is not currently supported for configuration variables. See b/210546943")

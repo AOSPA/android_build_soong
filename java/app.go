@@ -1022,7 +1022,13 @@ func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
 	case ".aapt.proguardOptionsFile":
 		return []android.Path{a.proguardOptionsFile}, nil
 	case ".aapt.srcjar":
-		return []android.Path{a.aaptSrcJar}, nil
+		if a.aaptSrcJar != nil {
+			return []android.Path{a.aaptSrcJar}, nil
+		}
+	case ".aapt.jar":
+		if a.rJar != nil {
+			return []android.Path{a.rJar}, nil
+		}
 	case ".export-package.apk":
 		return []android.Path{a.exportPackage}, nil
 	}
@@ -1613,7 +1619,10 @@ type bazelAndroidAppAttributes struct {
 
 // ConvertWithBp2build is used to convert android_app to Bazel.
 func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	commonAttrs, bp2BuildInfo := a.convertLibraryAttrsBp2Build(ctx)
+	commonAttrs, bp2BuildInfo, supported := a.convertLibraryAttrsBp2Build(ctx)
+	if !supported {
+		return
+	}
 	depLabels := bp2BuildInfo.DepLabels
 
 	deps := depLabels.Deps
