@@ -80,6 +80,10 @@ func apexVndkMutator(mctx android.TopDownMutatorContext) {
 			// config targets the 'current' VNDK (see `vndkVersion`).
 			ab.Disable()
 		}
+		if proptools.String(ab.vndkProperties.Vndk_version) != "" &&
+			apiLevel.GreaterThanOrEqualTo(android.ApiLevelOrPanic(mctx, mctx.DeviceConfig().PlatformVndkVersion())) {
+			ab.Disable()
+		}
 	}
 }
 
@@ -103,7 +107,7 @@ func apexVndkDepsMutator(mctx android.BottomUpMutatorContext) {
 		}
 	} else if a, ok := mctx.Module().(*apexBundle); ok && a.vndkApex {
 		vndkVersion := proptools.StringDefault(a.vndkProperties.Vndk_version, "current")
-		mctx.AddDependency(mctx.Module(), prebuiltTag, cc.VndkLibrariesTxtModules(vndkVersion)...)
+		mctx.AddDependency(mctx.Module(), prebuiltTag, cc.VndkLibrariesTxtModules(vndkVersion, mctx)...)
 	}
 }
 

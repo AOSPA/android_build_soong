@@ -255,6 +255,7 @@ var (
 		"hardware/interfaces/audio/aidl/common":                   Bp2BuildDefaultTrue,
 		"hardware/interfaces/audio/aidl/default":                  Bp2BuildDefaultTrue,
 		"hardware/interfaces/audio/aidl/sounddose":                Bp2BuildDefaultTrue,
+		"hardware/interfaces/camera/metadata/aidl":                Bp2BuildDefaultTrueRecursively,
 		"hardware/interfaces/common/aidl":                         Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/fmq/aidl":                     Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/support":                      Bp2BuildDefaultTrue,
@@ -396,6 +397,7 @@ var (
 		"system/media/audio":                                     Bp2BuildDefaultTrueRecursively,
 		"system/media/alsa_utils":                                Bp2BuildDefaultTrueRecursively,
 		"system/media/audio_utils":                               Bp2BuildDefaultTrueRecursively,
+		"system/media/camera":                                    Bp2BuildDefaultTrueRecursively,
 		"system/memory/libion":                                   Bp2BuildDefaultTrueRecursively,
 		"system/memory/libmemunreachable":                        Bp2BuildDefaultTrueRecursively,
 		"system/sepolicy/apex":                                   Bp2BuildDefaultTrueRecursively,
@@ -437,6 +439,7 @@ var (
 		// external/bazelbuild-rules_android/... is needed by mixed builds, otherwise mixed builds analysis fails
 		// e.g. ERROR: Analysis of target '@soong_injection//mixed_builds:buildroot' failed
 		"external/bazelbuild-rules_android":/* recursive = */ true,
+		"external/bazelbuild-rules_cc":/* recursive = */ true,
 		"external/bazelbuild-rules_java":/* recursive = */ true,
 		"external/bazelbuild-rules_license":/* recursive = */ true,
 		"external/bazelbuild-rules_go":/* recursive = */ true,

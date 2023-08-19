@@ -39,25 +39,34 @@ const (
 	vndkUsingCoreVariantLibrariesTxt = "vndkcorevariant.libraries.txt"
 )
 
-func VndkLibrariesTxtModules(vndkVersion string) []string {
+func VndkLibrariesTxtModules(vndkVersion string, ctx android.BaseModuleContext) []string {
 	if vndkVersion == "current" {
-		return []string{
-			llndkLibrariesTxt,
+		result := []string{
 			vndkCoreLibrariesTxt,
 			vndkSpLibrariesTxt,
 			vndkPrivateLibrariesTxt,
 			vndkProductLibrariesTxt,
 		}
+
+		// TODO(b/290159430) This part will not be required once deprecation of VNDK
+		// is handled with 'ro.vndk.version' property
+		if !ctx.Config().IsVndkDeprecated() {
+			result = append(result, llndkLibrariesTxt)
+		}
+
+		return result
 	}
 	// Snapshot vndks have their own *.libraries.VER.txt files.
 	// Note that snapshots don't have "vndkcorevariant.libraries.VER.txt"
-	return []string{
-		insertVndkVersion(llndkLibrariesTxt, vndkVersion),
+	result := []string{
 		insertVndkVersion(vndkCoreLibrariesTxt, vndkVersion),
 		insertVndkVersion(vndkSpLibrariesTxt, vndkVersion),
 		insertVndkVersion(vndkPrivateLibrariesTxt, vndkVersion),
 		insertVndkVersion(vndkProductLibrariesTxt, vndkVersion),
+		insertVndkVersion(llndkLibrariesTxt, vndkVersion),
 	}
+
+	return result
 }
 
 type VndkProperties struct {
@@ -352,11 +361,19 @@ func IsForVndkApex(mctx android.BottomUpMutatorContext, m *Module) bool {
 		return false
 	}
 
-	// prebuilt vndk modules should match with device
 	// TODO(b/142675459): Use enabled: to select target device in vndk_prebuilt_shared
 	// When b/142675459 is landed, remove following check
-	if p, ok := m.linker.(*vndkPrebuiltLibraryDecorator); ok && !p.MatchesWithDevice(mctx.DeviceConfig()) {
-		return false
+	if p, ok := m.linker.(*vndkPrebuiltLibraryDecorator); ok {
+		// prebuilt vndk modules should match with device
+		if !p.MatchesWithDevice(mctx.DeviceConfig()) {
+			return false
+		}
+
+		// ignore prebuilt vndk modules that are newer than or equal to the platform vndk version
+		platformVndkApiLevel := android.ApiLevelOrPanic(mctx, mctx.DeviceConfig().PlatformVndkVersion())
+		if platformVndkApiLevel.LessThanOrEqualTo(android.ApiLevelOrPanic(mctx, p.Version())) {
+			return false
+		}
 	}
 
 	if lib, ok := m.linker.(libraryInterface); ok {
@@ -519,11 +536,15 @@ func insertVndkVersion(filename string, vndkVersion string) string {
 }
 
 func (txt *vndkLibrariesTxt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	var filename string
-	if BoolDefault(txt.properties.Insert_vndk_version, true) {
+	filename := txt.Name()
+
+	shouldInsertVndkVersion := BoolDefault(txt.properties.Insert_vndk_version, true)
+	// llndk.libraries.txt file installed in the system image should not contain version info.
+	if ctx.Config().IsVndkDeprecated() && txt.Name() == llndkLibrariesTxt {
+		shouldInsertVndkVersion = false
+	}
+	if shouldInsertVndkVersion {
 		filename = insertVndkVersion(txt.Name(), ctx.DeviceConfig().PlatformVndkVersion())
-	} else {
-		filename = txt.Name()
 	}
 
 	txt.outputFile = android.PathForModuleOut(ctx, filename).OutputPath

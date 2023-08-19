@@ -65,6 +65,8 @@ type staticOrSharedAttributes struct {
 	Hdrs      bazel.LabelListAttribute
 	Copts     bazel.StringListAttribute
 
+	Additional_compiler_inputs bazel.LabelListAttribute
+
 	Deps                              bazel.LabelListAttribute
 	Implementation_deps               bazel.LabelListAttribute
 	Dynamic_deps                      bazel.LabelListAttribute
@@ -508,6 +510,8 @@ type compilerAttributes struct {
 	suffix bazel.StringAttribute
 
 	fdoProfile bazel.LabelAttribute
+
+	additionalCompilerInputs bazel.LabelListAttribute
 }
 
 type filterOutFn func(string) bool
@@ -1016,12 +1020,24 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 	(&compilerAttrs).localIncludes.Append(rsLocalIncludes)
 	(&compilerAttrs).localIncludes.Value = android.FirstUniqueStrings(compilerAttrs.localIncludes.Value)
 
-	features := compilerAttrs.features.Clone().Append(linkerAttrs.features).Append(bp2buildSanitizerFeatures(ctx, module))
+	sanitizerValues := bp2buildSanitizerFeatures(ctx, module)
+
+	features := compilerAttrs.features.Clone().Append(linkerAttrs.features).Append(sanitizerValues.features)
 	features = features.Append(bp2buildLtoFeatures(ctx, module))
 	features = features.Append(convertHiddenVisibilityToFeatureBase(ctx, module))
 	features.DeduplicateAxesFromBase()
 
+	compilerAttrs.copts = *compilerAttrs.copts.Append(sanitizerValues.copts)
+	compilerAttrs.additionalCompilerInputs = *compilerAttrs.additionalCompilerInputs.Append(sanitizerValues.additionalCompilerInputs)
+
 	addMuslSystemDynamicDeps(ctx, linkerAttrs)
+
+	// Dedupe all deps.
+	(&linkerAttrs).deps.Value = bazel.FirstUniqueBazelLabelList((&linkerAttrs).deps.Value)
+	(&linkerAttrs).implementationDeps.Value = bazel.FirstUniqueBazelLabelList((&linkerAttrs).implementationDeps.Value)
+	(&linkerAttrs).implementationDynamicDeps.Value = bazel.FirstUniqueBazelLabelList((&linkerAttrs).implementationDynamicDeps.Value)
+	(&linkerAttrs).wholeArchiveDeps.Value = bazel.FirstUniqueBazelLabelList((&linkerAttrs).wholeArchiveDeps.Value)
+	(&linkerAttrs).implementationWholeArchiveDeps.Value = bazel.FirstUniqueBazelLabelList((&linkerAttrs).implementationWholeArchiveDeps.Value)
 
 	return baseAttributes{
 		compilerAttrs,
@@ -1910,8 +1926,16 @@ func bp2buildBinaryLinkerProps(ctx android.BazelConversionPathContext, m *Module
 	return attrs
 }
 
-func bp2buildSanitizerFeatures(ctx android.BazelConversionPathContext, m *Module) bazel.StringListAttribute {
+type sanitizerValues struct {
+	features                 bazel.StringListAttribute
+	copts                    bazel.StringListAttribute
+	additionalCompilerInputs bazel.LabelListAttribute
+}
+
+func bp2buildSanitizerFeatures(ctx android.BazelConversionPathContext, m *Module) sanitizerValues {
 	sanitizerFeatures := bazel.StringListAttribute{}
+	sanitizerCopts := bazel.StringListAttribute{}
+	sanitizerCompilerInputs := bazel.LabelListAttribute{}
 	bp2BuildPropParseHelper(ctx, m, &SanitizeProperties{}, func(axis bazel.ConfigurationAxis, config string, props interface{}) {
 		var features []string
 		if sanitizerProps, ok := props.(*SanitizeProperties); ok {
@@ -1923,9 +1947,10 @@ func bp2buildSanitizerFeatures(ctx android.BazelConversionPathContext, m *Module
 			}
 			blocklist := sanitizerProps.Sanitize.Blocklist
 			if blocklist != nil {
-				// Format the blocklist name to be used in a feature name
-				blocklistFeatureSuffix := strings.Replace(strings.ToLower(*blocklist), ".", "_", -1)
-				features = append(features, "sanitizer_blocklist_"+blocklistFeatureSuffix)
+				// TODO: b/294868620 - Change this not to use the special axis when completing the bug
+				coptValue := fmt.Sprintf("-fsanitize-ignorelist=$(location %s)", *blocklist)
+				sanitizerCopts.SetSelectValue(bazel.SanitizersEnabledAxis, bazel.SanitizersEnabled, []string{coptValue})
+				sanitizerCompilerInputs.SetSelectValue(bazel.SanitizersEnabledAxis, bazel.SanitizersEnabled, bazel.MakeLabelListFromTargetNames([]string{*blocklist}))
 			}
 			if sanitizerProps.Sanitize.Cfi != nil && !proptools.Bool(sanitizerProps.Sanitize.Cfi) {
 				features = append(features, "-android_cfi")
@@ -1938,7 +1963,11 @@ func bp2buildSanitizerFeatures(ctx android.BazelConversionPathContext, m *Module
 			sanitizerFeatures.SetSelectValue(axis, config, features)
 		}
 	})
-	return sanitizerFeatures
+	return sanitizerValues{
+		features:                 sanitizerFeatures,
+		copts:                    sanitizerCopts,
+		additionalCompilerInputs: sanitizerCompilerInputs,
+	}
 }
 
 func bp2buildLtoFeatures(ctx android.BazelConversionPathContext, m *Module) bazel.StringListAttribute {
