@@ -911,8 +911,9 @@ var (
 		"apexer_test", "apexer_test_host_tools", "host_apex_verifier",
 
 		// java bugs
-		"libbase_ndk",  // TODO(b/186826477): fails to link libctscamera2_jni for device (required for CtsCameraTestCases)
-		"bouncycastle", // TODO(b/274474005): Need support for custom system_modules.
+		"libbase_ndk",           // TODO(b/186826477): fails to link libctscamera2_jni for device (required for CtsCameraTestCases)
+		"bouncycastle",          // TODO(b/274474005): Need support for custom system_modules.
+		"bouncycastle-test-lib", // TODO(b/274474005): Reverse dependency of bouncycastle
 
 		// genrule incompatibilities
 		"brotli-fuzzer-corpus",                                       // TODO(b/202015218): outputs are in location incompatible with bazel genrule handling.
@@ -1560,6 +1561,13 @@ var (
 
 		// depends on libart-unstripped and new module type llvm_prebuilt_build_tool
 		"check_cfi",
+
+		// TODO(b/297070571): cannot convert prebuilts_etc module which possess identical name and src properties
+		"boringssl_self_test.zygote64.rc",
+		"boringssl_self_test.zygote64_32.rc",
+
+		// depends on unconverted module tradefed
+		"HelloWorldPerformanceTest",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel

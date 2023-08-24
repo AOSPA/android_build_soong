@@ -667,6 +667,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-devicelock":              {},
 		"framework-graphics":                {},
 		"framework-healthfitness":           {},
+		"framework-location":                {},
 		"framework-media":                   {},
 		"framework-mediaprovider":           {},
 		"framework-ondevicepersonalization": {},
@@ -1949,10 +1950,6 @@ func (c *deviceConfig) BuildDebugfsRestrictionsEnabled() bool {
 
 func (c *deviceConfig) BuildBrokenVendorPropertyNamespace() bool {
 	return c.config.productVariables.BuildBrokenVendorPropertyNamespace
-}
-
-func (c *deviceConfig) BuildBrokenVendorSeappUsesCoredomain() bool {
-	return c.config.productVariables.BuildBrokenVendorSeappUsesCoredomain
 }
 
 func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
