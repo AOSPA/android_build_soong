@@ -233,7 +233,7 @@ var (
 		"frameworks/base/tools/streaming_proto":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/hardware/interfaces/stats/aidl":          Bp2BuildDefaultTrue,
 		"frameworks/libs/modules-utils/build":                Bp2BuildDefaultTrueRecursively,
-		"frameworks/libs/net/common/native":                  Bp2BuildDefaultTrueRecursively,
+		"frameworks/libs/net/common/native":                  Bp2BuildDefaultTrueRecursively, // TODO(b/296014682): Remove this path
 		"frameworks/native":                                  Bp2BuildDefaultTrue,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/arect":                       Bp2BuildDefaultTrueRecursively,
@@ -316,6 +316,7 @@ var (
 		"packages/modules/adb/pairing_connection":            Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/proto":                         Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/tls":                           Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/staticlibs/native":    Bp2BuildDefaultTrueRecursively,
 		"packages/modules/Gki/libkver":                       Bp2BuildDefaultTrue,
 		"packages/modules/NetworkStack/common/captiveportal": Bp2BuildDefaultTrue,
 		"packages/modules/NeuralNetworks/apex":               Bp2BuildDefaultTrue,
@@ -338,6 +339,7 @@ var (
 		"prebuilts/sdk/current/support":                    Bp2BuildDefaultTrue,
 		"prebuilts/tools":                                  Bp2BuildDefaultTrue,
 		"prebuilts/tools/common/m2":                        Bp2BuildDefaultTrue,
+		"prebuilts/r8":                                     Bp2BuildDefaultTrueRecursively,
 
 		"sdk/dumpeventlog":  Bp2BuildDefaultTrue,
 		"sdk/eventanalyzer": Bp2BuildDefaultTrue,
@@ -1568,6 +1570,14 @@ var (
 
 		// depends on unconverted module tradefed
 		"HelloWorldPerformanceTest",
+
+		// r8 is a java_binary, which creates an implicit "r8.jar" target, but the
+		// same package contains a "r8.jar" file which gets overshadowed by the implicit target.
+		// We don't need this target as we're not using the Soong wrapper for now
+		"r8",
+
+		// Depends on the module defined in the directory not bp2build default allowed
+		"ota_from_raw_img",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel
