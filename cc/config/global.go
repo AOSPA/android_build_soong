@@ -381,9 +381,8 @@ var (
 	ForceSDClangOff = false
 
 	// prebuilts/clang default settings.
-	ClangDefaultBase = "prebuilts/clang/host"
-	// TODO(b/243545528) Match upstream version
-	ClangDefaultVersion      = "clang-r487747c"
+	ClangDefaultBase         = "prebuilts/clang/host"
+	ClangDefaultVersion      = "clang-r498229b"
 	ClangDefaultShortVersion = "17"
 
 	// Directories with warnings from Android.bp files.
