@@ -43,6 +43,7 @@ func init() {
 	android.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
 	})
+	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/rust/config")
 	pctx.ImportAs("cc_config", "android/soong/cc/config")
 	android.InitRegistrationContext.RegisterParallelSingletonType("kythe_rust_extract", kytheExtractRustFactory)
@@ -91,6 +92,8 @@ type BaseProperties struct {
 	// Used by vendor snapshot to record dependencies from snapshot modules.
 	SnapshotSharedLibs []string `blueprint:"mutated"`
 	SnapshotStaticLibs []string `blueprint:"mutated"`
+	SnapshotRlibs      []string `blueprint:"mutated"`
+	SnapshotDylibs     []string `blueprint:"mutated"`
 
 	// Make this module available when building for ramdisk.
 	// On device without a dedicated recovery partition, the module is only
@@ -256,6 +259,15 @@ func (mod *Module) Dylib() bool {
 		}
 	}
 	return false
+}
+
+func (mod *Module) RlibStd() bool {
+	if mod.compiler != nil {
+		if library, ok := mod.compiler.(libraryInterface); ok && library.rlib() {
+			return library.rlibStd()
+		}
+	}
+	panic(fmt.Errorf("RlibStd() called on non-rlib module: %q", mod.BaseModuleName()))
 }
 
 func (mod *Module) Rlib() bool {
@@ -1225,6 +1237,8 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				}
 				directDylibDeps = append(directDylibDeps, rustDep)
 				mod.Properties.AndroidMkDylibs = append(mod.Properties.AndroidMkDylibs, makeLibName)
+				mod.Properties.SnapshotDylibs = append(mod.Properties.SnapshotDylibs, cc.BaseLibName(depName))
+
 			case rlibDepTag:
 
 				rlib, ok := rustDep.compiler.(libraryInterface)
@@ -1234,6 +1248,8 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				}
 				directRlibDeps = append(directRlibDeps, rustDep)
 				mod.Properties.AndroidMkRlibs = append(mod.Properties.AndroidMkRlibs, makeLibName)
+				mod.Properties.SnapshotRlibs = append(mod.Properties.SnapshotRlibs, cc.BaseLibName(depName))
+
 			case procMacroDepTag:
 				directProcMacroDeps = append(directProcMacroDeps, rustDep)
 				mod.Properties.AndroidMkProcMacroLibs = append(mod.Properties.AndroidMkProcMacroLibs, makeLibName)
@@ -1290,11 +1306,16 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				}
 			}
 			linkObject := ccDep.OutputFile()
-			linkPath := linkPathFromFilePath(linkObject.Path())
-
 			if !linkObject.Valid() {
-				ctx.ModuleErrorf("Invalid output file when adding dep %q to %q", depName, ctx.ModuleName())
+				if !ctx.Config().AllowMissingDependencies() {
+					ctx.ModuleErrorf("Invalid output file when adding dep %q to %q", depName, ctx.ModuleName())
+				} else {
+					ctx.AddMissingDependencies([]string{depName})
+				}
+				return
 			}
+
+			linkPath := linkPathFromFilePath(linkObject.Path())
 
 			exportDep := false
 			switch {
@@ -1340,6 +1361,14 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				// Re-get linkObject as ChooseStubOrImpl actually tells us which
 				// object (either from stub or non-stub) to use.
 				linkObject = android.OptionalPathForPath(sharedLibraryInfo.SharedLibrary)
+				if !linkObject.Valid() {
+					if !ctx.Config().AllowMissingDependencies() {
+						ctx.ModuleErrorf("Invalid output file when adding dep %q to %q", depName, ctx.ModuleName())
+					} else {
+						ctx.AddMissingDependencies([]string{depName})
+					}
+					return
+				}
 				linkPath = linkPathFromFilePath(linkObject.Path())
 
 				depPaths.linkDirs = append(depPaths.linkDirs, linkPath)
@@ -1518,10 +1547,10 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 
 	// dylibs
-	actx.AddVariationDependencies(
-		append(commonDepVariations, []blueprint.Variation{
-			{Mutator: "rust_libraries", Variation: dylibVariation}}...),
-		dylibDepTag, deps.Dylibs...)
+	dylibDepVariations := append(commonDepVariations, blueprint.Variation{Mutator: "rust_libraries", Variation: dylibVariation})
+	for _, lib := range deps.Dylibs {
+		addDylibDependency(actx, lib, mod, &snapshotInfo, dylibDepVariations, dylibDepTag)
+	}
 
 	// rustlibs
 	if deps.Rustlibs != nil && !mod.compiler.Disabled() {
@@ -1536,8 +1565,11 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 				// otherwise select the rlib variant.
 				autoDepVariations := append(commonDepVariations,
 					blueprint.Variation{Mutator: "rust_libraries", Variation: autoDep.variation})
-				if actx.OtherModuleDependencyVariantExists(autoDepVariations, lib) {
-					actx.AddVariationDependencies(autoDepVariations, autoDep.depTag, lib)
+
+				replacementLib := cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Dylibs)
+
+				if actx.OtherModuleDependencyVariantExists(autoDepVariations, replacementLib) {
+					addDylibDependency(actx, lib, mod, &snapshotInfo, autoDepVariations, autoDep.depTag)
 				} else {
 					// If there's no dylib dependency available, try to add the rlib dependency instead.
 					addRlibDependency(actx, lib, mod, &snapshotInfo, rlibDepVariations)
@@ -1549,16 +1581,14 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	if deps.Stdlibs != nil {
 		if mod.compiler.stdLinkage(ctx) == RlibLinkage {
 			for _, lib := range deps.Stdlibs {
-				depTag := rlibDepTag
 				lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
-
 				actx.AddVariationDependencies(append(commonDepVariations, []blueprint.Variation{{Mutator: "rust_libraries", Variation: "rlib"}}...),
-					depTag, lib)
+					rlibDepTag, lib)
 			}
 		} else {
-			actx.AddVariationDependencies(
-				append(commonDepVariations, blueprint.Variation{Mutator: "rust_libraries", Variation: "dylib"}),
-				dylibDepTag, deps.Stdlibs...)
+			for _, lib := range deps.Stdlibs {
+				addDylibDependency(actx, lib, mod, &snapshotInfo, dylibDepVariations, dylibDepTag)
+			}
 		}
 	}
 
@@ -1634,6 +1664,11 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 func addRlibDependency(actx android.BottomUpMutatorContext, lib string, mod *Module, snapshotInfo **cc.SnapshotInfo, variations []blueprint.Variation) {
 	lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, snapshotInfo, actx).Rlibs)
 	actx.AddVariationDependencies(variations, rlibDepTag, lib)
+}
+
+func addDylibDependency(actx android.BottomUpMutatorContext, lib string, mod *Module, snapshotInfo **cc.SnapshotInfo, variations []blueprint.Variation, depTag dependencyTag) {
+	lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, snapshotInfo, actx).Dylibs)
+	actx.AddVariationDependencies(variations, depTag, lib)
 }
 
 func BeginMutator(ctx android.BottomUpMutatorContext) {

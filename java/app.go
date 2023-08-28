@@ -205,8 +205,8 @@ func (a *AndroidApp) ExportedProguardFlagFiles() android.Paths {
 	return nil
 }
 
-func (a *AndroidApp) ExportedStaticPackages() android.Paths {
-	return nil
+func (a *AndroidApp) ResourcesNodeDepSet() *android.DepSet[*resourcesNode] {
+	return a.aapt.resourcesNodesDepSet
 }
 
 func (a *AndroidApp) OutputFile() android.Path {
@@ -522,7 +522,23 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) android.Path {
 	a.dexpreopter.preventInstall = a.appProperties.PreventInstall
 
 	if ctx.ModuleName() != "framework-res" {
-		a.Module.compile(ctx, a.aaptSrcJar)
+		var extraSrcJars android.Paths
+		var extraClasspathJars android.Paths
+		var extraCombinedJars android.Paths
+		if a.useResourceProcessorBusyBox() {
+			// When building an app with ResourceProcessorBusyBox enabled ResourceProcessorBusyBox has already
+			// created R.class files that provide IDs for resources in busybox/R.jar.  Pass that file in the
+			// classpath when compiling everything else, and add it to the final classes jar.
+			extraClasspathJars = android.Paths{a.aapt.rJar}
+			extraCombinedJars = android.Paths{a.aapt.rJar}
+		} else {
+			// When building an app without ResourceProcessorBusyBox the aapt2 rule creates R.srcjar containing
+			// R.java files for the app's package and the packages from all transitive static android_library
+			// dependencies.  Compile the srcjar alongside the rest of the sources.
+			extraSrcJars = android.Paths{a.aapt.aaptSrcJar}
+		}
+
+		a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars)
 	}
 
 	return a.dexJarFile.PathOrNil()
@@ -667,8 +683,17 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.aapt.useEmbeddedNativeLibs = a.useEmbeddedNativeLibs(ctx)
 	a.aapt.useEmbeddedDex = Bool(a.appProperties.Use_embedded_dex)
 
+	// Unlike installApkName, a.stem should respect base module name for override_android_app.
+	// Therefore, use ctx.ModuleName() instead of a.Name().
+	a.stem = proptools.StringDefault(a.overridableDeviceProperties.Stem, ctx.ModuleName())
+
 	// Check if the install APK name needs to be overridden.
-	a.installApkName = ctx.DeviceConfig().OverridePackageNameFor(a.Stem())
+	// Both android_app and override_android_app module are expected to possess
+	// its module bound apk path. However, override_android_app inherits ctx.ModuleName()
+	// from the base module. Therefore, use a.Name() which represents
+	// the module name for both android_app and override_android_app.
+	a.installApkName = ctx.DeviceConfig().OverridePackageNameFor(
+		proptools.StringDefault(a.overridableDeviceProperties.Stem, a.Name()))
 
 	if ctx.ModuleName() == "framework-res" {
 		// framework-res.apk is installed as system/framework/framework-res.apk
@@ -1625,7 +1650,9 @@ func androidAppCertificateBp2Build(ctx android.TopDownMutatorContext, module *An
 }
 
 type manifestValueAttribute struct {
-	MinSdkVersion *string
+	MinSdkVersion    *string
+	MaxSdkVersion    *string
+	TargetSdkVersion *string
 }
 
 type bazelAndroidAppAttributes struct {
@@ -1655,9 +1682,22 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	// MinSdkVersion(ctx) calls SdkVersion(ctx) if no value for min_sdk_version is set
 	minSdkVersion := a.MinSdkVersion(ctx)
 	if !minSdkVersion.IsPreview() && !minSdkVersion.IsInvalid() {
-		minSdkStr, err := minSdkVersion.EffectiveVersionString(ctx)
-		if err == nil {
+		if minSdkStr, err := minSdkVersion.EffectiveVersionString(ctx); err == nil {
 			manifestValues.MinSdkVersion = &minSdkStr
+		}
+	}
+
+	maxSdkVersion := a.MaxSdkVersion(ctx)
+	if !maxSdkVersion.IsPreview() && !maxSdkVersion.IsInvalid() {
+		if maxSdkStr, err := maxSdkVersion.EffectiveVersionString(ctx); err == nil {
+			manifestValues.MaxSdkVersion = &maxSdkStr
+		}
+	}
+
+	targetSdkVersion := a.TargetSdkVersion(ctx)
+	if !targetSdkVersion.IsPreview() && !targetSdkVersion.IsInvalid() {
+		if targetSdkStr, err := targetSdkVersion.EffectiveVersionString(ctx); err == nil {
+			manifestValues.TargetSdkVersion = &targetSdkStr
 		}
 	}
 

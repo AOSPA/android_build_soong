@@ -18,7 +18,6 @@ package android
 // product variables necessary for soong_build's operation.
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -171,6 +170,19 @@ func (c Config) RunningInsideUnitTest() bool {
 	return c.config.TestProductVariables != nil
 }
 
+// DisableHiddenApiChecks returns true if hiddenapi checks have been disabled.
+// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation,
+// but can be enabled by setting environment variable ENABLE_HIDDENAPI_FLAGS=true.
+// For other target variants hiddenapi check are enabled by default but can be disabled by
+// setting environment variable UNSAFE_DISABLE_HIDDENAPI_FLAGS=true.
+// If both ENABLE_HIDDENAPI_FLAGS=true and UNSAFE_DISABLE_HIDDENAPI_FLAGS=true, then
+// ENABLE_HIDDENAPI_FLAGS=true will be triggered and hiddenapi checks will be considered enabled.
+func (c Config) DisableHiddenApiChecks() bool {
+	return !c.IsEnvTrue("ENABLE_HIDDENAPI_FLAGS") &&
+		(c.IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") ||
+			Bool(c.productVariables.Eng))
+}
+
 // MaxPageSizeSupported returns the max page size supported by the device. This
 // value will define the ELF segment alignment for binaries (executables and
 // shared libraries).
@@ -202,10 +214,10 @@ type VendorConfig soongconfig.SoongConfig
 // product configuration values are read from Kati-generated soong.variables.
 type config struct {
 	// Options configurable with soong.variables
-	productVariables productVariables
+	productVariables ProductVariables
 
 	// Only available on configs created by TestConfig
-	TestProductVariables *productVariables
+	TestProductVariables *ProductVariables
 
 	// A specialized context object for Bazel/Soong mixed builds and migration
 	// purposes.
@@ -321,7 +333,7 @@ func loadConfig(config *config) error {
 
 // loadFromConfigFile loads and decodes configuration options from a JSON file
 // in the current working directory.
-func loadFromConfigFile(configurable *productVariables, filename string) error {
+func loadFromConfigFile(configurable *ProductVariables, filename string) error {
 	// Try to open the file
 	configFileReader, err := os.Open(filename)
 	defer configFileReader.Close()
@@ -373,7 +385,7 @@ func loadFromConfigFile(configurable *productVariables, filename string) error {
 
 // atomically writes the config file in case two copies of soong_build are running simultaneously
 // (for example, docs generation and ninja manifest generation)
-func saveToConfigFile(config *productVariables, filename string) error {
+func saveToConfigFile(config *ProductVariables, filename string) error {
 	data, err := json.MarshalIndent(&config, "", "    ")
 	if err != nil {
 		return fmt.Errorf("cannot marshal config data: %s", err.Error())
@@ -402,7 +414,7 @@ func saveToConfigFile(config *productVariables, filename string) error {
 	return nil
 }
 
-func saveToBazelConfigFile(config *productVariables, outDir string) error {
+func saveToBazelConfigFile(config *ProductVariables, outDir string) error {
 	dir := filepath.Join(outDir, bazel.SoongInjectionDirName, "product_config")
 	err := createDirIfNonexistent(dir, os.ModePerm)
 	if err != nil {
@@ -431,32 +443,6 @@ func saveToBazelConfigFile(config *productVariables, outDir string) error {
 		return fmt.Errorf("cannot marshal arch variant product variable data: %s", err.Error())
 	}
 
-	configJson, err := json.MarshalIndent(&config, "", "    ")
-	if err != nil {
-		return fmt.Errorf("cannot marshal config data: %s", err.Error())
-	}
-	// The backslashes need to be escaped because this text is going to be put
-	// inside a Starlark string literal.
-	configJson = bytes.ReplaceAll(configJson, []byte("\\"), []byte("\\\\"))
-
-	bzl := []string{
-		bazel.GeneratedBazelFileWarning,
-		fmt.Sprintf(`_product_vars = json.decode("""%s""")`, configJson),
-		fmt.Sprintf(`_product_var_constraints = %s`, nonArchVariantProductVariablesJson),
-		fmt.Sprintf(`_arch_variant_product_var_constraints = %s`, archVariantProductVariablesJson),
-		"\n", `
-product_vars = _product_vars
-
-# TODO(b/269577299) Remove these when everything switches over to loading them from product_variable_constants.bzl
-product_var_constraints = _product_var_constraints
-arch_variant_product_var_constraints = _arch_variant_product_var_constraints
-`,
-	}
-	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variables.bzl"),
-		[]byte(strings.Join(bzl, "\n")), 0644)
-	if err != nil {
-		return fmt.Errorf("Could not write .bzl config file %s", err)
-	}
 	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variable_constants.bzl"), []byte(fmt.Sprintf(`
 product_var_constraints = %s
 arch_variant_product_var_constraints = %s
@@ -1358,6 +1344,10 @@ func (c *config) BazelModulesForceEnabledByFlag() map[string]struct{} {
 	return c.bazelForceEnabledModules
 }
 
+func (c *config) IsVndkDeprecated() bool {
+	return !Bool(c.productVariables.KeepVndk)
+}
+
 func (c *deviceConfig) Arches() []Arch {
 	var arches []Arch
 	for _, target := range c.config.Targets[Android] {
@@ -1985,6 +1975,10 @@ func (c *deviceConfig) GenruleSandboxing() bool {
 
 func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
 	return c.config.productVariables.RequiresInsecureExecmemForSwiftshader
+}
+
+func (c *deviceConfig) Release_aidl_use_unfrozen() bool {
+	return Bool(c.config.productVariables.Release_aidl_use_unfrozen)
 }
 
 func (c *config) SelinuxIgnoreNeverallows() bool {

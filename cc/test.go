@@ -267,7 +267,7 @@ func (test *testDecorator) gtest() bool {
 	return BoolDefault(test.LinkerProperties.Gtest, true)
 }
 
-func (test *testDecorator) isolated(ctx BaseModuleContext) bool {
+func (test *testDecorator) isolated(ctx android.EarlyModuleContext) bool {
 	return BoolDefault(test.LinkerProperties.Isolated, false)
 }
 
@@ -641,14 +641,27 @@ type ccTestBazelHandler struct {
 
 var _ BazelHandler = (*ccTestBazelHandler)(nil)
 
+// The top level target named $label is a test_suite target,
+// not the internal cc_test executable target.
+//
+// This is to ensure `b test //$label` runs the test_suite target directly,
+// which depends on tradefed_test targets, instead of the internal cc_test
+// target, which doesn't have tradefed integrations.
+//
+// However, for cquery, we want the internal cc_test executable target, which
+// has the suffix "__tf_internal".
+func mixedBuildsTestLabel(label string) string {
+	return label + "__tf_internal"
+}
+
 func (handler *ccTestBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	bazelCtx.QueueBazelRequest(label, cquery.GetCcUnstrippedInfo, android.GetConfigKey(ctx))
+	bazelCtx.QueueBazelRequest(mixedBuildsTestLabel(label), cquery.GetCcUnstrippedInfo, android.GetConfigKey(ctx))
 }
 
 func (handler *ccTestBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	info, err := bazelCtx.GetCcUnstrippedInfo(label, android.GetConfigKey(ctx))
+	info, err := bazelCtx.GetCcUnstrippedInfo(mixedBuildsTestLabel(label), android.GetConfigKey(ctx))
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 		return
@@ -669,8 +682,7 @@ func (handler *ccTestBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleC
 type testBinaryAttributes struct {
 	binaryAttributes
 
-	Gtest    bool
-	Isolated bool
+	Gtest *bool
 
 	tidyAttributes
 	tradefed.TestConfigAttributes
@@ -708,13 +720,15 @@ func testBinaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
 
 	m.convertTidyAttributes(ctx, &testBinaryAttrs.tidyAttributes)
 
-	for _, propIntf := range m.GetProperties() {
-		if testLinkerProps, ok := propIntf.(*TestLinkerProperties); ok {
-			testBinaryAttrs.Gtest = proptools.BoolDefault(testLinkerProps.Gtest, true)
-			testBinaryAttrs.Isolated = proptools.BoolDefault(testLinkerProps.Isolated, true)
-			break
-		}
-	}
+	testBinary := m.linker.(*testBinary)
+	gtest := testBinary.gtest()
+	gtestIsolated := testBinary.isolated(ctx)
+	// Use the underling bool pointer for Gtest in attrs
+	// This ensures that if this property is not set in Android.bp file, it will not be set in BUILD file either
+	// cc_test macro will default gtest to True
+	testBinaryAttrs.Gtest = testBinary.LinkerProperties.Gtest
+
+	addImplicitGtestDeps(ctx, &testBinaryAttrs, gtest, gtestIsolated)
 
 	for _, testProps := range m.GetProperties() {
 		if p, ok := testProps.(*TestBinaryProperties); ok {
@@ -727,7 +741,7 @@ func testBinaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
 				p.Auto_gen_config,
 				p.Test_options.Test_suite_tag,
 				p.Test_config_template,
-				getTradefedConfigOptions(ctx, p, testBinaryAttrs.Isolated),
+				getTradefedConfigOptions(ctx, p, gtestIsolated),
 				&testInstallBase,
 			)
 			testBinaryAttrs.TestConfigAttributes = testConfigAttributes
@@ -746,4 +760,29 @@ func testBinaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
 			Tags: tags,
 		},
 		&testBinaryAttrs)
+}
+
+// cc_test that builds using gtest needs some additional deps
+// addImplicitGtestDeps makes these deps explicit in the generated BUILD files
+func addImplicitGtestDeps(ctx android.BazelConversionPathContext, attrs *testBinaryAttributes, gtest, gtestIsolated bool) {
+	addDepsAndDedupe := func(lla *bazel.LabelListAttribute, modules []string) {
+		moduleLabels := android.BazelLabelForModuleDeps(ctx, modules)
+		lla.Value.Append(moduleLabels)
+		// Dedupe
+		lla.Value = bazel.FirstUniqueBazelLabelList(lla.Value)
+	}
+	// this must be kept in sync with Soong's implementation in:
+	// https://cs.android.com/android/_/android/platform/build/soong/+/460fb2d6d546b5ab493a7e5479998c4933a80f73:cc/test.go;l=300-313;drc=ec7314336a2b35ea30ce5438b83949c28e3ac429;bpv=1;bpt=0
+	if gtest {
+		// TODO - b/244433197: Handle canUseSdk
+		if gtestIsolated {
+			addDepsAndDedupe(&attrs.Deps, []string{"libgtest_isolated_main"})
+			addDepsAndDedupe(&attrs.Dynamic_deps, []string{"liblog"})
+		} else {
+			addDepsAndDedupe(&attrs.Deps, []string{
+				"libgtest_main",
+				"libgtest",
+			})
+		}
+	}
 }

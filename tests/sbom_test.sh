@@ -85,7 +85,13 @@ function test_sbom_aosp_cf_x86_64_phone {
   lz4=$out_dir/host/linux-x86/bin/lz4
 
   declare -A diff_excludes
-  diff_excludes[vendor]="-I /vendor/lib64/libkeystore2_crypto.so"
+  diff_excludes[product]="\
+    -I /product/etc/aconfig_flags.textproto \
+    -I /product/etc/build_flags.json"
+  diff_excludes[vendor]="\
+    -I /vendor/lib64/libkeystore2_crypto.so \
+    -I /vendor/etc/aconfig_flags.textproto \
+    -I /vendor/etc/build_flags.json"
   diff_excludes[system]="\
     -I /bin \
     -I /bugreports \
@@ -105,12 +111,22 @@ function test_sbom_aosp_cf_x86_64_phone {
     -I /odm/priv-app \
     -I /odm/usr \
     -I /sdcard \
+    -I /system/etc/aconfig_flags.textproto \
+    -I /system/etc/build_flags.json \
     -I /system/lib64/android.hardware.confirmationui@1.0.so \
     -I /system/lib64/android.hardware.confirmationui-V1-ndk.so \
     -I /system/lib64/android.hardware.keymaster@4.1.so \
     -I /system/lib64/android.hardware.security.rkp-V3-ndk.so \
     -I /system/lib64/android.hardware.security.sharedsecret-V1-ndk.so \
     -I /system/lib64/android.security.compat-ndk.so \
+    -I /system/lib64/libcuttlefish_allocd_utils.so \
+    -I /system/lib64/libcuttlefish_device_config_proto.so \
+    -I /system/lib64/libcuttlefish_device_config.so \
+    -I /system/lib64/libcuttlefish_fs.so \
+    -I /system/lib64/libcuttlefish_kernel_log_monitor_utils.so \
+    -I /system/lib64/libcuttlefish_utils.so \
+    -I /system/lib64/libfruit.so \
+    -I /system/lib64/libgflags.so \
     -I /system/lib64/libkeymaster4_1support.so \
     -I /system/lib64/libkeymaster4support.so \
     -I /system/lib64/libkeymint.so \
@@ -126,6 +142,9 @@ function test_sbom_aosp_cf_x86_64_phone {
     -I /system/lib/vndk-sp-29 \
     -I /system/usr/icu \
     -I /vendor_dlkm/etc"
+  diff_excludes[system_ext]="\
+    -I /system_ext/etc/aconfig_flags.textproto \
+    -I /system_ext/etc/build_flags.json"
 
   # Example output of dump.erofs is as below, and the data used in the test start
   # at line 11. Column 1 is inode id, column 2 is inode type and column 3 is name.
@@ -223,4 +242,65 @@ function test_sbom_aosp_cf_x86_64_phone {
   cleanup "${out_dir}"
 }
 
+function test_sbom_unbundled_apex {
+  # Setup
+  out_dir="$(setup)"
+
+  # run_soong to build com.android.adbd.apex
+  run_soong "module_arm64" "${out_dir}" "sbom deapexer" "com.android.adbd"
+
+  deapexer=${out_dir}/host/linux-x86/bin/deapexer
+  debugfs=${out_dir}/host/linux-x86/bin/debugfs_static
+  apex_file=${out_dir}/target/product/module_arm64/system/apex/com.android.adbd.apex
+  echo "============ Diffing files in $apex_file and SBOM"
+  set +e
+  # deapexer prints the list of all files and directories
+  # sed extracts the file/directory names
+  # grep removes directories
+  # sed removes leading ./ in file names
+  diff -I /system/apex/com.android.adbd.apex -I apex_manifest.pb \
+      <($deapexer --debugfs_path=$debugfs list --extents ${apex_file} | sed -E 's#(.*) \[.*\]$#\1#' | grep -v "/$" | sed -E 's#^\./(.*)#\1#' | sort -n) \
+      <(grep '"fileName": ' ${apex_file}.spdx.json | sed -E 's/.*"fileName": "(.*)",/\1/' | sort -n )
+
+  if [ $? != "0" ]; then
+    echo "Diffs found in $apex_file and SBOM"
+    exit 1
+  else
+    echo "No diffs."
+  fi
+  set -e
+
+  # Teardown
+  cleanup "${out_dir}"
+}
+
+function test_sbom_unbundled_apk {
+  # Setup
+  out_dir="$(setup)"
+
+  # run_soong to build Browser2.apk
+  run_soong "module_arm64" "${out_dir}" "sbom" "Browser2"
+
+  sbom_file=${out_dir}/target/product/module_arm64/system/product/app/Browser2/Browser2.apk.spdx.json
+  echo "============ Diffing files in Browser2.apk and SBOM"
+  set +e
+  # There is only one file in SBOM of APKs
+  diff \
+      <(echo "/system/product/app/Browser2/Browser2.apk" ) \
+      <(grep '"fileName": ' ${sbom_file} | sed -E 's/.*"fileName": "(.*)",/\1/' )
+
+  if [ $? != "0" ]; then
+    echo "Diffs found in $sbom_file"
+    exit 1
+  else
+    echo "No diffs."
+  fi
+  set -e
+
+  # Teardown
+  cleanup "${out_dir}"
+}
+
 test_sbom_aosp_cf_x86_64_phone
+test_sbom_unbundled_apex
+test_sbom_unbundled_apk

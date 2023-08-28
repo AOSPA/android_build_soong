@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"android/soong/ui/metrics/bp2build_metrics_proto"
+
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 
@@ -500,6 +501,21 @@ type Module struct {
 	maxSdkVersion android.ApiLevel
 
 	sourceExtensions []string
+
+	annoSrcJars android.Paths
+
+	// output file name based on Stem property.
+	// This should be set in every ModuleWithStem's GenerateAndroidBuildActions
+	// or the module should override Stem().
+	stem string
+
+	// Aconfig "cache files" that went directly into this module.  Transitive ones are
+	// tracked via JavaInfo.TransitiveAconfigFiles
+	// TODO: Extract to something standalone to propagate tags via GeneratedJavaLibraryModule
+	aconfigIntermediates android.Paths
+
+	// Aconfig files for all transitive deps.  Also exposed via JavaInfo
+	transitiveAconfigFiles *android.DepSet[android.Path]
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -1049,7 +1065,7 @@ func (module *Module) addGeneratedSrcJars(path android.Path) {
 	module.properties.Generated_srcjars = append(module.properties.Generated_srcjars, path)
 }
 
-func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
+func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars android.Paths) {
 	j.exportAidlIncludeDirs = android.PathsForModuleSrc(ctx, j.deviceProperties.Aidl.Export_include_dirs)
 
 	deps := j.collectDeps(ctx)
@@ -1087,9 +1103,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	srcJars := srcFiles.FilterByExt(".srcjar")
 	srcJars = append(srcJars, deps.srcJars...)
-	if aaptSrcJar != nil {
-		srcJars = append(srcJars, aaptSrcJar)
-	}
+	srcJars = append(srcJars, extraSrcJars...)
 	srcJars = append(srcJars, j.properties.Generated_srcjars...)
 	srcFiles = srcFiles.FilterOutByExt(".srcjar")
 
@@ -1097,7 +1111,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		j.expandJarjarRules = android.PathForModuleSrc(ctx, *j.properties.Jarjar_rules)
 	}
 
-	jarName := ctx.ModuleName() + ".jar"
+	jarName := j.Stem() + ".jar"
 
 	var uniqueJavaFiles android.Paths
 	set := make(map[string]bool)
@@ -1131,6 +1145,11 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	var kotlinJars android.Paths
 	var kotlinHeaderJars android.Paths
+
+	// Prepend extraClasspathJars to classpath so that the resource processor R.jar comes before
+	// any dependencies so that it can override any non-final R classes from dependencies with the
+	// final R classes from the app.
+	flags.classpath = append(android.CopyOf(extraClasspathJars), flags.classpath...)
 
 	if srcFiles.HasExt(".kt") {
 		// When using kotlin sources turbine is used to generate annotation processor sources,
@@ -1225,8 +1244,9 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			// allow for the use of annotation processors that do function correctly
 			// with sharding enabled. See: b/77284273.
 		}
+		extraJars := append(android.CopyOf(extraCombinedJars), kotlinHeaderJars...)
 		headerJarFileWithoutDepsOrJarjar, j.headerJarFile =
-			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName, kotlinHeaderJars)
+			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName, extraJars)
 		if ctx.Failed() {
 			return
 		}
@@ -1255,8 +1275,9 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			// this module, or else we could have duplicated errorprone messages.
 			errorproneFlags := enableErrorproneFlags(flags)
 			errorprone := android.PathForModuleOut(ctx, "errorprone", jarName)
+			errorproneAnnoSrcJar := android.PathForModuleOut(ctx, "errorprone", "anno.srcjar")
 
-			transformJavaToClasses(ctx, errorprone, -1, uniqueJavaFiles, srcJars, errorproneFlags, nil,
+			transformJavaToClasses(ctx, errorprone, -1, uniqueJavaFiles, srcJars, errorproneAnnoSrcJar, errorproneFlags, nil,
 				"errorprone", "errorprone")
 
 			extraJarDeps = append(extraJarDeps, errorprone)
@@ -1376,6 +1397,8 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		jars = append(jars, servicesJar)
 	}
 
+	jars = append(android.CopyOf(extraCombinedJars), jars...)
+
 	// Combine the classes built from sources, any manifests, and any static libraries into
 	// classes.jar. If there is only one input jar this step will be skipped.
 	var outputFile android.OutputPath
@@ -1468,7 +1491,13 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	j.implementationJarFile = outputFile
 	if j.headerJarFile == nil {
-		j.headerJarFile = j.implementationJarFile
+		// If this module couldn't generate a header jar (for example due to api generating annotation processors)
+		// then use the implementation jar.  Run it through zip2zip first to remove any files in META-INF/services
+		// so that javac on modules that depend on this module don't pick up annotation processors (which may be
+		// missing their implementations) from META-INF/services/javax.annotation.processing.Processor.
+		headerJarFile := android.PathForModuleOut(ctx, "javac-header", jarName)
+		convertImplementationJarToHeaderJar(ctx, j.implementationJarFile, headerJarFile)
+		j.headerJarFile = headerJarFile
 	}
 
 	// enforce syntax check to jacoco filters for any build (http://b/183622051)
@@ -1614,6 +1643,8 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	ctx.CheckbuildFile(outputFile)
 
+	j.collectTransitiveAconfigFiles(ctx)
+
 	ctx.SetProvider(JavaInfoProvider, JavaInfo{
 		HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
 		TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
@@ -1628,6 +1659,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		ExportedPluginClasses:          j.exportedPluginClasses,
 		ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
 		JacocoReportClassesFile:        j.jacocoReportClassesFile,
+		TransitiveAconfigFiles:         j.transitiveAconfigFiles,
 	})
 
 	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource
@@ -1657,18 +1689,24 @@ func (j *Module) compileJavaClasses(ctx android.ModuleContext, jarName string, i
 	srcFiles, srcJars android.Paths, flags javaBuilderFlags, extraJarDeps android.Paths) android.WritablePath {
 
 	kzipName := pathtools.ReplaceExtension(jarName, "kzip")
+	annoSrcJar := android.PathForModuleOut(ctx, "javac", "anno.srcjar")
 	if idx >= 0 {
 		kzipName = strings.TrimSuffix(jarName, filepath.Ext(jarName)) + strconv.Itoa(idx) + ".kzip"
+		annoSrcJar = android.PathForModuleOut(ctx, "javac", "anno-"+strconv.Itoa(idx)+".srcjar")
 		jarName += strconv.Itoa(idx)
 	}
 
 	classes := android.PathForModuleOut(ctx, "javac", jarName).OutputPath
-	TransformJavaToClasses(ctx, classes, idx, srcFiles, srcJars, flags, extraJarDeps)
+	TransformJavaToClasses(ctx, classes, idx, srcFiles, srcJars, annoSrcJar, flags, extraJarDeps)
 
 	if ctx.Config().EmitXrefRules() {
 		extractionFile := android.PathForModuleOut(ctx, kzipName)
 		emitXrefRule(ctx, extractionFile, idx, srcFiles, srcJars, flags, extraJarDeps)
 		j.kytheFiles = append(j.kytheFiles, extractionFile)
+	}
+
+	if len(flags.processorPath) > 0 {
+		j.annoSrcJars = append(j.annoSrcJars, annoSrcJar)
 	}
 
 	return classes
@@ -1850,6 +1888,7 @@ func (j *Module) IDEInfo(dpInfo *android.IdeInfo) {
 	dpInfo.Paths = append(dpInfo.Paths, j.modulePaths...)
 	dpInfo.Static_libs = append(dpInfo.Static_libs, j.properties.Static_libs...)
 	dpInfo.Libs = append(dpInfo.Libs, j.properties.Libs...)
+	dpInfo.SrcJars = append(dpInfo.SrcJars, j.annoSrcJars.Strings()...)
 }
 
 func (j *Module) CompilerDeps() []string {
@@ -1887,7 +1926,10 @@ func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersi
 }
 
 func (j *Module) Stem() string {
-	return proptools.StringDefault(j.overridableDeviceProperties.Stem, j.Name())
+	if j.stem == "" {
+		panic("Stem() called before stem property was set")
+	}
+	return j.stem
 }
 
 func (j *Module) JacocoReportClassesFile() android.Path {
@@ -1896,6 +1938,34 @@ func (j *Module) JacocoReportClassesFile() android.Path {
 
 func (j *Module) IsInstallable() bool {
 	return Bool(j.properties.Installable)
+}
+
+func (j *Module) collectTransitiveAconfigFiles(ctx android.ModuleContext) {
+	// Aconfig files from this module
+	mine := j.aconfigIntermediates
+
+	// Aconfig files from transitive dependencies
+	fromDeps := []*android.DepSet[android.Path]{}
+	ctx.VisitDirectDeps(func(module android.Module) {
+		dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+		if dep.TransitiveAconfigFiles != nil {
+			fromDeps = append(fromDeps, dep.TransitiveAconfigFiles)
+		}
+	})
+
+	// DepSet containing aconfig files myself and from dependencies
+	j.transitiveAconfigFiles = android.NewDepSet(android.POSTORDER, mine, fromDeps)
+}
+
+func (j *Module) AddAconfigIntermediate(path android.Path) {
+	j.aconfigIntermediates = append(j.aconfigIntermediates, path)
+}
+
+func (j *Module) getTransitiveAconfigFiles() *android.DepSet[android.Path] {
+	if j.transitiveAconfigFiles == nil {
+		panic(fmt.Errorf("java.Moduile: getTransitiveAconfigFiles called before collectTransitiveAconfigFiles module=%s", j.Name()))
+	}
+	return j.transitiveAconfigFiles
 }
 
 type sdkLinkType int

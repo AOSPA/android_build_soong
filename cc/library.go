@@ -33,6 +33,20 @@ import (
 	"github.com/google/blueprint/proptools"
 )
 
+var (
+	alwaysLinkLibraries = map[string]bool{
+		// Coverage libraries are _always_ added as a whole_static_dep. By converting as these as
+		// alwayslink = True, we can add these as to deps (e.g. as a regular static dep) in Bazel
+		// without any extra complications in cc_shared_library roots to prevent linking the same
+		// library repeatedly.
+		"libprofile-extras_ndk":               true,
+		"libprofile-extras":                   true,
+		"libprofile-clang-extras_ndk":         true,
+		"libprofile-clang-extras_cfi_support": true,
+		"libprofile-clang-extras":             true,
+	}
+)
+
 // LibraryProperties is a collection of properties shared by cc library rules/cc.
 type LibraryProperties struct {
 	// local file name to pass to the linker as -unexported_symbols_list
@@ -434,6 +448,10 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 	sharedProps := bazel.BazelTargetModuleProperties{
 		Rule_class:        "cc_library_shared",
 		Bzl_load_location: "//build/bazel/rules/cc:cc_library_shared.bzl",
+	}
+
+	if _, ok := alwaysLinkLibraries[m.Name()]; ok {
+		staticTargetAttrs.Alwayslink = proptools.BoolPtr(true)
 	}
 
 	var tagsForStaticVariant bazel.StringListAttribute
@@ -1978,6 +1996,10 @@ func (library *libraryDecorator) optInAbiDiff(ctx android.ModuleContext, referen
 
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 	errorMessage := "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l " + libName + " -ref-dump-dir $$ANDROID_BUILD_TOP/" + refDumpDir
+	// Most opt-in libraries do not have dumps for all default architectures.
+	if ctx.Config().HasDeviceProduct() {
+		errorMessage += " -products " + ctx.Config().DeviceProduct()
+	}
 
 	library.sourceAbiDiff(ctx, referenceDump, baseName, nameExt,
 		isLlndkOrNdk, false /* allowExtensions */, "current", errorMessage)
@@ -2294,7 +2316,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 
 			// do not install vndk libs
 			// vndk libs are packaged into VNDK APEX
-			if ctx.isVndk() && !ctx.IsVndkExt() {
+			if ctx.isVndk() && !ctx.IsVndkExt() && !ctx.Config().IsVndkDeprecated() {
 				return
 			}
 		} else if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
@@ -2970,6 +2992,10 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 	var attrs interface{}
 	if isStatic {
 		commonAttrs.Deps.Add(baseAttributes.protoDependency)
+		var alwayslink *bool
+		if _, ok := alwaysLinkLibraries[module.Name()]; ok && isStatic {
+			alwayslink = proptools.BoolPtr(true)
+		}
 		attrs = &bazelCcLibraryStaticAttributes{
 			staticOrSharedAttributes: commonAttrs,
 			Rtti:                     compilerAttrs.rtti,
@@ -2983,8 +3009,10 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 			Conlyflags: compilerAttrs.conlyFlags,
 			Asflags:    asFlags,
 
-			Features: *features,
+			Alwayslink: alwayslink,
+			Features:   *features,
 		}
+
 	} else {
 		commonAttrs.Dynamic_deps.Add(baseAttributes.protoDependency)
 
@@ -3066,7 +3094,8 @@ type bazelCcLibraryStaticAttributes struct {
 	Conlyflags bazel.StringListAttribute
 	Asflags    bazel.StringListAttribute
 
-	Features bazel.StringListAttribute
+	Alwayslink *bool
+	Features   bazel.StringListAttribute
 }
 
 // TODO(b/199902614): Can this be factored to share with the other Attributes?

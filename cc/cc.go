@@ -42,6 +42,7 @@ import (
 func init() {
 	RegisterCCBuildComponents(android.InitRegistrationContext)
 
+	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/cc/config")
 }
 
@@ -575,6 +576,24 @@ type feature interface {
 	props() []interface{}
 }
 
+// Information returned from Generator about the source code it's generating
+type GeneratedSource struct {
+	IncludeDirs    android.Paths
+	Sources        android.Paths
+	Headers        android.Paths
+	ReexportedDirs android.Paths
+}
+
+// generator allows injection of generated code
+type Generator interface {
+	GeneratorProps() []interface{}
+	GeneratorInit(ctx BaseModuleContext)
+	GeneratorDeps(ctx DepsContext, deps Deps) Deps
+	GeneratorFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags
+	GeneratorSources(ctx ModuleContext) GeneratedSource
+	GeneratorBuildActions(ctx ModuleContext, flags Flags, deps PathDeps)
+}
+
 // compiler is the interface for a compiler helper object. Different module decorators may implement
 // this helper differently.
 type compiler interface {
@@ -857,6 +876,7 @@ type Module struct {
 	// type-specific logic. These members may reference different objects or the same object.
 	// Functions of these decorators will be invoked to initialize and register type-specific
 	// build statements.
+	generators   []Generator
 	compiler     compiler
 	linker       linker
 	installer    installer
@@ -1086,6 +1106,10 @@ func (c *Module) CcLibraryInterface() bool {
 	return false
 }
 
+func (c *Module) RlibStd() bool {
+	panic(fmt.Errorf("RlibStd called on non-Rust module: %q", c.BaseModuleName()))
+}
+
 func (c *Module) RustLibraryInterface() bool {
 	return false
 }
@@ -1203,6 +1227,9 @@ func (c *Module) VndkVersion() string {
 
 func (c *Module) Init() android.Module {
 	c.AddProperties(&c.Properties, &c.VendorProperties)
+	for _, generator := range c.generators {
+		c.AddProperties(generator.GeneratorProps()...)
+	}
 	if c.compiler != nil {
 		c.AddProperties(c.compiler.compilerProps()...)
 	}
@@ -1374,7 +1401,7 @@ func (c *Module) isPgoCompile() bool {
 
 func (c *Module) isCfi() bool {
 	if sanitize := c.sanitize; sanitize != nil {
-		return Bool(sanitize.Properties.Sanitize.Cfi)
+		return Bool(sanitize.Properties.SanitizeMutated.Cfi)
 	}
 	return false
 }
@@ -2154,6 +2181,25 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		return
 	}
 
+	for _, generator := range c.generators {
+		gen := generator.GeneratorSources(ctx)
+		deps.IncludeDirs = append(deps.IncludeDirs, gen.IncludeDirs...)
+		deps.ReexportedDirs = append(deps.ReexportedDirs, gen.ReexportedDirs...)
+		deps.GeneratedDeps = append(deps.GeneratedDeps, gen.Headers...)
+		deps.ReexportedGeneratedHeaders = append(deps.ReexportedGeneratedHeaders, gen.Headers...)
+		deps.ReexportedDeps = append(deps.ReexportedDeps, gen.Headers...)
+		if len(deps.Objs.objFiles) == 0 {
+			// If we are reusuing object files (which happens when we're a shared library and we're
+			// reusing our static variant's object files), then skip adding the actual source files,
+			// because we already have the object for it.
+			deps.GeneratedSources = append(deps.GeneratedSources, gen.Sources...)
+		}
+	}
+
+	if ctx.Failed() {
+		return
+	}
+
 	if c.stubLibraryMultipleApexViolation(actx) {
 		actx.PropertyErrorf("apex_available",
 			"Stub libraries should have a single apex_available (test apexes excluded). Got %v", c.ApexAvailable())
@@ -2166,6 +2212,9 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		Toolchain: c.toolchain(ctx),
 		EmitXrefs: ctx.Config().EmitXrefRules(),
 		Sdclang:   c.sdclang(ctx),
+	}
+	for _, generator := range c.generators {
+		flags = generator.GeneratorFlags(ctx, flags, deps)
 	}
 	if c.compiler != nil {
 		flags = c.compiler.compilerFlags(ctx, flags, deps)
@@ -2223,6 +2272,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	flags.AssemblerWithCpp = inList("-xassembler-with-cpp", flags.Local.AsFlags)
+
+	for _, generator := range c.generators {
+		generator.GeneratorBuildActions(ctx, flags, deps)
+	}
 
 	var objs Objects
 	if c.compiler != nil {
@@ -2311,6 +2364,9 @@ func (c *Module) toolchain(ctx android.BaseModuleContext) config.Toolchain {
 }
 
 func (c *Module) begin(ctx BaseModuleContext) {
+	for _, generator := range c.generators {
+		generator.GeneratorInit(ctx)
+	}
 	if c.compiler != nil {
 		c.compiler.compilerInit(ctx)
 	}
@@ -2346,6 +2402,9 @@ func (c *Module) begin(ctx BaseModuleContext) {
 func (c *Module) deps(ctx DepsContext) Deps {
 	deps := Deps{}
 
+	for _, generator := range c.generators {
+		deps = generator.GeneratorDeps(ctx, deps)
+	}
 	if c.compiler != nil {
 		deps = c.compiler.compilerDeps(ctx, deps)
 	}
@@ -2958,20 +3017,20 @@ func checkLinkType(ctx android.BaseModuleContext, from LinkableInterface, to Lin
 			ctx.ModuleErrorf("links %q built against newer API version %q",
 				ctx.OtherModuleName(to.Module()), "current")
 		} else {
-			fromApi, err := strconv.Atoi(from.SdkVersion())
+			fromApi, err := android.ApiLevelFromUserWithConfig(ctx.Config(), from.SdkVersion())
 			if err != nil {
 				ctx.PropertyErrorf("sdk_version",
-					"Invalid sdk_version value (must be int or current): %q",
+					"Invalid sdk_version value (must be int, preview or current): %q",
 					from.SdkVersion())
 			}
-			toApi, err := strconv.Atoi(to.SdkVersion())
+			toApi, err := android.ApiLevelFromUserWithConfig(ctx.Config(), to.SdkVersion())
 			if err != nil {
 				ctx.PropertyErrorf("sdk_version",
-					"Invalid sdk_version value (must be int or current): %q",
+					"Invalid sdk_version value (must be int, preview or current): %q",
 					to.SdkVersion())
 			}
 
-			if toApi > fromApi {
+			if toApi.GreaterThan(fromApi) {
 				ctx.ModuleErrorf("links %q built against newer API version %q",
 					ctx.OtherModuleName(to.Module()), to.SdkVersion())
 			}

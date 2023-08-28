@@ -396,7 +396,7 @@ func ExistentPathsForSources(ctx PathGlobContext, paths []string) Paths {
 //
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
-// path_deps mutator.
+// pathdeps mutator.
 // If a requested module is not found as a dependency:
 //   - if ctx.Config().AllowMissingDependencies() is true, this module to be marked as having
 //     missing dependencies
@@ -425,7 +425,7 @@ type SourceInput struct {
 // excluding the items (similarly resolved
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
-// path_deps mutator.
+// pathdeps mutator.
 // If a requested module is not found as a dependency:
 //   - if ctx.Config().AllowMissingDependencies() is true, this module to be marked as having
 //     missing dependencies
@@ -560,7 +560,7 @@ func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string)
 // and a list of the module names of missing module dependencies are returned as the second return.
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
-// path_deps mutator.
+// pathdeps mutator.
 func PathsAndMissingDepsForModuleSrcExcludes(ctx ModuleMissingDepsPathContext, paths, excludes []string) (Paths, []string) {
 	return PathsAndMissingDepsRelativeToModuleSourceDir(SourceInput{
 		Context:      ctx,
@@ -1029,14 +1029,14 @@ func (p basePath) withRel(rel string) basePath {
 	return p
 }
 
+func (p basePath) RelativeToTop() Path {
+	ensureTestOnly()
+	return p
+}
+
 // SourcePath is a Path representing a file path rooted from SrcDir
 type SourcePath struct {
 	basePath
-}
-
-func (p SourcePath) RelativeToTop() Path {
-	ensureTestOnly()
-	return p
 }
 
 var _ Path = SourcePath{}
@@ -1124,6 +1124,16 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 		ReportPathErrorf(ctx, "source path %q does not exist", path)
 	}
 	return path
+}
+
+// PathForArbitraryOutput creates a path for the given components. Unlike PathForOutput,
+// the path is relative to the root of the output folder, not the out/soong folder.
+func PathForArbitraryOutput(ctx PathContext, pathComponents ...string) Path {
+	p, err := validatePath(pathComponents...)
+	if err != nil {
+		reportPathError(ctx, err)
+	}
+	return basePath{path: filepath.Join(ctx.Config().OutDir(), p)}
 }
 
 // MaybeExistentPathForSource joins the provided path components and validates that the result

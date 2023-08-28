@@ -993,7 +993,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	// the non-system APEXes because the VNDK libraries won't be included (and duped) in the
 	// APEX, but shared across APEXes via the VNDK APEX.
 	useVndk := a.SocSpecific() || a.DeviceSpecific() || (a.ProductSpecific() && mctx.Config().EnforceProductPartitionInterface())
-	excludeVndkLibs := useVndk && proptools.Bool(a.properties.Use_vndk_as_stable)
+	excludeVndkLibs := useVndk && a.useVndkAsStable(mctx)
 	if proptools.Bool(a.properties.Use_vndk_as_stable) {
 		if !useVndk {
 			mctx.PropertyErrorf("use_vndk_as_stable", "not supported for system/system_ext APEXes")
@@ -2394,7 +2394,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 	// tags used below are private (e.g. `cc.sharedDepTag`).
 	if cc.IsSharedDepTag(depTag) || cc.IsRuntimeDepTag(depTag) {
 		if ch, ok := child.(*cc.Module); ok {
-			if ch.UseVndk() && proptools.Bool(a.properties.Use_vndk_as_stable) && ch.IsVndk() {
+			if ch.UseVndk() && a.useVndkAsStable(ctx) && ch.IsVndk() {
 				vctx.requireNativeLibs = append(vctx.requireNativeLibs, ":vndk")
 				return false
 			}
@@ -3277,31 +3277,6 @@ func makeApexAvailableBaseline() map[string][]string {
 	// Module separator
 	//
 	m["com.android.runtime"] = []string{
-		"libc_aeabi",
-		"libc_bionic",
-		"libc_bionic_ndk",
-		"libc_bootstrap",
-		"libc_common",
-		"libc_common_shared",
-		"libc_dns",
-		"libc_dynamic_dispatch",
-		"libc_fortify",
-		"libc_freebsd",
-		"libc_freebsd_large_stack",
-		"libc_gdtoa",
-		"libc_init_dynamic",
-		"libc_init_static",
-		"libc_jemalloc_wrapper",
-		"libc_netbsd",
-		"libc_nomalloc",
-		"libc_nopthread",
-		"libc_openbsd",
-		"libc_openbsd_large_stack",
-		"libc_openbsd_ndk",
-		"libc_pthread",
-		"libc_syscalls",
-		"libc_tzcode",
-		"libc_unwind_static",
 		"libdebuggerd",
 		"libdebuggerd_common_headers",
 		"libdebuggerd_handler_core",
@@ -3313,7 +3288,6 @@ func makeApexAvailableBaseline() map[string][]string {
 		"libprocinfo",
 		"libpropertyinfoparser",
 		"libscudo",
-		"libstdc++",
 		"libsystemproperties",
 		"libtombstoned_client_static",
 		"libunwindstack",
@@ -3748,4 +3722,13 @@ func invalidCompileMultilib(ctx android.TopDownMutatorContext, value string) {
 
 func (a *apexBundle) IsTestApex() bool {
 	return a.testApex
+}
+
+func (a *apexBundle) useVndkAsStable(ctx android.BaseModuleContext) bool {
+	// VNDK cannot be linked if it is deprecated
+	if ctx.Config().IsVndkDeprecated() {
+		return false
+	}
+
+	return proptools.Bool(a.properties.Use_vndk_as_stable)
 }

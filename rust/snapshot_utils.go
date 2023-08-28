@@ -47,8 +47,7 @@ func (mod *Module) ExcludeFromRamdiskSnapshot() bool {
 
 func (mod *Module) IsSnapshotLibrary() bool {
 	if lib, ok := mod.compiler.(libraryInterface); ok {
-		// Rust-native dylibs are not snapshot supported yet. Only snapshot the rlib-std variants of rlibs.
-		return lib.shared() || lib.static() || (lib.rlib() && lib.rlibStd())
+		return lib.shared() || lib.static() || lib.rlib() || lib.dylib()
 	}
 	return false
 }
@@ -64,6 +63,14 @@ func (mod *Module) SnapshotSharedLibs() []string {
 
 func (mod *Module) SnapshotStaticLibs() []string {
 	return mod.Properties.SnapshotStaticLibs
+}
+
+func (mod *Module) SnapshotRlibs() []string {
+	return mod.Properties.SnapshotRlibs
+}
+
+func (mod *Module) SnapshotDylibs() []string {
+	return mod.Properties.SnapshotDylibs
 }
 
 func (mod *Module) Symlinks() []string {

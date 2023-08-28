@@ -56,10 +56,6 @@ var (
 		// higher number of "optimized out" stack variables.
 		// b/112437883.
 		"-instcombine-lower-dbg-declare=0",
-		// TODO(b/159343917): HWASan and GlobalISel don't play nicely, and
-		// GlobalISel is the default at -O0 on aarch64.
-		"--aarch64-enable-global-isel-at-O=-1",
-		"-fast-isel=false",
 		"-hwasan-use-after-scope=1",
 		"-dom-tree-reachability-max-bbs-to-explore=128",
 	}
@@ -680,10 +676,6 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	// SCS is only implemented on AArch64/riscv64.
 	if (ctx.Arch().ArchType != android.Arm64 && ctx.Arch().ArchType != android.Riscv64) || !ctx.toolchain().Bionic() {
-		s.Scs = nil
-	}
-	// ...but temporarily globally disabled on riscv64 (http://b/277909695).
-	if ctx.Arch().ArchType == android.Riscv64 {
 		s.Scs = nil
 	}
 

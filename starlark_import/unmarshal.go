@@ -25,13 +25,18 @@ import (
 )
 
 func Unmarshal[T any](value starlark.Value) (T, error) {
-	var zero T
-	x, err := UnmarshalReflect(value, reflect.TypeOf(zero))
+	x, err := UnmarshalReflect(value, reflect.TypeOf((*T)(nil)).Elem())
 	return x.Interface().(T), err
 }
 
 func UnmarshalReflect(value starlark.Value, ty reflect.Type) (reflect.Value, error) {
+	if ty == reflect.TypeOf((*starlark.Value)(nil)).Elem() {
+		return reflect.ValueOf(value), nil
+	}
 	zero := reflect.Zero(ty)
+	if value == nil {
+		panic("nil value")
+	}
 	var result reflect.Value
 	if ty.Kind() == reflect.Interface {
 		var err error
@@ -285,4 +290,15 @@ func typeOfStarlarkValue(value starlark.Value) (reflect.Type, error) {
 	default:
 		return nil, fmt.Errorf("unimplemented starlark type: %s", value.Type())
 	}
+}
+
+// UnmarshalNoneable is like Unmarshal, but it will accept None as the top level (but not nested)
+// starlark value. If the value is None, a nil pointer will be returned, otherwise a pointer
+// to the result of Unmarshal will be returned.
+func UnmarshalNoneable[T any](value starlark.Value) (*T, error) {
+	if _, ok := value.(starlark.NoneType); ok {
+		return nil, nil
+	}
+	ret, err := Unmarshal[T](value)
+	return &ret, err
 }

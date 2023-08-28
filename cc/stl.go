@@ -80,8 +80,7 @@ func (stl *stl) begin(ctx BaseModuleContext) {
 			return ""
 		}
 		s = deduplicateStlInput(s)
-		archHasNDKStl := ctx.Arch().ArchType != android.Riscv64
-		if ctx.useSdk() && ctx.Device() && archHasNDKStl {
+		if ctx.useSdk() && ctx.Device() {
 			switch s {
 			case "", "system":
 				return "ndk_system"
@@ -118,11 +117,6 @@ func (stl *stl) begin(ctx BaseModuleContext) {
 			}
 		}
 	}()
-}
-
-func needsLibAndroidSupport(ctx BaseModuleContext) bool {
-	version := nativeApiLevelOrPanic(ctx, ctx.sdkVersion())
-	return version.LessThan(android.FirstNonLibAndroidSupportVersion)
 }
 
 func staticUnwinder(ctx android.BaseModuleContext) string {
@@ -183,11 +177,6 @@ func (stl *stl) deps(ctx BaseModuleContext, deps Deps) Deps {
 			deps.SharedLibs = append(deps.SharedLibs, stl.Properties.SelectedStl)
 		} else {
 			deps.StaticLibs = append(deps.StaticLibs, stl.Properties.SelectedStl, "ndk_libc++abi")
-		}
-		if needsLibAndroidSupport(ctx) {
-			// Use LateStaticLibs for ndk_libandroid_support so that its include directories
-			// come after ndk_libc++_static or ndk_libc++_shared.
-			deps.LateStaticLibs = append(deps.LateStaticLibs, "ndk_libandroid_support")
 		}
 		deps.StaticLibs = append(deps.StaticLibs, "ndk_libunwind")
 	default:

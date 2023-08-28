@@ -29,6 +29,7 @@ import (
 func init() {
 	android.RegisterModuleType("cc_fuzz", LibFuzzFactory)
 	android.RegisterParallelSingletonType("cc_fuzz_packaging", fuzzPackagingFactory)
+	android.RegisterParallelSingletonType("cc_fuzz_presubmit_packaging", fuzzPackagingFactoryPresubmit)
 }
 
 type FuzzProperties struct {
@@ -258,25 +259,29 @@ func (fuzzBin *fuzzBinary) install(ctx ModuleContext, file android.Path) {
 
 func PackageFuzzModule(ctx android.ModuleContext, fuzzPackagedModule fuzz.FuzzPackagedModule, pctx android.PackageContext) fuzz.FuzzPackagedModule {
 	fuzzPackagedModule.Corpus = android.PathsForModuleSrc(ctx, fuzzPackagedModule.FuzzProperties.Corpus)
-	builder := android.NewRuleBuilder(pctx, ctx)
 	intermediateDir := android.PathForModuleOut(ctx, "corpus")
+
+	// Create one rule per file to avoid MAX_ARG_STRLEN hardlimit.
 	for _, entry := range fuzzPackagedModule.Corpus {
-		builder.Command().Text("cp").
-			Input(entry).
-			Output(intermediateDir.Join(ctx, entry.Base()))
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.Cp,
+			Output: intermediateDir.Join(ctx, entry.Base()),
+			Input:  entry,
+		})
 	}
-	builder.Build("copy_corpus", "copy corpus")
 	fuzzPackagedModule.CorpusIntermediateDir = intermediateDir
 
 	fuzzPackagedModule.Data = android.PathsForModuleSrc(ctx, fuzzPackagedModule.FuzzProperties.Data)
-	builder = android.NewRuleBuilder(pctx, ctx)
 	intermediateDir = android.PathForModuleOut(ctx, "data")
+
+	// Create one rule per file to avoid MAX_ARG_STRLEN hardlimit.
 	for _, entry := range fuzzPackagedModule.Data {
-		builder.Command().Text("cp").
-			Input(entry).
-			Output(intermediateDir.Join(ctx, entry.Rel()))
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.Cp,
+			Output: intermediateDir.Join(ctx, entry.Rel()),
+			Input:  entry,
+		})
 	}
-	builder.Build("copy_data", "copy data")
 	fuzzPackagedModule.DataIntermediateDir = intermediateDir
 
 	if fuzzPackagedModule.FuzzProperties.Dictionary != nil {
@@ -352,9 +357,10 @@ func NewFuzzer(hod android.HostOrDeviceSupported) *Module {
 // their architecture & target/host specific zip file.
 type ccRustFuzzPackager struct {
 	fuzz.FuzzPackager
-	fuzzPackagingArchModules         string
-	fuzzTargetSharedDepsInstallPairs string
-	allFuzzTargetsName               string
+	fuzzPackagingArchModules         			string
+	fuzzTargetSharedDepsInstallPairs 			string
+	allFuzzTargetsName               			string
+	onlyIncludePresubmits						bool
 }
 
 func fuzzPackagingFactory() android.Singleton {
@@ -363,6 +369,18 @@ func fuzzPackagingFactory() android.Singleton {
 		fuzzPackagingArchModules:         "SOONG_FUZZ_PACKAGING_ARCH_MODULES",
 		fuzzTargetSharedDepsInstallPairs: "FUZZ_TARGET_SHARED_DEPS_INSTALL_PAIRS",
 		allFuzzTargetsName:               "ALL_FUZZ_TARGETS",
+		onlyIncludePresubmits:			  false,
+	}
+	return fuzzPackager
+}
+
+func fuzzPackagingFactoryPresubmit() android.Singleton {
+
+	fuzzPackager := &ccRustFuzzPackager{
+		fuzzPackagingArchModules:         "SOONG_PRESUBMIT_FUZZ_PACKAGING_ARCH_MODULES",
+		fuzzTargetSharedDepsInstallPairs: "PRESUBMIT_FUZZ_TARGET_SHARED_DEPS_INSTALL_PAIRS",
+		allFuzzTargetsName:               "ALL_PRESUBMIT_FUZZ_TARGETS",
+		onlyIncludePresubmits:			  true,
 	}
 	return fuzzPackager
 }
@@ -386,7 +404,6 @@ func (s *ccRustFuzzPackager) GenerateBuildActions(ctx android.SingletonContext) 
 		if !ok || ccModule.PreventInstall() {
 			return
 		}
-
 		// Discard non-fuzz targets.
 		if ok := fuzz.IsValid(ccModule.FuzzModuleStruct()); !ok {
 			return
@@ -402,6 +419,9 @@ func (s *ccRustFuzzPackager) GenerateBuildActions(ctx android.SingletonContext) 
 			hostOrTargetString = "host_cross"
 		} else if ccModule.Host() {
 			hostOrTargetString = "host"
+		}
+		if s.onlyIncludePresubmits == true {
+			hostOrTargetString = "presubmit-" + hostOrTargetString
 		}
 
 		fpm := fuzz.FuzzPackagedModule{}
@@ -427,6 +447,14 @@ func (s *ccRustFuzzPackager) GenerateBuildActions(ctx android.SingletonContext) 
 		// The executable.
 		files = append(files, fuzz.FileToZip{SourceFilePath: android.OutputFileForModule(ctx, ccModule, "unstripped")})
 
+		if s.onlyIncludePresubmits == true {
+			if fpm.FuzzProperties.Fuzz_config == nil {
+				return
+			}
+			if !BoolDefault(fpm.FuzzProperties.Fuzz_config.Use_for_presubmit, false){
+				return
+			}
+		}
 		archDirs[archOs], ok = s.BuildZipFile(ctx, module, fpm, files, builder, archDir, archString, hostOrTargetString, archOs, archDirs)
 		if !ok {
 			return
