@@ -251,9 +251,6 @@ var (
 	noOverrideExternalGlobalCflags = []string{
 		// http://b/191699019
 		"-Wno-format-insufficient-args",
-		// http://b/296422292
-		// Usually signals a mistake and should be a hard error.
-		"-Wno-sizeof-array-div",
 		// http://b/296321145
 		// Indicates potential memory or stack corruption, so should be changed
 		// to a hard error. Currently triggered by some vendor code.
@@ -320,7 +317,7 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r498229"
+	ClangDefaultVersion      = "clang-r498229b"
 	ClangDefaultShortVersion = "17"
 
 	// Directories with warnings from Android.bp files.
