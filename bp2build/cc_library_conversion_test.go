@@ -2839,205 +2839,6 @@ cc_library {
 	)
 }
 
-func TestCcApiContributionsWithHdrs(t *testing.T) {
-	bp := `
-	cc_library {
-		name: "libfoo",
-		stubs: { symbol_file: "libfoo.map.txt", versions: ["28", "29", "current"] },
-		llndk: { symbol_file: "libfoo.map.txt", override_export_include_dirs: ["dir2"]},
-		export_include_dirs: ["dir1"],
-	}
-	`
-	expectedBazelTargets := []string{
-		MakeBazelTarget(
-			"cc_api_library_headers",
-			"libfoo.module-libapi.headers",
-			AttrNameToString{
-				"export_includes": `["dir1"]`,
-			}),
-		MakeBazelTarget(
-			"cc_api_library_headers",
-			"libfoo.vendorapi.headers",
-			AttrNameToString{
-				"export_includes": `["dir2"]`,
-			}),
-		MakeBazelTarget(
-			"cc_api_contribution",
-			"libfoo.contribution",
-			AttrNameToString{
-				"api":          `"libfoo.map.txt"`,
-				"library_name": `"libfoo"`,
-				"api_surfaces": `[
-        "module-libapi",
-        "vendorapi",
-    ]`,
-				"hdrs": `[
-        ":libfoo.module-libapi.headers",
-        ":libfoo.vendorapi.headers",
-    ]`,
-			}),
-	}
-	RunApiBp2BuildTestCase(t, cc.RegisterLibraryBuildComponents, Bp2buildTestCase{
-		Blueprint:            bp,
-		Description:          "cc API contributions to module-libapi and vendorapi",
-		ExpectedBazelTargets: expectedBazelTargets,
-	})
-}
-
-func TestCcApiSurfaceCombinations(t *testing.T) {
-	testCases := []struct {
-		bp                  string
-		expectedApi         string
-		expectedApiSurfaces string
-		description         string
-	}{
-		{
-			bp: `
-			cc_library {
-				name: "a",
-				stubs: {symbol_file: "a.map.txt"},
-			}`,
-			expectedApi:         `"a.map.txt"`,
-			expectedApiSurfaces: `["module-libapi"]`,
-			description:         "Library that contributes to module-libapi",
-		},
-		{
-			bp: `
-			cc_library {
-				name: "a",
-				llndk: {symbol_file: "a.map.txt"},
-			}`,
-			expectedApi:         `"a.map.txt"`,
-			expectedApiSurfaces: `["vendorapi"]`,
-			description:         "Library that contributes to vendorapi",
-		},
-		{
-			bp: `
-			cc_library {
-				name: "a",
-				llndk: {symbol_file: "a.map.txt"},
-				stubs: {symbol_file: "a.map.txt"},
-			}`,
-			expectedApi: `"a.map.txt"`,
-			expectedApiSurfaces: `[
-        "module-libapi",
-        "vendorapi",
-    ]`,
-			description: "Library that contributes to module-libapi and vendorapi",
-		},
-	}
-	for _, testCase := range testCases {
-		expectedBazelTargets := []string{
-			MakeBazelTarget(
-				"cc_api_contribution",
-				"a.contribution",
-				AttrNameToString{
-					"library_name": `"a"`,
-					"hdrs":         `[]`,
-					"api":          testCase.expectedApi,
-					"api_surfaces": testCase.expectedApiSurfaces,
-				},
-			),
-		}
-		RunApiBp2BuildTestCase(t, cc.RegisterLibraryBuildComponents, Bp2buildTestCase{
-			Blueprint:            testCase.bp,
-			Description:          testCase.description,
-			ExpectedBazelTargets: expectedBazelTargets,
-		})
-	}
-}
-
-// llndk struct property in Soong provides users with several options to configure the exported include dirs
-// Test the generated bazel targets for the different configurations
-func TestCcVendorApiHeaders(t *testing.T) {
-	testCases := []struct {
-		bp                     string
-		expectedIncludes       string
-		expectedSystemIncludes string
-		description            string
-	}{
-		{
-			bp: `
-			cc_library {
-				name: "a",
-				export_include_dirs: ["include"],
-				export_system_include_dirs: ["base_system_include"],
-				llndk: {
-					symbol_file: "a.map.txt",
-					export_headers_as_system: true,
-				},
-			}
-			`,
-			expectedIncludes: "",
-			expectedSystemIncludes: `[
-        "base_system_include",
-        "include",
-    ]`,
-			description: "Headers are exported as system to API surface",
-		},
-		{
-			bp: `
-			cc_library {
-				name: "a",
-				export_include_dirs: ["include"],
-				export_system_include_dirs: ["base_system_include"],
-				llndk: {
-					symbol_file: "a.map.txt",
-					override_export_include_dirs: ["llndk_include"],
-				},
-			}
-			`,
-			expectedIncludes:       `["llndk_include"]`,
-			expectedSystemIncludes: `["base_system_include"]`,
-			description:            "Non-system Headers are ovverriden before export to API surface",
-		},
-		{
-			bp: `
-			cc_library {
-				name: "a",
-				export_include_dirs: ["include"],
-				export_system_include_dirs: ["base_system_include"],
-				llndk: {
-					symbol_file: "a.map.txt",
-					override_export_include_dirs: ["llndk_include"],
-					export_headers_as_system: true,
-				},
-			}
-			`,
-			expectedIncludes: "", // includes are set to nil
-			expectedSystemIncludes: `[
-        "base_system_include",
-        "llndk_include",
-    ]`,
-			description: "System Headers are extended before export to API surface",
-		},
-	}
-	for _, testCase := range testCases {
-		attrs := AttrNameToString{}
-		if testCase.expectedIncludes != "" {
-			attrs["export_includes"] = testCase.expectedIncludes
-		}
-		if testCase.expectedSystemIncludes != "" {
-			attrs["export_system_includes"] = testCase.expectedSystemIncludes
-		}
-
-		expectedBazelTargets := []string{
-			MakeBazelTarget("cc_api_library_headers", "a.vendorapi.headers", attrs),
-			// Create a target for cc_api_contribution target
-			MakeBazelTarget("cc_api_contribution", "a.contribution", AttrNameToString{
-				"api":          `"a.map.txt"`,
-				"api_surfaces": `["vendorapi"]`,
-				"hdrs":         `[":a.vendorapi.headers"]`,
-				"library_name": `"a"`,
-			}),
-		}
-		RunApiBp2BuildTestCase(t, cc.RegisterLibraryBuildComponents, Bp2buildTestCase{
-			Blueprint:            testCase.bp,
-			ExpectedBazelTargets: expectedBazelTargets,
-		})
-	}
-}
-
 func TestCcLibraryStubsAcrossConfigsDuplicatesRemoved(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
 		Description:                "stub target generation of the same lib across configs should not result in duplicates",
@@ -5238,6 +5039,99 @@ func TestProtoLocalIncludeDirs(t *testing.T) {
 			"strip_import_prefix": `""`,
 			"tags":                `["manual"]`,
 		}),
+	}
+	runCcLibraryTestCase(t, tc)
+}
+
+// `foo_device` and `bar_host` can depend on .proto files of a specific dir,
+// the dynamically generated proto_library should not have any target_compatible_with
+func TestProtoLibraryForIncludeDirsIsOsAgnostic(t *testing.T) {
+	tc := Bp2buildTestCase{
+		Description:                "proto_library generated for proto.include_dirs is compatible for all axes",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: simpleModuleDoNotConvertBp2build("cc_library", "libprotobuf-cpp-lite") + `
+cc_library {
+	name: "foo_device",
+	device_supported: true, // this is the default behavior, but added explicitly here for illustration
+	host_supported: false,
+	proto: {include_dirs: ["dir"]},
+}
+cc_library {
+	name: "bar_host",
+	device_supported: false,
+	host_supported: true,
+	srcs: ["bar.proto"],
+	proto: {include_dirs: ["dir"]},
+}
+`,
+		Filesystem: map[string]string{
+			"dir/Android.bp": "",
+			"dir/dir.proto":  "",
+		},
+		Dir: "dir", // check for the generated proto_library
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions("proto_library", "dir.include_dir_bp2build_generated_proto", AttrNameToString{
+				"srcs":                `["dir.proto"]`,
+				"strip_import_prefix": `""`,
+				"tags":                `["manual"]`,
+			}),
+		},
+	}
+	runCcLibraryTestCase(t, tc)
+}
+
+func TestCcCompileMultilibConversion(t *testing.T) {
+	tc := Bp2buildTestCase{
+		Description:                "cc_library with compile_multilib",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "lib32",
+	compile_multilib: "32",
+}
+cc_library {
+	name: "lib64",
+	compile_multilib: "64",
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions("cc_library_shared", "lib32", AttrNameToString{
+				"local_includes": `["."]`,
+				"target_compatible_with": `["//build/bazel/platforms/os:android"] + select({
+        "//build/bazel/platforms/arch:arm64": ["@platforms//:incompatible"],
+        "//build/bazel/platforms/arch:riscv64": ["@platforms//:incompatible"],
+        "//build/bazel/platforms/arch:x86_64": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    })`,
+			}),
+			MakeBazelTargetNoRestrictions("cc_library_static", "lib32_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+				"target_compatible_with": `["//build/bazel/platforms/os:android"] + select({
+        "//build/bazel/platforms/arch:arm64": ["@platforms//:incompatible"],
+        "//build/bazel/platforms/arch:riscv64": ["@platforms//:incompatible"],
+        "//build/bazel/platforms/arch:x86_64": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    })`,
+			}),
+			MakeBazelTargetNoRestrictions("cc_library_shared", "lib64", AttrNameToString{
+				"local_includes": `["."]`,
+				"target_compatible_with": `["//build/bazel/platforms/os:android"] + select({
+        "//build/bazel/platforms/arch:arm": ["@platforms//:incompatible"],
+        "//build/bazel/platforms/arch:x86": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    })`,
+			}),
+			MakeBazelTargetNoRestrictions("cc_library_static", "lib64_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+				"target_compatible_with": `["//build/bazel/platforms/os:android"] + select({
+        "//build/bazel/platforms/arch:arm": ["@platforms//:incompatible"],
+        "//build/bazel/platforms/arch:x86": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    })`,
+			}),
+		},
 	}
 	runCcLibraryTestCase(t, tc)
 }
