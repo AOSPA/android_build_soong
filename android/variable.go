@@ -95,10 +95,6 @@ type variableProperties struct {
 			Cflags []string
 		}
 
-		Device_page_size_agnostic struct {
-			Cflags []string `android:"arch_variant"`
-		} `android:"arch_variant"`
-
 		Override_rs_driver struct {
 			Cflags []string
 		}
@@ -142,6 +138,7 @@ type variableProperties struct {
 
 			Srcs         []string
 			Exclude_srcs []string
+			Cmd          *string
 		}
 
 		// eng is true for -eng builds, and can be used to turn on additional heavyweight debugging
@@ -159,10 +156,6 @@ type variableProperties struct {
 				Enabled *bool
 			}
 		}
-
-		Pdk struct {
-			Enabled *bool `android:"arch_variant"`
-		} `android:"arch_variant"`
 
 		Uml struct {
 			Cppflags []string
@@ -259,6 +252,7 @@ type ProductVariables struct {
 	DeviceCurrentApiLevelForVendorModules *string  `json:",omitempty"`
 	DeviceSystemSdkVersions               []string `json:",omitempty"`
 	DeviceMaxPageSizeSupported            *string  `json:",omitempty"`
+	DevicePageSizeAgnostic                *bool    `json:",omitempty"`
 
 	RecoverySnapshotVersion *string `json:",omitempty"`
 	RamdiskSnapshotVersion *string `json:",omitempty"`
@@ -535,6 +529,8 @@ type ProductVariables struct {
 	ReleaseVersion          string   `json:",omitempty"`
 	ReleaseAconfigValueSets []string `json:",omitempty"`
 
+	ReleaseAconfigFlagDefaultPermission string `json:",omitempty"`
+
 	KeepVndk *bool `json:",omitempty"`
 }
 
@@ -576,6 +572,7 @@ func (v *ProductVariables) SetDefaultConfig() {
 		DeviceSecondaryCpuVariant:  stringPtr("generic"),
 		DeviceSecondaryAbi:         []string{"armeabi-v7a", "armeabi"},
 		DeviceMaxPageSizeSupported: stringPtr("4096"),
+		DevicePageSizeAgnostic:     boolPtr(false),
 
 		AAPTConfig:          []string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
 		AAPTPreferredConfig: stringPtr("xhdpi"),
@@ -588,7 +585,6 @@ func (v *ProductVariables) SetDefaultConfig() {
 		Safestack:                    boolPtr(false),
 		TrimmedApex:                  boolPtr(false),
 		Build_from_text_stub:         boolPtr(false),
-		Device_page_size_agnostic:    boolPtr(false),
 
 		BootJars:     ConfiguredJarList{apexes: []string{}, jars: []string{}},
 		ApexBootJars: ConfiguredJarList{apexes: []string{}, jars: []string{}},
@@ -728,11 +724,16 @@ func ProductVariableProperties(ctx ArchVariantContext, module Module) ProductCon
 
 	if moduleBase.variableProperties != nil {
 		productVariablesProperty := proptools.FieldNameForProperty("product_variables")
-		for /* axis */ _, configToProps := range moduleBase.GetArchVariantProperties(ctx, moduleBase.variableProperties) {
-			for config, props := range configToProps {
-				variableValues := reflect.ValueOf(props).Elem().FieldByName(productVariablesProperty)
-				productConfigProperties.AddProductConfigProperties(variableValues, config)
+		if moduleBase.ArchSpecific() {
+			for /* axis */ _, configToProps := range moduleBase.GetArchVariantProperties(ctx, moduleBase.variableProperties) {
+				for config, props := range configToProps {
+					variableValues := reflect.ValueOf(props).Elem().FieldByName(productVariablesProperty)
+					productConfigProperties.AddProductConfigProperties(variableValues, config)
+				}
 			}
+		} else {
+			variableValues := reflect.ValueOf(moduleBase.variableProperties).Elem().FieldByName(productVariablesProperty)
+			productConfigProperties.AddProductConfigProperties(variableValues, "")
 		}
 	}
 

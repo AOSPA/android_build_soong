@@ -1416,6 +1416,32 @@ func TestJavaSdkLibrary_StubOnlyLibs_PassedToDroidstubs(t *testing.T) {
 	android.AssertStringListContains(t, "foo stubs should depend on bar-lib", fooStubsSources.Javadoc.properties.Libs, "bar-lib")
 }
 
+func TestJavaSdkLibrary_Scope_Libs_PassedToDroidstubs(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+	).RunTestWithBp(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			public: {
+				enabled: true,
+				libs: ["bar-lib"],
+			},
+		}
+
+		java_library {
+			name: "bar-lib",
+			srcs: ["b.java"],
+		}
+		`)
+
+	// The foo.stubs.source should depend on bar-lib
+	fooStubsSources := result.ModuleForTests("foo.stubs.source", "android_common").Module().(*Droidstubs)
+	android.AssertStringListContains(t, "foo stubs should depend on bar-lib", fooStubsSources.Javadoc.properties.Libs, "bar-lib")
+}
+
 func TestJavaSdkLibrary_ApiLibrary(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForJavaTest,
@@ -1449,17 +1475,17 @@ func TestJavaSdkLibrary_ApiLibrary(t *testing.T) {
 		{
 			scope:              apiScopePublic,
 			apiContributions:   []string{"foo.stubs.source.api.contribution"},
-			fullApiSurfaceStub: "android_stubs_current.from-text",
+			fullApiSurfaceStub: "android_stubs_current",
 		},
 		{
 			scope:              apiScopeSystem,
 			apiContributions:   []string{"foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
-			fullApiSurfaceStub: "android_system_stubs_current.from-text",
+			fullApiSurfaceStub: "android_system_stubs_current",
 		},
 		{
 			scope:              apiScopeTest,
 			apiContributions:   []string{"foo.stubs.source.test.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
-			fullApiSurfaceStub: "android_test_stubs_current.from-text",
+			fullApiSurfaceStub: "android_test_stubs_current",
 		},
 		{
 			scope:              apiScopeModuleLib,

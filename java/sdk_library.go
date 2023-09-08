@@ -387,6 +387,23 @@ var (
 		apiScopeModuleLib,
 		apiScopeSystemServer,
 	}
+	apiLibraryAdditionalProperties = map[string]struct {
+		FullApiSurfaceStubLib     string
+		AdditionalApiContribution string
+	}{
+		"legacy.i18n.module.platform.api": {
+			FullApiSurfaceStubLib:     "legacy.core.platform.api.stubs",
+			AdditionalApiContribution: "i18n.module.public.api.stubs.source.api.contribution",
+		},
+		"stable.i18n.module.platform.api": {
+			FullApiSurfaceStubLib:     "stable.core.platform.api.stubs",
+			AdditionalApiContribution: "i18n.module.public.api.stubs.source.api.contribution",
+		},
+		"conscrypt.module.platform.api": {
+			FullApiSurfaceStubLib:     "stable.core.platform.api.stubs",
+			AdditionalApiContribution: "conscrypt.module.public.api.stubs.source.api.contribution",
+		},
+	}
 )
 
 var (
@@ -442,6 +459,9 @@ type ApiScopeProperties struct {
 	// or the API file. They both have to use the same sdk_version as is used for
 	// compiling the implementation library.
 	Sdk_version *string
+
+	// Extra libs used when compiling stubs for this scope.
+	Libs []string
 }
 
 type sdkLibraryProperties struct {
@@ -1513,6 +1533,29 @@ func (module *SdkLibrary) contributesToApiSurface(c android.Config) bool {
 	return exists
 }
 
+// The listed modules are the special java_sdk_libraries where apiScope.kind do not match the
+// api surface that the module contribute to. For example, the public droidstubs and java_library
+// do not contribute to the public api surface, but contributes to the core platform api surface.
+// This method returns the full api surface stub lib that
+// the generated java_api_library should depend on.
+func (module *SdkLibrary) alternativeFullApiSurfaceStubLib() string {
+	if val, ok := apiLibraryAdditionalProperties[module.Name()]; ok {
+		return val.FullApiSurfaceStubLib
+	}
+	return ""
+}
+
+// The listed modules' stubs contents do not match the corresponding txt files,
+// but require additional api contributions to generate the full stubs.
+// This method returns the name of the additional api contribution module
+// for corresponding sdk_library modules.
+func (module *SdkLibrary) apiLibraryAdditionalApiContribution() string {
+	if val, ok := apiLibraryAdditionalProperties[module.Name()]; ok {
+		return val.AdditionalApiContribution
+	}
+	return ""
+}
+
 func childModuleVisibility(childVisibility []string) []string {
 	if childVisibility == nil {
 		// No child visibility set. The child will use the visibility of the sdk_library.
@@ -1602,6 +1645,7 @@ func (module *SdkLibrary) createStubsLibrary(mctx android.DefaultableHookContext
 	props.Patch_module = module.properties.Patch_module
 	props.Installable = proptools.BoolPtr(false)
 	props.Libs = module.sdkLibraryProperties.Stub_only_libs
+	props.Libs = append(props.Libs, module.scopeToProperties[apiScope].Libs...)
 	props.Static_libs = module.sdkLibraryProperties.Stub_only_static_libs
 	// The stub-annotations library contains special versions of the annotations
 	// with CLASS retention policy, so that they're kept.
@@ -1674,6 +1718,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	props.Libs = module.properties.Libs
 	props.Libs = append(props.Libs, module.properties.Static_libs...)
 	props.Libs = append(props.Libs, module.sdkLibraryProperties.Stub_only_libs...)
+	props.Libs = append(props.Libs, module.scopeToProperties[apiScope].Libs...)
 	props.Aidl.Include_dirs = module.deviceProperties.Aidl.Include_dirs
 	props.Aidl.Local_include_dirs = module.deviceProperties.Aidl.Local_include_dirs
 	props.Java_version = module.properties.Java_version
@@ -1778,7 +1823,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	mctx.CreateModule(DroidstubsFactory, &props).(*Droidstubs).CallHookIfAvailable(mctx)
 }
 
-func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, apiScope *apiScope) {
+func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, apiScope *apiScope, alternativeFullApiSurfaceStub string) {
 	props := struct {
 		Name                  *string
 		Visibility            []string
@@ -1801,13 +1846,23 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 		apiContributions = append(apiContributions, module.stubsSourceModuleName(scope)+".api.contribution")
 		scope = scope.extends
 	}
+	if apiScope == apiScopePublic {
+		additionalApiContribution := module.apiLibraryAdditionalApiContribution()
+		if additionalApiContribution != "" {
+			apiContributions = append(apiContributions, additionalApiContribution)
+		}
+	}
 
 	props.Api_contributions = apiContributions
 	props.Libs = module.properties.Libs
 	props.Libs = append(props.Libs, module.sdkLibraryProperties.Stub_only_libs...)
+	props.Libs = append(props.Libs, module.scopeToProperties[apiScope].Libs...)
 	props.Libs = append(props.Libs, "stub-annotations")
 	props.Static_libs = module.sdkLibraryProperties.Stub_only_static_libs
-	props.Full_api_surface_stub = proptools.StringPtr(apiScope.kind.DefaultJavaLibraryName() + ".from-text")
+	props.Full_api_surface_stub = proptools.StringPtr(apiScope.kind.DefaultJavaLibraryName())
+	if alternativeFullApiSurfaceStub != "" {
+		props.Full_api_surface_stub = proptools.StringPtr(alternativeFullApiSurfaceStub)
+	}
 
 	// android_module_lib_stubs_current.from-text only comprises api contributions from art, conscrypt and i18n.
 	// Thus, replace with android_module_lib_stubs_current_full.from-text, which comprises every api domains.
@@ -2062,9 +2117,13 @@ func (module *SdkLibrary) CreateInternalModules(mctx android.DefaultableHookCont
 
 		module.createStubsLibrary(mctx, scope)
 
-		contributesToApiSurface := module.contributesToApiSurface(mctx.Config())
+		alternativeFullApiSurfaceStubLib := ""
+		if scope == apiScopePublic {
+			alternativeFullApiSurfaceStubLib = module.alternativeFullApiSurfaceStubLib()
+		}
+		contributesToApiSurface := module.contributesToApiSurface(mctx.Config()) || alternativeFullApiSurfaceStubLib != ""
 		if contributesToApiSurface {
-			module.createApiLibrary(mctx, scope)
+			module.createApiLibrary(mctx, scope, alternativeFullApiSurfaceStubLib)
 		}
 
 		module.createTopLevelStubsLibrary(mctx, scope, contributesToApiSurface)

@@ -1021,6 +1021,11 @@ type CommonAttributes struct {
 	Applicable_licenses bazel.LabelListAttribute
 
 	Testonly *bool
+
+	// Dir is neither a Soong nor Bazel target attribute
+	// If set, the bazel target will be created in this directory
+	// If unset, the bazel target will default to be created in the directory of the visited soong module
+	Dir *string
 }
 
 // constraintAttributes represents Bazel attributes pertaining to build constraints,
@@ -1373,25 +1378,21 @@ func (attrs *CommonAttributes) fillCommonBp2BuildModuleAttrs(ctx *topDownMutator
 		}
 	}
 
-	productConfigEnabledLabels := []bazel.Label{}
+	productConfigEnabledAttribute := bazel.LabelListAttribute{}
 	// TODO(b/234497586): Soong config variables and product variables have different overriding behavior, we
 	// should handle it correctly
 	if !proptools.BoolDefault(enabledProperty.Value, true) && !neitherHostNorDevice {
 		// If the module is not enabled by default, then we can check if a
 		// product variable enables it
-		productConfigEnabledLabels = productVariableConfigEnableLabels(ctx)
+		productConfigEnabledAttribute = productVariableConfigEnableAttribute(ctx)
 
-		if len(productConfigEnabledLabels) > 0 {
+		if len(productConfigEnabledAttribute.ConfigurableValues) > 0 {
 			// In this case, an existing product variable configuration overrides any
 			// module-level `enable: false` definition
 			newValue := true
 			enabledProperty.Value = &newValue
 		}
 	}
-
-	productConfigEnabledAttribute := bazel.MakeLabelListAttribute(bazel.LabelList{
-		productConfigEnabledLabels, nil,
-	})
 
 	platformEnabledAttribute, err := enabledProperty.ToLabelListAttribute(
 		bazel.LabelList{[]bazel.Label{{Label: "@platforms//:incompatible"}}, nil},
@@ -1423,31 +1424,35 @@ func (attrs *CommonAttributes) fillCommonBp2BuildModuleAttrs(ctx *topDownMutator
 
 // Check product variables for `enabled: true` flag override.
 // Returns a list of the constraint_value targets who enable this override.
-func productVariableConfigEnableLabels(ctx *topDownMutatorContext) []bazel.Label {
+func productVariableConfigEnableAttribute(ctx *topDownMutatorContext) bazel.LabelListAttribute {
+	result := bazel.LabelListAttribute{}
 	productVariableProps := ProductVariableProperties(ctx, ctx.Module())
-	productConfigEnablingTargets := []bazel.Label{}
-	const propName = "Enabled"
-	if productConfigProps, exists := productVariableProps[propName]; exists {
+	if productConfigProps, exists := productVariableProps["Enabled"]; exists {
 		for productConfigProp, prop := range productConfigProps {
 			flag, ok := prop.(*bool)
 			if !ok {
-				ctx.ModuleErrorf("Could not convert product variable %s property", proptools.PropertyNameForField(propName))
+				ctx.ModuleErrorf("Could not convert product variable enabled property")
 			}
 
-			if *flag {
+			if flag == nil {
+				// soong config var is not used to set `enabled`. nothing to do.
+				continue
+			} else if *flag {
 				axis := productConfigProp.ConfigurationAxis()
-				targetLabel := axis.SelectKey(productConfigProp.SelectKey())
-				productConfigEnablingTargets = append(productConfigEnablingTargets, bazel.Label{
-					Label: targetLabel,
-				})
+				result.SetSelectValue(axis, bazel.ConditionsDefaultConfigKey, bazel.MakeLabelList([]bazel.Label{{Label: "@platforms//:incompatible"}}))
+				result.SetSelectValue(axis, productConfigProp.SelectKey(), bazel.LabelList{Includes: []bazel.Label{}})
+			} else if scp, isSoongConfigProperty := productConfigProp.(SoongConfigProperty); isSoongConfigProperty && scp.value == bazel.ConditionsDefaultConfigKey {
+				// productVariableConfigEnableAttribute runs only if `enabled: false` is set at the top-level outside soong_config_variables
+				// conditions_default { enabled: false} is a no-op in this case
+				continue
 			} else {
 				// TODO(b/210546943): handle negative case where `enabled: false`
-				ctx.ModuleErrorf("`enabled: false` is not currently supported for configuration variables. See b/210546943", proptools.PropertyNameForField(propName))
+				ctx.ModuleErrorf("`enabled: false` is not currently supported for configuration variables. See b/210546943")
 			}
 		}
 	}
 
-	return productConfigEnablingTargets
+	return result
 }
 
 // A ModuleBase object contains the properties that are common to all Android

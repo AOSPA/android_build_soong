@@ -439,6 +439,8 @@ var (
 		"external/bazelbuild-rules_java":/* recursive = */ true,
 		"external/bazelbuild-rules_license":/* recursive = */ true,
 		"external/bazelbuild-rules_go":/* recursive = */ true,
+		"external/bazelbuild-rules_python":/* recursive = */ true,
+		"external/bazelbuild-rules_rust":/* recursive = */ true,
 		"external/bazelbuild-kotlin-rules":/* recursive = */ true,
 		"external/bazel-skylib":/* recursive = */ true,
 		"external/protobuf":/* recursive = */ false,
@@ -466,6 +468,7 @@ var (
 		"prebuilts/sdk/tools":/* recursive = */ false,
 		"prebuilts/r8":/* recursive = */ false,
 		"prebuilts/runtime":/* recursive = */ false,
+		"prebuilts/rust":/* recursive = */ true,
 
 		// not recursive due to conflicting workspace paths in tools/atest/bazel/rules
 		"tools/asuite/atest":/* recursive = */ false,
@@ -479,6 +482,32 @@ var (
 	}
 
 	Bp2buildModuleAlwaysConvertList = []string{
+		// ext
+		"tagsoup",
+
+		// framework-res
+		"remote-color-resources-compile-public",
+		"remote-color-resources-compile-colors",
+
+		// framework-minus-apex
+		"android.mime.types.minimized",
+		"debian.mime.types.minimized",
+		"framework-javastream-protos",
+		"libview-inspector-annotation-processor",
+
+		// services
+		"apache-commons-math",
+		"cbor-java",
+		"icu4j_calendar_astronomer",
+		"json",
+		"remote-color-resources-compile-public",
+		"statslog-art-java-gen",
+		"statslog-framework-java-gen",
+
+		"AndroidCommonLint",
+		"ImmutabilityAnnotation",
+		"ImmutabilityAnnotationProcessorHostLibrary",
+
 		"libidmap2_policies",
 		"libSurfaceFlingerProp",
 		"toolbox_input_labels",
@@ -937,7 +966,6 @@ var (
 		"libdebuggerd_handler",                                       // depends on unconverted module libdebuggerd_handler_core
 		"libdebuggerd_handler_core", "libdebuggerd_handler_fallback", // depends on unconverted module libdebuggerd
 		"libdexfiled",                                             // depends on unconverted modules: dexfile_operator_srcs, libartbased, libartpalette
-		"libfastdeploy_host",                                      // depends on unconverted modules: libandroidfw, libusb, AdbWinApi
 		"libgmock_main_ndk",                                       // depends on unconverted modules: libgtest_ndk_c++
 		"libgmock_ndk",                                            // depends on unconverted modules: libgtest_ndk_c++
 		"libnativehelper_lazy_mts_jni", "libnativehelper_mts_jni", // depends on unconverted modules: libnativetesthelper_jni, libgmock_ndk
@@ -991,8 +1019,6 @@ var (
 		"svcenc", "svcdec",
 
 		// Failing host cc_tests
-		"libprocinfo_test",
-		"ziparchive-tests",
 		"gtest_isolated_tests",
 		"libunwindstack_unit_test",
 		"power_tests", // failing test on server, but not on host
@@ -1011,7 +1037,7 @@ var (
 		"libnativebridge6-test-case",
 		"libnativebridge6prezygotefork",
 
-		"libandroidfw_tests", "aapt2_tests", // failing due to data path issues
+		"libandroidfw_tests", // failing due to data path issues
 
 		// error: overriding commands for target
 		// `out/host/linux-x86/nativetest64/gmock_tests/gmock_tests__cc_runner_test',
@@ -1069,6 +1095,7 @@ var (
 		"ion-unit-tests",
 		"jemalloc5_integrationtests",
 		"jemalloc5_unittests",
+		"jemalloc5_stresstests", // run by run_jemalloc_tests.sh and will be deleted after V
 		"ld_config_test_helper",
 		"ld_preload_test_helper",
 		"libBionicCtsGtestMain", // depends on unconverted modules: libgtest_isolated
@@ -1098,7 +1125,6 @@ var (
 		"memunreachable_binder_test", // depends on unconverted modules: libbinder
 		"memunreachable_test",
 		"metadata_tests",
-		"minijail0_cli_unittest_gtest",
 		"mpeg2dec",
 		"mvcdec",
 		"ns_hidden_child_helper",
@@ -1110,14 +1136,12 @@ var (
 		"rappor-tests", // depends on unconverted modules: jsr305, guava
 		"scudo_unit_tests",
 		"stats-log-api-gen-test", // depends on unconverted modules: libstats_proto_host
-		"syscall_filter_unittest_gtest",
 		"thread_exit_cb_helper",
 		"tls_properties_helper",
 		"ulp",
 		"vec_test",
 		"yuvconstants",
 		"yuvconvert",
-		"zipalign_tests",
 
 		// cc_test_library
 		"clang_diagnostic_tests",
@@ -1525,6 +1549,10 @@ var (
 		"libart_generated_headers",
 		"libart-runtime-gtest",
 		"libartd-runtime-gtest",
+		"libart-unstripped",
+
+		// depends on libart-unstripped and new module type llvm_prebuilt_build_tool
+		"check_cfi",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel

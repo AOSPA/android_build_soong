@@ -29,6 +29,7 @@ import (
 	"android/soong/bazel"
 	"android/soong/starlark_fmt"
 	"android/soong/ui/metrics/bp2build_metrics_proto"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/proptools"
@@ -94,16 +95,16 @@ func (targets BazelTargets) sort() {
 // statements (use LoadStatements for that), since the targets are usually not
 // adjacent to the load statements at the top of the BUILD file.
 func (targets BazelTargets) String() string {
-	var res string
+	var res strings.Builder
 	for i, target := range targets {
 		if target.ruleClass != "package" {
-			res += target.content
+			res.WriteString(target.content)
 		}
 		if i != len(targets)-1 {
-			res += "\n\n"
+			res.WriteString("\n\n")
 		}
 	}
-	return res
+	return res.String()
 }
 
 // LoadStatements return the string representation of the sorted and deduplicated
@@ -653,6 +654,8 @@ func generateBazelTargetsGoBinary(ctx *android.Context, g *bootstrap.GoBinary, g
 }
 
 func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (conversionResults, []error) {
+	ctx.Context().BeginEvent("GenerateBazelTargets")
+	defer ctx.Context().EndEvent("GenerateBazelTargets")
 	buildFileToTargets := make(map[string]BazelTargets)
 
 	// Simple metrics tracking for bp2build
@@ -683,6 +686,9 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 			//
 			// bp2build converters are used for the majority of modules.
 			if b, ok := m.(android.Bazelable); ok && b.HasHandcraftedLabel() {
+				if aModule, ok := m.(android.Module); ok && aModule.IsConvertedByBp2build() {
+					panic(fmt.Errorf("module %q [%s] [%s] was both converted with bp2build and has a handcrafted label", bpCtx.ModuleName(m), moduleType, dir))
+				}
 				// Handle modules converted to handcrafted targets.
 				//
 				// Since these modules are associated with some handcrafted

@@ -16,6 +16,7 @@ package aconfig
 
 import (
 	"android/soong/android"
+
 	"github.com/google/blueprint"
 )
 
@@ -29,6 +30,7 @@ var (
 				` --package ${package}` +
 				` ${declarations}` +
 				` ${values}` +
+				` ${default-permission}` +
 				` --cache ${out}.tmp` +
 				` && ( if cmp -s ${out}.tmp ${out} ; then rm ${out}.tmp ; else mv ${out}.tmp ${out} ; fi )`,
 			//				` --build-id ${release_version}` +
@@ -36,7 +38,7 @@ var (
 				"${aconfig}",
 			},
 			Restat: true,
-		}, "release_version", "package", "declarations", "values")
+		}, "release_version", "package", "declarations", "values", "default-permission")
 
 	// For java_aconfig_library: Generate java file
 	javaRule = pctx.AndroidStaticRule("java_aconfig_library",
@@ -70,6 +72,20 @@ var (
 			},
 		}, "gendir")
 
+	rustRule = pctx.AndroidStaticRule("rust_aconfig_library",
+		blueprint.RuleParams{
+			Command: `rm -rf ${gendir}` +
+				` && mkdir -p ${gendir}` +
+				` && ${aconfig} create-rust-lib` +
+				`    --mode ${mode}` +
+				`    --cache ${in}` +
+				`    --out ${gendir}`,
+			CommandDeps: []string{
+				"$aconfig",
+				"$soong_zip",
+			},
+		}, "gendir", "mode")
+
 	// For all_aconfig_declarations
 	allDeclarationsRule = pctx.AndroidStaticRule("all_aconfig_declarations_dump",
 		blueprint.RuleParams{
@@ -92,5 +108,6 @@ func registerBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("aconfig_value_set", ValueSetFactory)
 	ctx.RegisterModuleType("cc_aconfig_library", CcAconfigLibraryFactory)
 	ctx.RegisterModuleType("java_aconfig_library", JavaDeclarationsLibraryFactory)
+	ctx.RegisterModuleType("rust_aconfig_library", RustAconfigLibraryFactory)
 	ctx.RegisterParallelSingletonType("all_aconfig_declarations", AllAconfigDeclarationsFactory)
 }

@@ -88,6 +88,8 @@ type BazelConversionPathContext interface {
 	EarlyModulePathContext
 	BazelConversionContext
 
+	ModuleName() string
+	ModuleType() string
 	ModuleErrorf(fmt string, args ...interface{})
 	PropertyErrorf(property, fmt string, args ...interface{})
 	GetDirectDep(name string) (blueprint.Module, blueprint.DependencyTag)
@@ -431,7 +433,7 @@ func getOtherModuleLabel(ctx BazelConversionPathContext, dep, tag string,
 
 func BazelModuleLabel(ctx BazelConversionPathContext, module blueprint.Module) string {
 	// TODO(b/165114590): Convert tag (":name{.tag}") to corresponding Bazel implicit output targets.
-	if !convertedToBazel(ctx, module) {
+	if !convertedToBazel(ctx, module) || isGoModule(module) {
 		return bp2buildModuleLabel(ctx, module)
 	}
 	b, _ := module.(Bazelable)
@@ -459,8 +461,8 @@ func samePackage(label1, label2 string) bool {
 }
 
 func bp2buildModuleLabel(ctx BazelConversionContext, module blueprint.Module) string {
-	moduleName := moduleNameWithPossibleOverride(ctx, module)
-	moduleDir := moduleDirWithPossibleOverride(ctx, module)
+	moduleName := moduleNameWithPossibleOverride(ctx, module, ctx.OtherModuleName(module))
+	moduleDir := moduleDirWithPossibleOverride(ctx, module, ctx.OtherModuleDir(module))
 	if moduleDir == Bp2BuildTopLevel {
 		moduleDir = ""
 	}

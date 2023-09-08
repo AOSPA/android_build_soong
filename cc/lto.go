@@ -143,10 +143,14 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 			ltoLdFlags = append(ltoLdFlags, cachePolicyFormat+policy)
 		}
 
-		// If the module does not have a profile, be conservative and limit cross TU inline
-		// limit to 5 LLVM IR instructions, to balance binary size increase and performance.
-		if !ctx.Darwin() && !ctx.isPgoCompile() && !ctx.isAfdoCompile() {
-			ltoLdFlags = append(ltoLdFlags, "-Wl,-plugin-opt,-import-instr-limit=5")
+		// Reduce the inlining threshold for a better balance of binary size and
+		// performance.
+		if !ctx.Darwin() {
+			if ctx.isPgoCompile() || ctx.isAfdoCompile() {
+				ltoLdFlags = append(ltoLdFlags, "-Wl,-plugin-opt,-import-instr-limit=40")
+			} else {
+				ltoLdFlags = append(ltoLdFlags, "-Wl,-plugin-opt,-import-instr-limit=5")
+			}
 		}
 
 		flags.Local.CFlags = append(flags.Local.CFlags, ltoCFlags...)
@@ -166,7 +170,7 @@ func (lto *lto) Never() bool {
 }
 
 func GlobalThinLTO(ctx android.BaseModuleContext) bool {
-	return !ctx.Config().IsEnvFalse("GLOBAL_THINLTO")
+	return ctx.Config().IsEnvTrue("GLOBAL_THINLTO")
 }
 
 // Propagate lto requirements down from binaries

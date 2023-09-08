@@ -91,10 +91,8 @@ type BaseCompilerProperties struct {
 	// list of rust rlib crate dependencies
 	Rlibs []string `android:"arch_variant"`
 
-	// list of rust dylib crate dependencies
-	Dylibs []string `android:"arch_variant"`
-
-	// list of rust automatic crate dependencies
+	// list of rust automatic crate dependencies.
+	// Rustlibs linkage is rlib for host targets and dylib for device targets.
 	Rustlibs []string `android:"arch_variant"`
 
 	// list of rust proc_macro crate dependencies
@@ -320,6 +318,15 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 		flags.LinkFlags = append(flags.LinkFlags, cc.RpathFlags(ctx)...)
 	}
 
+	if !ctx.toolchain().Bionic() && ctx.Os() != android.LinuxMusl && !ctx.Windows() {
+		// Add -ldl, -lpthread, -lm and -lrt to host builds to match the default behavior of device
+		// builds. This is irrelevant for the Windows target as these are Posix specific.
+		flags.LinkFlags = append(flags.LinkFlags,
+			"-ldl",
+			"-lpthread",
+			"-lm",
+		)
+	}
 	return flags
 }
 
@@ -359,7 +366,6 @@ func (compiler *baseCompiler) strippedOutputFilePath() android.OptionalPath {
 
 func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.Rlibs = append(deps.Rlibs, compiler.Properties.Rlibs...)
-	deps.Dylibs = append(deps.Dylibs, compiler.Properties.Dylibs...)
 	deps.Rustlibs = append(deps.Rustlibs, compiler.Properties.Rustlibs...)
 	deps.ProcMacros = append(deps.ProcMacros, compiler.Properties.Proc_macros...)
 	deps.StaticLibs = append(deps.StaticLibs, compiler.Properties.Static_libs...)

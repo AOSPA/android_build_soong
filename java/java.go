@@ -26,6 +26,7 @@ import (
 	"android/soong/bazel"
 	"android/soong/bazel/cquery"
 	"android/soong/remoteexec"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -1682,6 +1683,9 @@ type JavaApiLibraryProperties struct {
 	// extracting the compiled class files provided by the
 	// full_api_surface_stub module.
 	Full_api_surface_stub *string
+
+	// Version of previously released API file for compatibility check.
+	Previous_api *string `android:"path"`
 }
 
 func ApiLibraryFactory() android.Module {
@@ -1725,7 +1729,6 @@ func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 	cmd.BuiltTool("metalava").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "metalava.jar")).
 		Flag(config.JavacVmFlags).
 		Flag("-J--add-opens=java.base/java.util=ALL-UNNAMED").
-		FlagWithArg("-encoding ", "UTF-8").
 		FlagWithInputList("--source-files ", srcs, " ")
 
 	cmd.Flag("--color").
@@ -1812,6 +1815,28 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 }
 
+// API signature file names sorted from
+// the narrowest api scope to the widest api scope
+var scopeOrderedSourceFileNames = allApiScopes.Strings(
+	func(s *apiScope) string { return s.apiFilePrefix + "current.txt" })
+
+func (al *ApiLibrary) sortApiFilesByApiScope(ctx android.ModuleContext, srcFiles android.Paths) android.Paths {
+	sortedSrcFiles := android.Paths{}
+
+	for _, scopeSourceFileName := range scopeOrderedSourceFileNames {
+		for _, sourceFileName := range srcFiles {
+			if sourceFileName.Base() == scopeSourceFileName {
+				sortedSrcFiles = append(sortedSrcFiles, sourceFileName)
+			}
+		}
+	}
+	if len(srcFiles) != len(sortedSrcFiles) {
+		ctx.ModuleErrorf("Unrecognizable source file found within %s", srcFiles)
+	}
+
+	return sortedSrcFiles
+}
+
 func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	rule := android.NewRuleBuilder(pctx, ctx)
@@ -1862,9 +1887,17 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.ModuleErrorf("Error: %s has an empty api file.", ctx.ModuleName())
 	}
 
+	srcFiles = al.sortApiFilesByApiScope(ctx, srcFiles)
+
 	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir)
 
 	al.stubsFlags(ctx, cmd, stubsDir)
+
+	migratingNullability := String(al.properties.Previous_api) != ""
+	if migratingNullability {
+		previousApi := android.PathForModuleSrc(ctx, String(al.properties.Previous_api))
+		cmd.FlagWithInput("--migrate-nullness ", previousApi)
+	}
 
 	al.stubsSrcJar = android.PathForModuleOut(ctx, "metalava", ctx.ModuleName()+"-"+"stubs.srcjar")
 	al.stubsJarWithoutStaticLibs = android.PathForModuleOut(ctx, "metalava", "stubs.jar")
@@ -2828,7 +2861,7 @@ func javaXsdTargetName(xsd android.XsdConfigBp2buildTargets) string {
 // which has other non-attribute information needed for bp2build conversion
 // that needs different handling depending on the module types, and thus needs
 // to be returned to the calling function.
-func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext) (*javaCommonAttributes, *bp2BuildJavaInfo) {
+func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext) (*javaCommonAttributes, *bp2BuildJavaInfo, bool) {
 	var srcs bazel.LabelListAttribute
 	var deps bazel.LabelListAttribute
 	var staticDeps bazel.LabelListAttribute
@@ -2839,6 +2872,10 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 			if archProps, ok := _props.(*CommonProperties); ok {
 				archSrcs := android.BazelLabelForModuleSrcExcludes(ctx, archProps.Srcs, archProps.Exclude_srcs)
 				srcs.SetSelectValue(axis, config, archSrcs)
+				if archProps.Jarjar_rules != nil {
+					ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "jarjar_rules")
+					return &javaCommonAttributes{}, &bp2BuildJavaInfo{}, false
+				}
 			}
 		}
 	}
@@ -3006,7 +3043,7 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 		hasKotlin: hasKotlin,
 	}
 
-	return commonAttrs, bp2BuildInfo
+	return commonAttrs, bp2BuildInfo, true
 }
 
 type javaLibraryAttributes struct {
@@ -3036,7 +3073,10 @@ func javaLibraryBazelTargetModuleProperties() bazel.BazelTargetModuleProperties 
 }
 
 func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
-	commonAttrs, bp2BuildInfo := m.convertLibraryAttrsBp2Build(ctx)
+	commonAttrs, bp2BuildInfo, supported := m.convertLibraryAttrsBp2Build(ctx)
+	if !supported {
+		return
+	}
 	depLabels := bp2BuildInfo.DepLabels
 
 	deps := depLabels.Deps
@@ -3083,7 +3123,10 @@ type javaBinaryHostAttributes struct {
 
 // JavaBinaryHostBp2Build is for java_binary_host bp2build.
 func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
-	commonAttrs, bp2BuildInfo := m.convertLibraryAttrsBp2Build(ctx)
+	commonAttrs, bp2BuildInfo, supported := m.convertLibraryAttrsBp2Build(ctx)
+	if !supported {
+		return
+	}
 	depLabels := bp2BuildInfo.DepLabels
 
 	deps := depLabels.Deps
@@ -3167,7 +3210,10 @@ type javaTestHostAttributes struct {
 
 // javaTestHostBp2Build is for java_test_host bp2build.
 func javaTestHostBp2Build(ctx android.TopDownMutatorContext, m *TestHost) {
-	commonAttrs, bp2BuildInfo := m.convertLibraryAttrsBp2Build(ctx)
+	commonAttrs, bp2BuildInfo, supported := m.convertLibraryAttrsBp2Build(ctx)
+	if !supported {
+		return
+	}
 	depLabels := bp2BuildInfo.DepLabels
 
 	deps := depLabels.Deps
