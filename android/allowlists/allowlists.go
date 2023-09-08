@@ -422,7 +422,7 @@ var (
 		"tools/apifinder":                            Bp2BuildDefaultTrue,
 		"tools/apksig":                               Bp2BuildDefaultTrue,
 		"tools/external_updater":                     Bp2BuildDefaultTrueRecursively,
-		"tools/metalava":                             Bp2BuildDefaultTrue,
+		"tools/metalava":                             Bp2BuildDefaultTrueRecursively,
 		"tools/platform-compat/java/android/compat":  Bp2BuildDefaultTrueRecursively,
 		"tools/tradefederation/prebuilts/filegroups": Bp2BuildDefaultTrueRecursively,
 	}
@@ -1721,9 +1721,10 @@ var (
 			Label: "//build/bazel/examples/partitions:system_image",
 			Host:  false,
 		},
-		{
-			Label: "//build/bazel/examples/partitions:run_test",
-			Host:  false,
-		},
+		// TODO(b/297269187) re-enable this
+		//{
+		//	Label: "//build/bazel/examples/partitions:run_test",
+		//	Host:  false,
+		//},
 	}
 )
