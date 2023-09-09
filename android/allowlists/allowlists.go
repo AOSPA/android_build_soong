@@ -178,6 +178,7 @@ var (
 		"external/libjpeg-turbo":                 Bp2BuildDefaultTrueRecursively,
 		"external/libmpeg2":                      Bp2BuildDefaultTrueRecursively,
 		"external/libpng":                        Bp2BuildDefaultTrueRecursively,
+		"external/libphonenumber":                Bp2BuildDefaultTrueRecursively,
 		"external/libvpx":                        Bp2BuildDefaultTrueRecursively,
 		"external/libyuv":                        Bp2BuildDefaultTrueRecursively,
 		"external/lz4/lib":                       Bp2BuildDefaultTrue,
@@ -285,13 +286,9 @@ var (
 		"hardware/interfaces/health/2.1":                          Bp2BuildDefaultTrue,
 		"hardware/interfaces/health/aidl":                         Bp2BuildDefaultTrue,
 		"hardware/interfaces/health/utils":                        Bp2BuildDefaultTrueRecursively,
-		"hardware/interfaces/media/1.0":                           Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/bufferpool":                    Bp2BuildDefaultTrueRecursively,
+		"hardware/interfaces/media":                               Bp2BuildDefaultTrueRecursively,
 		"hardware/interfaces/media/bufferpool/aidl/default/tests": Bp2BuildDefaultFalseRecursively,
-		"hardware/interfaces/media/c2/1.0":                        Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/c2/1.1":                        Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/c2/1.2":                        Bp2BuildDefaultTrue,
-		"hardware/interfaces/media/omx/1.0":                       Bp2BuildDefaultTrue,
+		"hardware/interfaces/media/omx/1.0/vts":                   Bp2BuildDefaultFalseRecursively,
 		"hardware/interfaces/neuralnetworks":                      Bp2BuildDefaultTrueRecursively,
 		"hardware/interfaces/neuralnetworks/aidl/vts":             Bp2BuildDefaultFalseRecursively,
 		"hardware/interfaces/neuralnetworks/1.0/vts":              Bp2BuildDefaultFalseRecursively,
@@ -414,6 +411,7 @@ var (
 		"system/tools/aidl/build/tests_bp2build":                 Bp2BuildDefaultTrue,
 		"system/tools/aidl/metadata":                             Bp2BuildDefaultTrue,
 		"system/tools/hidl/metadata":                             Bp2BuildDefaultTrue,
+		"system/tools/hidl/utils":                                Bp2BuildDefaultTrue,
 		"system/tools/mkbootimg":                                 Bp2BuildDefaultTrueRecursively,
 		"system/tools/sysprop":                                   Bp2BuildDefaultTrue,
 		"system/tools/xsdc/utils":                                Bp2BuildDefaultTrueRecursively,
@@ -1051,6 +1049,7 @@ var (
 		"libgmock_ndk",                                            // depends on unconverted modules: libgtest_ndk_c++
 		"libnativehelper_lazy_mts_jni", "libnativehelper_mts_jni", // depends on unconverted modules: libnativetesthelper_jni, libgmock_ndk
 		"libnativetesthelper_jni",   // depends on unconverted modules: libgtest_ndk_c++
+		"libphonenumber_test",       // depends on android.test.mock
 		"libstatslog",               // depends on unconverted modules: libstatspull, statsd-aidl-ndk
 		"libstatslog_art",           // depends on unconverted modules: statslog_art.cpp, statslog_art.h
 		"linker_reloc_bench_main",   // depends on unconverted modules: liblinker_reloc_bench_*
@@ -1635,10 +1634,6 @@ var (
 
 		// depends on libart-unstripped and new module type llvm_prebuilt_build_tool
 		"check_cfi",
-
-		// TODO(b/297070571): cannot convert prebuilts_etc module which possess identical name and src properties
-		"boringssl_self_test.zygote64.rc",
-		"boringssl_self_test.zygote64_32.rc",
 
 		// depends on unconverted module tradefed
 		"HelloWorldPerformanceTest",
