@@ -205,6 +205,21 @@ func BazelLabelForModuleSrcExcludes(ctx BazelConversionPathContext, paths, exclu
 	return labels
 }
 
+func BazelLabelForSrcPatternExcludes(ctx BazelConversionPathContext, dir, pattern string, excludes []string) bazel.LabelList {
+	topRelPaths, err := ctx.GlobWithDeps(filepath.Join(dir, pattern), excludes)
+	if err != nil {
+		ctx.ModuleErrorf("Could not search dir: %s for pattern %s due to %v\n", dir, pattern, err)
+	}
+	// An intermediate list of labels relative to `dir` that assumes that there no subpacakges beneath `dir`
+	dirRelLabels := []bazel.Label{}
+	for _, topRelPath := range topRelPaths {
+		dirRelPath := Rel(ctx, dir, topRelPath)
+		dirRelLabels = append(dirRelLabels, bazel.Label{Label: "./" + dirRelPath})
+	}
+	// Return the package boudary resolved labels
+	return TransformSubpackagePaths(ctx.Config(), dir, bazel.MakeLabelList(dirRelLabels))
+}
+
 // Returns true if a prefix + components[:i] is a package boundary.
 //
 // A package boundary is determined by a BUILD file in the directory. This can happen in 2 cases:
@@ -378,7 +393,13 @@ func expandSrcsForBazel(ctx BazelConversionPathContext, paths, expandedExcludes 
 		if m, tag := SrcIsModuleWithTag(p); m != "" {
 			l := getOtherModuleLabel(ctx, m, tag, BazelModuleLabel)
 			if l != nil && !InList(l.Label, expandedExcludes) {
-				l.OriginalModuleName = fmt.Sprintf(":%s", m)
+				if strings.HasPrefix(m, "//") {
+					// this is a module in a soong namespace
+					// It appears as //<namespace>:<module_name> in srcs, and not ://<namespace>:<module_name>
+					l.OriginalModuleName = m
+				} else {
+					l.OriginalModuleName = fmt.Sprintf(":%s", m)
+				}
 				labels.Includes = append(labels.Includes, *l)
 			}
 		} else {

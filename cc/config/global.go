@@ -89,11 +89,6 @@ var (
 		// Help catch common 32/64-bit errors.
 		"-Werror=int-conversion",
 
-		// Disable overly aggressive warning for macros defined with a leading underscore
-		// This happens in AndroidConfig.h, which is included nearly everywhere.
-		// TODO: can we remove this now?
-		"-Wno-reserved-id-macro",
-
 		// TODO(b/207393703): delete this line after failures resolved
 		// Workaround for ccache with clang.
 		// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
@@ -103,22 +98,25 @@ var (
 		// color codes if it is not running in a terminal.
 		"-fcolor-diagnostics",
 
-		// Warnings from clang-7.0
+		// -Wno-sign-compare is incompatible with the Google C++ style guidance
+		// to use 'int' for loop indices, and the signal to noise ratio is poor
+		// anyway.
 		"-Wno-sign-compare",
 
-		// Disable -Winconsistent-missing-override until we can clean up the existing
-		// codebase for it.
+		// AIDL generated code redeclares pure virtual methods in each
+		// subsequent version of an interface, so this is currently infeasible
+		// to enable.
 		"-Wno-inconsistent-missing-override",
 
-		// Warnings from clang-10
-		// Nested and array designated initialization is nice to have.
+		// Designated initializer syntax is recommended by the Google C++ style
+		// guide and should not be a warning, at least by default.
 		"-Wno-c99-designator",
-
-		// Many old files still have GNU designator syntax.
-		"-Wno-gnu-designator",
 
 		// Warnings from clang-12
 		"-Wno-gnu-folding-constant",
+
+		// http://b/145210666
+		"-Wno-error=reorder-init-list",
 
 		// Calls to the APIs that are newer than the min sdk version of the caller should be
 		// guarded with __builtin_available.
@@ -213,6 +211,8 @@ var (
 		"-Wno-gnu-include-next",
 	}
 
+	// These flags are appended after the module's cflags, so they cannot be
+	// overridden from Android.bp files.
 	noOverrideGlobalCflags = []string{
 		"-Werror=bool-operation",
 		"-Werror=format-insufficient-args",
@@ -239,8 +239,6 @@ var (
 		// new warnings are fixed.
 		"-Wno-tautological-constant-compare",
 		"-Wno-tautological-type-limit-compare",
-		// http://b/145210666
-		"-Wno-reorder-init-list",
 		// http://b/145211066
 		"-Wno-implicit-int-float-conversion",
 		// New warnings to be fixed after clang-r377782.
@@ -319,16 +317,30 @@ var (
 
 	noOverride64GlobalCflags = []string{}
 
+	// Similar to noOverrideGlobalCflags, but applies only to third-party code
+	// (anything for which IsThirdPartyPath() in build/soong/android/paths.go
+	// returns true - includes external/, most of vendor/ and most of hardware/)
 	noOverrideExternalGlobalCflags = []string{
 		// http://b/191699019
 		"-Wno-format-insufficient-args",
+		// http://b/296422292
+		// Usually signals a mistake and should be a hard error.
 		"-Wno-sizeof-array-div",
+		// http://b/296321145
+		// Indicates potential memory or stack corruption, so should be changed
+		// to a hard error. Currently triggered by some vendor code.
 		"-Wno-incompatible-function-pointer-types",
+		// http://b/296321508
+		// Introduced in response to a critical security vulnerability and
+		// should be a hard error - it requires only whitespace changes to fix.
+		"-Wno-misleading-indentation",
+		// Triggered by old LLVM code in external/llvm. Likely not worth
+		// enabling since it's a cosmetic issue.
+		"-Wno-bitwise-instead-of-logical",
+
 		"-Wno-unused-but-set-variable",
 		"-Wno-unused-but-set-parameter",
 		"-Wno-unqualified-std-cast-call",
-		"-Wno-bitwise-instead-of-logical",
-		"-Wno-misleading-indentation",
 		"-Wno-array-parameter",
 		"-Wno-gnu-offsetof-extensions",
 	}
