@@ -145,6 +145,7 @@ var (
 		"external/flatbuffers":                   Bp2BuildDefaultTrueRecursively,
 		"external/fmtlib":                        Bp2BuildDefaultTrueRecursively,
 		"external/fsverity-utils":                Bp2BuildDefaultTrueRecursively,
+		"external/gflags":                        Bp2BuildDefaultTrueRecursively,
 		"external/google-benchmark":              Bp2BuildDefaultTrueRecursively,
 		"external/googletest":                    Bp2BuildDefaultTrueRecursively,
 		"external/guava":                         Bp2BuildDefaultTrueRecursively,
@@ -232,7 +233,7 @@ var (
 		"frameworks/base/tools/streaming_proto":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/hardware/interfaces/stats/aidl":          Bp2BuildDefaultTrue,
 		"frameworks/libs/modules-utils/build":                Bp2BuildDefaultTrueRecursively,
-		"frameworks/libs/net/common/native":                  Bp2BuildDefaultTrueRecursively,
+		"frameworks/libs/net/common/native":                  Bp2BuildDefaultTrueRecursively, // TODO(b/296014682): Remove this path
 		"frameworks/native":                                  Bp2BuildDefaultTrue,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/arect":                       Bp2BuildDefaultTrueRecursively,
@@ -254,6 +255,7 @@ var (
 		"hardware/interfaces/audio/aidl/common":                   Bp2BuildDefaultTrue,
 		"hardware/interfaces/audio/aidl/default":                  Bp2BuildDefaultTrue,
 		"hardware/interfaces/audio/aidl/sounddose":                Bp2BuildDefaultTrue,
+		"hardware/interfaces/camera/metadata/aidl":                Bp2BuildDefaultTrueRecursively,
 		"hardware/interfaces/common/aidl":                         Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/fmq/aidl":                     Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/support":                      Bp2BuildDefaultTrue,
@@ -314,6 +316,7 @@ var (
 		"packages/modules/adb/pairing_connection":            Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/proto":                         Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/tls":                           Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/staticlibs/native":    Bp2BuildDefaultTrueRecursively,
 		"packages/modules/Gki/libkver":                       Bp2BuildDefaultTrue,
 		"packages/modules/NetworkStack/common/captiveportal": Bp2BuildDefaultTrue,
 		"packages/modules/NeuralNetworks/apex":               Bp2BuildDefaultTrue,
@@ -336,6 +339,7 @@ var (
 		"prebuilts/sdk/current/support":                    Bp2BuildDefaultTrue,
 		"prebuilts/tools":                                  Bp2BuildDefaultTrue,
 		"prebuilts/tools/common/m2":                        Bp2BuildDefaultTrue,
+		"prebuilts/r8":                                     Bp2BuildDefaultTrueRecursively,
 
 		"sdk/dumpeventlog":  Bp2BuildDefaultTrue,
 		"sdk/eventanalyzer": Bp2BuildDefaultTrue,
@@ -395,6 +399,7 @@ var (
 		"system/media/audio":                                     Bp2BuildDefaultTrueRecursively,
 		"system/media/alsa_utils":                                Bp2BuildDefaultTrueRecursively,
 		"system/media/audio_utils":                               Bp2BuildDefaultTrueRecursively,
+		"system/media/camera":                                    Bp2BuildDefaultTrueRecursively,
 		"system/memory/libion":                                   Bp2BuildDefaultTrueRecursively,
 		"system/memory/libmemunreachable":                        Bp2BuildDefaultTrueRecursively,
 		"system/sepolicy/apex":                                   Bp2BuildDefaultTrueRecursively,
@@ -436,6 +441,7 @@ var (
 		// external/bazelbuild-rules_android/... is needed by mixed builds, otherwise mixed builds analysis fails
 		// e.g. ERROR: Analysis of target '@soong_injection//mixed_builds:buildroot' failed
 		"external/bazelbuild-rules_android":/* recursive = */ true,
+		"external/bazelbuild-rules_cc":/* recursive = */ true,
 		"external/bazelbuild-rules_java":/* recursive = */ true,
 		"external/bazelbuild-rules_license":/* recursive = */ true,
 		"external/bazelbuild-rules_go":/* recursive = */ true,
@@ -666,6 +672,9 @@ var (
 
 		//frameworks/native/cmds/cmd
 		"libcmd",
+
+		//system/chre
+		"chre_api",
 
 		//system/core/fs_mgr/libdm
 		"libdm",
@@ -904,8 +913,9 @@ var (
 		"apexer_test", "apexer_test_host_tools", "host_apex_verifier",
 
 		// java bugs
-		"libbase_ndk",  // TODO(b/186826477): fails to link libctscamera2_jni for device (required for CtsCameraTestCases)
-		"bouncycastle", // TODO(b/274474005): Need support for custom system_modules.
+		"libbase_ndk",           // TODO(b/186826477): fails to link libctscamera2_jni for device (required for CtsCameraTestCases)
+		"bouncycastle",          // TODO(b/274474005): Need support for custom system_modules.
+		"bouncycastle-test-lib", // TODO(b/274474005): Reverse dependency of bouncycastle
 
 		// genrule incompatibilities
 		"brotli-fuzzer-corpus",                                       // TODO(b/202015218): outputs are in location incompatible with bazel genrule handling.
@@ -1553,6 +1563,21 @@ var (
 
 		// depends on libart-unstripped and new module type llvm_prebuilt_build_tool
 		"check_cfi",
+
+		// TODO(b/297070571): cannot convert prebuilts_etc module which possess identical name and src properties
+		"boringssl_self_test.zygote64.rc",
+		"boringssl_self_test.zygote64_32.rc",
+
+		// depends on unconverted module tradefed
+		"HelloWorldPerformanceTest",
+
+		// r8 is a java_binary, which creates an implicit "r8.jar" target, but the
+		// same package contains a "r8.jar" file which gets overshadowed by the implicit target.
+		// We don't need this target as we're not using the Soong wrapper for now
+		"r8",
+
+		// Depends on the module defined in the directory not bp2build default allowed
+		"ota_from_raw_img",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel

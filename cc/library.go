@@ -350,6 +350,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
 		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
 		Native_coverage:                   baseAttributes.Native_coverage,
+		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
 	}
 
 	includeAttrs := includesAttributes{
@@ -377,6 +378,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
 		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
 		Native_coverage:                   baseAttributes.Native_coverage,
+		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
 	}
 
 	staticTargetAttrs := &bazelCcLibraryStaticAttributes{
@@ -2985,6 +2987,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		sdkAttributes:                     bp2BuildParseSdkAttributes(module),
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
 		Native_coverage:                   baseAttributes.Native_coverage,
+		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
 	}
 
 	module.convertTidyAttributes(ctx, &commonAttrs.tidyAttributes)
