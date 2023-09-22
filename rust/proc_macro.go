@@ -15,9 +15,10 @@
 package rust
 
 import (
+	"fmt"
+
 	"android/soong/android"
 	"android/soong/bazel"
-	"fmt"
 )
 
 func init() {
@@ -79,7 +80,7 @@ func (procMacro *procMacroDecorator) compile(ctx ModuleContext, flags Flags, dep
 	outputFile := android.PathForModuleOut(ctx, fileName)
 
 	srcPath, _ := srcPathFromModuleSrcs(ctx, procMacro.baseCompiler.Properties.Srcs)
-	ret := TransformSrctoProcMacro(ctx, srcPath, deps, flags, outputFile)
+	ret := TransformSrctoProcMacro(ctx, procMacro, srcPath, deps, flags, outputFile)
 	procMacro.baseCompiler.unstrippedOutputFile = outputFile
 	return ret
 }
@@ -114,7 +115,7 @@ type procMacroAttributes struct {
 	Rustc_flags    bazel.StringListAttribute
 }
 
-func procMacroBp2build(ctx android.TopDownMutatorContext, m *Module) {
+func procMacroBp2build(ctx android.Bp2buildMutatorContext, m *Module) {
 	procMacro := m.compiler.(*procMacroDecorator)
 	srcs, compileData := srcsAndCompileDataAttrs(ctx, *procMacro.baseCompiler)
 	deps := android.BazelLabelForModuleDeps(ctx, append(

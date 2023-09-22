@@ -200,7 +200,7 @@ func (c Config) ReleaseVersion() string {
 // The aconfig value set passed to aconfig, derived from RELEASE_VERSION
 func (c Config) ReleaseAconfigValueSets() string {
 	// This logic to handle both Soong module name and bazel target is temporary in order to
-	// provide backward compatibility where aosp and vendor/google both have the release
+	// provide backward compatibility where aosp and internal both have the release
 	// aconfig value set but can't be updated at the same time to use bazel target
 	value := strings.Split(c.config.productVariables.ReleaseAconfigValueSets, ":")
 	value_len := len(value)
@@ -2075,6 +2075,11 @@ func (c *config) SetApiLibraries(libs []string) {
 
 func (c *config) GetApiLibraries() map[string]struct{} {
 	return c.apiLibraries
+}
+
+// Bp2buildMode indicates whether the config is for bp2build mode of Soong
+func (c *config) Bp2buildMode() bool {
+	return c.BuildMode == Bp2build
 }
 
 func (c *deviceConfig) CheckVendorSeappViolations() bool {

@@ -31,6 +31,7 @@ import (
 	"android/soong/dexpreopt"
 	"android/soong/genrule"
 	"android/soong/tradefed"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 )
 
 func init() {
@@ -1257,6 +1258,8 @@ type AndroidTestHelperApp struct {
 	AndroidApp
 
 	appTestHelperAppProperties appTestHelperAppProperties
+
+	android.BazelModuleBase
 }
 
 func (a *AndroidTestHelperApp) InstallInTestcases() bool {
@@ -1288,6 +1291,7 @@ func AndroidTestHelperAppFactory() android.Module {
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	android.InitApexModule(module)
+	android.InitBazelModule(module)
 	return module
 }
 
@@ -1594,11 +1598,11 @@ type bazelAndroidAppCertificateAttributes struct {
 	Certificate string
 }
 
-func (m *AndroidAppCertificate) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (m *AndroidAppCertificate) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	androidAppCertificateBp2Build(ctx, m)
 }
 
-func androidAppCertificateBp2Build(ctx android.TopDownMutatorContext, module *AndroidAppCertificate) {
+func androidAppCertificateBp2Build(ctx android.Bp2buildMutatorContext, module *AndroidAppCertificate) {
 	var certificate string
 	if module.properties.Certificate != nil {
 		certificate = *module.properties.Certificate
@@ -1634,11 +1638,26 @@ type bazelAndroidAppAttributes struct {
 	Proguard_specs   bazel.LabelListAttribute
 }
 
-func convertWithBp2build(ctx android.TopDownMutatorContext, a *AndroidApp) (bool, android.CommonAttributes, *bazelAndroidAppAttributes) {
+func convertWithBp2build(ctx android.Bp2buildMutatorContext, a *AndroidApp) (bool, android.CommonAttributes, *bazelAndroidAppAttributes) {
 	aapt, supported := a.convertAaptAttrsWithBp2Build(ctx)
 	if !supported {
 		return false, android.CommonAttributes{}, &bazelAndroidAppAttributes{}
 	}
+	if a.appProperties.Jni_uses_platform_apis != nil {
+		ctx.MarkBp2buildUnconvertible(
+			bp2build_metrics_proto.UnconvertedReasonType_UNSUPPORTED,
+			"TODO - b/299360988: Add bp2build support for jni_uses_platform_apis",
+		)
+		return false, android.CommonAttributes{}, &bazelAndroidAppAttributes{}
+	}
+	if a.appProperties.Jni_uses_sdk_apis != nil {
+		ctx.MarkBp2buildUnconvertible(
+			bp2build_metrics_proto.UnconvertedReasonType_UNSUPPORTED,
+			"TODO - b/299360988: Add bp2build support for jni_uses_sdk_apis",
+		)
+		return false, android.CommonAttributes{}, &bazelAndroidAppAttributes{}
+	}
+
 	certificate, certificateName := android.BazelStringOrLabelFromProp(ctx, a.overridableAppProperties.Certificate)
 
 	manifestValues := &manifestValueAttribute{}
@@ -1716,6 +1735,20 @@ func convertWithBp2build(ctx android.TopDownMutatorContext, a *AndroidApp) (bool
 	deps := depLabels.Deps
 	deps.Append(depLabels.StaticDeps)
 
+	var jniDeps bazel.LabelListAttribute
+	archVariantProps := a.GetArchVariantProperties(ctx, &appProperties{})
+	for axis, configToProps := range archVariantProps {
+		for config, _props := range configToProps {
+			if archProps, ok := _props.(*appProperties); ok {
+				archJniLibs := android.BazelLabelForModuleDeps(
+					ctx,
+					android.LastUniqueStrings(android.CopyOf(archProps.Jni_libs)))
+				jniDeps.SetSelectValue(axis, config, archJniLibs)
+			}
+		}
+	}
+	deps.Append(jniDeps)
+
 	if !bp2BuildInfo.hasKotlin {
 		appAttrs.javaCommonAttributes = commonAttrs
 		appAttrs.bazelAapt = aapt
@@ -1745,7 +1778,7 @@ func convertWithBp2build(ctx android.TopDownMutatorContext, a *AndroidApp) (bool
 }
 
 // ConvertWithBp2build is used to convert android_app to Bazel.
-func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (a *AndroidApp) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	if ok, commonAttrs, appAttrs := convertWithBp2build(ctx, a); ok {
 		props := bazel.BazelTargetModuleProperties{
 			Rule_class:        "android_binary",
@@ -1758,7 +1791,7 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 }
 
 // ConvertWithBp2build is used to convert android_test to Bazel.
-func (at *AndroidTest) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (at *AndroidTest) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	if ok, commonAttrs, appAttrs := convertWithBp2build(ctx, &at.AndroidApp); ok {
 		props := bazel.BazelTargetModuleProperties{
 			Rule_class:        "android_test",
@@ -1768,4 +1801,28 @@ func (at *AndroidTest) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		ctx.CreateBazelTargetModule(props, commonAttrs, appAttrs)
 	}
 
+}
+
+func (atha *AndroidTestHelperApp) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
+	if ok, commonAttrs, appAttrs := convertWithBp2build(ctx, &atha.AndroidApp); ok {
+		// an android_test_helper_app is an android_binary with testonly = True
+		commonAttrs.Testonly = proptools.BoolPtr(true)
+
+		// additionally, it sets default values differently to android_app,
+		// https://cs.android.com/android/platform/superproject/main/+/main:build/soong/java/app.go;l=1273-1279;drc=e12c083198403ec694af6c625aed11327eb2bf7f
+		//
+		// installable: true (settable prop)
+		// use_embedded_native_libs: true (settable prop)
+		// lint.test: true (settable prop)
+		// optimize EnabledByDefault: true (blueprint mutated prop)
+		// AlwaysPackageNativeLibs: true (blueprint mutated prop)
+		// dexpreopt isTest: true (not prop)
+
+		props := bazel.BazelTargetModuleProperties{
+			Rule_class:        "android_binary",
+			Bzl_load_location: "//build/bazel/rules/android:android_binary.bzl",
+		}
+
+		ctx.CreateBazelTargetModule(props, commonAttrs, appAttrs)
+	}
 }

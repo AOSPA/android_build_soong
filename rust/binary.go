@@ -15,9 +15,10 @@
 package rust
 
 import (
+	"fmt"
+
 	"android/soong/android"
 	"android/soong/bazel"
-	"fmt"
 )
 
 func init() {
@@ -137,13 +138,17 @@ func (binary *binaryDecorator) preferRlib() bool {
 
 func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) buildOutput {
 	fileName := binary.getStem(ctx) + ctx.toolchain().ExecutableSuffix()
-	srcPath, _ := srcPathFromModuleSrcs(ctx, binary.baseCompiler.Properties.Srcs)
 	outputFile := android.PathForModuleOut(ctx, fileName)
 	ret := buildOutput{outputFile: outputFile}
+	var crateRootPath android.Path
+	if binary.baseCompiler.Properties.Crate_root == nil {
+		crateRootPath, _ = srcPathFromModuleSrcs(ctx, binary.baseCompiler.Properties.Srcs)
+	} else {
+		crateRootPath = android.PathForModuleSrc(ctx, *binary.baseCompiler.Properties.Crate_root)
+	}
 
 	flags.RustFlags = append(flags.RustFlags, deps.depFlags...)
 	flags.LinkFlags = append(flags.LinkFlags, deps.depLinkFlags...)
-	flags.LinkFlags = append(flags.LinkFlags, deps.linkObjects.Strings()...)
 
 	if binary.stripper.NeedsStrip(ctx) {
 		strippedOutputFile := outputFile
@@ -154,7 +159,7 @@ func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps Path
 	}
 	binary.baseCompiler.unstrippedOutputFile = outputFile
 
-	ret.kytheFile = TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile).kytheFile
+	ret.kytheFile = TransformSrcToBinary(ctx, binary, crateRootPath, deps, flags, outputFile).kytheFile
 	return ret
 }
 
@@ -199,7 +204,7 @@ type rustBinaryLibraryAttributes struct {
 	Rustc_flags     bazel.StringListAttribute
 }
 
-func binaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
+func binaryBp2build(ctx android.Bp2buildMutatorContext, m *Module) {
 	binary := m.compiler.(*binaryDecorator)
 
 	var srcs bazel.LabelList

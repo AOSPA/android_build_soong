@@ -340,6 +340,7 @@ var (
 		"prebuilts/clang/host/linux-x86":                   Bp2BuildDefaultTrueRecursively,
 		"prebuilts/gradle-plugin":                          Bp2BuildDefaultTrueRecursively,
 		"prebuilts/runtime/mainline/platform/sdk":          Bp2BuildDefaultTrueRecursively,
+		"prebuilts/module_sdk":                             Bp2BuildDefaultTrueRecursively,
 		"prebuilts/sdk":                                    Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/androidx":                   Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/androidx-legacy":            Bp2BuildDefaultTrue,
@@ -432,6 +433,7 @@ var (
 
 		"tools/apifinder":                             Bp2BuildDefaultTrue,
 		"tools/apksig":                                Bp2BuildDefaultTrue,
+		"tools/dexter/slicer":                         Bp2BuildDefaultTrueRecursively,
 		"tools/external_updater":                      Bp2BuildDefaultTrueRecursively,
 		"tools/metalava":                              Bp2BuildDefaultTrueRecursively,
 		"tools/platform-compat/java/android/compat":   Bp2BuildDefaultTrueRecursively,
@@ -852,6 +854,10 @@ var (
 
 		"libstagefright_headers",
 
+		// Apps with JNI libs
+		"SimpleJNI",
+		"libsimplejni",
+
 		// aidl
 		"aidl",
 		"libaidl-common",
@@ -914,14 +920,21 @@ var (
 		"androidx.test.monitor-nodeps",
 		"androidx.test.annotation",
 		"androidx.test.annotation-nodeps",
+
+		// jni deps of an internal android_test (b/297405812)
+		"libdexmakerjvmtiagent",
+		"libopenjdkjvmti_headers",
+		"libstaticjvmtiagent",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
+		// go/keep-sorted start
 		"aconfig_declarations",
 		"aconfig_value_set",
 		"aconfig_values",
 		"aidl_interface_headers",
 		"bpf",
+		"cc_aconfig_library",
 		"cc_prebuilt_library",
 		"cc_prebuilt_library_headers",
 		"cc_prebuilt_library_shared",
@@ -934,8 +947,10 @@ var (
 		"java_sdk_library_import",
 		"license",
 		"linker_config",
+		"ndk_library",
 		"sysprop_library",
 		"xsd_config",
+		// go/keep-sorted end
 	}
 
 	// Add the names of modules that bp2build should never convert, if it is
@@ -1675,6 +1690,9 @@ var (
 		"MtsTimeZoneDataTestCases",
 		"NanoAndroidTest",
 		"MtsLibnativehelperTestCases",
+
+		// android_test_helper_app from allowlisted packages, but with unconverted deps
+		"SharedLibraryInfoTestApp",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel
