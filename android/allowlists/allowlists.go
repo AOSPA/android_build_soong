@@ -228,6 +228,7 @@ var (
 		"frameworks/base/services/tests/servicestests/aidl":  Bp2BuildDefaultTrue,
 		"frameworks/base/startop/apps/test":                  Bp2BuildDefaultTrue,
 		"frameworks/base/tests/appwidgets/AppWidgetHostTest": Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/tools/aapt":                         Bp2BuildDefaultTrue,
 		"frameworks/base/tools/aapt2":                        Bp2BuildDefaultTrue,
 		"frameworks/base/tools/codegen":                      Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/tools/streaming_proto":              Bp2BuildDefaultTrueRecursively,
@@ -310,6 +311,7 @@ var (
 		"packages/modules/StatsD/lib/libstatssocket":         Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb":                               Bp2BuildDefaultTrue,
 		"packages/modules/adb/apex":                          Bp2BuildDefaultTrue,
+		"packages/modules/adb/fastdeploy":                    Bp2BuildDefaultTrue,
 		"packages/modules/adb/crypto":                        Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/libs":                          Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/pairing_auth":                  Bp2BuildDefaultTrueRecursively,
@@ -488,6 +490,55 @@ var (
 	}
 
 	Bp2buildModuleAlwaysConvertList = []string{
+		// aconfig
+		"libonce_cell",
+		"libanyhow",
+		"libunicode_segmentation",
+		"libmemchr",
+		"libbitflags-1.3.2",
+		"libryu",
+		"libitoa",
+		"libos_str_bytes",
+		"libheck",
+		"libclap_lex",
+		"libsyn",
+		"libquote",
+		"libunicode_ident",
+		"libproc_macro2",
+		"libthiserror_impl",
+		"libserde_derive",
+		"libclap_derive",
+		"libthiserror",
+		"libserde",
+		"libclap",
+		"libbytes",
+		"libprotobuf_support",
+		"libtinytemplate",
+		"libserde_json",
+		"libprotobuf",
+
+		"protoc-gen-rust",
+		"libprotobuf_codegen",
+		"libprotobuf_parse",
+		"libregex",
+		"libtempfile",
+		"libwhich",
+		"libregex_syntax",
+		"libfastrand",
+		"libeither",
+		"libaho_corasick",
+		"liblibc",
+		"libcfg_if",
+		"liblog_rust",
+		"libgetrandom",
+		"libremove_dir_all",
+		"libahash",
+		"libhashbrown",
+		"libindexmap",
+		"libaconfig_protos",
+		"libpaste",
+		"aconfig",
+
 		// ext
 		"tagsoup",
 
@@ -858,6 +909,12 @@ var (
 		"hal_unit_tests",
 
 		"merge_annotation_zips_test",
+
+		// bouncycastle dep
+		"platform-test-annotations",
+
+		// java_resources with multiple resource_dirs
+		"emma",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -881,6 +938,20 @@ var (
 	// the "prebuilt_" prefix to the name, so that it's differentiable from
 	// the source versions within Soong's module graph.
 	Bp2buildModuleDoNotConvertList = []string{
+		// rust modules that have cc deps
+		"liblogger",
+		"libbssl_ffi",
+		"libbssl_ffi_nostd",
+		"pull_rust",
+		"libstatslog_rust",
+		"libstatslog_rust_header",
+		"libflatbuffers",
+		"liblog_event_list",
+		"libminijail_rust",
+		"libminijail_sys",
+		"libfsverity_rs",
+		"libtombstoned_client_rust",
+
 		// TODO(b/263326760): Failed already.
 		"minijail_compiler_unittest",
 		"minijail_parser_unittest",
@@ -1546,6 +1617,7 @@ var (
 		"permissive_mte_test",
 		"ICU4CTestRunner",
 		"DeviceLongPollingStubTest",
+		"FastDeployHostTests",
 
 		"libprotobuf-full-test", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
 		"libprotobuf-lite-test", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
@@ -1647,6 +1719,10 @@ var (
 	}{
 		{
 			Label: "//build/bazel/examples/partitions:system_image",
+			Host:  false,
+		},
+		{
+			Label: "//build/bazel/examples/partitions:run_test",
 			Host:  false,
 		},
 	}

@@ -44,9 +44,14 @@ func TestMinimalAndroidApp(t *testing.T) {
 		},
 		Blueprint: `
 android_app {
-        name: "TestApp",
-        srcs: ["app.java"],
-        sdk_version: "current",
+		name: "TestApp",
+		srcs: ["app.java"],
+		sdk_version: "current",
+		optimize: {
+			shrink: true,
+			optimize: true,
+			obfuscate: true,
+		},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -75,17 +80,25 @@ func TestAndroidAppAllSupportedFields(t *testing.T) {
 		},
 		Blueprint: simpleModuleDoNotConvertBp2build("android_app", "static_lib_dep") + `
 android_app {
-        name: "TestApp",
-        srcs: ["app.java"],
-        sdk_version: "current",
-        package_name: "com.google",
-        resource_dirs: ["resa", "resb"],
-        manifest: "manifest/AndroidManifest.xml",
-        static_libs: ["static_lib_dep"],
-        java_version: "7",
-        certificate: "foocert",
-        required: ["static_lib_dep"],
-        asset_dirs: ["assets_"],
+	name: "TestApp",
+	srcs: ["app.java"],
+	sdk_version: "current",
+	package_name: "com.google",
+	resource_dirs: ["resa", "resb"],
+	manifest: "manifest/AndroidManifest.xml",
+	static_libs: ["static_lib_dep"],
+	java_version: "7",
+	certificate: "foocert",
+	required: ["static_lib_dep"],
+	asset_dirs: ["assets_"],
+	optimize: {
+		enabled: true,
+		optimize: false,
+		proguard_flags_files: ["proguard.flags"],
+		shrink: false,
+		obfuscate: false,
+		ignore_warnings: true,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -103,6 +116,14 @@ android_app {
 				"java_version":     `"7"`,
 				"sdk_version":      `"current"`,
 				"certificate_name": `"foocert"`,
+				"proguard_specs": `[
+        "proguard.flags",
+        ":TestApp_proguard_flags",
+    ]`,
+			}),
+			MakeBazelTarget("genrule", "TestApp_proguard_flags", AttrNameToString{
+				"outs": `["TestApp_proguard.flags"]`,
+				"cmd":  `"echo -ignorewarning -dontshrink -dontoptimize -dontobfuscate > $(OUTS)"`,
 			}),
 		}})
 }
@@ -120,16 +141,19 @@ func TestAndroidAppArchVariantSrcs(t *testing.T) {
 		},
 		Blueprint: `
 android_app {
-        name: "TestApp",
-        sdk_version: "current",
-        arch: {
-			arm: {
-				srcs: ["arm.java"],
-			},
-			x86: {
-				srcs: ["x86.java"],
-			}
+	name: "TestApp",
+	sdk_version: "current",
+	arch: {
+		arm: {
+			srcs: ["arm.java"],
+		},
+		x86: {
+			srcs: ["x86.java"],
 		}
+	},
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -142,6 +166,7 @@ android_app {
 				"manifest":       `"AndroidManifest.xml"`,
 				"resource_files": `["res/res.png"]`,
 				"sdk_version":    `"current"`,
+				"optimize":       `False`,
 			}),
 		}})
 }
@@ -154,8 +179,12 @@ func TestAndroidAppCertIsModule(t *testing.T) {
 		Filesystem:                 map[string]string{},
 		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
 android_app {
-        name: "TestApp",
-        certificate: ":foocert",
+	name: "TestApp",
+	certificate: ":foocert",
+	sdk_version: "current",
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -163,6 +192,8 @@ android_app {
 				"certificate":    `":foocert"`,
 				"manifest":       `"AndroidManifest.xml"`,
 				"resource_files": `[]`,
+				"sdk_version":    `"current"`, // use as default
+				"optimize":       `False`,
 			}),
 		}})
 }
@@ -177,8 +208,12 @@ func TestAndroidAppCertIsSrcFile(t *testing.T) {
 		},
 		Blueprint: `
 android_app {
-        name: "TestApp",
-        certificate: "foocert",
+	name: "TestApp",
+	certificate: "foocert",
+	sdk_version: "current",
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -186,6 +221,8 @@ android_app {
 				"certificate":    `"foocert"`,
 				"manifest":       `"AndroidManifest.xml"`,
 				"resource_files": `[]`,
+				"sdk_version":    `"current"`, // use as default
+				"optimize":       `False`,
 			}),
 		}})
 }
@@ -200,8 +237,12 @@ func TestAndroidAppCertIsNotSrcOrModule(t *testing.T) {
 		},
 		Blueprint: `
 android_app {
-        name: "TestApp",
-        certificate: "foocert",
+	name: "TestApp",
+	certificate: "foocert",
+	sdk_version: "current",
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -209,6 +250,8 @@ android_app {
 				"certificate_name": `"foocert"`,
 				"manifest":         `"AndroidManifest.xml"`,
 				"resource_files":   `[]`,
+				"sdk_version":      `"current"`, // use as default
+				"optimize":         `False`,
 			}),
 		}})
 }
@@ -219,22 +262,23 @@ func TestAndroidAppLibs(t *testing.T) {
 		ModuleTypeUnderTest:        "android_app",
 		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
 		Filesystem:                 map[string]string{},
-		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+		Blueprint: simpleModuleDoNotConvertBp2build("java_library", "barLib") + `
 android_app {
-        name: "foo",
-				libs: ["barLib"]
-}
-java_library{
-       name: "barLib",
+	name: "foo",
+	libs: ["barLib"],
+	sdk_version: "current",
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
-			MakeBazelTarget("java_library", "barLib", AttrNameToString{}),
-			MakeNeverlinkDuplicateTarget("java_library", "barLib"),
 			MakeBazelTarget("android_binary", "foo", AttrNameToString{
 				"manifest":       `"AndroidManifest.xml"`,
 				"resource_files": `[]`,
 				"deps":           `[":barLib-neverlink"]`,
+				"sdk_version":    `"current"`, // use as default
+				"optimize":       `False`,
 			}),
 		}})
 }
@@ -247,21 +291,21 @@ func TestAndroidAppKotlinSrcs(t *testing.T) {
 		Filesystem: map[string]string{
 			"res/res.png": "",
 		},
-		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") +
+			simpleModuleDoNotConvertBp2build("java_library", "barLib") + `
 android_app {
-        name: "foo",
-        srcs: ["a.java", "b.kt"],
-        certificate: ":foocert",
-        manifest: "fooManifest.xml",
-        libs: ["barLib"]
-}
-java_library{
-      name:   "barLib",
+	name: "foo",
+	srcs: ["a.java", "b.kt"],
+	certificate: ":foocert",
+	manifest: "fooManifest.xml",
+	libs: ["barLib"],
+	sdk_version: "current",
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
-			MakeBazelTarget("java_library", "barLib", AttrNameToString{}),
-			MakeNeverlinkDuplicateTarget("java_library", "barLib"),
 			MakeBazelTarget("android_library", "foo_kt", AttrNameToString{
 				"srcs": `[
         "a.java",
@@ -270,11 +314,14 @@ java_library{
 				"manifest":       `"fooManifest.xml"`,
 				"resource_files": `["res/res.png"]`,
 				"deps":           `[":barLib-neverlink"]`,
+				"sdk_version":    `"current"`, // use as default
 			}),
 			MakeBazelTarget("android_binary", "foo", AttrNameToString{
 				"deps":        `[":foo_kt"]`,
 				"certificate": `":foocert"`,
 				"manifest":    `"fooManifest.xml"`,
+				"sdk_version": `"current"`, // use as default
+				"optimize":    `False`,
 			}),
 		}})
 }
@@ -287,33 +334,37 @@ func TestAndroidAppCommonSrcs(t *testing.T) {
 		Filesystem: map[string]string{
 			"res/res.png": "",
 		},
-		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+		Blueprint: `
 android_app {
-        name: "foo",
-        srcs: ["a.java"],
-        common_srcs: ["b.kt"],
-        certificate: "foocert",
-        manifest: "fooManifest.xml",
-        libs:        ["barLib"],
+	name: "foo",
+	srcs: ["a.java"],
+	common_srcs: ["b.kt"],
+	manifest: "fooManifest.xml",
+	libs:        ["barLib"],
+	sdk_version: "current",
+	optimize: {
+		enabled: false,
+	},
 }
 java_library{
-      name:   "barLib",
+	name:   "barLib",
+	bazel_module: { bp2build_available: false },
 }
 `,
 		ExpectedBazelTargets: []string{
-			MakeBazelTarget("java_library", "barLib", AttrNameToString{}),
-			MakeNeverlinkDuplicateTarget("java_library", "barLib"),
 			MakeBazelTarget("android_library", "foo_kt", AttrNameToString{
 				"srcs":           `["a.java"]`,
 				"common_srcs":    `["b.kt"]`,
 				"manifest":       `"fooManifest.xml"`,
 				"resource_files": `["res/res.png"]`,
 				"deps":           `[":barLib-neverlink"]`,
+				"sdk_version":    `"current"`, // use as default
 			}),
 			MakeBazelTarget("android_binary", "foo", AttrNameToString{
-				"deps":             `[":foo_kt"]`,
-				"certificate_name": `"foocert"`,
-				"manifest":         `"fooManifest.xml"`,
+				"deps":        `[":foo_kt"]`,
+				"manifest":    `"fooManifest.xml"`,
+				"sdk_version": `"current"`, // use as default
+				"optimize":    `False`,
 			}),
 		}})
 }
@@ -326,13 +377,16 @@ func TestAndroidAppKotlinCflags(t *testing.T) {
 		Filesystem: map[string]string{
 			"res/res.png": "",
 		},
-		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+		Blueprint: `
 android_app {
-        name: "foo",
-        srcs: ["a.java", "b.kt"],
-        certificate: ":foocert",
-        manifest: "fooManifest.xml",
-        kotlincflags: ["-flag1", "-flag2"],
+	name: "foo",
+	srcs: ["a.java", "b.kt"],
+	manifest: "fooManifest.xml",
+	kotlincflags: ["-flag1", "-flag2"],
+	sdk_version: "current",
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -347,11 +401,13 @@ android_app {
         "-flag1",
         "-flag2",
     ]`,
+				"sdk_version": `"current"`, // use as default
 			}),
 			MakeBazelTarget("android_binary", "foo", AttrNameToString{
 				"deps":        `[":foo_kt"]`,
-				"certificate": `":foocert"`,
 				"manifest":    `"fooManifest.xml"`,
+				"sdk_version": `"current"`,
+				"optimize":    `False`,
 			}),
 		}})
 }
@@ -362,13 +418,16 @@ func TestAndroidAppManifestSdkVersionsProvided(t *testing.T) {
 		ModuleTypeUnderTest:        "android_app",
 		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
 		Filesystem:                 map[string]string{},
-		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+		Blueprint: `
 android_app {
-        name: "foo",
-        sdk_version: "current",
-        min_sdk_version: "24",
-        max_sdk_version: "30",
-        target_sdk_version: "29",
+	name: "foo",
+	sdk_version: "current",
+	min_sdk_version: "24",
+	max_sdk_version: "30",
+	target_sdk_version: "29",
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -381,6 +440,7 @@ android_app {
         "targetSdkVersion": "29",
     }`,
 				"sdk_version": `"current"`,
+				"optimize":    `False`,
 			}),
 		}})
 }
@@ -391,10 +451,13 @@ func TestAndroidAppMinAndTargetSdkDefaultToSdkVersion(t *testing.T) {
 		ModuleTypeUnderTest:        "android_app",
 		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
 		Filesystem:                 map[string]string{},
-		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+		Blueprint: `
 android_app {
-        name: "foo",
-        sdk_version: "30",
+	name: "foo",
+	sdk_version: "30",
+	optimize: {
+		enabled: false,
+	},
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -406,6 +469,7 @@ android_app {
         "targetSdkVersion": "30",
     }`,
 				"sdk_version": `"30"`,
+				"optimize":    `False`,
 			}),
 		}})
 }

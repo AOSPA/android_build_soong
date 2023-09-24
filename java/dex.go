@@ -45,8 +45,8 @@ type DexProperties struct {
 		// Whether to continue building even if warnings are emitted.  Defaults to true.
 		Ignore_warnings *bool
 
-		// If true, runs R8 in Proguard compatibility mode (default).
-		// Otherwise, runs R8 in full mode.
+		// If true, runs R8 in Proguard compatibility mode, otherwise runs R8 in full mode.
+		// Defaults to false for apps, true for libraries and tests.
 		Proguard_compatibility *bool
 
 		// If true, optimize for size by removing unused code.  Defaults to true for apps,
@@ -217,8 +217,9 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 	// Note: Targets with a min SDK kind of core_platform (e.g., framework.jar) or unspecified (e.g.,
 	// services.jar), are not classified as stable, which is WAI.
 	// TODO(b/232073181): Expand to additional min SDK cases after validation.
+	var addAndroidPlatformBuildFlag = false
 	if !dexParams.sdkVersion.Stable() {
-		flags = append(flags, "--android-platform-build")
+		addAndroidPlatformBuildFlag = true
 	}
 
 	effectiveVersion, err := dexParams.minSdkVersion.EffectiveVersion(ctx)
@@ -226,7 +227,18 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 		ctx.PropertyErrorf("min_sdk_version", "%s", err)
 	}
 
-	flags = append(flags, "--min-api "+strconv.Itoa(effectiveVersion.FinalOrFutureInt()))
+	// If the specified SDK level is 10000, then configure the compiler to use the
+	// current platform SDK level and to compile the build as a platform build.
+	var minApiFlagValue = effectiveVersion.FinalOrFutureInt()
+	if minApiFlagValue == 10000 {
+		minApiFlagValue = ctx.Config().PlatformSdkVersion().FinalInt()
+		addAndroidPlatformBuildFlag = true
+	}
+	flags = append(flags, "--min-api "+strconv.Itoa(minApiFlagValue))
+
+	if addAndroidPlatformBuildFlag {
+		flags = append(flags, "--android-platform-build")
+	}
 	return flags, deps
 }
 
