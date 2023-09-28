@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "046fb41e_0b890127",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000760
+      },
+      "writtenOn": "2023-09-28T14:51:47Z",
+      "side": 1,
+      "message": "moreover, it\u0027s required for those who compile inline kernel with sdllvm 17",
+      "revId": "f39c2f50c0db5ceccf3a45b319bc9b6fa6459046",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
