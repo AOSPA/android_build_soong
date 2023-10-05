@@ -1263,7 +1263,7 @@ apex {
 	file_contexts: ":com.android.apogee-file_contexts",
 	certificate: ":com.android.apogee.certificate",
 }
-` + simpleModuleDoNotConvertBp2build("filegroup", "com.android.apogee-file_contexts"),
+` + SimpleModuleDoNotConvertBp2build("filegroup", "com.android.apogee-file_contexts"),
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("apex", "com.android.apogee", AttrNameToString{
 				"certificate":   `":com.android.apogee.certificate"`,
@@ -1299,7 +1299,7 @@ apex {
 	binaries: ["bar"],
 	native_shared_libs: ["foo"],
 }
-` + simpleModuleDoNotConvertBp2build("filegroup", "myapex-file_contexts"),
+` + SimpleModuleDoNotConvertBp2build("filegroup", "myapex-file_contexts"),
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_binary", "bar", AttrNameToString{
 				"local_includes": `["."]`,
@@ -1315,6 +1315,7 @@ apex {
 				"tags":              `["apex_available=myapex"]`,
 			}),
 			MakeBazelTarget("cc_stub_suite", "foo_stub_libs", AttrNameToString{
+				"api_surface":          `"module-libapi"`,
 				"soname":               `"foo.so"`,
 				"source_library_label": `"//:foo"`,
 				"symbol_file":          `"foo.map.txt"`,
@@ -1356,7 +1357,7 @@ apex {
 	file_contexts: ":com.android.apogee-file_contexts",
 	certificate: "com.android.apogee.certificate",
 }
-` + simpleModuleDoNotConvertBp2build("filegroup", "com.android.apogee-file_contexts"),
+` + SimpleModuleDoNotConvertBp2build("filegroup", "com.android.apogee-file_contexts"),
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("apex", "com.android.apogee", AttrNameToString{
 				"certificate_name": `"com.android.apogee.certificate"`,

@@ -355,6 +355,7 @@ type ProductVariables struct {
 	MemtagHeapSyncIncludePaths  []string `json:",omitempty"`
 
 	HWASanIncludePaths []string `json:",omitempty"`
+	HWASanExcludePaths []string `json:",omitempty"`
 
 	VendorPath    *string `json:",omitempty"`
 	OdmPath       *string `json:",omitempty"`
@@ -492,6 +493,7 @@ type ProductVariables struct {
 	BuildBrokenTrebleSyspropNeverallow bool     `json:",omitempty"`
 	BuildBrokenUsesSoongPython2Modules bool     `json:",omitempty"`
 	BuildBrokenVendorPropertyNamespace bool     `json:",omitempty"`
+	BuildBrokenIncorrectPartitionImages bool     `json:",omitempty"`
 	BuildBrokenInputDirModules         []string `json:",omitempty"`
 
 	BuildWarningBadOptionalUsesLibsAllowlist []string `json:",omitempty"`
@@ -520,8 +522,8 @@ type ProductVariables struct {
 	ProductBrand        string   `json:",omitempty"`
 	BuildVersionTags    []string `json:",omitempty"`
 
-	ReleaseVersion          string   `json:",omitempty"`
-	ReleaseAconfigValueSets []string `json:",omitempty"`
+	ReleaseVersion          string `json:",omitempty"`
+	ReleaseAconfigValueSets string `json:",omitempty"`
 
 	ReleaseAconfigFlagDefaultPermission string `json:",omitempty"`
 

@@ -1798,6 +1798,7 @@ func (al *ApiLibrary) extractApiSrcs(ctx android.ModuleContext, rule *android.Ru
 		Flag("-jar").
 		Flag("-write_if_changed").
 		Flag("-ignore_missing_files").
+		Flag("-quiet").
 		FlagWithArg("-C ", unzippedSrcJarDir.String()).
 		FlagWithInput("-l ", classFilesList).
 		FlagWithOutput("-o ", al.stubsJarWithoutStaticLibs)
@@ -2826,7 +2827,7 @@ func (m *Library) convertJavaResourcesAttributes(ctx android.TopDownMutatorConte
 			if resourceStripPrefix == nil && i == 0 {
 				resourceStripPrefix = resAttr.Resource_strip_prefix
 				resources = resAttr.Resources.Value
-			} else {
+			} else if !resAttr.Resources.IsEmpty() {
 				ctx.CreateBazelTargetModule(
 					bazel.BazelTargetModuleProperties{
 						Rule_class:        "java_resources",
@@ -2904,7 +2905,12 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 	var staticDeps bazel.LabelListAttribute
 
 	if proptools.String(m.deviceProperties.Sdk_version) == "" && m.DeviceSupported() {
+		// TODO(b/297356704): handle platform apis in bp2build
 		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "sdk_version unset")
+		return &javaCommonAttributes{}, &bp2BuildJavaInfo{}, false
+	} else if proptools.String(m.deviceProperties.Sdk_version) == "core_platform" {
+		// TODO(b/297356582): handle core_platform in bp2build
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "sdk_version core_platform")
 		return &javaCommonAttributes{}, &bp2BuildJavaInfo{}, false
 	}
 
@@ -3122,16 +3128,22 @@ func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
 	depLabels := bp2BuildInfo.DepLabels
 
 	deps := depLabels.Deps
+	exports := depLabels.StaticDeps
 	if !commonAttrs.Srcs.IsEmpty() {
-		deps.Append(depLabels.StaticDeps) // we should only append these if there are sources to use them
+		deps.Append(exports) // we should only append these if there are sources to use them
 	} else if !deps.IsEmpty() {
-		ctx.ModuleErrorf("Module has direct dependencies but no sources. Bazel will not allow this.")
+		// java_library does not accept deps when there are no srcs because
+		// there is no compilation happening, but it accepts exports.
+		// The non-empty deps here are unnecessary as deps on the java_library
+		// since they aren't being propagated to any dependencies.
+		// So we can drop deps here.
+		deps = bazel.LabelListAttribute{}
 	}
 	var props bazel.BazelTargetModuleProperties
 	attrs := &javaLibraryAttributes{
 		javaCommonAttributes: commonAttrs,
 		Deps:                 deps,
-		Exports:              depLabels.StaticDeps,
+		Exports:              exports,
 	}
 	name := m.Name()
 

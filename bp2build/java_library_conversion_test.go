@@ -15,7 +15,6 @@
 package bp2build
 
 import (
-	"fmt"
 	"testing"
 
 	"android/soong/android"
@@ -140,26 +139,6 @@ java_library {
 }
 `,
 		ExpectedBazelTargets: []string{}, // no targets expected because sdk_version is not set
-	})
-}
-
-func TestJavaLibraryFailsToConvertLibsWithNoSrcs(t *testing.T) {
-	runJavaLibraryTestCase(t, Bp2buildTestCase{
-		ExpectedErr: fmt.Errorf("Module has direct dependencies but no sources. Bazel will not allow this."),
-		Blueprint: `java_library {
-    name: "java-lib-1",
-    libs: ["java-lib-2"],
-    sdk_version: "current",
-    bazel_module: { bp2build_available: true },
-}
-
-java_library {
-    name: "java-lib-2",
-    srcs: ["a.java"],
-    sdk_version: "current",
-    bazel_module: { bp2build_available: false },
-}`,
-		ExpectedBazelTargets: []string{},
 	})
 }
 
@@ -441,12 +420,13 @@ func TestJavaLibraryResourcesExcludeFile(t *testing.T) {
 func TestJavaLibraryResourcesWithMultipleDirs(t *testing.T) {
 	runJavaLibraryTestCase(t, Bp2buildTestCase{
 		Filesystem: map[string]string{
-			"res/a.res":  "",
-			"res1/b.res": "",
+			"res/a.res":   "",
+			"res1/b.res":  "",
+			"res2/b.java": "",
 		},
 		Blueprint: `java_library {
 	name: "java-lib-1",
-	java_resource_dirs: ["res", "res1"],
+	java_resource_dirs: ["res", "res1", "res2"],
 	sdk_version: "current",
 }`,
 		ExpectedBazelTargets: []string{
@@ -676,7 +656,7 @@ func TestConvertArmNeonVariant(t *testing.T) {
 		Description:                "Android Library - simple arch feature",
 		ModuleTypeUnderTest:        "android_library",
 		ModuleTypeUnderTestFactory: java.AndroidLibraryFactory,
-		Blueprint: simpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
+		Blueprint: SimpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
 android_library {
   name: "TestLib",
   manifest: "manifest/AndroidManifest.xml",
@@ -714,7 +694,7 @@ func TestConvertMultipleArchFeatures(t *testing.T) {
 		Description:                "Android Library - multiple arch features",
 		ModuleTypeUnderTest:        "android_library",
 		ModuleTypeUnderTestFactory: java.AndroidLibraryFactory,
-		Blueprint: simpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
+		Blueprint: SimpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
 android_library {
   name: "TestLib",
   manifest: "manifest/AndroidManifest.xml",
@@ -760,7 +740,7 @@ func TestConvertExcludeSrcsArchFeature(t *testing.T) {
 		Description:                "Android Library - exclude_srcs with arch feature",
 		ModuleTypeUnderTest:        "android_library",
 		ModuleTypeUnderTestFactory: java.AndroidLibraryFactory,
-		Blueprint: simpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
+		Blueprint: SimpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
 android_library {
   name: "TestLib",
   manifest: "manifest/AndroidManifest.xml",
@@ -864,6 +844,30 @@ func TestJavaLibraryKotlinCommonSrcs(t *testing.T) {
 				"sdk_version": `"current"`,
 			}),
 			MakeNeverlinkDuplicateTarget("kt_jvm_library", "java-lib-1"),
+		},
+	})
+}
+
+func TestJavaLibraryLibsWithNoSrcs(t *testing.T) {
+	runJavaLibraryTestCase(t, Bp2buildTestCase{
+		Description: "java_library that has libs but no srcs",
+		Blueprint: `java_library {
+    name: "java-lib-1",
+    libs: ["java-lib-2"],
+    sdk_version: "current",
+    bazel_module: { bp2build_available: true },
+}
+
+java_library{
+    name: "java-lib-2",
+    bazel_module: { bp2build_available: false },
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
+				"sdk_version": `"current"`,
+			}),
+			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
 		},
 	})
 }
@@ -1044,5 +1048,16 @@ filegroup {
 		},
 	}, func(ctx android.RegistrationContext) {
 		ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
+	})
+}
+
+func TestJavaSdkVersionCorePlatformDoesNotConvert(t *testing.T) {
+	runJavaLibraryTestCase(t, Bp2buildTestCase{
+		Blueprint: `java_library {
+    name: "java-lib-1",
+    sdk_version: "core_platform",
+    bazel_module: { bp2build_available: true },
+}`,
+		ExpectedBazelTargets: []string{},
 	})
 }

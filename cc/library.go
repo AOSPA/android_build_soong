@@ -495,6 +495,7 @@ func createStubsBazelTargetIfNeeded(ctx android.TopDownMutatorContext, m *Module
 			Soname:               &soname,
 			Source_library_label: proptools.StringPtr(m.GetBazelLabel(ctx, m)),
 			Deps:                 baseAttributes.deps,
+			Api_surface:          proptools.StringPtr("module-libapi"),
 		}
 		ctx.CreateBazelTargetModule(stubSuitesProps,
 			android.CommonAttributes{Name: m.Name() + "_stub_libs"},
@@ -3144,6 +3145,7 @@ type bazelCcStubSuiteAttributes struct {
 	Source_library_label *string
 	Soname               *string
 	Deps                 bazel.LabelListAttribute
+	Api_surface          *string
 }
 
 type bazelCcHeaderAbiCheckerAttributes struct {

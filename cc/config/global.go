@@ -59,7 +59,6 @@ var (
 		"-UDEBUG",
 
 		"-fno-exceptions",
-		"-Wno-multichar",
 
 		"-O2",
 		"-fdebug-default-version=5",
@@ -81,10 +80,6 @@ var (
 		// Emit address-significance table which allows linker to perform safe ICF. Clang does
 		// not emit the table by default on Android since NDK still uses GNU binutils.
 		"-faddrsig",
-
-		// Turn on -fcommon explicitly, since Clang now defaults to -fno-common. The cleanup bug
-		// tracking this is http://b/151457797.
-		"-fcommon",
 
 		// Help catch common 32/64-bit errors.
 		"-Werror=int-conversion",
@@ -328,6 +323,8 @@ var (
 	// (anything for which IsThirdPartyPath() in build/soong/android/paths.go
 	// returns true - includes external/, most of vendor/ and most of hardware/)
 	noOverrideExternalGlobalCflags = []string{
+		// http://b/151457797
+		"-fcommon",
 		// http://b/191699019
 		"-Wno-format-insufficient-args",
 		// http://b/296321145

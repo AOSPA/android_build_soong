@@ -1000,6 +1000,8 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 	if module.afdo != nil && module.afdo.Properties.Afdo {
 		fdoProfileDep := bp2buildFdoProfile(ctx, module)
 		if fdoProfileDep != nil {
+			// TODO(b/276287371): Only set fdo_profile for android platform
+			// https://cs.android.com/android/platform/superproject/main/+/main:build/soong/cc/afdo.go;l=105;drc=2dbe160d1af445de32725098570ec594e3944fc5
 			(&compilerAttrs).fdoProfile.SetValue(*fdoProfileDep)
 		}
 	}
@@ -1109,22 +1111,15 @@ func bp2buildFdoProfile(
 	ctx android.Bp2buildMutatorContext,
 	m *Module,
 ) *bazel.Label {
+	// TODO(b/267229066): Convert to afdo boolean attribute and let Bazel handles finding
+	// fdo_profile target from AfdoProfiles product var
 	for _, project := range globalAfdoProfileProjects {
-		// Ensure handcrafted BUILD file exists in the project
-		BUILDPath := android.ExistentPathForSource(ctx, project, "BUILD")
-		if BUILDPath.Valid() {
-			// We handcraft a BUILD file with fdo_profile targets that use the existing profiles in the project
-			// This implementation is assuming that every afdo profile in globalAfdoProfileProjects already has
-			// an associated fdo_profile target declared in the same package.
+		// Ensure it's a Soong package
+		bpPath := android.ExistentPathForSource(ctx, project, "Android.bp")
+		if bpPath.Valid() {
 			// TODO(b/260714900): Handle arch-specific afdo profiles (e.g. `<module-name>-arm<64>.afdo`)
 			path := android.ExistentPathForSource(ctx, project, m.Name()+".afdo")
 			if path.Valid() {
-				// FIXME: Some profiles only exist internally and are not released to AOSP.
-				// When generated BUILD files are checked in, we'll run into merge conflict.
-				// The cc_library_shared target in AOSP won't have reference to an fdo_profile target because
-				// the profile doesn't exist. Internally, the same cc_library_shared target will
-				// have reference to the fdo_profile.
-				// For more context, see b/258682955#comment2
 				fdoProfileLabel := "//" + strings.TrimSuffix(project, "/") + ":" + m.Name()
 				return &bazel.Label{
 					Label: fdoProfileLabel,
@@ -1380,10 +1375,10 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 		// having stubs or not, so Bazel select() statement can be used to choose
 		// source/stub variants of them.
 		apexAvailable := module.ApexAvailable()
-		setStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.export, &la.dynamicDeps, 0, false)
-		setStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.implementation, &la.implementationDynamicDeps, 1, false)
+		SetStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.export, &la.dynamicDeps, 0, false)
+		SetStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.implementation, &la.implementationDynamicDeps, 1, false)
 		if len(systemSharedLibs) > 0 {
-			setStubsForDynamicDeps(ctx, axis, config, apexAvailable, bazelLabelForSharedDeps(ctx, systemSharedLibs), &la.systemDynamicDeps, 2, true)
+			SetStubsForDynamicDeps(ctx, axis, config, apexAvailable, bazelLabelForSharedDeps(ctx, systemSharedLibs), &la.systemDynamicDeps, 2, true)
 		}
 	}
 
@@ -1583,7 +1578,7 @@ func useStubOrImplInApexWithName(ssi stubSelectionInfo) {
 	}
 }
 
-func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.ConfigurationAxis,
+func SetStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.ConfigurationAxis,
 	config string, apexAvailable []string, dynamicLibs bazel.LabelList, dynamicDeps *bazel.LabelListAttribute, ind int, buildNonApexWithStubs bool) {
 
 	// Create a config_setting for each apex_available.
@@ -1622,6 +1617,11 @@ func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.C
 				// TODO (b/280343104): Discuss if we can drop this special handling for platform variants.
 				sameApiDomain = availableToSameApexes(apexAvailable, dep.(*Module).ApexAvailable())
 				if linkable, ok := ctx.Module().(LinkableInterface); ok && linkable.Bootstrap() {
+					sameApiDomain = true
+				}
+				// If dependency has `apex_available: ["//apex_available:platform]`, then the platform variant of rdep should link against its impl.
+				// https://cs.android.com/android/_/android/platform/build/soong/+/main:cc/cc.go;l=3617;bpv=1;bpt=0;drc=c6a93d853b37ec90786e745b8d282145e6d3b589
+				if depApexAvailable := dep.(*Module).ApexAvailable(); len(depApexAvailable) == 1 && depApexAvailable[0] == android.AvailableToPlatform {
 					sameApiDomain = true
 				}
 			} else {

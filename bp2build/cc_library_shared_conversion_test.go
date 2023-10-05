@@ -218,12 +218,12 @@ cc_library_shared {
 
 func TestCcLibrarySharedOsSpecificSharedLib(t *testing.T) {
 	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_shared os-specific shared_libs",
-		Filesystem:  map[string]string{},
+		StubbedBuildDefinitions: []string{"shared_dep"},
+		Description:             "cc_library_shared os-specific shared_libs",
+		Filesystem:              map[string]string{},
 		Blueprint: soongCcLibrarySharedPreamble + `
 cc_library_shared {
     name: "shared_dep",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_shared {
     name: "foo_shared",
@@ -243,20 +243,18 @@ cc_library_shared {
 
 func TestCcLibrarySharedBaseArchOsSpecificSharedLib(t *testing.T) {
 	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_shared base, arch, and os-specific shared_libs",
-		Filesystem:  map[string]string{},
+		StubbedBuildDefinitions: []string{"shared_dep", "shared_dep2", "shared_dep3"},
+		Description:             "cc_library_shared base, arch, and os-specific shared_libs",
+		Filesystem:              map[string]string{},
 		Blueprint: soongCcLibrarySharedPreamble + `
 cc_library_shared {
     name: "shared_dep",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_shared {
     name: "shared_dep2",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_shared {
     name: "shared_dep3",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_shared {
     name: "foo_shared",
@@ -543,6 +541,7 @@ cc_library_shared {
 		},
 		Blueprint: soongCcLibraryPreamble,
 		ExpectedBazelTargets: []string{makeCcStubSuiteTargets("a", AttrNameToString{
+			"api_surface":          `"module-libapi"`,
 			"soname":               `"a.so"`,
 			"source_library_label": `"//foo/bar:a"`,
 			"stubs_symbol_file":    `"a.map.txt"`,
@@ -661,7 +660,7 @@ cc_library_shared {
             ":libapexfoo_stable",
         ],
         "//build/bazel/rules/apex:system": [
-            "@api_surfaces//module-libapi/current:libplatform_stable",
+            ":libplatform_stable",
             "@api_surfaces//module-libapi/current:libapexfoo_stable",
         ],
         "//conditions:default": [
@@ -1442,6 +1441,7 @@ cc_library_shared {
 `,
 		ExpectedBazelTargets: []string{
 			makeCcStubSuiteTargets("a", AttrNameToString{
+				"api_surface":          `"module-libapi"`,
 				"soname":               `"a.so"`,
 				"source_library_label": `"//:a"`,
 				"stubs_symbol_file":    `"a.map.txt"`,
@@ -1456,6 +1456,7 @@ cc_library_shared {
 				"stubs_symbol_file": `"a.map.txt"`,
 			}),
 			makeCcStubSuiteTargets("b", AttrNameToString{
+				"api_surface":          `"module-libapi"`,
 				"soname":               `"b.so"`,
 				"source_library_label": `"//:b"`,
 				"stubs_symbol_file":    `"b.map.txt"`,

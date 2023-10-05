@@ -317,6 +317,17 @@ func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.generateJavaUsedByApex(ctx)
 }
 
+func (a *AndroidApp) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	defaultMinSdkVersion := a.Module.MinSdkVersion(ctx)
+	if proptools.Bool(a.appProperties.Updatable) {
+		overrideApiLevel := android.MinSdkVersionFromValue(ctx, ctx.DeviceConfig().ApexGlobalMinSdkVersionOverride())
+		if !overrideApiLevel.IsNone() && overrideApiLevel.CompareTo(defaultMinSdkVersion) > 0 {
+			return overrideApiLevel
+		}
+	}
+	return defaultMinSdkVersion
+}
+
 func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 	if a.Updatable() {
 		if !a.SdkVersion(ctx).Stable() {
@@ -1675,15 +1686,6 @@ type bazelAndroidAppAttributes struct {
 
 // ConvertWithBp2build is used to convert android_app to Bazel.
 func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	commonAttrs, bp2BuildInfo, supported := a.convertLibraryAttrsBp2Build(ctx)
-	if !supported {
-		return
-	}
-	depLabels := bp2BuildInfo.DepLabels
-
-	deps := depLabels.Deps
-	deps.Append(depLabels.StaticDeps)
-
 	aapt, supported := a.convertAaptAttrsWithBp2Build(ctx)
 	if !supported {
 		return
@@ -1754,8 +1756,16 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 			})
 			appAttrs.Proguard_specs.Add(bazel.MakeLabelAttribute(":" + generatedFlagFileRuleName))
 		}
-
 	}
+
+	commonAttrs, bp2BuildInfo, supported := a.convertLibraryAttrsBp2Build(ctx)
+	if !supported {
+		return
+	}
+	depLabels := bp2BuildInfo.DepLabels
+
+	deps := depLabels.Deps
+	deps.Append(depLabels.StaticDeps)
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "android_binary",

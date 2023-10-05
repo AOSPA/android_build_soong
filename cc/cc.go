@@ -886,16 +886,16 @@ type Module struct {
 	installer    installer
 	bazelHandler BazelHandler
 
-	features []feature
-	stl      *stl
-	sanitize *sanitize
-	coverage *coverage
-	fuzzer   *fuzzer
-	sabi     *sabi
-	vndkdep  *vndkdep
-	lto      *lto
-	afdo     *afdo
-	pgo      *pgo
+	features  []feature
+	stl       *stl
+	sanitize  *sanitize
+	coverage  *coverage
+	fuzzer    *fuzzer
+	sabi      *sabi
+	vndkdep   *vndkdep
+	lto       *lto
+	afdo      *afdo
+	pgo       *pgo
 	orderfile *orderfile
 
 	library libraryInterface
@@ -1106,6 +1106,16 @@ func (c *Module) CcLibrary() bool {
 
 func (c *Module) CcLibraryInterface() bool {
 	if _, ok := c.linker.(libraryInterface); ok {
+		return true
+	}
+	return false
+}
+
+func (c *Module) IsNdkPrebuiltStl() bool {
+	if c.linker == nil {
+		return false
+	}
+	if _, ok := c.linker.(*ndkPrebuiltStlLinker); ok {
 		return true
 	}
 	return false
@@ -4186,6 +4196,7 @@ const (
 	headerLibrary
 	testBin // testBinary already declared
 	ndkLibrary
+	ndkPrebuiltStl
 )
 
 func (c *Module) typ() moduleType {
@@ -4224,6 +4235,8 @@ func (c *Module) typ() moduleType {
 		return sharedLibrary
 	} else if c.isNDKStubLibrary() {
 		return ndkLibrary
+	} else if c.IsNdkPrebuiltStl() {
+		return ndkPrebuiltStl
 	}
 	return unknownType
 }
@@ -4268,6 +4281,8 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		} else {
 			sharedOrStaticLibraryBp2Build(ctx, c, false)
 		}
+	case ndkPrebuiltStl:
+		ndkPrebuiltStlBp2build(ctx, c)
 	default:
 		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
 	}

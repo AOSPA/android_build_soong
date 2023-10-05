@@ -18,6 +18,7 @@ package apex
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -991,6 +992,13 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 				return false
 			}
 		}
+
+		//TODO: b/296491928 Vendor APEX should use libbinder.ndk instead of libbinder once VNDK is fully deprecated.
+		if useVndk && mctx.Config().IsVndkDeprecated() && child.Name() == "libbinder" {
+			log.Print("Libbinder is linked from Vendor APEX ", a.Name(), " with module ", parent.Name())
+			return false
+		}
+
 		// By default, all the transitive dependencies are collected, unless filtered out
 		// above.
 		return true
@@ -2008,6 +2016,9 @@ func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 			// If a module is directly included and also transitively depended on
 			// consider it as directly included.
 			e.transitiveDep = e.transitiveDep && f.transitiveDep
+			// If a module is added as both a JNI library and a regular shared library, consider it as a
+			// JNI library.
+			e.isJniLib = e.isJniLib || f.isJniLib
 			encountered[dest] = e
 		}
 	}
@@ -2220,6 +2231,11 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		if ch, ok := child.(*cc.Module); ok {
 			if ch.UseVndk() && a.useVndkAsStable(ctx) && ch.IsVndk() {
 				vctx.requireNativeLibs = append(vctx.requireNativeLibs, ":vndk")
+				return false
+			}
+
+			//TODO: b/296491928 Vendor APEX should use libbinder.ndk instead of libbinder once VNDK is fully deprecated.
+			if ch.UseVndk() && ctx.Config().IsVndkDeprecated() && child.Name() == "libbinder" {
 				return false
 			}
 			af := apexFileForNativeLibrary(ctx, ch, vctx.handleSpecialLibs)
@@ -2727,13 +2743,13 @@ func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
 	// Only override the minSdkVersion value on Apexes which already specify
 	// a min_sdk_version (it's optional for non-updatable apexes), and that its
 	// min_sdk_version value is lower than the one to override with.
-	minApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
+	minApiLevel := android.MinSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
 	if minApiLevel.IsNone() {
 		return ""
 	}
 
 	overrideMinSdkValue := ctx.DeviceConfig().ApexGlobalMinSdkVersionOverride()
-	overrideApiLevel := minSdkVersionFromValue(ctx, overrideMinSdkValue)
+	overrideApiLevel := android.MinSdkVersionFromValue(ctx, overrideMinSdkValue)
 	if !overrideApiLevel.IsNone() && overrideApiLevel.CompareTo(minApiLevel) > 0 {
 		minApiLevel = overrideApiLevel
 	}
@@ -2748,20 +2764,7 @@ func (a *apexBundle) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLe
 
 // Returns apex's min_sdk_version ApiLevel, honoring overrides
 func (a *apexBundle) minSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
-	return minSdkVersionFromValue(ctx, a.minSdkVersionValue(ctx))
-}
-
-// Construct ApiLevel object from min_sdk_version string value
-func minSdkVersionFromValue(ctx android.EarlyModuleContext, value string) android.ApiLevel {
-	if value == "" {
-		return android.NoneApiLevel
-	}
-	apiLevel, err := android.ApiLevelFromUser(ctx, value)
-	if err != nil {
-		ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
-		return android.NoneApiLevel
-	}
-	return apiLevel
+	return android.MinSdkVersionFromValue(ctx, a.minSdkVersionValue(ctx))
 }
 
 // Ensures that a lib providing stub isn't statically linked
