@@ -16,6 +16,24 @@
       "message": "just qcacld?",
       "revId": "d5857f4444488b096dc5d536e3361301251313ba",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6c27d5d5_6b048e0f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000465
+      },
+      "writtenOn": "2023-10-12T23:11:59Z",
+      "side": 1,
+      "message": "Uh I use it(the topic) for audio too. IDK if audio dlkm requires this specific patch",
+      "parentUuid": "51d04b34_dcbf9ac7",
+      "revId": "d5857f4444488b096dc5d536e3361301251313ba",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
