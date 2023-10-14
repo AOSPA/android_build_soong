@@ -1153,6 +1153,10 @@ func (c *configImpl) KatiArgs() []string {
 }
 
 func (c *configImpl) Parallel() int {
+	if i, ok := c.environ.GetInt("NINJA_FORCE_PARALLEL_COUNT"); ok {
+		return i
+	}
+
 	return c.parallel
 }
 
@@ -1194,6 +1198,9 @@ func (c *configImpl) HighmemParallel() int {
 	} else if c.totalRAM <= 32*1024*1024*1024 {
 		// Less than 32GB of ram, restrict to 2 highmem processes
 		return 2
+	} else if c.totalRAM <= 64*1024*1024*1024 {
+		// Less than 64GB of ram, restrict to 4 highmem processes
+		return 4
 	} else if p := int(c.totalRAM / minMemPerHighmemProcess); p < parallel {
 		// If less than 8GB total RAM per process, reduce the number of highmem processes
 		return p
