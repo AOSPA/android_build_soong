@@ -22,6 +22,16 @@ type createProductConfigFilesResult struct {
 	bp2buildTargets map[string]BazelTargets
 }
 
+type bazelLabel struct {
+	repo   string
+	pkg    string
+	target string
+}
+
+func (l *bazelLabel) String() string {
+	return fmt.Sprintf("@%s//%s:%s", l.repo, l.pkg, l.target)
+}
+
 func createProductConfigFiles(
 	ctx *CodegenContext,
 	metrics CodegenMetrics) (createProductConfigFilesResult, error) {
@@ -53,9 +63,10 @@ func createProductConfigFiles(
 		return res, err
 	}
 
-	// TODO(b/249685973): the name is product_config_platforms because product_config
-	// was already used for other files. Deduplicate them.
-	currentProductFolder := fmt.Sprintf("product_config_platforms/products/%s-%s", targetProduct, targetBuildVariant)
+	currentProductFolder := fmt.Sprintf("build/bazel/products/%s", targetProduct)
+	if len(productVariables.PartitionVarsForBazelMigrationOnlyDoNotUse.ProductDirectory) > 0 {
+		currentProductFolder = fmt.Sprintf("%s%s", productVariables.PartitionVarsForBazelMigrationOnlyDoNotUse.ProductDirectory, targetProduct)
+	}
 
 	productReplacer := strings.NewReplacer(
 		"{PRODUCT}", targetProduct,
@@ -71,17 +82,48 @@ func createProductConfigFiles(
 		productsForTesting[i] = fmt.Sprintf("  \"@//build/bazel/tests/products:%s\",", productsForTesting[i])
 	}
 
-	productLabelsToVariables := make(map[string]*android.ProductVariables)
-	productLabelsToVariables[productReplacer.Replace("@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}")] = &productVariables
+	productLabelsToVariables := make(map[bazelLabel]*android.ProductVariables)
+	productLabelsToVariables[bazelLabel{
+		repo:   "",
+		pkg:    currentProductFolder,
+		target: targetProduct,
+	}] = &productVariables
 	for product, productVariablesStarlark := range productsForTestingMap {
 		productVariables, err := starlarkMapToProductVariables(productVariablesStarlark)
 		if err != nil {
 			return res, err
 		}
-		productLabelsToVariables["@//build/bazel/tests/products:"+product] = &productVariables
+		productLabelsToVariables[bazelLabel{
+			repo:   "",
+			pkg:    "build/bazel/tests/products",
+			target: product,
+		}] = &productVariables
 	}
 
-	res.bp2buildTargets = createTargets(productLabelsToVariables)
+	res.bp2buildTargets = make(map[string]BazelTargets)
+	res.bp2buildTargets[currentProductFolder] = append(res.bp2buildTargets[currentProductFolder], BazelTarget{
+		name:        productReplacer.Replace("{PRODUCT}"),
+		packageName: currentProductFolder,
+		content: productReplacer.Replace(`android_product(
+    name = "{PRODUCT}",
+    soong_variables = _soong_variables,
+)`),
+		ruleClass: "android_product",
+		loads: []BazelLoad{
+			{
+				file: ":soong.variables.bzl",
+				symbols: []BazelLoadSymbol{{
+					symbol: "variables",
+					alias:  "_soong_variables",
+				}},
+			},
+			{
+				file:    "//build/bazel/product_config:android_product.bzl",
+				symbols: []BazelLoadSymbol{{symbol: "android_product"}},
+			},
+		},
+	})
+	createTargets(productLabelsToVariables, res.bp2buildTargets)
 
 	platformMappingContent, err := platformMappingContent(
 		productLabelsToVariables,
@@ -93,26 +135,6 @@ func createProductConfigFiles(
 
 	res.injectionFiles = []BazelFile{
 		newFile(
-			currentProductFolder,
-			"soong.variables.bzl",
-			`variables = json.decode("""`+strings.ReplaceAll(string(productVariablesBytes), "\\", "\\\\")+`""")`),
-		newFile(
-			currentProductFolder,
-			"BUILD",
-			productReplacer.Replace(`
-package(default_visibility=[
-    "@soong_injection//product_config_platforms:__subpackages__",
-    "@//build/bazel/product_config:__subpackages__",
-])
-load(":soong.variables.bzl", _soong_variables = "variables")
-load("@//build/bazel/product_config:android_product.bzl", "android_product")
-
-android_product(
-    name = "{PRODUCT}-{VARIANT}",
-    soong_variables = _soong_variables,
-)
-`)),
-		newFile(
 			"product_config_platforms",
 			"BUILD.bazel",
 			productReplacer.Replace(`
@@ -121,7 +143,7 @@ package(default_visibility = [
 	"@soong_injection//product_config_platforms:__subpackages__",
 ])
 
-load("//{PRODUCT_FOLDER}:soong.variables.bzl", _soong_variables = "variables")
+load("@//{PRODUCT_FOLDER}:soong.variables.bzl", _soong_variables = "variables")
 load("@//build/bazel/product_config:android_product.bzl", "android_product")
 
 # Bazel will qualify its outputs by the platform name. When switching between products, this
@@ -130,7 +152,7 @@ load("@//build/bazel/product_config:android_product.bzl", "android_product")
 # extra rebuilding, make mixed builds always use a single platform so that the bazel artifacts
 # are always under the same path.
 android_product(
-    name = "mixed_builds_product-{VARIANT}",
+    name = "mixed_builds_product",
     soong_variables = _soong_variables,
     extra_constraints = ["@//build/bazel/platforms:mixed_builds"],
 )
@@ -144,34 +166,35 @@ android_product(
 # TODO: When we start generating the platforms for more than just the
 # currently lunched product, they should all be listed here
 product_labels = [
-  "@soong_injection//product_config_platforms:mixed_builds_product-{VARIANT}",
-  "@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}",
+  "@soong_injection//product_config_platforms:mixed_builds_product",
+  "@//{PRODUCT_FOLDER}:{PRODUCT}",
 `)+strings.Join(productsForTesting, "\n")+"\n]\n"),
 		newFile(
 			"product_config_platforms",
 			"common.bazelrc",
 			productReplacer.Replace(`
 build --platform_mappings=platform_mappings
-build --platforms @soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_linux_x86_64
+build --platforms @//{PRODUCT_FOLDER}:{PRODUCT}_linux_x86_64
+build --//build/bazel/product_config:target_build_variant={VARIANT}
 
-build:android --platforms=@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}
-build:linux_x86 --platforms=@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_linux_x86
-build:linux_x86_64 --platforms=@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_linux_x86_64
-build:linux_bionic_x86_64 --platforms=@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_linux_bionic_x86_64
-build:linux_musl_x86 --platforms=@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_linux_musl_x86
-build:linux_musl_x86_64 --platforms=@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_linux_musl_x86_64
+build:android --platforms=@//{PRODUCT_FOLDER}:{PRODUCT}
+build:linux_x86 --platforms=@//{PRODUCT_FOLDER}:{PRODUCT}_linux_x86
+build:linux_x86_64 --platforms=@//{PRODUCT_FOLDER}:{PRODUCT}_linux_x86_64
+build:linux_bionic_x86_64 --platforms=@//{PRODUCT_FOLDER}:{PRODUCT}_linux_bionic_x86_64
+build:linux_musl_x86 --platforms=@//{PRODUCT_FOLDER}:{PRODUCT}_linux_musl_x86
+build:linux_musl_x86_64 --platforms=@//{PRODUCT_FOLDER}:{PRODUCT}_linux_musl_x86_64
 `)),
 		newFile(
 			"product_config_platforms",
 			"linux.bazelrc",
 			productReplacer.Replace(`
-build --host_platform @soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_linux_x86_64
+build --host_platform @//{PRODUCT_FOLDER}:{PRODUCT}_linux_x86_64
 `)),
 		newFile(
 			"product_config_platforms",
 			"darwin.bazelrc",
 			productReplacer.Replace(`
-build --host_platform @soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_darwin_x86_64
+build --host_platform @//{PRODUCT_FOLDER}:{PRODUCT}_darwin_x86_64
 `)),
 	}
 	res.bp2buildFiles = []BazelFile{
@@ -179,13 +202,17 @@ build --host_platform @soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_dar
 			"",
 			"platform_mappings",
 			platformMappingContent),
+		newFile(
+			currentProductFolder,
+			"soong.variables.bzl",
+			`variables = json.decode("""`+strings.ReplaceAll(string(productVariablesBytes), "\\", "\\\\")+`""")`),
 	}
 
 	return res, nil
 }
 
 func platformMappingContent(
-	productLabelToVariables map[string]*android.ProductVariables,
+	productLabelToVariables map[bazelLabel]*android.ProductVariables,
 	soongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions,
 	convertedModulePathMap map[string]string) (string, error) {
 	var result strings.Builder
@@ -224,17 +251,11 @@ var bazelPlatformSuffixes = []string{
 }
 
 func platformMappingSingleProduct(
-	label string,
+	label bazelLabel,
 	productVariables *android.ProductVariables,
 	soongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions,
 	convertedModulePathMap map[string]string,
 	result *strings.Builder) {
-	targetBuildVariant := "user"
-	if proptools.Bool(productVariables.Eng) {
-		targetBuildVariant = "eng"
-	} else if proptools.Bool(productVariables.Debuggable) {
-		targetBuildVariant = "userdebug"
-	}
 
 	platform_sdk_version := -1
 	if productVariables.Platform_sdk_version != nil {
@@ -248,7 +269,7 @@ func platformMappingSingleProduct(
 
 	for _, suffix := range bazelPlatformSuffixes {
 		result.WriteString("  ")
-		result.WriteString(label)
+		result.WriteString(label.String())
 		result.WriteString(suffix)
 		result.WriteString("\n")
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:always_use_prebuilt_sdks=%t\n", proptools.Bool(productVariables.Always_use_prebuilt_sdks)))
@@ -262,7 +283,6 @@ func platformMappingSingleProduct(
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:cfi_exclude_paths=%s\n", strings.Join(productVariables.CFIExcludePaths, ",")))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:cfi_include_paths=%s\n", strings.Join(productVariables.CFIIncludePaths, ",")))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:compressed_apex=%t\n", proptools.Bool(productVariables.CompressedApex)))
-		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:debuggable=%t\n", proptools.Bool(productVariables.Debuggable)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:default_app_certificate=%s\n", proptools.String(productVariables.DefaultAppCertificate)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:default_app_certificate_filegroup=%s\n", defaultAppCertificateFilegroup))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:device_abi=%s\n", strings.Join(productVariables.DeviceAbi, ",")))
@@ -270,10 +290,9 @@ func platformMappingSingleProduct(
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:device_name=%s\n", proptools.String(productVariables.DeviceName)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:device_page_size_agnostic=%t\n", proptools.Bool(productVariables.DevicePageSizeAgnostic)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:device_product=%s\n", proptools.String(productVariables.DeviceProduct)))
-		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:device_platform=%s\n", label))
+		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:device_platform=%s\n", label.String()))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:enable_cfi=%t\n", proptools.BoolDefault(productVariables.EnableCFI, true)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:enforce_vintf_manifest=%t\n", proptools.Bool(productVariables.Enforce_vintf_manifest)))
-		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:eng=%t\n", proptools.Bool(productVariables.Eng)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:malloc_not_svelte=%t\n", proptools.Bool(productVariables.Malloc_not_svelte)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:malloc_pattern_fill_contents=%t\n", proptools.Bool(productVariables.Malloc_pattern_fill_contents)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:malloc_zero_contents=%t\n", proptools.Bool(productVariables.Malloc_zero_contents)))
@@ -282,6 +301,7 @@ func platformMappingSingleProduct(
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:memtag_heap_sync_include_paths=%s\n", strings.Join(productVariables.MemtagHeapSyncIncludePaths, ",")))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:manifest_package_name_overrides=%s\n", strings.Join(productVariables.ManifestPackageNameOverrides, ",")))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:native_coverage=%t\n", proptools.Bool(productVariables.Native_coverage)))
+		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:platform_sdk_final=%t\n", proptools.Bool(productVariables.Platform_sdk_final)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:platform_version_name=%s\n", proptools.String(productVariables.Platform_version_name)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:product_brand=%s\n", productVariables.ProductBrand))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:product_manufacturer=%s\n", productVariables.ProductManufacturer))
@@ -293,7 +313,6 @@ func platformMappingSingleProduct(
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:release_version=%s\n", productVariables.ReleaseVersion))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:platform_sdk_version=%d\n", platform_sdk_version))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:safestack=%t\n", proptools.Bool(productVariables.Safestack)))
-		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:target_build_variant=%s\n", targetBuildVariant))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:treble_linker_namespaces=%t\n", proptools.Bool(productVariables.Treble_linker_namespaces)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:tidy_checks=%s\n", proptools.String(productVariables.TidyChecks)))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:uml=%t\n", proptools.Bool(productVariables.Uml)))
@@ -421,8 +440,14 @@ func starlarkMapToProductVariables(in map[string]starlark.Value) (android.Produc
 	return result, nil
 }
 
-func createTargets(productLabelsToVariables map[string]*android.ProductVariables) map[string]BazelTargets {
-	res := make(map[string]BazelTargets)
+func createTargets(productLabelsToVariables map[bazelLabel]*android.ProductVariables, res map[string]BazelTargets) {
+	createGeneratedAndroidCertificateDirectories(productLabelsToVariables, res)
+	for label, variables := range productLabelsToVariables {
+		createSystemPartition(label, &variables.PartitionVarsForBazelMigrationOnlyDoNotUse, res)
+	}
+}
+
+func createGeneratedAndroidCertificateDirectories(productLabelsToVariables map[bazelLabel]*android.ProductVariables, targets map[string]BazelTargets) {
 	var allDefaultAppCertificateDirs []string
 	for _, productVariables := range productLabelsToVariables {
 		if proptools.String(productVariables.DefaultAppCertificate) != "" {
@@ -433,20 +458,284 @@ func createTargets(productLabelsToVariables map[string]*android.ProductVariables
 		}
 	}
 	for _, dir := range allDefaultAppCertificateDirs {
-		content := fmt.Sprintf(ruleTargetTemplate, "filegroup", "generated_android_certificate_directory", propsToAttributes(map[string]string{
-			"srcs": `glob([
+		content := `filegroup(
+    name = "generated_android_certificate_directory",
+    srcs = glob([
         "*.pk8",
         "*.pem",
         "*.avbpubkey",
-    ])`,
-			"visibility": `["//visibility:public"]`,
-		}))
-		res[dir] = append(res[dir], BazelTarget{
+    ]),
+    visibility = ["//visibility:public"],
+)`
+		targets[dir] = append(targets[dir], BazelTarget{
 			name:        "generated_android_certificate_directory",
 			packageName: dir,
 			content:     content,
 			ruleClass:   "filegroup",
 		})
 	}
-	return res
+}
+
+func createSystemPartition(platformLabel bazelLabel, variables *android.PartitionVariables, targets map[string]BazelTargets) {
+	if !variables.PartitionQualifiedVariables["system"].BuildingImage {
+		return
+	}
+
+	imageProps := generateImagePropDictionary(variables, "system")
+	imageProps["skip_fsck"] = "true"
+
+	var properties strings.Builder
+	for _, prop := range android.SortedKeys(imageProps) {
+		properties.WriteString(prop)
+		properties.WriteRune('=')
+		properties.WriteString(imageProps[prop])
+		properties.WriteRune('\n')
+	}
+
+	targets[platformLabel.pkg] = append(targets[platformLabel.pkg], BazelTarget{
+		name:        "system_image",
+		packageName: platformLabel.pkg,
+		content: fmt.Sprintf(`partition(
+    name = "system_image",
+    base_staging_dir = "//build/bazel/bazel_sandwich:system_staging_dir",
+    base_staging_dir_file_list = "//build/bazel/bazel_sandwich:system_staging_dir_file_list",
+    root_dir = "//build/bazel/bazel_sandwich:root_staging_dir",
+    image_properties = """
+%s
+""",
+    type = "system",
+)`, properties.String()),
+		ruleClass: "partition",
+		loads: []BazelLoad{{
+			file: "//build/bazel/rules/partitions:partition.bzl",
+			symbols: []BazelLoadSymbol{{
+				symbol: "partition",
+			}},
+		}},
+	}, BazelTarget{
+		name:        "system_image_test",
+		packageName: platformLabel.pkg,
+		content: `partition_diff_test(
+    name = "system_image_test",
+    partition1 = "//build/bazel/bazel_sandwich:make_system_image",
+    partition2 = ":system_image",
+)`,
+		ruleClass: "partition_diff_test",
+		loads: []BazelLoad{{
+			file: "//build/bazel/rules/partitions/diff:partition_diff.bzl",
+			symbols: []BazelLoadSymbol{{
+				symbol: "partition_diff_test",
+			}},
+		}},
+	}, BazelTarget{
+		name:        "run_system_image_test",
+		packageName: platformLabel.pkg,
+		content: `run_test_in_build(
+    name = "run_system_image_test",
+    test = ":system_image_test",
+)`,
+		ruleClass: "run_test_in_build",
+		loads: []BazelLoad{{
+			file: "//build/bazel/bazel_sandwich:run_test_in_build.bzl",
+			symbols: []BazelLoadSymbol{{
+				symbol: "run_test_in_build",
+			}},
+		}},
+	})
+}
+
+var allPartitionTypes = []string{
+	"system",
+	"vendor",
+	"cache",
+	"userdata",
+	"product",
+	"system_ext",
+	"oem",
+	"odm",
+	"vendor_dlkm",
+	"odm_dlkm",
+	"system_dlkm",
+}
+
+// An equivalent of make's generate-image-prop-dictionary function
+func generateImagePropDictionary(variables *android.PartitionVariables, partitionType string) map[string]string {
+	partitionQualifiedVariables, ok := variables.PartitionQualifiedVariables[partitionType]
+	if !ok {
+		panic("Unknown partitionType: " + partitionType)
+	}
+	ret := map[string]string{}
+	if partitionType == "system" {
+		if len(variables.PartitionQualifiedVariables["system_other"].BoardPartitionSize) > 0 {
+			ret["system_other_size"] = variables.PartitionQualifiedVariables["system_other"].BoardPartitionSize
+		}
+		if len(partitionQualifiedVariables.ProductHeadroom) > 0 {
+			ret["system_headroom"] = partitionQualifiedVariables.ProductHeadroom
+		}
+		addCommonRoFlagsToImageProps(variables, partitionType, ret)
+	}
+	// TODO: other partition-specific logic
+	if variables.TargetUserimagesUseExt2 {
+		ret["fs_type"] = "ext2"
+	} else if variables.TargetUserimagesUseExt3 {
+		ret["fs_type"] = "ext3"
+	} else if variables.TargetUserimagesUseExt4 {
+		ret["fs_type"] = "ext4"
+	}
+
+	if !variables.TargetUserimagesSparseExtDisabled {
+		ret["extfs_sparse_flag"] = "-s"
+	}
+	if !variables.TargetUserimagesSparseErofsDisabled {
+		ret["erofs_sparse_flag"] = "-s"
+	}
+	if !variables.TargetUserimagesSparseSquashfsDisabled {
+		ret["squashfs_sparse_flag"] = "-s"
+	}
+	if !variables.TargetUserimagesSparseF2fsDisabled {
+		ret["f2fs_sparse_flag"] = "-S"
+	}
+	erofsCompressor := variables.BoardErofsCompressor
+	if len(erofsCompressor) == 0 && hasErofsPartition(variables) {
+		if len(variables.BoardErofsUseLegacyCompression) > 0 {
+			erofsCompressor = "lz4"
+		} else {
+			erofsCompressor = "lz4hc,9"
+		}
+	}
+	if len(erofsCompressor) > 0 {
+		ret["erofs_default_compressor"] = erofsCompressor
+	}
+	if len(variables.BoardErofsCompressorHints) > 0 {
+		ret["erofs_default_compress_hints"] = variables.BoardErofsCompressorHints
+	}
+	if len(variables.BoardErofsCompressorHints) > 0 {
+		ret["erofs_default_compress_hints"] = variables.BoardErofsCompressorHints
+	}
+	if len(variables.BoardErofsPclusterSize) > 0 {
+		ret["erofs_pcluster_size"] = variables.BoardErofsPclusterSize
+	}
+	if len(variables.BoardErofsShareDupBlocks) > 0 {
+		ret["erofs_share_dup_blocks"] = variables.BoardErofsShareDupBlocks
+	}
+	if len(variables.BoardErofsUseLegacyCompression) > 0 {
+		ret["erofs_use_legacy_compression"] = variables.BoardErofsUseLegacyCompression
+	}
+	if len(variables.BoardExt4ShareDupBlocks) > 0 {
+		ret["ext4_share_dup_blocks"] = variables.BoardExt4ShareDupBlocks
+	}
+	if len(variables.BoardFlashLogicalBlockSize) > 0 {
+		ret["flash_logical_block_size"] = variables.BoardFlashLogicalBlockSize
+	}
+	if len(variables.BoardFlashEraseBlockSize) > 0 {
+		ret["flash_erase_block_size"] = variables.BoardFlashEraseBlockSize
+	}
+	if len(variables.BoardExt4ShareDupBlocks) > 0 {
+		ret["ext4_share_dup_blocks"] = variables.BoardExt4ShareDupBlocks
+	}
+	if len(variables.BoardExt4ShareDupBlocks) > 0 {
+		ret["ext4_share_dup_blocks"] = variables.BoardExt4ShareDupBlocks
+	}
+	for _, partitionType := range allPartitionTypes {
+		if qualifiedVariables, ok := variables.PartitionQualifiedVariables[partitionType]; ok && len(qualifiedVariables.ProductVerityPartition) > 0 {
+			ret[partitionType+"_verity_block_device"] = qualifiedVariables.ProductVerityPartition
+		}
+	}
+	// TODO: Vboot
+	// TODO: AVB
+	if variables.BoardUsesRecoveryAsBoot {
+		ret["recovery_as_boot"] = "true"
+	}
+	if variables.BoardBuildGkiBootImageWithoutRamdisk {
+		ret["gki_boot_image_without_ramdisk"] = "true"
+	}
+	if variables.ProductUseDynamicPartitionSize {
+		ret["use_dynamic_partition_size"] = "true"
+	}
+	if variables.CopyImagesForTargetFilesZip {
+		ret["use_fixed_timestamp"] = "true"
+	}
+	return ret
+}
+
+// Soong equivalent of make's add-common-ro-flags-to-image-props
+func addCommonRoFlagsToImageProps(variables *android.PartitionVariables, partitionType string, ret map[string]string) {
+	partitionQualifiedVariables, ok := variables.PartitionQualifiedVariables[partitionType]
+	if !ok {
+		panic("Unknown partitionType: " + partitionType)
+	}
+	if len(partitionQualifiedVariables.BoardErofsCompressor) > 0 {
+		ret[partitionType+"_erofs_compressor"] = partitionQualifiedVariables.BoardErofsCompressor
+	}
+	if len(partitionQualifiedVariables.BoardErofsCompressHints) > 0 {
+		ret[partitionType+"_erofs_compress_hints"] = partitionQualifiedVariables.BoardErofsCompressHints
+	}
+	if len(partitionQualifiedVariables.BoardErofsPclusterSize) > 0 {
+		ret[partitionType+"_erofs_pcluster_size"] = partitionQualifiedVariables.BoardErofsPclusterSize
+	}
+	if len(partitionQualifiedVariables.BoardExtfsRsvPct) > 0 {
+		ret[partitionType+"_extfs_rsv_pct"] = partitionQualifiedVariables.BoardExtfsRsvPct
+	}
+	if len(partitionQualifiedVariables.BoardF2fsSloadCompressFlags) > 0 {
+		ret[partitionType+"_f2fs_sldc_flags"] = partitionQualifiedVariables.BoardF2fsSloadCompressFlags
+	}
+	if len(partitionQualifiedVariables.BoardFileSystemCompress) > 0 {
+		ret[partitionType+"_f2fs_compress"] = partitionQualifiedVariables.BoardFileSystemCompress
+	}
+	if len(partitionQualifiedVariables.BoardFileSystemType) > 0 {
+		ret[partitionType+"_fs_type"] = partitionQualifiedVariables.BoardFileSystemType
+	}
+	if len(partitionQualifiedVariables.BoardJournalSize) > 0 {
+		ret[partitionType+"_journal_size"] = partitionQualifiedVariables.BoardJournalSize
+	}
+	if len(partitionQualifiedVariables.BoardPartitionReservedSize) > 0 {
+		ret[partitionType+"_reserved_size"] = partitionQualifiedVariables.BoardPartitionReservedSize
+	}
+	if len(partitionQualifiedVariables.BoardPartitionSize) > 0 {
+		ret[partitionType+"_size"] = partitionQualifiedVariables.BoardPartitionSize
+	}
+	if len(partitionQualifiedVariables.BoardSquashfsBlockSize) > 0 {
+		ret[partitionType+"_squashfs_block_size"] = partitionQualifiedVariables.BoardSquashfsBlockSize
+	}
+	if len(partitionQualifiedVariables.BoardSquashfsCompressor) > 0 {
+		ret[partitionType+"_squashfs_compressor"] = partitionQualifiedVariables.BoardSquashfsCompressor
+	}
+	if len(partitionQualifiedVariables.BoardSquashfsCompressorOpt) > 0 {
+		ret[partitionType+"_squashfs_compressor_opt"] = partitionQualifiedVariables.BoardSquashfsCompressorOpt
+	}
+	if len(partitionQualifiedVariables.BoardSquashfsDisable4kAlign) > 0 {
+		ret[partitionType+"_squashfs_disable_4k_align"] = partitionQualifiedVariables.BoardSquashfsDisable4kAlign
+	}
+	if len(partitionQualifiedVariables.BoardPartitionSize) == 0 && len(partitionQualifiedVariables.BoardPartitionReservedSize) == 0 && len(partitionQualifiedVariables.ProductHeadroom) == 0 {
+		ret[partitionType+"_disable_sparse"] = "true"
+	}
+	addCommonFlagsToImageProps(variables, partitionType, ret)
+}
+
+func hasErofsPartition(variables *android.PartitionVariables) bool {
+	return variables.PartitionQualifiedVariables["product"].BoardFileSystemType == "erofs" ||
+		variables.PartitionQualifiedVariables["system_ext"].BoardFileSystemType == "erofs" ||
+		variables.PartitionQualifiedVariables["odm"].BoardFileSystemType == "erofs" ||
+		variables.PartitionQualifiedVariables["vendor"].BoardFileSystemType == "erofs" ||
+		variables.PartitionQualifiedVariables["system"].BoardFileSystemType == "erofs" ||
+		variables.PartitionQualifiedVariables["vendor_dlkm"].BoardFileSystemType == "erofs" ||
+		variables.PartitionQualifiedVariables["odm_dlkm"].BoardFileSystemType == "erofs" ||
+		variables.PartitionQualifiedVariables["system_dlkm"].BoardFileSystemType == "erofs"
+}
+
+// Soong equivalent of make's add-common-flags-to-image-props
+func addCommonFlagsToImageProps(variables *android.PartitionVariables, partitionType string, ret map[string]string) {
+	// The selinux_fc will be handled separately
+	partitionQualifiedVariables, ok := variables.PartitionQualifiedVariables[partitionType]
+	if !ok {
+		panic("Unknown partitionType: " + partitionType)
+	}
+	ret["building_"+partitionType+"_image"] = boolToMakeString(partitionQualifiedVariables.BuildingImage)
+}
+
+func boolToMakeString(b bool) string {
+	if b {
+		return "true"
+	}
+	return ""
 }

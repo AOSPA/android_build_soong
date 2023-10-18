@@ -773,9 +773,12 @@ func TestLoadStatements(t *testing.T) {
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_library")`,
@@ -783,14 +786,20 @@ func TestLoadStatements(t *testing.T) {
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 				BazelTarget{
-					name:            "bar",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "bar",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_library")`,
@@ -798,14 +807,20 @@ func TestLoadStatements(t *testing.T) {
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 				BazelTarget{
-					name:            "bar",
-					ruleClass:       "cc_binary",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "bar",
+					ruleClass: "cc_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_binary"}},
+					}},
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_binary", "cc_library")`,
@@ -813,19 +828,28 @@ func TestLoadStatements(t *testing.T) {
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 				BazelTarget{
-					name:            "bar",
-					ruleClass:       "cc_binary",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "bar",
+					ruleClass: "cc_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_binary"}},
+					}},
 				},
 				BazelTarget{
-					name:            "baz",
-					ruleClass:       "java_binary",
-					bzlLoadLocation: "//build/bazel/rules:java.bzl",
+					name:      "baz",
+					ruleClass: "java_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:java.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "java_binary"}},
+					}},
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_binary", "cc_library")
@@ -834,19 +858,25 @@ load("//build/bazel/rules:java.bzl", "java_binary")`,
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_binary",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_binary"}},
+					}},
 				},
 				BazelTarget{
-					name:            "bar",
-					ruleClass:       "java_binary",
-					bzlLoadLocation: "//build/bazel/rules:java.bzl",
+					name:      "bar",
+					ruleClass: "java_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:java.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "java_binary"}},
+					}},
 				},
 				BazelTarget{
 					name:      "baz",
 					ruleClass: "genrule",
-					// Note: no bzlLoadLocation for native rules
+					// Note: no loads for native rules
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_binary")
@@ -1743,7 +1773,8 @@ func TestCommonBp2BuildModuleAttrs(t *testing.T) {
 			Description:                "Required into data test",
 			ModuleTypeUnderTest:        "filegroup",
 			ModuleTypeUnderTestFactory: android.FileGroupFactory,
-			Blueprint: SimpleModuleDoNotConvertBp2build("filegroup", "reqd") + `
+			StubbedBuildDefinitions:    []string{"reqd"},
+			Blueprint: simpleModule("filegroup", "reqd") + `
 filegroup {
     name: "fg_foo",
     required: ["reqd"],
@@ -1759,7 +1790,8 @@ filegroup {
 			Description:                "Required into data test, cyclic self reference is filtered out",
 			ModuleTypeUnderTest:        "filegroup",
 			ModuleTypeUnderTestFactory: android.FileGroupFactory,
-			Blueprint: SimpleModuleDoNotConvertBp2build("filegroup", "reqd") + `
+			StubbedBuildDefinitions:    []string{"reqd"},
+			Blueprint: simpleModule("filegroup", "reqd") + `
 filegroup {
     name: "fg_foo",
     required: ["reqd", "fg_foo"],
@@ -1775,8 +1807,9 @@ filegroup {
 			Description:                "Required via arch into data test",
 			ModuleTypeUnderTest:        "python_library",
 			ModuleTypeUnderTestFactory: python.PythonLibraryFactory,
-			Blueprint: SimpleModuleDoNotConvertBp2build("python_library", "reqdx86") +
-				SimpleModuleDoNotConvertBp2build("python_library", "reqdarm") + `
+			StubbedBuildDefinitions:    []string{"reqdx86", "reqdarm"},
+			Blueprint: simpleModule("python_library", "reqdx86") +
+				simpleModule("python_library", "reqdarm") + `
 python_library {
     name: "fg_foo",
     arch: {
@@ -1809,7 +1842,8 @@ python_library {
 				"data.bin": "",
 				"src.py":   "",
 			},
-			Blueprint: SimpleModuleDoNotConvertBp2build("python_library", "reqd") + `
+			StubbedBuildDefinitions: []string{"reqd"},
+			Blueprint: simpleModule("python_library", "reqd") + `
 python_library {
     name: "fg_foo",
     data: ["data.bin"],
@@ -1831,7 +1865,8 @@ python_library {
 			Description:                "All props-to-attrs at once together test",
 			ModuleTypeUnderTest:        "filegroup",
 			ModuleTypeUnderTestFactory: android.FileGroupFactory,
-			Blueprint: SimpleModuleDoNotConvertBp2build("filegroup", "reqd") + `
+			StubbedBuildDefinitions:    []string{"reqd"},
+			Blueprint: simpleModule("filegroup", "reqd") + `
 filegroup {
     name: "fg_foo",
     required: ["reqd"],
@@ -1956,6 +1991,41 @@ func TestAlreadyPresentBuildTarget(t *testing.T) {
 		Blueprint:                    bp,
 		ExpectedBazelTargets:         expectedBazelTargets,
 		Description:                  "Not duplicating work for an already-present BUILD target.",
+	})
+}
+
+func TestAlreadyPresentOneToManyBuildTarget(t *testing.T) {
+	bp := `
+	custom {
+		name: "foo",
+    one_to_many_prop: true,
+	}
+	custom {
+		name: "bar",
+	}
+	`
+	alreadyPresentBuildFile :=
+		MakeBazelTarget(
+			"custom",
+			// one_to_many_prop ensures that foo generates "foo_proto_library_deps".
+			"foo_proto_library_deps",
+			AttrNameToString{},
+		)
+	expectedBazelTargets := []string{
+		MakeBazelTarget(
+			"custom",
+			"bar",
+			AttrNameToString{},
+		),
+	}
+	registerCustomModule := func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("custom", customModuleFactoryHostAndDevice)
+	}
+	RunBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		AlreadyExistingBuildContents: alreadyPresentBuildFile,
+		Blueprint:                    bp,
+		ExpectedBazelTargets:         expectedBazelTargets,
+		Description:                  "Not duplicating work for an already-present BUILD target (different generated name)",
 	})
 }
 

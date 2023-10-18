@@ -920,7 +920,7 @@ type BazelGenruleAttributes struct {
 }
 
 // ConvertWithBp2build converts a Soong module -> Bazel target.
-func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (m *Module) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	// Bazel only has the "tools" attribute.
 	tools_prop := android.BazelLabelForModuleDeps(ctx, m.properties.Tools)
 	tool_files_prop := android.BazelLabelForModuleSrc(ctx, m.properties.Tool_files)
@@ -993,7 +993,10 @@ func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 	var cmdProp bazel.StringAttribute
 	cmdProp.SetValue(replaceVariables(proptools.String(m.properties.Cmd)))
-	allProductVariableProps := android.ProductVariableProperties(ctx, m)
+	allProductVariableProps, errs := android.ProductVariableProperties(ctx, m)
+	for _, err := range errs {
+		ctx.ModuleErrorf("ProductVariableProperties error: %s", err)
+	}
 	if productVariableProps, ok := allProductVariableProps["Cmd"]; ok {
 		for productVariable, value := range productVariableProps {
 			var cmd string

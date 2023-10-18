@@ -25,6 +25,7 @@ import (
 	"android/soong/bazel"
 	"android/soong/bazel/cquery"
 	"android/soong/tradefed"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 )
 
 // TestLinkerProperties properties to be registered via the linker
@@ -700,7 +701,7 @@ type testBinaryAttributes struct {
 // TODO(b/244432609): handle `isolated` property.
 // TODO(b/244432134): handle custom runpaths for tests that assume runfile layouts not
 // default to bazel. (see linkerInit function)
-func testBinaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
+func testBinaryBp2build(ctx android.Bp2buildMutatorContext, m *Module) {
 	var testBinaryAttrs testBinaryAttributes
 	testBinaryAttrs.binaryAttributes = binaryBp2buildAttrs(ctx, m)
 
@@ -718,6 +719,13 @@ func testBinaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
 				combinedData.Append(android.BazelLabelForModuleDeps(ctx, p.Data_libs))
 				data.SetSelectValue(axis, config, combinedData)
 				tags.SetSelectValue(axis, config, p.Test_options.Tags)
+
+				// TODO: b/300117121 - handle bp2build conversion of non-unit tests
+				// default to true to only handle non-nil falses
+				if !BoolDefault(p.Test_options.Unit_test, true) {
+					ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "Host unit_test = false")
+					return
+				}
 			}
 		}
 	}

@@ -596,6 +596,7 @@ type Generator interface {
 	GeneratorFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags
 	GeneratorSources(ctx ModuleContext) GeneratedSource
 	GeneratorBuildActions(ctx ModuleContext, flags Flags, deps PathDeps)
+	GeneratorBp2build(ctx android.Bp2buildMutatorContext) bool
 }
 
 // compiler is the interface for a compiler helper object. Different module decorators may implement
@@ -4242,7 +4243,17 @@ func (c *Module) typ() moduleType {
 }
 
 // ConvertWithBp2build converts Module to Bazel for bp2build.
-func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (c *Module) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
+	if len(c.generators) > 0 {
+		allConverted := true
+		for _, generator := range c.generators {
+			allConverted = allConverted && generator.GeneratorBp2build(ctx)
+		}
+		if allConverted {
+			return
+		}
+	}
+
 	prebuilt := c.IsPrebuilt()
 	switch c.typ() {
 	case binary:
@@ -4283,26 +4294,10 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		}
 	case ndkPrebuiltStl:
 		ndkPrebuiltStlBp2build(ctx, c)
+	case ndkLibrary:
+		ndkLibraryBp2build(ctx, c)
 	default:
 		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
-	}
-}
-
-var _ android.ApiProvider = (*Module)(nil)
-
-func (c *Module) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
-	if c.IsPrebuilt() {
-		return
-	}
-	switch c.typ() {
-	case fullLibrary:
-		apiContributionBp2Build(ctx, c)
-	case sharedLibrary:
-		apiContributionBp2Build(ctx, c)
-	case headerLibrary:
-		// Aggressively generate api targets for all header modules
-		// This is necessary since the header module does not know if it is a dep of API surface stub library
-		apiLibraryHeadersBp2Build(ctx, c)
 	}
 }
 

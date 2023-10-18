@@ -65,6 +65,7 @@ var (
 
 		"build/bazel":                        Bp2BuildDefaultTrueRecursively,
 		"build/make/target/product/security": Bp2BuildDefaultTrue,
+		"build/make/tools":                   Bp2BuildDefaultTrue,
 		"build/make/tools/protos":            Bp2BuildDefaultTrue,
 		"build/make/tools/releasetools":      Bp2BuildDefaultTrue,
 		"build/make/tools/sbom":              Bp2BuildDefaultTrue,
@@ -79,7 +80,9 @@ var (
 		"build/soong/scripts":                Bp2BuildDefaultTrueRecursively,
 
 		"cts/common/device-side/nativetesthelper/jni": Bp2BuildDefaultTrueRecursively,
-		"cts/libs/json": Bp2BuildDefaultTrueRecursively,
+		"cts/libs/json":                          Bp2BuildDefaultTrueRecursively,
+		"cts/tests/tests/gesture":                Bp2BuildDefaultTrueRecursively,
+		"platform_testing/libraries/annotations": Bp2BuildDefaultTrueRecursively,
 
 		"dalvik/tools/dexdeps": Bp2BuildDefaultTrueRecursively,
 
@@ -193,6 +196,7 @@ var (
 		"external/openscreen":                    Bp2BuildDefaultTrueRecursively,
 		"external/ow2-asm":                       Bp2BuildDefaultTrueRecursively,
 		"external/pcre":                          Bp2BuildDefaultTrueRecursively,
+		"external/perfmark/api":                  Bp2BuildDefaultTrueRecursively,
 		"external/protobuf":                      Bp2BuildDefaultTrueRecursively,
 		"external/python/pyyaml/lib/yaml":        Bp2BuildDefaultTrueRecursively,
 		"external/python/six":                    Bp2BuildDefaultTrueRecursively,
@@ -241,7 +245,6 @@ var (
 		"frameworks/hardware/interfaces/stats/aidl":          Bp2BuildDefaultTrue,
 		"frameworks/libs/modules-utils/build":                Bp2BuildDefaultTrueRecursively,
 		"frameworks/libs/modules-utils/java":                 Bp2BuildDefaultTrue,
-		"frameworks/libs/net/common/native":                  Bp2BuildDefaultTrueRecursively, // TODO(b/296014682): Remove this path
 		"frameworks/native":                                  Bp2BuildDefaultTrue,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/arect":                       Bp2BuildDefaultTrueRecursively,
@@ -337,6 +340,7 @@ var (
 		"prebuilts/clang/host/linux-x86":                   Bp2BuildDefaultTrueRecursively,
 		"prebuilts/gradle-plugin":                          Bp2BuildDefaultTrueRecursively,
 		"prebuilts/runtime/mainline/platform/sdk":          Bp2BuildDefaultTrueRecursively,
+		"prebuilts/module_sdk":                             Bp2BuildDefaultTrueRecursively,
 		"prebuilts/sdk":                                    Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/androidx":                   Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/androidx-legacy":            Bp2BuildDefaultTrue,
@@ -429,6 +433,7 @@ var (
 
 		"tools/apifinder":                             Bp2BuildDefaultTrue,
 		"tools/apksig":                                Bp2BuildDefaultTrue,
+		"tools/dexter/slicer":                         Bp2BuildDefaultTrueRecursively,
 		"tools/external_updater":                      Bp2BuildDefaultTrueRecursively,
 		"tools/metalava":                              Bp2BuildDefaultTrueRecursively,
 		"tools/platform-compat/java/android/compat":   Bp2BuildDefaultTrueRecursively,
@@ -750,6 +755,7 @@ var (
 		//system/core/fs_mgr
 		"libfs_mgr",
 
+		"libcodec2_aidl",
 		"libcodec2_hidl@1.0",
 		"libcodec2_hidl@1.1",
 		"libcodec2_hidl@1.2",
@@ -849,6 +855,10 @@ var (
 
 		"libstagefright_headers",
 
+		// Apps with JNI libs
+		"SimpleJNI",
+		"libsimplejni",
+
 		// aidl
 		"aidl",
 		"libaidl-common",
@@ -892,9 +902,6 @@ var (
 
 		"merge_annotation_zips_test",
 
-		// bouncycastle dep
-		"platform-test-annotations",
-
 		// java_resources with multiple resource_dirs
 		"emma",
 
@@ -904,23 +911,71 @@ var (
 		"ndk_libc++_static",
 		"ndk_libc++_shared",
 		"ndk_system",
+
+		// allowlist //prebuilts/common/misc/androidx-test/...
+		"androidx.test.runner",
+		"androidx.test.runner-nodeps",
+		"androidx.test.services.storage",
+		"androidx.test.services.storage-nodeps",
+		"androidx.test.monitor",
+		"androidx.test.monitor-nodeps",
+		"androidx.test.annotation",
+		"androidx.test.annotation-nodeps",
+
+		// jni deps of an internal android_test (b/297405812)
+		"libdexmakerjvmtiagent",
+		"libopenjdkjvmti_headers",
+		"libstaticjvmtiagent",
+
+		// tradefed deps
+		"tradefed-protos",
+		"grpc-java",
+		"grpc-java-api",
+		"grpc-java-auth",
+		"grpc-java-context",
+		"grpc-java-core",
+		"grpc-java-core-inprocess",
+		"grpc-java-core-internal",
+		"grpc-java-core-util",
+		"grpc-java-protobuf",
+		"grpc-java-protobuf-lite",
+		"grpc-java-stub",
+		"grpc-java-annotation-stubs",
+		"grpc-java-annotation-stubs-srcjar",
+		"gen_annotations",
+		"opencensus-java-contrib-grpc-metrics",
+		"opencensus-java-api",
+		"gson",
+		"GsonBuildConfig.java",
+		"gson_version_generator",
+		"lab-resource-grpc",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
+		// go/keep-sorted start
+		"aconfig_declarations",
+		"aconfig_value_set",
+		"aconfig_values",
 		"aidl_interface_headers",
 		"bpf",
+		"cc_aconfig_library",
+		"cc_prebuilt_library",
+		"cc_prebuilt_library_headers",
+		"cc_prebuilt_library_shared",
+		"cc_prebuilt_library_static",
 		"combined_apis",
 		"droiddoc_exported_dir",
-		"license",
-		"linker_config",
 		"java_import",
 		"java_import_host",
 		"java_sdk_library",
+		"java_sdk_library_import",
+		"license",
+		"linker_config",
+		"ndk_headers",
+		"ndk_library",
 		"sysprop_library",
 		"xsd_config",
-		"aconfig_declarations",
-		"aconfig_values",
-		"aconfig_value_set",
+		// go/keep-sorted end
 	}
 
 	// Add the names of modules that bp2build should never convert, if it is
@@ -996,7 +1051,6 @@ var (
 		"conscrypt-for-host",               // TODO(b/210751803), we don't handle path property for filegroups
 		"host-libprotobuf-java-full",       // TODO(b/210751803), we don't handle path property for filegroups
 		"libprotobuf-internal-python-srcs", // TODO(b/210751803), we don't handle path property for filegroups
-		"libprotobuf-java-util-full",       // TODO(b/210751803), we don't handle path property for filegroups
 
 		// go deps:
 		"analyze_bcpf",              // depends on bpmodify a blueprint_go_binary.
@@ -1649,6 +1703,20 @@ var (
 
 		// TODO(b/299974637) Fix linking error
 		"libbinder_rpc_unstable",
+
+		// TODO(b/297356704) sdk_version is unset.
+		"VendorAtomCodeGenJavaTest",
+
+		// android_test from allowlisted packages, but with unconverted deps
+		"MtsLibnativehelperLazyTestCases",
+		"ObjenesisTck",
+		"DevCodelabTest",
+		"MtsTimeZoneDataTestCases",
+		"NanoAndroidTest",
+		"MtsLibnativehelperTestCases",
+
+		// android_test_helper_app from allowlisted packages, but with unconverted deps
+		"SharedLibraryInfoTestApp",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel
@@ -1710,19 +1778,5 @@ var (
 		"droidstubs":  DEFAULT_PRIORITIZED_WEIGHT,
 		"art_":        DEFAULT_PRIORITIZED_WEIGHT,
 		"ndk_library": DEFAULT_PRIORITIZED_WEIGHT,
-	}
-
-	BazelSandwichTargets = []struct {
-		Label string
-		Host  bool
-	}{
-		{
-			Label: "//build/bazel/examples/partitions:system_image",
-			Host:  false,
-		},
-		{
-			Label: "//build/bazel/examples/partitions:run_test",
-			Host:  false,
-		},
 	}
 )

@@ -487,6 +487,9 @@ func bp2buildModuleLabel(ctx BazelConversionContext, module blueprint.Module) st
 	if moduleDir == Bp2BuildTopLevel {
 		moduleDir = ""
 	}
+	if a, ok := module.(Module); ok && IsModulePrebuilt(a) {
+		moduleName = RemoveOptionalPrebuiltPrefix(moduleName)
+	}
 	return fmt.Sprintf("//%s:%s", moduleDir, moduleName)
 }
 
@@ -585,7 +588,7 @@ func PathsForBazelOut(ctx PathContext, paths []string) Paths {
 // For the first two cases, they are defined using the label attribute. For the third case,
 // it's defined with the string attribute.
 func BazelStringOrLabelFromProp(
-	ctx TopDownMutatorContext,
+	ctx Bp2buildMutatorContext,
 	propToDistinguish *string) (bazel.LabelAttribute, bazel.StringAttribute) {
 
 	var labelAttr bazel.LabelAttribute

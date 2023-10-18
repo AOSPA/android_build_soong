@@ -995,7 +995,7 @@ var extractJNI = pctx.AndroidStaticRule("extractJNI",
 			`jni_files=$$(find $outDir/jni -type f) && ` +
 			// print error message if there are no JNI libs for this arch
 			`[ -n "$$jni_files" ] || (echo "ERROR: no JNI libs found for arch ${archString}" && exit 1) && ` +
-			`${config.SoongZipCmd} -o $out -P 'lib/${archString}' ` +
+			`${config.SoongZipCmd} -o $out -L 0 -P 'lib/${archString}' ` +
 			`-C $outDir/jni/${archString} $$(echo $$jni_files | xargs -n1 printf " -f %s")`,
 		CommandDeps: []string{"${config.SoongZipCmd}"},
 	},
@@ -1241,7 +1241,7 @@ type bazelAndroidLibraryImport struct {
 	Sdk_version bazel.StringAttribute
 }
 
-func (a *aapt) convertAaptAttrsWithBp2Build(ctx android.TopDownMutatorContext) (*bazelAapt, bool) {
+func (a *aapt) convertAaptAttrsWithBp2Build(ctx android.Bp2buildMutatorContext) (*bazelAapt, bool) {
 	manifest := proptools.StringDefault(a.aaptProperties.Manifest, "AndroidManifest.xml")
 
 	resourceFiles := bazel.LabelList{
@@ -1277,7 +1277,7 @@ func (a *aapt) convertAaptAttrsWithBp2Build(ctx android.TopDownMutatorContext) (
 	}, true
 }
 
-func (a *AARImport) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (a *AARImport) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	aars := android.BazelLabelForModuleSrcExcludes(ctx, a.properties.Aars, []string{})
 	exportableStaticLibs := []string{}
 	// TODO(b/240716882): investigate and handle static_libs deps that are not imports. They are not supported for export by Bazel.
@@ -1330,7 +1330,7 @@ func AndroidLibraryBazelTargetModuleProperties() bazel.BazelTargetModuleProperti
 	}
 }
 
-func (a *AndroidLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (a *AndroidLibrary) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	commonAttrs, bp2buildInfo, supported := a.convertLibraryAttrsBp2Build(ctx)
 	if !supported {
 		return
@@ -1342,13 +1342,19 @@ func (a *AndroidLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) 
 	if !commonAttrs.Srcs.IsEmpty() {
 		deps.Append(depLabels.StaticDeps) // we should only append these if there are sources to use them
 	} else if !depLabels.Deps.IsEmpty() {
-		ctx.ModuleErrorf("Module has direct dependencies but no sources. Bazel will not allow this.")
+		ctx.MarkBp2buildUnconvertible(
+			bp2build_metrics_proto.UnconvertedReasonType_UNSUPPORTED,
+			"Module has direct dependencies but no sources. Bazel will not allow this.")
+		return
 	}
 	name := a.Name()
 	props := AndroidLibraryBazelTargetModuleProperties()
 
 	aaptAttrs, supported := a.convertAaptAttrsWithBp2Build(ctx)
 	if !supported {
+		return
+	}
+	if hasJavaResources := aaptAttrs.ConvertJavaResources(ctx, commonAttrs); hasJavaResources {
 		return
 	}
 	ctx.CreateBazelTargetModule(

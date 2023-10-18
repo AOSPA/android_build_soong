@@ -16,6 +16,7 @@ package bp2build
 
 import (
 	"android/soong/android"
+	"android/soong/cc"
 	"android/soong/java"
 
 	"testing"
@@ -29,6 +30,7 @@ func runAndroidAppTestCase(t *testing.T, tc Bp2buildTestCase) {
 func registerAndroidAppModuleTypes(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("java_library", java.LibraryFactory)
+	ctx.RegisterModuleType("cc_library_shared", cc.LibrarySharedFactory)
 }
 
 func TestMinimalAndroidApp(t *testing.T) {
@@ -78,7 +80,9 @@ func TestAndroidAppAllSupportedFields(t *testing.T) {
 			"manifest/AndroidManifest.xml": "",
 			"assets_/asset.png":            "",
 		},
-		Blueprint: SimpleModuleDoNotConvertBp2build("android_app", "static_lib_dep") + `
+		StubbedBuildDefinitions: []string{"static_lib_dep", "jni_lib"},
+		Blueprint: simpleModule("android_app", "static_lib_dep") +
+			simpleModule("cc_library_shared", "jni_lib") + `
 android_app {
 	name: "TestApp",
 	srcs: ["app.java"],
@@ -99,6 +103,7 @@ android_app {
 		obfuscate: false,
 		ignore_warnings: true,
 	},
+	jni_libs: ["jni_lib"],
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -109,10 +114,13 @@ android_app {
         "resa/res.png",
         "resb/res.png",
     ]`,
-				"assets":           `["assets_/asset.png"]`,
-				"assets_dir":       `"assets_"`,
-				"custom_package":   `"com.google"`,
-				"deps":             `[":static_lib_dep"]`,
+				"assets":         `["assets_/asset.png"]`,
+				"assets_dir":     `"assets_"`,
+				"custom_package": `"com.google"`,
+				"deps": `[
+        ":static_lib_dep",
+        ":jni_lib",
+    ]`,
 				"java_version":     `"7"`,
 				"sdk_version":      `"current"`,
 				"certificate_name": `"foocert"`,
@@ -177,7 +185,8 @@ func TestAndroidAppCertIsModule(t *testing.T) {
 		ModuleTypeUnderTest:        "android_app",
 		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
 		Filesystem:                 map[string]string{},
-		Blueprint: SimpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+		StubbedBuildDefinitions:    []string{"foocert"},
+		Blueprint: simpleModule("filegroup", "foocert") + `
 android_app {
 	name: "TestApp",
 	certificate: ":foocert",
@@ -262,7 +271,8 @@ func TestAndroidAppLibs(t *testing.T) {
 		ModuleTypeUnderTest:        "android_app",
 		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
 		Filesystem:                 map[string]string{},
-		Blueprint: SimpleModuleDoNotConvertBp2build("java_library", "barLib") + `
+		StubbedBuildDefinitions:    []string{"barLib"},
+		Blueprint: simpleModule("java_library", "barLib") + `
 android_app {
 	name: "foo",
 	libs: ["barLib"],
@@ -291,8 +301,9 @@ func TestAndroidAppKotlinSrcs(t *testing.T) {
 		Filesystem: map[string]string{
 			"res/res.png": "",
 		},
-		Blueprint: SimpleModuleDoNotConvertBp2build("filegroup", "foocert") +
-			SimpleModuleDoNotConvertBp2build("java_library", "barLib") + `
+		StubbedBuildDefinitions: []string{"foocert", "barLib"},
+		Blueprint: simpleModule("filegroup", "foocert") +
+			simpleModule("java_library", "barLib") + `
 android_app {
 	name: "foo",
 	srcs: ["a.java", "b.kt"],
@@ -334,6 +345,7 @@ func TestAndroidAppCommonSrcs(t *testing.T) {
 		Filesystem: map[string]string{
 			"res/res.png": "",
 		},
+		StubbedBuildDefinitions: []string{"barLib"},
 		Blueprint: `
 android_app {
 	name: "foo",
@@ -348,7 +360,6 @@ android_app {
 }
 java_library{
 	name:   "barLib",
-	bazel_module: { bp2build_available: false },
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -423,7 +434,6 @@ android_app {
 	name: "foo",
 	sdk_version: "current",
 	min_sdk_version: "24",
-	max_sdk_version: "30",
 	target_sdk_version: "29",
 	optimize: {
 		enabled: false,
@@ -435,7 +445,6 @@ android_app {
 				"manifest":       `"AndroidManifest.xml"`,
 				"resource_files": `[]`,
 				"manifest_values": `{
-        "maxSdkVersion": "30",
         "minSdkVersion": "24",
         "targetSdkVersion": "29",
     }`,
@@ -464,12 +473,8 @@ android_app {
 			MakeBazelTarget("android_binary", "foo", AttrNameToString{
 				"manifest":       `"AndroidManifest.xml"`,
 				"resource_files": `[]`,
-				"manifest_values": `{
-        "minSdkVersion": "30",
-        "targetSdkVersion": "30",
-    }`,
-				"sdk_version": `"30"`,
-				"optimize":    `False`,
+				"sdk_version":    `"30"`,
+				"optimize":       `False`,
 			}),
 		}})
 }

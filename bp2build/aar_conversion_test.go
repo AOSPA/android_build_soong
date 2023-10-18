@@ -15,11 +15,10 @@
 package bp2build
 
 import (
+	"testing"
+
 	"android/soong/android"
 	"android/soong/java"
-	"fmt"
-
-	"testing"
 )
 
 func TestConvertAndroidLibrary(t *testing.T) {
@@ -35,7 +34,8 @@ func TestConvertAndroidLibrary(t *testing.T) {
 			"res/res.png":                  "",
 			"manifest/AndroidManifest.xml": "",
 		},
-		Blueprint: SimpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
+		StubbedBuildDefinitions: []string{"static_lib_dep"},
+		Blueprint: simpleModule("android_library", "static_lib_dep") + `
 android_library {
 	name: "TestLib",
 	srcs: ["lib.java"],
@@ -82,7 +82,7 @@ func TestConvertAndroidLibraryWithNoSources(t *testing.T) {
 			"res/res.png":         "",
 			"AndroidManifest.xml": "",
 		},
-		Blueprint: SimpleModuleDoNotConvertBp2build("android_library", "lib_dep") + `
+		Blueprint: simpleModule("android_library", "lib_dep") + `
 android_library {
 	name: "TestLib",
 	srcs: [],
@@ -91,7 +91,6 @@ android_library {
 	sdk_version: "current",
 }
 `,
-		ExpectedErr:          fmt.Errorf("Module has direct dependencies but no sources. Bazel will not allow this."),
 		ExpectedBazelTargets: []string{},
 	})
 }
@@ -109,17 +108,24 @@ func TestConvertAndroidLibraryImport(t *testing.T) {
 			ModuleTypeUnderTestFactory: java.AARImportFactory,
 			Filesystem: map[string]string{
 				"import.aar": "",
+				"dep.aar":    "",
 			},
+			StubbedBuildDefinitions: []string{"static_lib_dep", "static_import_dep", "static_import_dep-neverlink"},
 			// Bazel's aar_import can only export *_import targets, so we expect
 			// only "static_import_dep" in exports, but both "static_lib_dep" and
 			// "static_import_dep" in deps
-			Blueprint: SimpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") +
-				SimpleModuleDoNotConvertBp2build("android_library_import", "static_import_dep") + `
+			Blueprint: simpleModule("android_library", "static_lib_dep") + `
 android_library_import {
         name: "TestImport",
         aars: ["import.aar"],
         static_libs: ["static_lib_dep", "static_import_dep"],
     sdk_version: "current",
+}
+
+// TODO: b/301007952 - This dep is needed because android_library_import must have aars set.
+android_library_import {
+        name: "static_import_dep",
+        aars: ["import.aar"],
 }
 `,
 			ExpectedBazelTargets: []string{

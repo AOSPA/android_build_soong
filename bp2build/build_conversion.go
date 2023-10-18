@@ -39,18 +39,24 @@ type BazelAttributes struct {
 	Attrs map[string]string
 }
 
-type BazelTarget struct {
-	name            string
-	packageName     string
-	content         string
-	ruleClass       string
-	bzlLoadLocation string
+type BazelLoadSymbol struct {
+	// The name of the symbol in the file being loaded
+	symbol string
+	// The name the symbol wil have in this file. Can be left blank to use the same name as symbol.
+	alias string
 }
 
-// IsLoadedFromStarlark determines if the BazelTarget's rule class is loaded from a .bzl file,
-// as opposed to a native rule built into Bazel.
-func (t BazelTarget) IsLoadedFromStarlark() bool {
-	return t.bzlLoadLocation != ""
+type BazelLoad struct {
+	file    string
+	symbols []BazelLoadSymbol
+}
+
+type BazelTarget struct {
+	name        string
+	packageName string
+	content     string
+	ruleClass   string
+	loads       []BazelLoad
 }
 
 // Label is the fully qualified Bazel label constructed from the BazelTarget's
@@ -110,30 +116,62 @@ func (targets BazelTargets) String() string {
 // LoadStatements return the string representation of the sorted and deduplicated
 // Starlark rule load statements needed by a group of BazelTargets.
 func (targets BazelTargets) LoadStatements() string {
-	bzlToLoadedSymbols := map[string][]string{}
+	// First, merge all the load statements from all the targets onto one list
+	bzlToLoadedSymbols := map[string][]BazelLoadSymbol{}
 	for _, target := range targets {
-		if target.IsLoadedFromStarlark() {
-			bzlToLoadedSymbols[target.bzlLoadLocation] =
-				append(bzlToLoadedSymbols[target.bzlLoadLocation], target.ruleClass)
+		for _, load := range target.loads {
+		outer:
+			for _, symbol := range load.symbols {
+				alias := symbol.alias
+				if alias == "" {
+					alias = symbol.symbol
+				}
+				for _, otherSymbol := range bzlToLoadedSymbols[load.file] {
+					otherAlias := otherSymbol.alias
+					if otherAlias == "" {
+						otherAlias = otherSymbol.symbol
+					}
+					if symbol.symbol == otherSymbol.symbol && alias == otherAlias {
+						continue outer
+					} else if alias == otherAlias {
+						panic(fmt.Sprintf("Conflicting destination (%s) for loads of %s and %s", alias, symbol.symbol, otherSymbol.symbol))
+					}
+				}
+				bzlToLoadedSymbols[load.file] = append(bzlToLoadedSymbols[load.file], symbol)
+			}
 		}
 	}
 
-	var loadStatements []string
-	for bzl, ruleClasses := range bzlToLoadedSymbols {
-		loadStatement := "load(\""
-		loadStatement += bzl
-		loadStatement += "\", "
-		ruleClasses = android.SortedUniqueStrings(ruleClasses)
-		for i, ruleClass := range ruleClasses {
-			loadStatement += "\"" + ruleClass + "\""
-			if i != len(ruleClasses)-1 {
-				loadStatement += ", "
+	var loadStatements strings.Builder
+	for i, bzl := range android.SortedKeys(bzlToLoadedSymbols) {
+		symbols := bzlToLoadedSymbols[bzl]
+		loadStatements.WriteString("load(\"")
+		loadStatements.WriteString(bzl)
+		loadStatements.WriteString("\", ")
+		sort.Slice(symbols, func(i, j int) bool {
+			if symbols[i].symbol < symbols[j].symbol {
+				return true
+			}
+			return symbols[i].alias < symbols[j].alias
+		})
+		for j, symbol := range symbols {
+			if symbol.alias != "" && symbol.alias != symbol.symbol {
+				loadStatements.WriteString(symbol.alias)
+				loadStatements.WriteString(" = ")
+			}
+			loadStatements.WriteString("\"")
+			loadStatements.WriteString(symbol.symbol)
+			loadStatements.WriteString("\"")
+			if j != len(symbols)-1 {
+				loadStatements.WriteString(", ")
 			}
 		}
-		loadStatement += ")"
-		loadStatements = append(loadStatements, loadStatement)
+		loadStatements.WriteString(")")
+		if i != len(bzlToLoadedSymbols)-1 {
+			loadStatements.WriteString("\n")
+		}
 	}
-	return strings.Join(android.SortedUniqueStrings(loadStatements), "\n")
+	return loadStatements.String()
 }
 
 type bpToBuildContext interface {
@@ -675,27 +713,32 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 
 		switch ctx.Mode() {
 		case Bp2Build:
-			// There are two main ways of converting a Soong module to Bazel:
-			// 1) Manually handcrafting a Bazel target and associating the module with its label
-			// 2) Automatically generating with bp2build converters
-			//
-			// bp2build converters are used for the majority of modules.
-			if b, ok := m.(android.Bazelable); ok && b.HasHandcraftedLabel() {
-				if aModule, ok := m.(android.Module); ok && aModule.IsConvertedByBp2build() {
-					panic(fmt.Errorf("module %q [%s] [%s] was both converted with bp2build and has a handcrafted label", bpCtx.ModuleName(m), moduleType, dir))
-				}
-				// Handle modules converted to handcrafted targets.
-				//
-				// Since these modules are associated with some handcrafted
-				// target in a BUILD file, we don't autoconvert them.
+			if aModule, ok := m.(android.Module); ok {
+				reason := aModule.GetUnconvertedReason()
+				if reason != nil {
+					// If this module was force-enabled, cause an error.
+					if _, ok := ctx.Config().BazelModulesForceEnabledByFlag()[m.Name()]; ok && m.Name() != "" {
+						err := fmt.Errorf("Force Enabled Module %s not converted", m.Name())
+						errs = append(errs, err)
+					}
 
-				// Log the module.
-				metrics.AddUnconvertedModule(m, moduleType, dir,
-					android.UnconvertedReason{
-						ReasonType: int(bp2build_metrics_proto.UnconvertedReasonType_DEFINED_IN_BUILD_FILE),
-					})
-			} else if aModule, ok := m.(android.Module); ok && aModule.IsConvertedByBp2build() {
+					// Log the module isn't to be converted by bp2build.
+					// TODO: b/291598248 - Log handcrafted modules differently than other unconverted modules.
+					metrics.AddUnconvertedModule(m, moduleType, dir, *reason)
+					return
+				}
+				if len(aModule.Bp2buildTargets()) == 0 {
+					panic(fmt.Errorf("illegal bp2build invariant: module '%s' was neither converted nor marked unconvertible", aModule.Name()))
+				}
+
 				// Handle modules converted to generated targets.
+				targets, targetErrs = generateBazelTargets(bpCtx, aModule)
+				errs = append(errs, targetErrs...)
+				for _, t := range targets {
+					// A module can potentially generate more than 1 Bazel
+					// target, each of a different rule class.
+					metrics.IncrementRuleClassCount(t.ruleClass)
+				}
 
 				// Log the module.
 				metrics.AddConvertedModule(aModule, moduleType, dir)
@@ -723,24 +766,6 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 						return
 					}
 				}
-				targets, targetErrs = generateBazelTargets(bpCtx, aModule)
-				errs = append(errs, targetErrs...)
-				for _, t := range targets {
-					// A module can potentially generate more than 1 Bazel
-					// target, each of a different rule class.
-					metrics.IncrementRuleClassCount(t.ruleClass)
-				}
-			} else if _, ok := ctx.Config().BazelModulesForceEnabledByFlag()[m.Name()]; ok && m.Name() != "" {
-				err := fmt.Errorf("Force Enabled Module %s not converted", m.Name())
-				errs = append(errs, err)
-			} else if aModule, ok := m.(android.Module); ok {
-				reason := aModule.GetUnconvertedReason()
-				if reason == nil {
-					panic(fmt.Errorf("module '%s' was neither converted nor marked unconvertible with bp2build", aModule.Name()))
-				} else {
-					metrics.AddUnconvertedModule(m, moduleType, dir, *reason)
-				}
-				return
 			} else if glib, ok := m.(*bootstrap.GoPackage); ok {
 				targets, targetErrs = generateBazelTargetsGoPackage(bpCtx, glib, nameToGoLibMap)
 				errs = append(errs, targetErrs...)
@@ -799,7 +824,7 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 		for dir := range dirs {
 			buildFileToTargets[dir] = append(buildFileToTargets[dir], BazelTarget{
 				name:      "bp2build_all_srcs",
-				content:   `filegroup(name = "bp2build_all_srcs", srcs = glob(["**/*"]))`,
+				content:   `filegroup(name = "bp2build_all_srcs", srcs = glob(["**/*"]), tags = ["manual"])`,
 				ruleClass: "filegroup",
 			})
 		}
@@ -857,12 +882,19 @@ func generateBazelTarget(ctx bpToBuildContext, m bp2buildModule) (BazelTarget, e
 	} else {
 		content = fmt.Sprintf(unnamedRuleTargetTemplate, ruleClass, attributes)
 	}
+	var loads []BazelLoad
+	if bzlLoadLocation != "" {
+		loads = append(loads, BazelLoad{
+			file:    bzlLoadLocation,
+			symbols: []BazelLoadSymbol{{symbol: ruleClass}},
+		})
+	}
 	return BazelTarget{
-		name:            targetName,
-		packageName:     m.TargetPackage(),
-		ruleClass:       ruleClass,
-		bzlLoadLocation: bzlLoadLocation,
-		content:         content,
+		name:        targetName,
+		packageName: m.TargetPackage(),
+		ruleClass:   ruleClass,
+		loads:       loads,
+		content:     content,
 	}, nil
 }
 

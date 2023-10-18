@@ -1077,8 +1077,8 @@ func (j *Module) AddJSONData(d *map[string]interface{}) {
 
 }
 
-func (module *Module) addGeneratedSrcJars(path android.Path) {
-	module.properties.Generated_srcjars = append(module.properties.Generated_srcjars, path)
+func (j *Module) addGeneratedSrcJars(path android.Path) {
+	j.properties.Generated_srcjars = append(j.properties.Generated_srcjars, path)
 }
 
 func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars android.Paths) {
@@ -2359,7 +2359,7 @@ type ModuleWithStem interface {
 
 var _ ModuleWithStem = (*Module)(nil)
 
-func (j *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (j *Module) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	switch ctx.ModuleType() {
 	case "java_library", "java_library_host", "java_library_static", "tradefed_java_library_host":
 		if lib, ok := ctx.Module().(*Library); ok {
