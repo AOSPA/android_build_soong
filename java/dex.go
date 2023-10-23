@@ -110,7 +110,8 @@ var d8, d8RE = pctx.MultiCommandRemoteStaticRules("d8",
 			`${config.Zip2ZipCmd} -i $in -o $tmpJar -x '**/*.dex' && ` +
 			`$d8Template${config.D8Cmd} ${config.D8Flags} --output $outDir $d8Flags $tmpJar && ` +
 			`$zipTemplate${config.SoongZipCmd} $zipFlags -o $outDir/classes.dex.jar -C $outDir -f "$outDir/classes*.dex" && ` +
-			`${config.MergeZipsCmd} -D -stripFile "**/*.class" $mergeZipsFlags $out $outDir/classes.dex.jar $in`,
+			`${config.MergeZipsCmd} -D -stripFile "**/*.class" $mergeZipsFlags $out $outDir/classes.dex.jar $in && ` +
+			`rm -f "$tmpJar" "$outDir/classes*.dex" "$outDir/classes.dex.jar"`,
 		CommandDeps: []string{
 			"${config.D8Cmd}",
 			"${config.Zip2ZipCmd}",
@@ -139,9 +140,7 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 		Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
 			`rm -f "$outDict" && rm -f "$outConfig" && rm -rf "${outUsageDir}" && ` +
 			`mkdir -p $$(dirname ${outUsage}) && ` +
-			`mkdir -p $$(dirname $tmpJar) && ` +
-			`${config.Zip2ZipCmd} -i $in -o $tmpJar -x '**/*.dex' && ` +
-			`$r8Template${config.R8Cmd} ${config.R8Flags} -injars $tmpJar --output $outDir ` +
+			`$r8Template${config.R8Cmd} ${config.R8Flags} -injars $in --output $outDir ` +
 			`--no-data-resources ` +
 			`-printmapping ${outDict} ` +
 			`-printconfiguration ${outConfig} ` +
@@ -152,7 +151,8 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 			`${config.SoongZipCmd} -o ${outUsageZip} -C ${outUsageDir} -f ${outUsage} && ` +
 			`rm -rf ${outUsageDir} && ` +
 			`$zipTemplate${config.SoongZipCmd} $zipFlags -o $outDir/classes.dex.jar -C $outDir -f "$outDir/classes*.dex" && ` +
-			`${config.MergeZipsCmd} -D -stripFile "**/*.class" $mergeZipsFlags $out $outDir/classes.dex.jar $in`,
+			`${config.MergeZipsCmd} -D -stripFile "**/*.class" $mergeZipsFlags $out $outDir/classes.dex.jar $in && ` +
+			`rm -f "$outDir/classes*.dex" "$outDir/classes.dex.jar"`,
 		Depfile: "${out}.d",
 		Deps:    blueprint.DepsGCC,
 		CommandDeps: []string{
@@ -185,7 +185,7 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 			Platform:     map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
 		},
 	}, []string{"outDir", "outDict", "outConfig", "outUsage", "outUsageZip", "outUsageDir",
-		"r8Flags", "zipFlags", "tmpJar", "mergeZipsFlags"}, []string{"implicits"})
+		"r8Flags", "zipFlags", "mergeZipsFlags"}, []string{"implicits"})
 
 func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 	dexParams *compileDexParams) (flags []string, deps android.Paths) {
@@ -368,7 +368,6 @@ func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParam
 	// Compile classes.jar into classes.dex and then javalib.jar
 	javalibJar := android.PathForModuleOut(ctx, "dex", dexParams.jarName).OutputPath
 	outDir := android.PathForModuleOut(ctx, "dex")
-	tmpJar := android.PathForModuleOut(ctx, "withres-withoutdex", dexParams.jarName)
 
 	zipFlags := "--ignore_missing_files"
 	if proptools.Bool(d.dexProperties.Uncompress_dex) {
@@ -406,7 +405,6 @@ func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParam
 			"outUsage":       proguardUsage.String(),
 			"outUsageZip":    proguardUsageZip.String(),
 			"outDir":         outDir.String(),
-			"tmpJar":         tmpJar.String(),
 			"mergeZipsFlags": mergeZipsFlags,
 		}
 		if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_R8") {
@@ -426,6 +424,7 @@ func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParam
 			Args:      args,
 		})
 	} else {
+		tmpJar := android.PathForModuleOut(ctx, "withres-withoutdex", dexParams.jarName)
 		d8Flags, d8Deps := d8Flags(dexParams.flags)
 		d8Deps = append(d8Deps, commonDeps...)
 		rule := d8

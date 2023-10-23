@@ -21,6 +21,17 @@ import (
 	"android/soong/java"
 )
 
+func runAndroidLibraryImportTestWithRegistrationCtxFunc(t *testing.T, registrationCtxFunc func(ctx android.RegistrationContext), tc Bp2buildTestCase) {
+	t.Helper()
+	(&tc).ModuleTypeUnderTest = "android_library_import"
+	(&tc).ModuleTypeUnderTestFactory = java.AARImportFactory
+	RunBp2BuildTestCase(t, registrationCtxFunc, tc)
+}
+
+func runAndroidLibraryImportTest(t *testing.T, tc Bp2buildTestCase) {
+	runAndroidLibraryImportTestWithRegistrationCtxFunc(t, func(ctx android.RegistrationContext) {}, tc)
+}
+
 func TestConvertAndroidLibrary(t *testing.T) {
 	t.Helper()
 	RunBp2BuildTestCase(t, func(ctx android.RegistrationContext) {}, Bp2buildTestCase{
@@ -75,7 +86,7 @@ android_library {
 func TestConvertAndroidLibraryWithNoSources(t *testing.T) {
 	t.Helper()
 	RunBp2BuildTestCase(t, func(ctx android.RegistrationContext) {}, Bp2buildTestCase{
-		Description:                "Android Library - modules with deps must have sources",
+		Description:                "Android Library - modules will deps when there are no sources",
 		ModuleTypeUnderTest:        "android_library",
 		ModuleTypeUnderTestFactory: java.AndroidLibraryFactory,
 		Filesystem: map[string]string{
@@ -91,25 +102,28 @@ android_library {
 	sdk_version: "current",
 }
 `,
-		ExpectedBazelTargets: []string{},
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget(
+				"android_library",
+				"TestLib",
+				AttrNameToString{
+					"manifest":       `"AndroidManifest.xml"`,
+					"resource_files": `["res/res.png"]`,
+					"sdk_version":    `"current"`, // use as default
+				},
+			),
+			MakeNeverlinkDuplicateTarget("android_library", "TestLib"),
+		},
 	})
 }
 
 func TestConvertAndroidLibraryImport(t *testing.T) {
-	t.Helper()
-	RunBp2BuildTestCase(
-		t,
+	runAndroidLibraryImportTestWithRegistrationCtxFunc(t,
 		func(ctx android.RegistrationContext) {
 			ctx.RegisterModuleType("android_library", java.AndroidLibraryFactory)
 		},
 		Bp2buildTestCase{
-			Description:                "Android Library Import",
-			ModuleTypeUnderTest:        "android_library_import",
-			ModuleTypeUnderTestFactory: java.AARImportFactory,
-			Filesystem: map[string]string{
-				"import.aar": "",
-				"dep.aar":    "",
-			},
+			Description:             "Android Library Import",
 			StubbedBuildDefinitions: []string{"static_lib_dep", "static_import_dep", "static_import_dep-neverlink"},
 			// Bazel's aar_import can only export *_import targets, so we expect
 			// only "static_import_dep" in exports, but both "static_lib_dep" and
@@ -122,7 +136,6 @@ android_library_import {
     sdk_version: "current",
 }
 
-// TODO: b/301007952 - This dep is needed because android_library_import must have aars set.
 android_library_import {
         name: "static_import_dep",
         aars: ["import.aar"],
@@ -219,4 +232,17 @@ android_library {
 				}),
 			MakeNeverlinkDuplicateTarget("android_library", "TestLib"),
 		}})
+}
+
+func TestAarImportFailsToConvertNoAars(t *testing.T) {
+	runAndroidLibraryImportTest(t,
+		Bp2buildTestCase{
+			Description: "Android Library Import with no aars does not convert.",
+			Blueprint: `
+android_library_import {
+        name: "no_aar_import",
+}
+`,
+			ExpectedBazelTargets: []string{},
+		})
 }

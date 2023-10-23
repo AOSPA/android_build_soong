@@ -463,8 +463,6 @@ type ProductVariables struct {
 	ProductPublicSepolicyDirs  []string `json:",omitempty"`
 	ProductPrivateSepolicyDirs []string `json:",omitempty"`
 
-	ProductVndkVersion *string `json:",omitempty"`
-
 	TargetFSConfigGen []string `json:",omitempty"`
 
 	EnforceProductPartitionInterface *bool `json:",omitempty"`
@@ -534,6 +532,10 @@ type ProductVariables struct {
 	// PartitionVarsForBazelMigrationOnlyDoNotUse are extra variables that are used to define the
 	// partition images. They should not be read from soong modules.
 	PartitionVarsForBazelMigrationOnlyDoNotUse PartitionVariables `json:",omitempty"`
+
+	NextReleaseHideFlaggedApi *bool `json:",omitempty"`
+
+	Release_expose_flagged_api *bool `json:",omitempty"`
 }
 
 type PartitionVariables struct {
@@ -558,6 +560,12 @@ type PartitionVariables struct {
 		ProductBaseFsPath           string `json:",omitempty"`
 		ProductHeadroom             string `json:",omitempty"`
 		ProductVerityPartition      string `json:",omitempty"`
+
+		BoardAvbAddHashtreeFooterArgs string `json:",omitempty"`
+		BoardAvbKeyPath               string `json:",omitempty"`
+		BoardAvbAlgorithm             string `json:",omitempty"`
+		BoardAvbRollbackIndex         string `json:",omitempty"`
+		BoardAvbRollbackIndexLocation string `json:",omitempty"`
 	}
 	TargetUserimagesUseExt2 bool `json:",omitempty"`
 	TargetUserimagesUseExt3 bool `json:",omitempty"`
@@ -580,6 +588,8 @@ type PartitionVariables struct {
 	BoardBuildGkiBootImageWithoutRamdisk bool   `json:",omitempty"`
 	ProductUseDynamicPartitionSize       bool   `json:",omitempty"`
 	CopyImagesForTargetFilesZip          bool   `json:",omitempty"`
+
+	BoardAvbEnable bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

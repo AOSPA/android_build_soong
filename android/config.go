@@ -679,6 +679,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-media":                   {},
 		"framework-mediaprovider":           {},
 		"framework-ondevicepersonalization": {},
+		"framework-pdf":                     {},
 		"framework-permission":              {},
 		"framework-permission-s":            {},
 		"framework-scheduling":              {},
@@ -1442,10 +1443,6 @@ func (c *deviceConfig) PlatformVndkVersion() string {
 	return String(c.config.productVariables.Platform_vndk_version)
 }
 
-func (c *deviceConfig) ProductVndkVersion() string {
-	return String(c.config.productVariables.ProductVndkVersion)
-}
-
 func (c *deviceConfig) ExtraVndkVersions() []string {
 	return c.config.productVariables.ExtraVndkVersions
 }
@@ -2135,4 +2132,16 @@ func (c *config) Bp2buildMode() bool {
 
 func (c *deviceConfig) CheckVendorSeappViolations() bool {
 	return Bool(c.config.productVariables.CheckVendorSeappViolations)
+}
+
+func (c *deviceConfig) NextReleaseHideFlaggedApi() bool {
+	return Bool(c.config.productVariables.NextReleaseHideFlaggedApi)
+}
+
+func (c *deviceConfig) ReleaseExposeFlaggedApi() bool {
+	return Bool(c.config.productVariables.Release_expose_flagged_api)
+}
+
+func (c *deviceConfig) HideFlaggedApis() bool {
+	return c.NextReleaseHideFlaggedApi() && !c.ReleaseExposeFlaggedApi()
 }

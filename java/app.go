@@ -1737,22 +1737,25 @@ func convertWithBp2build(ctx android.Bp2buildMutatorContext, a *AndroidApp) (boo
 		Updatable:        a.appProperties.Updatable,
 	}
 
+	// As framework-res has no sources, no deps in the Bazel sense, and java compilation, dexing and optimization is skipped by
+	// Soong specifically for it, return early here before any of the conversion work for the above is attempted.
+	if ctx.ModuleName() == "framework-res" {
+		appAttrs.bazelAapt = aapt
+		return true, android.CommonAttributes{Name: a.Name(), SkipData: proptools.BoolPtr(true)}, appAttrs
+	}
+
 	// Optimization is..
 	// - enabled by default for android_app, android_test_helper_app
 	// - disabled by default for android_test
 	//
 	// TODO(b/192032291): Disable android_test_helper_app optimization by
 	// default after auditing downstream usage.
-	if a.dexProperties.Optimize.Enabled == nil {
-		// Property was not explicitly defined.
-		a.dexProperties.Optimize.Enabled = &a.dexProperties.Optimize.EnabledByDefault
+	if a.dexProperties.Optimize.EnabledByDefault != a.dexer.effectiveOptimizeEnabled() {
+		// Property is explicitly defined by default from default, so emit the Bazel attribute.
+		appAttrs.Optimize = proptools.BoolPtr(a.dexer.effectiveOptimizeEnabled())
 	}
-	if Bool(a.dexProperties.Optimize.Enabled) {
-		if !a.dexProperties.Optimize.EnabledByDefault {
-			// explicitly enable optimize for module types that disable it by default
-			appAttrs.Optimize = proptools.BoolPtr(true)
-		}
 
+	if a.dexer.effectiveOptimizeEnabled() {
 		handCraftedFlags := ""
 		if Bool(a.dexProperties.Optimize.Ignore_warnings) {
 			handCraftedFlags += "-ignorewarning "
@@ -1782,9 +1785,6 @@ func convertWithBp2build(ctx android.Bp2buildMutatorContext, a *AndroidApp) (boo
 			})
 			appAttrs.Proguard_specs.Add(bazel.MakeLabelAttribute(":" + generatedFlagFileRuleName))
 		}
-	} else if a.dexProperties.Optimize.EnabledByDefault {
-		// explicitly disable optimize for module types that enable it by default
-		appAttrs.Optimize = proptools.BoolPtr(false)
 	}
 
 	commonAttrs, bp2BuildInfo, supported := a.convertLibraryAttrsBp2Build(ctx)
@@ -1845,11 +1845,18 @@ func convertWithBp2build(ctx android.Bp2buildMutatorContext, a *AndroidApp) (boo
 // ConvertWithBp2build is used to convert android_app to Bazel.
 func (a *AndroidApp) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	if ok, commonAttrs, appAttrs := convertWithBp2build(ctx, a); ok {
-		props := bazel.BazelTargetModuleProperties{
-			Rule_class:        "android_binary",
-			Bzl_load_location: "//build/bazel/rules/android:android_binary.bzl",
+		var props bazel.BazelTargetModuleProperties
+		if ctx.ModuleName() == "framework-res" {
+			props = bazel.BazelTargetModuleProperties{
+				Rule_class:        "framework_resources",
+				Bzl_load_location: "//build/bazel/rules/android:framework_resources.bzl",
+			}
+		} else {
+			props = bazel.BazelTargetModuleProperties{
+				Rule_class:        "android_binary",
+				Bzl_load_location: "//build/bazel/rules/android:android_binary.bzl",
+			}
 		}
-
 		ctx.CreateBazelTargetModule(props, commonAttrs, appAttrs)
 	}
 

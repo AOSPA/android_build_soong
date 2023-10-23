@@ -159,6 +159,10 @@ cc_library {
 			"min_sdk_version":    `"29"`,
 			"use_version_lib":    `True`,
 			"whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
+			"deps": `select({
+        "//build/bazel/rules/apex:unbundled_app": ["//build/bazel/rules/cc:ndk_sysroot"],
+        "//conditions:default": [],
+    })`,
 		}),
 	})
 }
@@ -5157,7 +5161,6 @@ func TestNdkLibraryConversion(t *testing.T) {
 		Blueprint: `
 cc_library {
 	name: "libfoo",
-	bazel_module: { bp2build_available: false },
 }
 ndk_library {
 	name: "libfoo",
@@ -5165,6 +5168,7 @@ ndk_library {
 	symbol_file: "libfoo.map.txt",
 }
 `,
+		StubbedBuildDefinitions: []string{"libfoo"},
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_stub_suite", "libfoo.ndk_stub_libs", AttrNameToString{
 				"api_surface":          `"publicapi"`,
