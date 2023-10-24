@@ -39,7 +39,7 @@ const (
 
 	// Targets in arch.go
 	osArchAndroidArm        = "android_arm"
-	osArchAndroidArm64      = "android_arm64"
+	OsArchAndroidArm64      = "android_arm64"
 	osArchAndroidRiscv64    = "android_riscv64"
 	osArchAndroidX86        = "android_x86"
 	osArchAndroidX86_64     = "android_x86_64"
@@ -71,6 +71,7 @@ const (
 
 	AndroidAndInApex = "android-in_apex"
 	AndroidPlatform  = "system"
+	Unbundled_app    = "unbundled_app"
 
 	InApex  = "in_apex"
 	NonApex = "non_apex"
@@ -170,7 +171,7 @@ var (
 
 	platformOsArchMap = map[string]string{
 		osArchAndroidArm:           "//build/bazel/platforms/os_arch:android_arm",
-		osArchAndroidArm64:         "//build/bazel/platforms/os_arch:android_arm64",
+		OsArchAndroidArm64:         "//build/bazel/platforms/os_arch:android_arm64",
 		osArchAndroidRiscv64:       "//build/bazel/platforms/os_arch:android_riscv64",
 		osArchAndroidX86:           "//build/bazel/platforms/os_arch:android_x86",
 		osArchAndroidX86_64:        "//build/bazel/platforms/os_arch:android_x86_64",
@@ -207,6 +208,7 @@ var (
 	osAndInApexMap = map[string]string{
 		AndroidAndInApex:           "//build/bazel/rules/apex:android-in_apex",
 		AndroidPlatform:            "//build/bazel/rules/apex:system",
+		Unbundled_app:              "//build/bazel/rules/apex:unbundled_app",
 		OsDarwin:                   "//build/bazel/platforms/os:darwin",
 		OsLinux:                    "//build/bazel/platforms/os:linux_glibc",
 		osLinuxMusl:                "//build/bazel/platforms/os:linux_musl",

@@ -33,10 +33,10 @@ import (
 	"android/soong/shared"
 	"android/soong/starlark_import"
 
+	"android/soong/bazel"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/metrics"
-
-	"android/soong/bazel"
 )
 
 var (
@@ -665,7 +665,8 @@ func (context *mixedBuildBazelContext) createBazelCommand(config Config, runName
 		command.expression,
 		"--profile=" + shared.BazelMetricsFilename(context.paths, runName),
 
-		"--host_platform=@soong_injection//product_config_platforms:mixed_builds_product-" + context.targetBuildVariant + "_" + runtime.GOOS + "_x86_64",
+		"--host_platform=@soong_injection//product_config_platforms:mixed_builds_product_" + runtime.GOOS + "_x86_64",
+		"--//build/bazel/product_config:target_build_variant=" + context.targetBuildVariant,
 		// Don't specify --platforms, because on some products/branches (like kernel-build-tools)
 		// the main platform for mixed_builds_product-variant doesn't exist because an arch isn't
 		// specified in product config. The derivative platforms that config_node transitions into
@@ -720,9 +721,9 @@ func (context *mixedBuildBazelContext) mainBzlFileContents() []byte {
 #####################################################
 def _config_node_transition_impl(settings, attr):
     if attr.os == "android" and attr.arch == "target":
-        target = "mixed_builds_product-{VARIANT}"
+        target = "mixed_builds_product"
     else:
-        target = "mixed_builds_product-{VARIANT}_%s_%s" % (attr.os, attr.arch)
+        target = "mixed_builds_product_%s_%s" % (attr.os, attr.arch)
     apex_name = ""
     if attr.within_apex:
         # //build/bazel/rules/apex:apex_name has to be set to a non_empty value,
@@ -794,11 +795,7 @@ phony_root = rule(
 )
 `
 
-	productReplacer := strings.NewReplacer(
-		"{PRODUCT}", context.targetProduct,
-		"{VARIANT}", context.targetBuildVariant)
-
-	return []byte(productReplacer.Replace(contents))
+	return []byte(contents)
 }
 
 func (context *mixedBuildBazelContext) mainBuildFileContents() []byte {
@@ -972,9 +969,9 @@ def get_arch(target):
   platform_name = platforms[0].name
   if platform_name == "host":
     return "HOST"
-  if not platform_name.startswith("mixed_builds_product-{TARGET_BUILD_VARIANT}"):
-    fail("expected platform name of the form 'mixed_builds_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'mixed_builds_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
-  platform_name = platform_name.removeprefix("mixed_builds_product-{TARGET_BUILD_VARIANT}").removeprefix("_")
+  if not platform_name.startswith("mixed_builds_product"):
+    fail("expected platform name of the form 'mixed_builds_product_android_<arch>' or 'mixed_builds_product_linux_<arch>', but was " + str(platforms))
+  platform_name = platform_name.removeprefix("mixed_builds_product").removeprefix("_")
   config_key = ""
   if not platform_name:
     config_key = "target|android"
@@ -983,7 +980,7 @@ def get_arch(target):
   elif platform_name.startswith("linux_"):
     config_key = platform_name.removeprefix("linux_") + "|linux"
   else:
-    fail("expected platform name of the form 'mixed_builds_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'mixed_builds_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
+    fail("expected platform name of the form 'mixed_builds_product_android_<arch>' or 'mixed_builds_product_linux_<arch>', but was " + str(platforms))
 
   within_apex = buildoptions.get("//build/bazel/rules/apex:within_apex")
   apex_sdk_version = buildoptions.get("//build/bazel/rules/apex:min_sdk_version")
@@ -1012,8 +1009,6 @@ def format(target):
   return id_string + ">>NONE"
 `
 	replacer := strings.NewReplacer(
-		"{TARGET_PRODUCT}", context.targetProduct,
-		"{TARGET_BUILD_VARIANT}", context.targetBuildVariant,
 		"{LABEL_REGISTRATION_MAP_SECTION}", labelRegistrationMapSection,
 		"{FUNCTION_DEF_SECTION}", functionDefSection,
 		"{MAIN_SWITCH_SECTION}", mainSwitchSection)
@@ -1053,39 +1048,46 @@ var (
 	allBazelCommands = []bazelCommand{aqueryCmd, cqueryCmd, buildCmd}
 )
 
+// This can't be part of bp2build_product_config.go because it would create a circular go package dependency
+func getLabelsForBazelSandwichPartitions(variables *ProductVariables) []string {
+	targetProduct := "unknown"
+	if variables.DeviceProduct != nil {
+		targetProduct = *variables.DeviceProduct
+	}
+	currentProductFolder := fmt.Sprintf("build/bazel/products/%s", targetProduct)
+	if len(variables.PartitionVarsForBazelMigrationOnlyDoNotUse.ProductDirectory) > 0 {
+		currentProductFolder = fmt.Sprintf("%s%s", variables.PartitionVarsForBazelMigrationOnlyDoNotUse.ProductDirectory, targetProduct)
+	}
+	var ret []string
+	if variables.PartitionVarsForBazelMigrationOnlyDoNotUse.PartitionQualifiedVariables["system"].BuildingImage {
+		ret = append(ret, "@//"+currentProductFolder+":system_image")
+		ret = append(ret, "@//"+currentProductFolder+":run_system_image_test")
+	}
+	return ret
+}
+
 func GetBazelSandwichCqueryRequests(config Config) ([]cqueryKey, error) {
-	result := make([]cqueryKey, 0, len(allowlists.BazelSandwichTargets))
+	partitionLabels := getLabelsForBazelSandwichPartitions(&config.productVariables)
+	result := make([]cqueryKey, 0, len(partitionLabels))
 	labelRegex := regexp.MustCompile("^@?//([a-zA-Z0-9/_-]+):[a-zA-Z0-9_-]+$")
 	// Note that bazel "targets" are different from soong "targets", the bazel targets are
 	// synonymous with soong modules, and soong targets are a configuration a module is built in.
-	for _, target := range allowlists.BazelSandwichTargets {
-		match := labelRegex.FindStringSubmatch(target.Label)
+	for _, target := range partitionLabels {
+		match := labelRegex.FindStringSubmatch(target)
 		if match == nil {
-			return nil, fmt.Errorf("invalid label, must match `^@?//([a-zA-Z0-9/_-]+):[a-zA-Z0-9_-]+$`: %s", target.Label)
-		}
-		if _, err := os.Stat(absolutePath(match[1])); err != nil {
-			if os.IsNotExist(err) {
-				// Ignore bazel sandwich targets that don't exist.
-				continue
-			} else {
-				return nil, err
-			}
+			return nil, fmt.Errorf("invalid label, must match `^@?//([a-zA-Z0-9/_-]+):[a-zA-Z0-9_-]+$`: %s", target)
 		}
 
-		var soongTarget Target
-		if target.Host {
-			soongTarget = config.BuildOSTarget
-		} else {
-			soongTarget = config.AndroidCommonTarget
-			if soongTarget.Os.Class != Device {
-				// kernel-build-tools seems to set the AndroidCommonTarget to a linux host
-				// target for some reason, disable device builds in that case.
-				continue
-			}
+		// change this to config.BuildOSTarget if we add host targets
+		soongTarget := config.AndroidCommonTarget
+		if soongTarget.Os.Class != Device {
+			// kernel-build-tools seems to set the AndroidCommonTarget to a linux host
+			// target for some reason, disable device builds in that case.
+			continue
 		}
 
 		result = append(result, cqueryKey{
-			label:       target.Label,
+			label:       target,
 			requestType: cquery.GetOutputFiles,
 			configKey: configKey{
 				arch:   soongTarget.Arch.String(),
@@ -1382,7 +1384,11 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 			WriteFileRuleVerbatim(ctx, out, "")
 		case "FileWrite", "SourceSymlinkManifest":
 			out := PathForBazelOut(ctx, buildStatement.OutputPaths[0])
-			WriteFileRuleVerbatim(ctx, out, buildStatement.FileContents)
+			if buildStatement.IsExecutable {
+				WriteExecutableFileRuleVerbatim(ctx, out, buildStatement.FileContents)
+			} else {
+				WriteFileRuleVerbatim(ctx, out, buildStatement.FileContents)
+			}
 		case "SymlinkTree":
 			// build-runfiles arguments are the manifest file and the target directory
 			// where it creates the symlink tree according to this manifest (and then

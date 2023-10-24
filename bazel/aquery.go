@@ -18,13 +18,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
-	analysis_v2_proto "prebuilts/bazel/common/proto/analysis_v2"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
+
+	analysis_v2_proto "prebuilts/bazel/common/proto/analysis_v2"
 
 	"github.com/google/blueprint/metrics"
 	"github.com/google/blueprint/proptools"
@@ -123,6 +125,7 @@ type BuildStatement struct {
 	// Unlike most properties in BuildStatement, these paths must be relative to the root of
 	// the whole out/ folder, instead of relative to ctx.Config().BazelContext.OutputBase()
 	ImplicitDeps []string
+	IsExecutable bool
 }
 
 // A helper type for aquery processing which facilitates retrieval of path IDs from their
@@ -175,6 +178,21 @@ func newAqueryHandler(aqueryResult *analysis_v2_proto.ActionGraphContainer) (*aq
 		artifactPath, err := expandPathFragment(pathFragmentId(artifact.PathFragmentId), pathFragments)
 		if err != nil {
 			return nil, err
+		}
+		if artifact.IsTreeArtifact &&
+			!strings.HasPrefix(artifactPath, "bazel-out/io_bazel_rules_go/") &&
+			!strings.HasPrefix(artifactPath, "bazel-out/rules_java_builtin/") {
+			// Since we're using ninja as an executor, we can't use tree artifacts. Ninja only
+			// considers a file/directory "dirty" when it's mtime changes. Directories' mtimes will
+			// only change when a file in the directory is added/removed, but not when files in
+			// the directory are changed, or when files in subdirectories are changed/added/removed.
+			// Bazel handles this by walking the directory and generating a hash for it after the
+			// action runs, which we would have to do as well if we wanted to support these
+			// artifacts in mixed builds.
+			//
+			// However, there are some bazel built-in rules that use tree artifacts. Allow those,
+			// but keep in mind that they'll have incrementality issues.
+			return nil, fmt.Errorf("tree artifacts are currently not supported in mixed builds: " + artifactPath)
 		}
 		artifactIdToPath[artifactId(artifact.Id)] = artifactPath
 	}
@@ -354,13 +372,20 @@ func AqueryBuildStatements(aqueryJsonProto []byte, eventHandler *metrics.EventHa
 		defer eventHandler.End("build_statements")
 		wg := sync.WaitGroup{}
 		var errOnce sync.Once
-
+		id2targets := make(map[uint32]string, len(aqueryProto.Targets))
+		for _, t := range aqueryProto.Targets {
+			id2targets[t.GetId()] = t.GetLabel()
+		}
 		for i, actionEntry := range aqueryProto.Actions {
 			wg.Add(1)
 			go func(i int, actionEntry *analysis_v2_proto.Action) {
-				buildStatement, aErr := aqueryHandler.actionToBuildStatement(actionEntry)
-				if aErr != nil {
+				if strings.HasPrefix(id2targets[actionEntry.TargetId], "@bazel_tools//") {
+					// bazel_tools are removed depsets in `populateDepsetMaps()` so skipping
+					// conversion to build statements as well
+					buildStatements[i] = nil
+				} else if buildStatement, aErr := aqueryHandler.actionToBuildStatement(actionEntry); aErr != nil {
 					errOnce.Do(func() {
+						aErr = fmt.Errorf("%s: [%s] [%s]", aErr.Error(), actionEntry.GetMnemonic(), id2targets[actionEntry.TargetId])
 						err = aErr
 					})
 				} else {
@@ -560,6 +585,7 @@ func (a *aqueryArtifactHandler) fileWriteActionBuildStatement(actionEntry *analy
 		Mnemonic:          actionEntry.Mnemonic,
 		InputDepsetHashes: depsetHashes,
 		FileContents:      actionEntry.FileContents,
+		IsExecutable:      actionEntry.IsExecutable,
 	}, nil
 }
 
@@ -765,7 +791,7 @@ func (a *aqueryArtifactHandler) actionToBuildStatement(actionEntry *analysis_v2_
 	}
 
 	if len(actionEntry.Arguments) < 1 {
-		return nil, fmt.Errorf("received action with no command: [%s]", actionEntry.Mnemonic)
+		return nil, errors.New("received action with no command")
 	}
 	return a.normalActionBuildStatement(actionEntry)
 

@@ -17,6 +17,7 @@ package apex
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -75,6 +76,8 @@ func init() {
 	pctx.HostBinToolVariable("deapexer", "deapexer")
 	pctx.HostBinToolVariable("debugfs_static", "debugfs_static")
 	pctx.SourcePathVariable("genNdkUsedbyApexPath", "build/soong/scripts/gen_ndk_usedby_apex.sh")
+	pctx.HostBinToolVariable("conv_linker_config", "conv_linker_config")
+	pctx.HostBinToolVariable("assemble_vintf", "assemble_vintf")
 }
 
 var (
@@ -221,6 +224,18 @@ var (
 			` && ${apex_sepolicy_tests} -f ${out}.fc && touch ${out}`,
 		CommandDeps: []string{"${apex_sepolicy_tests}", "${deapexer}", "${debugfs_static}"},
 		Description: "run apex_sepolicy_tests",
+	})
+
+	apexLinkerconfigValidationRule = pctx.StaticRule("apexLinkerconfigValidationRule", blueprint.RuleParams{
+		Command:     `${conv_linker_config} validate --type apex ${image_dir} && touch ${out}`,
+		CommandDeps: []string{"${conv_linker_config}"},
+		Description: "run apex_linkerconfig_validation",
+	}, "image_dir")
+
+	assembleVintfRule = pctx.StaticRule("assembleVintfRule", blueprint.RuleParams{
+		Command:     `rm -f $out && VINTF_IGNORE_TARGET_FCM_VERSION=true ${assemble_vintf} -i $in -o $out`,
+		CommandDeps: []string{"${assemble_vintf}"},
+		Description: "run assemble_vintf",
 	})
 )
 
@@ -444,6 +459,22 @@ func markManifestTestOnly(ctx android.ModuleContext, androidManifestFile android
 	})
 }
 
+func isVintfFragment(fi apexFile) bool {
+	isVintfFragment, _ := path.Match("etc/vintf/*.xml", fi.path())
+	return isVintfFragment
+}
+
+func runAssembleVintf(ctx android.ModuleContext, vintfFragment android.Path) android.Path {
+	processed := android.PathForModuleOut(ctx, "vintf", vintfFragment.Base())
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        assembleVintfRule,
+		Input:       vintfFragment,
+		Output:      processed,
+		Description: "run assemble_vintf for VINTF in APEX",
+	})
+	return processed
+}
+
 // buildApex creates build rules to build an APEX using apexer.
 func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 	suffix := imageApexSuffix
@@ -481,7 +512,15 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 			copyCommands = append(copyCommands, "ln -sfn "+pathOnDevice+" "+destPath)
 		} else {
 			// Copy the file into APEX
-			copyCommands = append(copyCommands, "cp -f "+fi.builtFile.String()+" "+destPath)
+			if !a.testApex && isVintfFragment(fi) {
+				// copy the output of assemble_vintf instead of the original
+				vintfFragment := runAssembleVintf(ctx, fi.builtFile)
+				copyCommands = append(copyCommands, "cp -f "+vintfFragment.String()+" "+destPath)
+				implicitInputs = append(implicitInputs, vintfFragment)
+			} else {
+				copyCommands = append(copyCommands, "cp -f "+fi.builtFile.String()+" "+destPath)
+				implicitInputs = append(implicitInputs, fi.builtFile)
+			}
 
 			var installedPath android.InstallPath
 			if fi.class == appSet {
@@ -499,7 +538,6 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 					installedPath = ctx.InstallFile(apexDir.Join(ctx, fi.installDir), fi.stem(), fi.builtFile)
 				}
 			}
-			implicitInputs = append(implicitInputs, fi.builtFile)
 
 			// Create additional symlinks pointing the file inside the APEX (if any). Note that
 			// this is independent from the symlink optimization.
@@ -843,6 +881,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 		args["outCommaList"] = signedOutputFile.String()
 	}
 	var validations android.Paths
+	validations = append(validations, runApexLinkerconfigValidation(ctx, unsignedOutputFile.OutputPath, imageDir.OutputPath))
 	// TODO(b/279688635) deapexer supports [ext4]
 	if suffix == imageApexSuffix && ext4 == a.payloadFsType {
 		validations = append(validations, runApexSepolicyTests(ctx, unsignedOutputFile.OutputPath))
@@ -1095,6 +1134,19 @@ func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext) android.Outp
 	builder.Build("generateFsConfig", fmt.Sprintf("Generating canned fs config for %s", a.BaseModuleName()))
 
 	return cannedFsConfig.OutputPath
+}
+
+func runApexLinkerconfigValidation(ctx android.ModuleContext, apexFile android.OutputPath, imageDir android.OutputPath) android.Path {
+	timestamp := android.PathForModuleOut(ctx, "apex_linkerconfig_validation.timestamp")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   apexLinkerconfigValidationRule,
+		Input:  apexFile,
+		Output: timestamp,
+		Args: map[string]string{
+			"image_dir": imageDir.String(),
+		},
+	})
+	return timestamp
 }
 
 // Runs apex_sepolicy_tests

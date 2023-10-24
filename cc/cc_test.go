@@ -41,7 +41,6 @@ var prepareForCcTest = android.GroupFixturePreparers(
 	PrepareForTestWithCcIncludeVndk,
 	android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 		variables.DeviceVndkVersion = StringPtr("current")
-		variables.ProductVndkVersion = StringPtr("current")
 		variables.Platform_vndk_version = StringPtr("29")
 	}),
 )
@@ -104,33 +103,6 @@ func testCc(t *testing.T, bp string) *android.TestContext {
 	return result.TestContext
 }
 
-// testCcNoVndk runs tests using the prepareForCcTest
-//
-// See testCc for an explanation as to how to stop using this deprecated method.
-//
-// deprecated
-func testCcNoVndk(t *testing.T, bp string) *android.TestContext {
-	t.Helper()
-	config := TestConfig(t.TempDir(), android.Android, nil, bp, nil)
-	config.TestProductVariables.Platform_vndk_version = StringPtr("29")
-
-	return testCcWithConfig(t, config)
-}
-
-// testCcNoProductVndk runs tests using the prepareForCcTest
-//
-// See testCc for an explanation as to how to stop using this deprecated method.
-//
-// deprecated
-func testCcNoProductVndk(t *testing.T, bp string) *android.TestContext {
-	t.Helper()
-	config := TestConfig(t.TempDir(), android.Android, nil, bp, nil)
-	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
-	config.TestProductVariables.Platform_vndk_version = StringPtr("29")
-
-	return testCcWithConfig(t, config)
-}
-
 // testCcErrorWithConfig runs tests using the prepareForCcTest
 //
 // See testCc for an explanation as to how to stop using this deprecated method.
@@ -167,7 +139,6 @@ func testCcErrorProductVndk(t *testing.T, pattern string, bp string) {
 	t.Helper()
 	config := TestConfig(t.TempDir(), android.Android, nil, bp, nil)
 	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
-	config.TestProductVariables.ProductVndkVersion = StringPtr("current")
 	config.TestProductVariables.Platform_vndk_version = StringPtr("29")
 	testCcErrorWithConfig(t, pattern, config)
 	return
@@ -524,7 +495,6 @@ func TestVndk(t *testing.T) {
 
 	config := TestConfig(t.TempDir(), android.Android, nil, bp, nil)
 	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
-	config.TestProductVariables.ProductVndkVersion = StringPtr("current")
 	config.TestProductVariables.Platform_vndk_version = StringPtr("29")
 
 	ctx := testCcWithConfig(t, config)
@@ -890,63 +860,6 @@ func TestTestLibraryTestSuites(t *testing.T) {
 	}
 }
 
-func TestVndkWhenVndkVersionIsNotSet(t *testing.T) {
-	t.Parallel()
-	ctx := testCcNoVndk(t, `
-		cc_library {
-			name: "libvndk",
-			vendor_available: true,
-			product_available: true,
-			vndk: {
-				enabled: true,
-			},
-			nocrt: true,
-		}
-		cc_library {
-			name: "libvndk-private",
-			vendor_available: true,
-			product_available: true,
-			vndk: {
-				enabled: true,
-				private: true,
-			},
-			nocrt: true,
-		}
-
-		cc_library {
-			name: "libllndk",
-			llndk: {
-				symbol_file: "libllndk.map.txt",
-				export_llndk_headers: ["libllndk_headers"],
-			}
-		}
-
-		cc_library_headers {
-			name: "libllndk_headers",
-			llndk: {
-				symbol_file: "libllndk.map.txt",
-			},
-			export_include_dirs: ["include"],
-		}
-	`)
-
-	checkVndkOutput(t, ctx, "vndk/vndk.libraries.txt", []string{
-		"LLNDK: libc.so",
-		"LLNDK: libdl.so",
-		"LLNDK: libft2.so",
-		"LLNDK: libllndk.so",
-		"LLNDK: libm.so",
-		"VNDK-SP: libc++.so",
-		"VNDK-core: libvndk-private.so",
-		"VNDK-core: libvndk.so",
-		"VNDK-private: libft2.so",
-		"VNDK-private: libvndk-private.so",
-		"VNDK-product: libc++.so",
-		"VNDK-product: libvndk-private.so",
-		"VNDK-product: libvndk.so",
-	})
-}
-
 func TestVndkModuleError(t *testing.T) {
 	t.Parallel()
 	// Check the error message for vendor_available and product_available properties.
@@ -1112,6 +1025,7 @@ func TestVndkDepError(t *testing.T) {
 		cc_library {
 			name: "libnonvndk",
 			vendor_available: true,
+			product_available: true,
 			nocrt: true,
 		}
 	`)
@@ -1133,6 +1047,7 @@ func TestVndkDepError(t *testing.T) {
 		cc_library {
 			name: "libnonvndk",
 			vendor_available: true,
+			product_available: true,
 			nocrt: true,
 		}
 	`)
@@ -1154,6 +1069,7 @@ func TestVndkDepError(t *testing.T) {
 		cc_library {
 			name: "libnonvndk",
 			vendor_available: true,
+			product_available: true,
 			nocrt: true,
 		}
 	`)
@@ -1176,6 +1092,7 @@ func TestVndkDepError(t *testing.T) {
 		cc_library {
 			name: "libnonvndk",
 			vendor_available: true,
+			product_available: true,
 			nocrt: true,
 		}
 	`)
@@ -1391,6 +1308,7 @@ func TestCheckVndkMembershipBeforeDoubleLoadable(t *testing.T) {
 		cc_library {
 			name: "libanothervndksp",
 			vendor_available: true,
+			product_available: true,
 		}
 	`)
 }
@@ -1468,7 +1386,6 @@ func TestVndkExt(t *testing.T) {
 	`
 	config := TestConfig(t.TempDir(), android.Android, nil, bp, nil)
 	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
-	config.TestProductVariables.ProductVndkVersion = StringPtr("current")
 	config.TestProductVariables.Platform_vndk_version = StringPtr("29")
 
 	ctx := testCcWithConfig(t, config)
@@ -1481,70 +1398,6 @@ func TestVndkExt(t *testing.T) {
 
 	mod_product := ctx.ModuleForTests("libvndk2_ext_product", productVariant).Module().(*Module)
 	assertString(t, mod_product.outputFile.Path().Base(), "libvndk2-suffix.so")
-}
-
-func TestVndkExtWithoutBoardVndkVersion(t *testing.T) {
-	t.Parallel()
-	// This test checks the VNDK-Ext properties when BOARD_VNDK_VERSION is not set.
-	ctx := testCcNoVndk(t, `
-		cc_library {
-			name: "libvndk",
-			vendor_available: true,
-			product_available: true,
-			vndk: {
-				enabled: true,
-			},
-			nocrt: true,
-		}
-
-		cc_library {
-			name: "libvndk_ext",
-			vendor: true,
-			vndk: {
-				enabled: true,
-				extends: "libvndk",
-			},
-			nocrt: true,
-		}
-	`)
-
-	// Ensures that the core variant of "libvndk_ext" can be found.
-	mod := ctx.ModuleForTests("libvndk_ext", coreVariant).Module().(*Module)
-	if extends := mod.getVndkExtendsModuleName(); extends != "libvndk" {
-		t.Errorf("\"libvndk_ext\" must extend from \"libvndk\" but get %q", extends)
-	}
-}
-
-func TestVndkExtWithoutProductVndkVersion(t *testing.T) {
-	t.Parallel()
-	// This test checks the VNDK-Ext properties when PRODUCT_PRODUCT_VNDK_VERSION is not set.
-	ctx := testCcNoProductVndk(t, `
-		cc_library {
-			name: "libvndk",
-			vendor_available: true,
-			product_available: true,
-			vndk: {
-				enabled: true,
-			},
-			nocrt: true,
-		}
-
-		cc_library {
-			name: "libvndk_ext_product",
-			product_specific: true,
-			vndk: {
-				enabled: true,
-				extends: "libvndk",
-			},
-			nocrt: true,
-		}
-	`)
-
-	// Ensures that the core variant of "libvndk_ext_product" can be found.
-	mod := ctx.ModuleForTests("libvndk_ext_product", coreVariant).Module().(*Module)
-	if extends := mod.getVndkExtendsModuleName(); extends != "libvndk" {
-		t.Errorf("\"libvndk_ext_product\" must extend from \"libvndk\" but get %q", extends)
-	}
 }
 
 func TestVndkExtError(t *testing.T) {
@@ -1921,7 +1774,6 @@ func TestProductVndkExtDependency(t *testing.T) {
 	`
 	config := TestConfig(t.TempDir(), android.Android, nil, bp, nil)
 	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
-	config.TestProductVariables.ProductVndkVersion = StringPtr("current")
 	config.TestProductVariables.Platform_vndk_version = StringPtr("29")
 
 	testCcWithConfig(t, config)
@@ -3033,24 +2885,6 @@ func TestExcludeRuntimeLibs(t *testing.T) {
 	variant = "android_vendor.29_arm64_armv8-a_shared"
 	module = ctx.ModuleForTests("libvendor_available2", variant).Module().(*Module)
 	checkRuntimeLibs(t, nil, module)
-}
-
-func TestRuntimeLibsNoVndk(t *testing.T) {
-	t.Parallel()
-	ctx := testCcNoVndk(t, runtimeLibAndroidBp)
-
-	// If DeviceVndkVersion is not defined, then runtime_libs are copied as-is.
-
-	variant := "android_arm64_armv8-a_shared"
-
-	module := ctx.ModuleForTests("libvendor_available1", variant).Module().(*Module)
-	checkRuntimeLibs(t, []string{"liball_available"}, module)
-
-	module = ctx.ModuleForTests("libvendor2", variant).Module().(*Module)
-	checkRuntimeLibs(t, []string{"liball_available", "libvendor1", "libproduct_vendor"}, module)
-
-	module = ctx.ModuleForTests("libproduct2", variant).Module().(*Module)
-	checkRuntimeLibs(t, []string{"liball_available", "libproduct1", "libproduct_vendor"}, module)
 }
 
 func checkStaticLibs(t *testing.T, expected []string, module *Module) {

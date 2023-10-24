@@ -432,6 +432,9 @@ type Module struct {
 	srcJarArgs []string
 	srcJarDeps android.Paths
 
+	// the source files of this module and all its static dependencies
+	transitiveSrcFiles *android.DepSet[android.Path]
+
 	// jar file containing implementation classes and resources including static library
 	// dependencies
 	implementationAndResourcesJar android.Path
@@ -638,6 +641,11 @@ func (j *Module) OutputFiles(tag string) (android.Paths, error) {
 		return nil, fmt.Errorf("%q was requested, but no output file was found.", tag)
 	case ".generated_srcjars":
 		return j.properties.Generated_srcjars, nil
+	case ".lint":
+		if j.linter.outputs.xml != nil {
+			return android.Paths{j.linter.outputs.xml}, nil
+		}
+		return nil, fmt.Errorf("%q was requested, but no output file was found.", tag)
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 	}
@@ -709,6 +717,10 @@ func (j *Module) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel 
 		return android.ApiLevelFrom(ctx, *j.deviceProperties.Min_sdk_version)
 	}
 	return j.SdkVersion(ctx).ApiLevel
+}
+
+func (j *Module) GetDeviceProperties() *DeviceProperties {
+	return &j.deviceProperties
 }
 
 func (j *Module) MaxSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
@@ -1077,8 +1089,8 @@ func (j *Module) AddJSONData(d *map[string]interface{}) {
 
 }
 
-func (module *Module) addGeneratedSrcJars(path android.Path) {
-	module.properties.Generated_srcjars = append(module.properties.Generated_srcjars, path)
+func (j *Module) addGeneratedSrcJars(path android.Path) {
+	j.properties.Generated_srcjars = append(j.properties.Generated_srcjars, path)
 }
 
 func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars android.Paths) {
@@ -1343,10 +1355,17 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 					jars = append(jars, classes)
 				}
 			}
+			// Assume approximately 5 sources per srcjar.
+			// For framework-minus-apex in AOSP at the time this was written, there are 266 srcjars, with a mean
+			// of 5.8 sources per srcjar, but a median of 1, a standard deviation of 10, and a max of 48 source files.
 			if len(srcJars) > 0 {
-				classes := j.compileJavaClasses(ctx, jarName, len(shardSrcs),
-					nil, srcJars, flags, extraJarDeps)
-				jars = append(jars, classes)
+				startIdx := len(shardSrcs)
+				shardSrcJarsList := android.ShardPaths(srcJars, shardSize/5)
+				for idx, shardSrcJars := range shardSrcJarsList {
+					classes := j.compileJavaClasses(ctx, jarName, startIdx+idx,
+						nil, shardSrcJars, flags, extraJarDeps)
+					jars = append(jars, classes)
+				}
 			}
 		} else {
 			classes := j.compileJavaClasses(ctx, jarName, -1, uniqueJavaFiles, srcJars, flags, extraJarDeps)
@@ -1608,7 +1627,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 					false, nil, nil)
 				if *j.dexProperties.Uncompress_dex {
 					combinedAlignedJar := android.PathForModuleOut(ctx, "dex-withres-aligned", jarName).OutputPath
-					TransformZipAlign(ctx, combinedAlignedJar, combinedJar)
+					TransformZipAlign(ctx, combinedAlignedJar, combinedJar, nil)
 					dexOutputFile = combinedAlignedJar
 				} else {
 					dexOutputFile = combinedJar
@@ -1687,6 +1706,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		j.linter.lint(ctx)
 	}
 
+	j.collectTransitiveSrcFiles(ctx, srcFiles)
+
 	ctx.CheckbuildFile(outputFile)
 
 	j.collectTransitiveAconfigFiles(ctx)
@@ -1701,6 +1722,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		AidlIncludeDirs:                j.exportAidlIncludeDirs,
 		SrcJarArgs:                     j.srcJarArgs,
 		SrcJarDeps:                     j.srcJarDeps,
+		TransitiveSrcFiles:             j.transitiveSrcFiles,
 		ExportedPlugins:                j.exportedPluginJars,
 		ExportedPluginClasses:          j.exportedPluginClasses,
 		ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
@@ -2023,6 +2045,21 @@ func (j *Module) Stem() string {
 
 func (j *Module) JacocoReportClassesFile() android.Path {
 	return j.jacocoReportClassesFile
+}
+
+func (j *Module) collectTransitiveSrcFiles(ctx android.ModuleContext, mine android.Paths) {
+	var fromDeps []*android.DepSet[android.Path]
+	ctx.VisitDirectDeps(func(module android.Module) {
+		tag := ctx.OtherModuleDependencyTag(module)
+		if tag == staticLibTag {
+			depInfo := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			if depInfo.TransitiveSrcFiles != nil {
+				fromDeps = append(fromDeps, depInfo.TransitiveSrcFiles)
+			}
+		}
+	})
+
+	j.transitiveSrcFiles = android.NewDepSet(android.POSTORDER, mine, fromDeps)
 }
 
 func (j *Module) IsInstallable() bool {
@@ -2359,7 +2396,7 @@ type ModuleWithStem interface {
 
 var _ ModuleWithStem = (*Module)(nil)
 
-func (j *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (j *Module) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	switch ctx.ModuleType() {
 	case "java_library", "java_library_host", "java_library_static", "tradefed_java_library_host":
 		if lib, ok := ctx.Module().(*Library); ok {

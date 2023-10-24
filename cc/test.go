@@ -25,6 +25,7 @@ import (
 	"android/soong/bazel"
 	"android/soong/bazel/cquery"
 	"android/soong/tradefed"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 )
 
 // TestLinkerProperties properties to be registered via the linker
@@ -395,7 +396,7 @@ func (test *testBinary) install(ctx ModuleContext, file android.Path) {
 
 	useVendor := ctx.inVendor() || ctx.useVndk()
 	testInstallBase := getTestInstallBase(useVendor)
-	configs := getTradefedConfigOptions(ctx, &test.Properties, test.isolated(ctx))
+	configs := getTradefedConfigOptions(ctx, &test.Properties, test.isolated(ctx), ctx.Device())
 
 	test.testConfig = tradefed.AutoGenTestConfig(ctx, tradefed.AutoGenTestConfigOptions{
 		TestConfigProp:         test.Properties.Test_config,
@@ -435,22 +436,24 @@ func getTestInstallBase(useVendor bool) string {
 	return testInstallBase
 }
 
-func getTradefedConfigOptions(ctx android.EarlyModuleContext, properties *TestBinaryProperties, isolated bool) []tradefed.Config {
+func getTradefedConfigOptions(ctx android.EarlyModuleContext, properties *TestBinaryProperties, isolated bool, device bool) []tradefed.Config {
 	var configs []tradefed.Config
 
 	for _, module := range properties.Test_mainline_modules {
 		configs = append(configs, tradefed.Option{Name: "config-descriptor:metadata", Key: "mainline-param", Value: module})
 	}
-	if Bool(properties.Require_root) {
-		configs = append(configs, tradefed.Object{"target_preparer", "com.android.tradefed.targetprep.RootTargetPreparer", nil})
-	} else {
-		var options []tradefed.Option
-		options = append(options, tradefed.Option{Name: "force-root", Value: "false"})
-		configs = append(configs, tradefed.Object{"target_preparer", "com.android.tradefed.targetprep.RootTargetPreparer", options})
-	}
-	if Bool(properties.Disable_framework) {
-		var options []tradefed.Option
-		configs = append(configs, tradefed.Object{"target_preparer", "com.android.tradefed.targetprep.StopServicesSetup", options})
+	if device {
+		if Bool(properties.Require_root) {
+			configs = append(configs, tradefed.Object{"target_preparer", "com.android.tradefed.targetprep.RootTargetPreparer", nil})
+		} else {
+			var options []tradefed.Option
+			options = append(options, tradefed.Option{Name: "force-root", Value: "false"})
+			configs = append(configs, tradefed.Object{"target_preparer", "com.android.tradefed.targetprep.RootTargetPreparer", options})
+		}
+		if Bool(properties.Disable_framework) {
+			var options []tradefed.Option
+			configs = append(configs, tradefed.Object{"target_preparer", "com.android.tradefed.targetprep.StopServicesSetup", options})
+		}
 	}
 	if isolated {
 		configs = append(configs, tradefed.Option{Name: "not-shardable", Value: "true"})
@@ -698,7 +701,7 @@ type testBinaryAttributes struct {
 // TODO(b/244432609): handle `isolated` property.
 // TODO(b/244432134): handle custom runpaths for tests that assume runfile layouts not
 // default to bazel. (see linkerInit function)
-func testBinaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
+func testBinaryBp2build(ctx android.Bp2buildMutatorContext, m *Module) {
 	var testBinaryAttrs testBinaryAttributes
 	testBinaryAttrs.binaryAttributes = binaryBp2buildAttrs(ctx, m)
 
@@ -716,9 +719,31 @@ func testBinaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
 				combinedData.Append(android.BazelLabelForModuleDeps(ctx, p.Data_libs))
 				data.SetSelectValue(axis, config, combinedData)
 				tags.SetSelectValue(axis, config, p.Test_options.Tags)
+
+				// TODO: b/300117121 - handle bp2build conversion of non-unit tests
+				// default to true to only handle non-nil falses
+				if !BoolDefault(p.Test_options.Unit_test, true) {
+					ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "Host unit_test = false")
+					return
+				}
 			}
 		}
 	}
+
+	// The logic comes from https://cs.android.com/android/platform/superproject/main/+/0df8153267f96da877febc5332240fa06ceb8533:build/soong/cc/sanitize.go;l=488
+	var features bazel.StringListAttribute
+	curFeatures := testBinaryAttrs.binaryAttributes.Features.SelectValue(bazel.OsArchConfigurationAxis, bazel.OsArchAndroidArm64)
+	var newFeatures []string
+	if !android.InList("memtag_heap", curFeatures) && !android.InList("-memtag_heap", curFeatures) {
+		newFeatures = append(newFeatures, "memtag_heap")
+		if !android.InList("diag_memtag_heap", curFeatures) && !android.InList("-diag_memtag_heap", curFeatures) {
+			newFeatures = append(newFeatures, "diag_memtag_heap")
+		}
+	}
+
+	features.SetSelectValue(bazel.OsArchConfigurationAxis, bazel.OsArchAndroidArm64, newFeatures)
+	testBinaryAttrs.binaryAttributes.Features.Append(features)
+	testBinaryAttrs.binaryAttributes.Features.DeduplicateAxesFromBase()
 
 	m.convertTidyAttributes(ctx, &testBinaryAttrs.tidyAttributes)
 
@@ -745,7 +770,7 @@ func testBinaryBp2build(ctx android.TopDownMutatorContext, m *Module) {
 				p.Auto_gen_config,
 				p.Test_options.Test_suite_tag,
 				p.Test_config_template,
-				getTradefedConfigOptions(ctx, p, gtestIsolated),
+				getTradefedConfigOptions(ctx, p, gtestIsolated, true),
 				&testInstallBase,
 			)
 			testBinaryAttrs.TestConfigAttributes = testConfigAttributes

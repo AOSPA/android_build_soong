@@ -19,6 +19,10 @@ import (
 	"strings"
 
 	"android/soong/android"
+	"android/soong/bazel"
+	"android/soong/cc"
+
+	"github.com/google/blueprint/proptools"
 )
 
 var (
@@ -56,14 +60,18 @@ type ProtobufProperties struct {
 	// Use protobuf version 3.x. This will be deleted once we migrate all current users
 	// of protobuf off of 2.x.
 	Use_protobuf3 *bool
+
+	// List of exported include paths containing proto files for dependent rust_protobuf modules.
+	Exported_include_dirs []string
 }
 
 type protobufDecorator struct {
 	*BaseSourceProvider
 
-	Properties ProtobufProperties
-	protoNames []string
-	grpcNames  []string
+	Properties       ProtobufProperties
+	protoNames       []string
+	additionalCrates []string
+	grpcNames        []string
 
 	grpcProtoFlags android.ProtoFlags
 	protoFlags     android.ProtoFlags
@@ -181,6 +189,10 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 	// stemFile must be first here as the first path in BaseSourceProvider.OutputFiles is the library entry-point.
 	proto.BaseSourceProvider.OutputFiles = append(android.Paths{stemFile}, outputs.Paths()...)
 
+	ctx.SetProvider(cc.FlagExporterInfoProvider, cc.FlagExporterInfo{
+		IncludeDirs: android.PathsForModuleSrc(ctx, proto.Properties.Exported_include_dirs),
+	})
+
 	// mod_stem.rs is the entry-point for our library modules, so this is what we return.
 	return stemFile
 }
@@ -189,8 +201,14 @@ func (proto *protobufDecorator) genModFileContents() string {
 	lines := []string{
 		"// @Soong generated Source",
 	}
+
 	for _, protoName := range proto.protoNames {
 		lines = append(lines, fmt.Sprintf("pub mod %s;", protoName))
+	}
+
+	for _, crate := range proto.additionalCrates {
+		lines = append(lines, fmt.Sprintf("pub use %s::*;", crate))
+
 	}
 
 	for _, grpcName := range proto.grpcNames {
@@ -264,5 +282,77 @@ func NewRustProtobuf(hod android.HostOrDeviceSupported) (*Module, *protobufDecor
 
 	module := NewSourceProviderModule(hod, protobuf, false, false)
 
+	android.InitBazelModule(module)
+
 	return module, protobuf
+}
+
+type rustProtoAttributes struct {
+	Srcs       bazel.LabelListAttribute
+	Crate_name bazel.StringAttribute
+	Deps       bazel.LabelListAttribute
+}
+
+type protoLibraryAttributes struct {
+	Srcs bazel.LabelListAttribute
+}
+
+func protoLibraryBp2build(ctx android.Bp2buildMutatorContext, m *Module) {
+	var protoFiles []string
+
+	for _, propsInterface := range m.sourceProvider.SourceProviderProps() {
+		if possibleProps, ok := propsInterface.(*ProtobufProperties); ok {
+			protoFiles = possibleProps.Protos
+			break
+		}
+	}
+
+	protoLibraryName := m.Name() + "_proto"
+
+	protoDeps := bazel.LabelListAttribute{
+		Value: bazel.LabelList{
+			Includes: []bazel.Label{
+				{
+					Label:              ":" + protoLibraryName,
+					OriginalModuleName: m.Name(),
+				},
+			},
+		},
+	}
+
+	// TODO(b/295918553): Remove androidRestriction after rust toolchain for android is checked in.
+	var androidRestriction bazel.BoolAttribute
+	androidRestriction.SetSelectValue(bazel.OsConfigurationAxis, "android", proptools.BoolPtr(false))
+
+	ctx.CreateBazelTargetModuleWithRestrictions(
+		bazel.BazelTargetModuleProperties{
+			Rule_class: "proto_library",
+		},
+		android.CommonAttributes{
+			Name: protoLibraryName,
+		},
+		&protoLibraryAttributes{
+			Srcs: bazel.MakeLabelListAttribute(
+				android.BazelLabelForModuleSrc(ctx, protoFiles),
+			),
+		},
+		androidRestriction,
+	)
+
+	ctx.CreateBazelTargetModuleWithRestrictions(
+		bazel.BazelTargetModuleProperties{
+			Rule_class:        "rust_proto_library",
+			Bzl_load_location: "@rules_rust//proto/protobuf:defs.bzl",
+		},
+		android.CommonAttributes{
+			Name: m.Name(),
+		},
+		&rustProtoAttributes{
+			Crate_name: bazel.StringAttribute{
+				Value: proptools.StringPtr(m.CrateName()),
+			},
+			Deps: protoDeps,
+		},
+		androidRestriction,
+	)
 }

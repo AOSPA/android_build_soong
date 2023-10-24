@@ -143,6 +143,9 @@ type TestProperties struct {
 	// Only available for host sh_test modules.
 	Data_device_libs []string `android:"path,arch_variant"`
 
+	// list of java modules that provide data that should be installed alongside the test.
+	Java_data []string
+
 	// Install the test into a folder named for the module in all test suites.
 	Per_testcase_directory *bool
 
@@ -185,6 +188,15 @@ func (s *ShBinary) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 func (s *ShBinary) OutputFile() android.OutputPath {
 	return s.outputFilePath
+}
+
+func (s *ShBinary) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case "":
+		return android.Paths{s.outputFilePath}, nil
+	default:
+		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+	}
 }
 
 func (s *ShBinary) SubDir() string {
@@ -307,6 +319,7 @@ var (
 	shTestDataLibsTag       = dependencyTag{name: "dataLibs"}
 	shTestDataDeviceBinsTag = dependencyTag{name: "dataDeviceBins"}
 	shTestDataDeviceLibsTag = dependencyTag{name: "dataDeviceLibs"}
+	shTestJavaDataTag       = dependencyTag{name: "javaData"}
 )
 
 var sharedLibVariations = []blueprint.Variation{{Mutator: "link", Variation: "shared"}}
@@ -322,12 +335,19 @@ func (s *ShTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 		ctx.AddFarVariationDependencies(deviceVariations, shTestDataDeviceBinsTag, s.testProperties.Data_device_bins...)
 		ctx.AddFarVariationDependencies(append(deviceVariations, sharedLibVariations...),
 			shTestDataDeviceLibsTag, s.testProperties.Data_device_libs...)
+
+		javaDataVariation := []blueprint.Variation{{"arch", android.Common.String()}}
+		ctx.AddVariationDependencies(javaDataVariation, shTestJavaDataTag, s.testProperties.Java_data...)
+
 	} else if ctx.Target().Os.Class != android.Host {
 		if len(s.testProperties.Data_device_bins) > 0 {
 			ctx.PropertyErrorf("data_device_bins", "only available for host modules")
 		}
 		if len(s.testProperties.Data_device_libs) > 0 {
 			ctx.PropertyErrorf("data_device_libs", "only available for host modules")
+		}
+		if len(s.testProperties.Java_data) > 0 {
+			ctx.PropertyErrorf("Java_data", "only available for host modules")
 		}
 	}
 }
@@ -361,7 +381,13 @@ func (s *ShTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	s.installedFile = ctx.InstallExecutable(s.installDir, s.outputFilePath.Base(), s.outputFilePath)
 
-	s.data = android.PathsForModuleSrc(ctx, s.testProperties.Data)
+	expandedData := android.PathsForModuleSrc(ctx, s.testProperties.Data)
+
+	// Emulate the data property for java_data dependencies.
+	for _, javaData := range ctx.GetDirectDepsWithTag(shTestJavaDataTag) {
+		expandedData = append(expandedData, android.OutputFilesForModule(ctx, javaData, "")...)
+	}
+	s.data = expandedData
 
 	var configs []tradefed.Config
 	if Bool(s.testProperties.Require_root) {
@@ -557,7 +583,7 @@ type bazelShTestAttributes struct {
 	Auto_gen_config      *bool
 }
 
-func (m *ShBinary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (m *ShBinary) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	srcs := bazel.MakeLabelListAttribute(
 		android.BazelLabelForModuleSrc(ctx, []string{*m.properties.Src}))
 
@@ -585,7 +611,7 @@ func (m *ShBinary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: m.Name()}, attrs)
 }
 
-func (m *ShTest) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (m *ShTest) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	srcs := bazel.MakeLabelListAttribute(
 		android.BazelLabelForModuleSrc(ctx, []string{*m.properties.Src}))
 

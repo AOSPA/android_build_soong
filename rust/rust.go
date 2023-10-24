@@ -15,9 +15,12 @@
 package rust
 
 import (
-	"android/soong/bloaty"
 	"fmt"
 	"strings"
+
+	"android/soong/bazel"
+	"android/soong/bloaty"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -169,6 +172,8 @@ type Module struct {
 	apexSdkVersion android.ApiLevel
 
 	transitiveAndroidMkSharedLibs *android.DepSet[string]
+
+	android.BazelModuleBase
 }
 
 func (mod *Module) Header() bool {
@@ -257,6 +262,15 @@ func (mod *Module) Dylib() bool {
 	if mod.compiler != nil {
 		if library, ok := mod.compiler.(libraryInterface); ok {
 			return library.dylib()
+		}
+	}
+	return false
+}
+
+func (mod *Module) Source() bool {
+	if mod.compiler != nil {
+		if library, ok := mod.compiler.(libraryInterface); ok && mod.sourceProvider != nil {
+			return library.source()
 		}
 	}
 	return false
@@ -433,12 +447,13 @@ type Deps struct {
 }
 
 type PathDeps struct {
-	DyLibs          RustLibraries
-	RLibs           RustLibraries
-	LibDeps         android.Paths
-	WholeStaticLibs android.Paths
-	ProcMacros      RustLibraries
-	AfdoProfiles    android.Paths
+	DyLibs        RustLibraries
+	RLibs         RustLibraries
+	SharedLibs    android.Paths
+	SharedLibDeps android.Paths
+	StaticLibs    android.Paths
+	ProcMacros    RustLibraries
+	AfdoProfiles  android.Paths
 
 	// depFlags and depLinkFlags are rustc and linker (clang) flags.
 	depFlags     []string
@@ -447,7 +462,7 @@ type PathDeps struct {
 	// linkDirs are link paths passed via -L to rustc. linkObjects are objects passed directly to the linker.
 	// Both of these are exported and propagate to dependencies.
 	linkDirs    []string
-	linkObjects android.Paths
+	linkObjects []string
 
 	// Used by bindgen modules which call clang
 	depClangFlags         []string
@@ -510,7 +525,7 @@ type compiler interface {
 
 type exportedFlagsProducer interface {
 	exportLinkDirs(...string)
-	exportLinkObjects(...android.Path)
+	exportLinkObjects(...string)
 }
 
 type xref interface {
@@ -519,27 +534,21 @@ type xref interface {
 
 type flagExporter struct {
 	linkDirs    []string
-	linkObjects android.Paths
-	libDeps     android.Paths
+	linkObjects []string
 }
 
 func (flagExporter *flagExporter) exportLinkDirs(dirs ...string) {
 	flagExporter.linkDirs = android.FirstUniqueStrings(append(flagExporter.linkDirs, dirs...))
 }
 
-func (flagExporter *flagExporter) exportLinkObjects(flags ...android.Path) {
-	flagExporter.linkObjects = android.FirstUniquePaths(append(flagExporter.linkObjects, flags...))
-}
-
-func (flagExporter *flagExporter) exportLibDeps(paths ...android.Path) {
-	flagExporter.libDeps = android.FirstUniquePaths(append(flagExporter.libDeps, paths...))
+func (flagExporter *flagExporter) exportLinkObjects(flags ...string) {
+	flagExporter.linkObjects = android.FirstUniqueStrings(append(flagExporter.linkObjects, flags...))
 }
 
 func (flagExporter *flagExporter) setProvider(ctx ModuleContext) {
 	ctx.SetProvider(FlagExporterInfoProvider, FlagExporterInfo{
 		LinkDirs:    flagExporter.linkDirs,
 		LinkObjects: flagExporter.linkObjects,
-		LibDeps:     flagExporter.libDeps,
 	})
 }
 
@@ -552,8 +561,7 @@ func NewFlagExporter() *flagExporter {
 type FlagExporterInfo struct {
 	Flags       []string
 	LinkDirs    []string // TODO: this should be android.Paths
-	LinkObjects android.Paths
-	LibDeps     android.Paths
+	LinkObjects []string // TODO: this should be android.Paths
 }
 
 var FlagExporterInfoProvider = blueprint.NewProvider(FlagExporterInfo{})
@@ -1151,6 +1159,13 @@ func rustMakeLibName(ctx android.ModuleContext, c cc.LinkableInterface, dep cc.L
 	return cc.MakeLibName(ctx, c, dep, depName)
 }
 
+func collectIncludedProtos(mod *Module, dep *Module) {
+	if protoMod, ok := mod.sourceProvider.(*protobufDecorator); ok {
+		if _, ok := dep.sourceProvider.(*protobufDecorator); ok {
+			protoMod.additionalCrates = append(protoMod.additionalCrates, dep.CrateName())
+		}
+	}
+}
 func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	var depPaths PathDeps
 
@@ -1263,6 +1278,11 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			case procMacroDepTag:
 				directProcMacroDeps = append(directProcMacroDeps, rustDep)
 				mod.Properties.AndroidMkProcMacroLibs = append(mod.Properties.AndroidMkProcMacroLibs, makeLibName)
+
+			case sourceDepTag:
+				if _, ok := mod.sourceProvider.(*protobufDecorator); ok {
+					collectIncludedProtos(mod, rustDep)
+				}
 			}
 
 			transitiveAndroidMkSharedLibs = append(transitiveAndroidMkSharedLibs, rustDep.transitiveAndroidMkSharedLibs)
@@ -1293,7 +1313,6 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				depPaths.linkDirs = append(depPaths.linkDirs, exportedInfo.LinkDirs...)
 				depPaths.depFlags = append(depPaths.depFlags, exportedInfo.Flags...)
 				depPaths.linkObjects = append(depPaths.linkObjects, exportedInfo.LinkObjects...)
-				depPaths.LibDeps = append(depPaths.LibDeps, exportedInfo.LibDeps...)
 			}
 
 			if depTag == dylibDepTag || depTag == rlibDepTag || depTag == procMacroDepTag {
@@ -1303,7 +1322,14 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					lib.exportLinkDirs(linkDir)
 				}
 			}
-
+			if depTag == sourceDepTag {
+				if _, ok := mod.sourceProvider.(*protobufDecorator); ok && mod.Source() {
+					if _, ok := rustDep.sourceProvider.(*protobufDecorator); ok {
+						exportedInfo := ctx.OtherModuleProvider(dep, cc.FlagExporterInfoProvider).(cc.FlagExporterInfo)
+						depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
+					}
+				}
+			}
 		} else if ccDep, ok := dep.(cc.LinkableInterface); ok {
 			//Handle C dependencies
 			makeLibName := cc.MakeLibName(ctx, mod, ccDep, depName)
@@ -1342,7 +1368,6 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 						depPaths.depLinkFlags = append(depPaths.depLinkFlags, []string{"-Wl,--whole-archive", linkObject.Path().String(), "-Wl,--no-whole-archive"}...)
 					} else if libName, ok := libNameFromFilePath(linkObject.Path()); ok {
 						depPaths.depFlags = append(depPaths.depFlags, "-lstatic="+libName)
-						depPaths.WholeStaticLibs = append(depPaths.WholeStaticLibs, linkObject.Path())
 					} else {
 						ctx.ModuleErrorf("'%q' cannot be listed as a whole_static_library in Rust modules unless the output is prefixed by 'lib'", depName, ctx.ModuleName())
 					}
@@ -1350,7 +1375,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 				// Add this to linkObjects to pass the library directly to the linker as well. This propagates
 				// to dependencies to avoid having to redeclare static libraries for dependents of the dylib variant.
-				depPaths.linkObjects = append(depPaths.linkObjects, linkObject.AsPaths()...)
+				depPaths.linkObjects = append(depPaths.linkObjects, linkObject.String())
 				depPaths.linkDirs = append(depPaths.linkDirs, linkPath)
 
 				exportedInfo := ctx.OtherModuleProvider(dep, cc.FlagExporterInfoProvider).(cc.FlagExporterInfo)
@@ -1384,7 +1409,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				linkPath = linkPathFromFilePath(linkObject.Path())
 
 				depPaths.linkDirs = append(depPaths.linkDirs, linkPath)
-				depPaths.linkObjects = append(depPaths.linkObjects, linkObject.AsPaths()...)
+				depPaths.linkObjects = append(depPaths.linkObjects, linkObject.String())
 				depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
 				depPaths.depSystemIncludePaths = append(depPaths.depSystemIncludePaths, exportedInfo.SystemIncludeDirs...)
 				depPaths.depClangFlags = append(depPaths.depClangFlags, exportedInfo.Flags...)
@@ -1410,9 +1435,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			// Make sure these dependencies are propagated
 			if lib, ok := mod.compiler.(exportedFlagsProducer); ok && exportDep {
 				lib.exportLinkDirs(linkPath)
-				if linkObject.Valid() {
-					lib.exportLinkObjects(linkObject.Path())
-				}
+				lib.exportLinkObjects(linkObject.String())
 			}
 		} else {
 			switch {
@@ -1446,16 +1469,19 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		procMacroDepFiles = append(procMacroDepFiles, RustLibrary{Path: dep.UnstrippedOutputFile(), CrateName: dep.CrateName()})
 	}
 
-	var libDepFiles android.Paths
+	var staticLibDepFiles android.Paths
 	for _, dep := range directStaticLibDeps {
-		libDepFiles = append(libDepFiles, dep.OutputFile().Path())
+		staticLibDepFiles = append(staticLibDepFiles, dep.OutputFile().Path())
 	}
 
+	var sharedLibFiles android.Paths
+	var sharedLibDepFiles android.Paths
 	for _, dep := range directSharedLibDeps {
+		sharedLibFiles = append(sharedLibFiles, dep.SharedLibrary)
 		if dep.TableOfContents.Valid() {
-			libDepFiles = append(libDepFiles, dep.TableOfContents.Path())
+			sharedLibDepFiles = append(sharedLibDepFiles, dep.TableOfContents.Path())
 		} else {
-			libDepFiles = append(libDepFiles, dep.SharedLibrary)
+			sharedLibDepFiles = append(sharedLibDepFiles, dep.SharedLibrary)
 		}
 	}
 
@@ -1471,13 +1497,15 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	depPaths.RLibs = append(depPaths.RLibs, rlibDepFiles...)
 	depPaths.DyLibs = append(depPaths.DyLibs, dylibDepFiles...)
-	depPaths.LibDeps = append(depPaths.LibDeps, libDepFiles...)
+	depPaths.SharedLibs = append(depPaths.SharedLibs, sharedLibFiles...)
+	depPaths.SharedLibDeps = append(depPaths.SharedLibDeps, sharedLibDepFiles...)
+	depPaths.StaticLibs = append(depPaths.StaticLibs, staticLibDepFiles...)
 	depPaths.ProcMacros = append(depPaths.ProcMacros, procMacroDepFiles...)
 	depPaths.SrcDeps = append(depPaths.SrcDeps, srcProviderDepFiles...)
 
 	// Dedup exported flags from dependencies
 	depPaths.linkDirs = android.FirstUniqueStrings(depPaths.linkDirs)
-	depPaths.linkObjects = android.FirstUniquePaths(depPaths.linkObjects)
+	depPaths.linkObjects = android.FirstUniqueStrings(depPaths.linkObjects)
 	depPaths.depFlags = android.FirstUniqueStrings(depPaths.depFlags)
 	depPaths.depClangFlags = android.FirstUniqueStrings(depPaths.depClangFlags)
 	depPaths.depIncludePaths = android.FirstUniquePaths(depPaths.depIncludePaths)
@@ -1567,30 +1595,43 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 
 	// rustlibs
-	if deps.Rustlibs != nil && !mod.compiler.Disabled() {
-		autoDep := mod.compiler.(autoDeppable).autoDep(ctx)
-		for _, lib := range deps.Rustlibs {
-			if autoDep.depTag == rlibDepTag {
-				// Handle the rlib deptag case
-				addRlibDependency(actx, lib, mod, &snapshotInfo, rlibDepVariations)
-			} else {
-				// autoDep.depTag is a dylib depTag. Not all rustlibs may be available as a dylib however.
-				// Check for the existence of the dylib deptag variant. Select it if available,
-				// otherwise select the rlib variant.
-				autoDepVariations := append(commonDepVariations,
-					blueprint.Variation{Mutator: "rust_libraries", Variation: autoDep.variation})
-
-				replacementLib := cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Dylibs)
-
-				if actx.OtherModuleDependencyVariantExists(autoDepVariations, replacementLib) {
-					addDylibDependency(actx, lib, mod, &snapshotInfo, autoDepVariations, autoDep.depTag)
-				} else {
-					// If there's no dylib dependency available, try to add the rlib dependency instead.
+	if deps.Rustlibs != nil {
+		if !mod.compiler.Disabled() {
+			for _, lib := range deps.Rustlibs {
+				autoDep := mod.compiler.(autoDeppable).autoDep(ctx)
+				if autoDep.depTag == rlibDepTag {
+					// Handle the rlib deptag case
 					addRlibDependency(actx, lib, mod, &snapshotInfo, rlibDepVariations)
+				} else {
+					// autoDep.depTag is a dylib depTag. Not all rustlibs may be available as a dylib however.
+					// Check for the existence of the dylib deptag variant. Select it if available,
+					// otherwise select the rlib variant.
+					autoDepVariations := append(commonDepVariations,
+						blueprint.Variation{Mutator: "rust_libraries", Variation: autoDep.variation})
+
+					replacementLib := cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Dylibs)
+
+					if actx.OtherModuleDependencyVariantExists(autoDepVariations, replacementLib) {
+						addDylibDependency(actx, lib, mod, &snapshotInfo, autoDepVariations, autoDep.depTag)
+					} else {
+						// If there's no dylib dependency available, try to add the rlib dependency instead.
+						addRlibDependency(actx, lib, mod, &snapshotInfo, rlibDepVariations)
+					}
+				}
+			}
+		} else if _, ok := mod.sourceProvider.(*protobufDecorator); ok {
+			for _, lib := range deps.Rustlibs {
+				replacementLib := cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Dylibs)
+				srcProviderVariations := append(commonDepVariations,
+					blueprint.Variation{Mutator: "rust_libraries", Variation: "source"})
+
+				if actx.OtherModuleDependencyVariantExists(srcProviderVariations, replacementLib) {
+					actx.AddVariationDependencies(srcProviderVariations, sourceDepTag, lib)
 				}
 			}
 		}
 	}
+
 	// stdlibs
 	if deps.Stdlibs != nil {
 		if mod.compiler.stdLinkage(ctx) == RlibLinkage {
@@ -1839,6 +1880,46 @@ func (k kytheExtractRustSingleton) GenerateBuildActions(ctx android.SingletonCon
 
 func (c *Module) Partition() string {
 	return ""
+}
+
+func (m *Module) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
+	if ctx.ModuleType() == "rust_library_host" || ctx.ModuleType() == "rust_library" {
+		libraryBp2build(ctx, m)
+	} else if ctx.ModuleType() == "rust_proc_macro" {
+		procMacroBp2build(ctx, m)
+	} else if ctx.ModuleType() == "rust_binary_host" {
+		binaryBp2build(ctx, m)
+	} else if ctx.ModuleType() == "rust_protobuf_host" || ctx.ModuleType() == "rust_protobuf" {
+		protoLibraryBp2build(ctx, m)
+	} else {
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
+	}
+}
+
+// This is a workaround by assuming the conventions that rust crate repos are structured
+// while waiting for the sandboxing work to complete.
+// TODO(b/297344471): When crate_root prop is set which enforces inputs sandboxing,
+// always use `srcs` and `compile_data` props to generate `srcs` and `compile_data` attributes
+// instead of using globs.
+func srcsAndCompileDataAttrs(ctx android.Bp2buildMutatorContext, c baseCompiler) (bazel.LabelList, bazel.LabelList) {
+	var srcs bazel.LabelList
+	var compileData bazel.LabelList
+
+	if c.Properties.Srcs[0] == "src/lib.rs" {
+		srcs = android.BazelLabelForModuleSrc(ctx, []string{"src/**/*.rs"})
+		compileData = android.BazelLabelForModuleSrc(
+			ctx,
+			[]string{
+				"src/**/*.proto",
+				"examples/**/*.rs",
+				"**/*.md",
+			},
+		)
+	} else {
+		srcs = android.BazelLabelForModuleSrc(ctx, c.Properties.Srcs)
+	}
+
+	return srcs, compileData
 }
 
 var Bool = proptools.Bool

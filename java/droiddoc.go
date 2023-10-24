@@ -22,6 +22,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel"
 	"android/soong/java/config"
 )
 
@@ -134,6 +135,9 @@ type DroiddocProperties struct {
 	// a todo file lists the program elements that are missing documentation.
 	// At some point, this might be improved to show more warnings.
 	Todo_file *string `android:"path"`
+
+	// A file containing a baseline for allowed lint errors.
+	Lint_baseline *string `android:"path"`
 
 	// directory under current module source that provide additional resources (images).
 	Resourcesdir *string
@@ -664,6 +668,10 @@ func (d *Droiddoc) doclavaDocsFlags(ctx android.ModuleContext, cmd *android.Rule
 			ImplicitOutput(android.PathForModuleOut(ctx, String(d.properties.Todo_file)))
 	}
 
+	if String(d.properties.Lint_baseline) != "" {
+		cmd.FlagWithInput("-lintbaseline ", android.PathForModuleSrc(ctx, String(d.properties.Lint_baseline)))
+	}
+
 	if String(d.properties.Resourcesdir) != "" {
 		// TODO: should we add files under resourcesDir to the implicits? It seems that
 		// resourcesDir is one sub dir of htmlDir
@@ -844,6 +852,7 @@ type ExportedDroiddocDirProperties struct {
 
 type ExportedDroiddocDir struct {
 	android.ModuleBase
+	android.BazelModuleBase
 
 	properties ExportedDroiddocDirProperties
 
@@ -856,6 +865,7 @@ func ExportedDroiddocDirFactory() android.Module {
 	module := &ExportedDroiddocDir{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidModule(module)
+	android.InitBazelModule(module)
 	return module
 }
 
@@ -865,6 +875,28 @@ func (d *ExportedDroiddocDir) GenerateAndroidBuildActions(ctx android.ModuleCont
 	path := String(d.properties.Path)
 	d.dir = android.PathForModuleSrc(ctx, path)
 	d.deps = android.PathsForModuleSrc(ctx, []string{filepath.Join(path, "**/*")})
+}
+
+// ConvertWithBp2build implements android.BazelModule.
+func (d *ExportedDroiddocDir) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
+	props := bazel.BazelTargetModuleProperties{
+		// Use the native py_library rule.
+		Rule_class:        "droiddoc_exported_dir",
+		Bzl_load_location: "//build/bazel/rules/droiddoc:droiddoc_exported_dir.bzl",
+	}
+
+	type BazelAttrs struct {
+		Dir  *string
+		Srcs bazel.LabelListAttribute
+	}
+
+	attrs := &BazelAttrs{
+		Dir:  proptools.StringPtr(*d.properties.Path),
+		Srcs: bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, []string{filepath.Join(*d.properties.Path, "**/*")})),
+	}
+
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: d.Name()}, attrs)
+
 }
 
 // Defaults

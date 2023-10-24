@@ -73,6 +73,15 @@ type BaseCompilerProperties struct {
 	// If no source file is defined, a single generated source module can be defined to be used as the main source.
 	Srcs []string `android:"path,arch_variant"`
 
+	// Entry point that is passed to rustc to begin the compilation. E.g. main.rs or lib.rs.
+	// When this property is set,
+	//    * sandboxing is enabled for this module, and
+	//    * the srcs attribute is interpreted as a list of all source files potentially
+	//          used in compilation, including the entrypoint, and
+	//    * compile_data can be used to add additional files used in compilation that
+	//          not directly used as source files.
+	Crate_root *string `android:"path,arch_variant"`
+
 	// name of the lint set that should be used to validate this module.
 	//
 	// Possible values are "default" (for using a sensible set of lints
@@ -318,10 +327,22 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 		flags.LinkFlags = append(flags.LinkFlags, cc.RpathFlags(ctx)...)
 	}
 
-	if !ctx.toolchain().Bionic() && ctx.Os() != android.LinuxMusl && !ctx.Windows() {
-		// Add -ldl, -lpthread, -lm and -lrt to host builds to match the default behavior of device
-		// builds. This is irrelevant for the Windows target as these are Posix specific.
+	if ctx.Os() == android.Linux {
+		// Add -lc, -lrt, -ldl, -lpthread, -lm and -lgcc_s to glibc builds to match
+		// the default behavior of device builds.
 		flags.LinkFlags = append(flags.LinkFlags,
+			"-lc",
+			"-lrt",
+			"-ldl",
+			"-lpthread",
+			"-lm",
+			"-lgcc_s",
+		)
+	} else if ctx.Os() == android.Darwin {
+		// Add -lc, -ldl, -lpthread and -lm to glibc darwin builds to match the default
+		// behavior of device builds.
+		flags.LinkFlags = append(flags.LinkFlags,
+			"-lc",
 			"-ldl",
 			"-lpthread",
 			"-lm",
@@ -511,6 +532,8 @@ func srcPathFromModuleSrcs(ctx ModuleContext, srcs []string) (android.Path, andr
 		ctx.PropertyErrorf("srcs", "only a single generated source module can be defined without a main source file.")
 	}
 
+	// TODO: b/297264540 - once all modules are sandboxed, we need to select the proper
+	// entry point file from Srcs rather than taking the first one
 	paths := android.PathsForModuleSrc(ctx, srcs)
 	return paths[srcIndex], paths[1:]
 }

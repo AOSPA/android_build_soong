@@ -197,6 +197,14 @@ func (p *PythonLibraryModule) getPkgPath() string {
 	return String(p.properties.Pkg_path)
 }
 
+// PkgPath is the "public" version of `getPkgPath` that is only available during bp2build
+func (p *PythonLibraryModule) PkgPath(ctx android.BazelConversionContext) *string {
+	if ctx.Config().BuildMode != android.Bp2build {
+		ctx.ModuleErrorf("PkgPath is only supported in bp2build mode")
+	}
+	return p.properties.Pkg_path
+}
+
 func (p *PythonLibraryModule) getBaseProperties() *BaseProperties {
 	return &p.properties
 }
@@ -454,8 +462,7 @@ func (p *PythonLibraryModule) GenerateAndroidBuildActions(ctx android.ModuleCont
 
 	// generate the zipfile of all source and data files
 	p.srcsZip = p.createSrcsZip(ctx, pkgPath)
-	// TODO(b/278602456): precompilation temporarily disabled for python3.11 upgrade
-	p.precompiledSrcsZip = p.srcsZip //p.precompileSrcs(ctx)
+	p.precompiledSrcsZip = p.precompileSrcs(ctx)
 }
 
 func isValidPythonPath(path string) error {

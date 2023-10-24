@@ -427,7 +427,6 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 
 	platformVndkVersion := mctx.DeviceConfig().PlatformVndkVersion()
 	boardVndkVersion := mctx.DeviceConfig().VndkVersion()
-	productVndkVersion := mctx.DeviceConfig().ProductVndkVersion()
 	recoverySnapshotVersion := mctx.DeviceConfig().RecoverySnapshotVersion()
 	usingRecoverySnapshot := recoverySnapshotVersion != "current" &&
 		recoverySnapshotVersion != ""
@@ -447,9 +446,6 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 	if boardVndkVersion == "current" {
 		boardVndkVersion = platformVndkVersion
 	}
-	if productVndkVersion == "current" {
-		productVndkVersion = platformVndkVersion
-	}
 
 	if m.NeedsLlndkVariants() {
 		// This is an LLNDK library.  The implementation of the library will be on /system,
@@ -465,9 +461,6 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		if needVndkVersionVendorVariantForLlndk {
 			vendorVariants = append(vendorVariants, boardVndkVersion)
 		}
-		if productVndkVersion != "" {
-			productVariants = append(productVariants, productVndkVersion)
-		}
 	} else if m.NeedsVendorPublicLibraryVariants() {
 		// A vendor public library has the implementation on /vendor, with stub variants
 		// for system and product.
@@ -475,9 +468,6 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		vendorVariants = append(vendorVariants, boardVndkVersion)
 		if platformVndkVersion != "" {
 			productVariants = append(productVariants, platformVndkVersion)
-		}
-		if productVndkVersion != "" {
-			productVariants = append(productVariants, productVndkVersion)
 		}
 	} else if boardVndkVersion == "" {
 		// If the device isn't compiling against the VNDK, we always
@@ -512,10 +502,6 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		// product_available modules are available to /product.
 		if m.HasProductVariant() {
 			productVariants = append(productVariants, platformVndkVersion)
-			// VNDK is always PLATFORM_VNDK_VERSION
-			if !m.IsVndk() {
-				productVariants = append(productVariants, productVndkVersion)
-			}
 		}
 	} else if vendorSpecific && m.SdkVersion() == "" {
 		// This will be available in /vendor (or /odm) only
@@ -543,17 +529,10 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		coreVariantNeeded = true
 	}
 
-	if boardVndkVersion != "" && productVndkVersion != "" {
-		if coreVariantNeeded && productSpecific && m.SdkVersion() == "" {
-			// The module has "product_specific: true" that does not create core variant.
-			coreVariantNeeded = false
-			productVariants = append(productVariants, productVndkVersion)
-		}
-	} else {
-		// Unless PRODUCT_PRODUCT_VNDK_VERSION is set, product partition has no
-		// restriction to use system libs.
-		// No product variants defined in this case.
-		productVariants = []string{}
+	if coreVariantNeeded && productSpecific && m.SdkVersion() == "" {
+		// The module has "product_specific: true" that does not create core variant.
+		coreVariantNeeded = false
+		productVariants = append(productVariants, platformVndkVersion)
 	}
 
 	if m.RamdiskAvailable() {

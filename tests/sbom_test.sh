@@ -35,25 +35,23 @@ function cleanup {
 }
 
 function run_soong {
-  target_product="$1";shift
-  out_dir="$1"; shift
-  targets="$1"; shift
+  local out_dir="$1"; shift
+  local targets="$1"; shift
   if [ "$#" -ge 1 ]; then
-    apps=$1; shift
-    TARGET_PRODUCT="${target_product}" TARGET_BUILD_VARIANT=userdebug OUT_DIR="${out_dir}" TARGET_BUILD_UNBUNDLED=true TARGET_BUILD_APPS=$apps build/soong/soong_ui.bash --make-mode ${targets}
+    local apps=$1; shift
+    TARGET_PRODUCT="${target_product}" TARGET_RELEASE="${target_release}" TARGET_BUILD_VARIANT="${target_build_variant}" OUT_DIR="${out_dir}" TARGET_BUILD_UNBUNDLED=true TARGET_BUILD_APPS=$apps \
+        build/soong/soong_ui.bash --make-mode ${targets}
   else
-    TARGET_PRODUCT="${target_product}" TARGET_BUILD_VARIANT=userdebug OUT_DIR="${out_dir}" build/soong/soong_ui.bash --make-mode ${targets}
+    TARGET_PRODUCT="${target_product}" TARGET_RELEASE="${target_release}" TARGET_BUILD_VARIANT="${target_build_variant}" OUT_DIR="${out_dir}" \
+        build/soong/soong_ui.bash --make-mode ${targets}
   fi
 }
 
 function diff_files {
-  file_list_file="$1"; shift
-  files_in_spdx_file="$1"; shift
-  partition_name="$1"; shift
-  exclude=
-  if [ -v 'diff_excludes[$partition_name]' ]; then
-   exclude=${diff_excludes[$partition_name]}
-  fi
+  local file_list_file="$1"; shift
+  local files_in_spdx_file="$1"; shift
+  local partition_name="$1"; shift
+  local exclude="$1"; shift
 
   diff "$file_list_file" "$files_in_spdx_file" $exclude
   if [ $? != "0" ]; then
@@ -70,7 +68,7 @@ function test_sbom_aosp_cf_x86_64_phone {
 
   # Test
   # m droid, build sbom later in case additional dependencies might be built and included in partition images.
-  run_soong "aosp_cf_x86_64_phone" "${out_dir}" "droid dump.erofs lz4"
+  run_soong "${out_dir}" "droid dump.erofs lz4"
 
   product_out=$out_dir/target/product/vsoc_x86_64
   sbom_test=$product_out/sbom_test
@@ -78,53 +76,11 @@ function test_sbom_aosp_cf_x86_64_phone {
   cp $product_out/*.img $sbom_test
 
   # m sbom
-  run_soong "aosp_cf_x86_64_phone" "${out_dir}" sbom
+  run_soong "${out_dir}" sbom
 
   # Generate installed file list from .img files in PRODUCT_OUT
   dump_erofs=$out_dir/host/linux-x86/bin/dump.erofs
   lz4=$out_dir/host/linux-x86/bin/lz4
-
-  declare -A diff_excludes
-  diff_excludes[vendor]="\
-    -I /vendor/lib64/libkeystore2_crypto.so \
-    -I /vendor/lib64/libvsock_utils.so"
-  diff_excludes[system]="\
-    -I /system/bin/assemble_cvd \
-    -I /system/bin/console_forwarder \
-    -I /system/bin/kernel_log_monitor \
-    -I /system/bin/logcat_receiver \
-    -I /system/bin/mkenvimage_slim \
-    -I /system/bin/run_cvd \
-    -I /system/bin/simg2img \
-    -I /system/bin/log_tee \
-    -I /system/lib64/android.hardware.confirmationui@1.0.so \
-    -I /system/lib64/android.hardware.confirmationui-V1-ndk.so \
-    -I /system/lib64/android.hardware.keymaster@4.1.so \
-    -I /system/lib64/android.hardware.security.rkp-V3-ndk.so \
-    -I /system/lib64/android.hardware.security.sharedsecret-V1-ndk.so \
-    -I /system/lib64/android.security.compat-ndk.so \
-    -I /system/lib64/libcuttlefish_allocd_utils.so \
-    -I /system/lib64/libcuttlefish_device_config_proto.so \
-    -I /system/lib64/libcuttlefish_device_config.so \
-    -I /system/lib64/libcuttlefish_fs.so \
-    -I /system/lib64/libcuttlefish_kernel_log_monitor_utils.so \
-    -I /system/lib64/libcuttlefish_utils.so \
-    -I /system/lib64/libfruit.so \
-    -I /system/lib64/libgflags.so \
-    -I /system/lib64/libkeymaster4_1support.so \
-    -I /system/lib64/libkeymaster4support.so \
-    -I /system/lib64/libkeymint.so \
-    -I /system/lib64/libkeystore2_aaid.so \
-    -I /system/lib64/libkeystore2_apc_compat.so \
-    -I /system/lib64/libkeystore2_crypto.so \
-    -I /system/lib64/libkeystore-attestation-application-id.so \
-    -I /system/lib64/libkm_compat_service.so \
-    -I /system/lib64/libkm_compat.so \
-    -I /system/lib64/vndk-29 \
-    -I /system/lib64/vndk-sp-29 \
-    -I /system/lib/vndk-29 \
-    -I /system/lib/vndk-sp-29 \
-    -I /system/usr/icu"
 
   # Example output of dump.erofs is as below, and the data used in the test start
   # at line 11. Column 1 is inode id, column 2 is inode type and column 3 is name.
@@ -197,7 +153,7 @@ function test_sbom_aosp_cf_x86_64_phone {
     sort -n -o "$files_in_spdx_file" "$files_in_spdx_file"
 
     echo ============ Diffing files in $f and SBOM
-    diff_files "$file_list_file" "$files_in_spdx_file" "$partition_name"
+    diff_files "$file_list_file" "$files_in_spdx_file" "$partition_name" ""
   done
 
   RAMDISK_IMAGES="$product_out/ramdisk.img"
@@ -215,7 +171,7 @@ function test_sbom_aosp_cf_x86_64_phone {
     grep "FileName: /${partition_name}/" $product_out/sbom.spdx | sed 's/^FileName: //' | sort -n > "$files_in_spdx_file"
 
     echo ============ Diffing files in $f and SBOM
-    diff_files "$file_list_file" "$files_in_spdx_file" "$partition_name"
+    diff_files "$file_list_file" "$files_in_spdx_file" "$partition_name" ""
   done
 
   verify_package_verification_code "$product_out/sbom.spdx"
@@ -262,7 +218,7 @@ function test_sbom_unbundled_apex {
   out_dir="$(setup)"
 
   # run_soong to build com.android.adbd.apex
-  run_soong "module_arm64" "${out_dir}" "sbom deapexer" "com.android.adbd"
+  run_soong "${out_dir}" "sbom deapexer" "com.android.adbd"
 
   deapexer=${out_dir}/host/linux-x86/bin/deapexer
   debugfs=${out_dir}/host/linux-x86/bin/debugfs_static
@@ -294,7 +250,7 @@ function test_sbom_unbundled_apk {
   out_dir="$(setup)"
 
   # run_soong to build Browser2.apk
-  run_soong "module_arm64" "${out_dir}" "sbom" "Browser2"
+  run_soong "${out_dir}" "sbom" "Browser2"
 
   sbom_file=${out_dir}/target/product/module_arm64/system/product/app/Browser2/Browser2.apk.spdx.json
   echo "============ Diffing files in Browser2.apk and SBOM"
@@ -316,6 +272,41 @@ function test_sbom_unbundled_apk {
   cleanup "${out_dir}"
 }
 
-test_sbom_aosp_cf_x86_64_phone
-test_sbom_unbundled_apex
-test_sbom_unbundled_apk
+target_product=aosp_cf_x86_64_phone
+target_release=trunk_staging
+target_build_variant=userdebug
+for i in "$@"; do
+  case $i in
+    TARGET_PRODUCT=*)
+      target_product=${i#*=}
+      shift
+      ;;
+    TARGET_RELEASE=*)
+      target_release=${i#*=}
+      shift
+      ;;
+    TARGET_BUILD_VARIANT=*)
+      target_build_variant=${i#*=}
+      shift
+      ;;
+    *)
+      echo "Unknown command line arguments: $i"
+      exit 1
+      ;;
+  esac
+done
+
+echo "target product: $target_product, target_release: $target_release, target build variant: $target_build_variant"
+case $target_product in
+  aosp_cf_x86_64_phone)
+    test_sbom_aosp_cf_x86_64_phone
+    ;;
+  module_arm64)
+    test_sbom_unbundled_apex
+    test_sbom_unbundled_apk
+    ;;
+  *)
+    echo "Unknown TARGET_PRODUCT: $target_product"
+    exit 1
+    ;;
+esac

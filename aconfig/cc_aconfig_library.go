@@ -16,8 +16,11 @@ package aconfig
 
 import (
 	"android/soong/android"
+	"android/soong/bazel"
 	"android/soong/cc"
+
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/proptools"
 
 	"fmt"
 	"strings"
@@ -29,9 +32,14 @@ type ccDeclarationsTagType struct {
 
 var ccDeclarationsTag = ccDeclarationsTagType{}
 
+const baseLibDep = "server_configurable_flags"
+
 type CcAconfigLibraryProperties struct {
 	// name of the aconfig_declarations module to generate a library for
 	Aconfig_declarations string
+
+	// whether to generate test mode version of the library
+	Test *bool
 }
 
 type CcAconfigLibraryCallbacks struct {
@@ -67,7 +75,7 @@ func (this *CcAconfigLibraryCallbacks) GeneratorDeps(ctx cc.DepsContext, deps cc
 	}
 
 	// Add a dependency for the aconfig flags base library
-	deps.SharedLibs = append(deps.SharedLibs, "server_configurable_flags")
+	deps.SharedLibs = append(deps.SharedLibs, baseLibDep)
 	// TODO: It'd be really nice if we could reexport this library and not make everyone do it.
 
 	return deps
@@ -113,6 +121,12 @@ func (this *CcAconfigLibraryCallbacks) GeneratorBuildActions(ctx cc.ModuleContex
 	}
 	declarations := ctx.OtherModuleProvider(declarationsModules[0], declarationsProviderKey).(declarationsProviderData)
 
+	var mode string
+	if proptools.Bool(this.properties.Test) {
+		mode = "test"
+	} else {
+		mode = "production"
+	}
 	ctx.Build(pctx, android.BuildParams{
 		Rule:  cppRule,
 		Input: declarations.IntermediatePath,
@@ -123,6 +137,37 @@ func (this *CcAconfigLibraryCallbacks) GeneratorBuildActions(ctx cc.ModuleContex
 		Description: "cc_aconfig_library",
 		Args: map[string]string{
 			"gendir": this.generatedDir.String(),
+			"mode":   mode,
 		},
 	})
+}
+
+type bazelCcAconfigLibraryAttributes struct {
+	Aconfig_declarations bazel.LabelAttribute
+	Dynamic_deps         bazel.LabelListAttribute
+}
+
+// Convert the cc_aconfig_library module to bazel.
+//
+// This method is called from cc.ConvertWithBp2build to actually convert the
+// cc_aconfig_library module. This is necessary since the factory method of this
+// module type returns a cc library and the bp2build conversion is called on the
+// cc library type.
+
+func (this *CcAconfigLibraryCallbacks) GeneratorBp2build(ctx android.Bp2buildMutatorContext) bool {
+	if ctx.ModuleType() != "cc_aconfig_library" {
+		return false
+	}
+
+	attrs := bazelCcAconfigLibraryAttributes{
+		Aconfig_declarations: *bazel.MakeLabelAttribute(android.BazelLabelForModuleDepSingle(ctx, this.properties.Aconfig_declarations).Label),
+		Dynamic_deps:         bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, []string{baseLibDep})),
+	}
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "cc_aconfig_library",
+		Bzl_load_location: "//build/bazel/rules/cc:cc_aconfig_library.bzl",
+	}
+
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: ctx.ModuleName()}, &attrs)
+	return true
 }

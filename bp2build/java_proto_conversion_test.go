@@ -68,6 +68,7 @@ func TestJavaProto(t *testing.T) {
         type: "%s",
     },
     srcs: ["a.proto"],
+    sdk_version: "current",
 }`
 
 	protoLibrary := MakeBazelTarget("proto_library", "java-protos_proto", AttrNameToString{
@@ -86,10 +87,12 @@ func TestJavaProto(t *testing.T) {
 					tc.javaLibraryType,
 					javaLibraryName,
 					AttrNameToString{
-						"deps": `[":java-protos_proto"]`,
+						"deps":        `[":java-protos_proto"]`,
+						"sdk_version": `"current"`,
 					}),
 				MakeBazelTarget("java_library", "java-protos", AttrNameToString{
-					"exports": fmt.Sprintf(`[":%s"]`, javaLibraryName),
+					"exports":     fmt.Sprintf(`[":%s"]`, javaLibraryName),
+					"sdk_version": `"current"`,
 				}),
 				MakeNeverlinkDuplicateTarget("java_library", "java-protos"),
 			},
@@ -104,6 +107,7 @@ func TestJavaProtoDefault(t *testing.T) {
     name: "java-protos",
     srcs: ["a.proto"],
     java_version: "7",
+    sdk_version: "current",
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -116,15 +120,76 @@ func TestJavaProtoDefault(t *testing.T) {
 				AttrNameToString{
 					"deps":         `[":java-protos_proto"]`,
 					"java_version": `"7"`,
+					"sdk_version":  `"current"`,
 				}),
 			MakeBazelTarget("java_library", "java-protos", AttrNameToString{
 				"exports":      `[":java-protos_java_proto_lite"]`,
 				"java_version": `"7"`,
+				"sdk_version":  `"current"`,
 			}),
 			MakeNeverlinkDuplicateTargetWithAttrs(
 				"java_library",
 				"java-protos",
-				AttrNameToString{"java_version": `"7"`}),
+				AttrNameToString{
+					"java_version": `"7"`,
+					"sdk_version":  `"current"`,
+				}),
+		},
+	})
+}
+
+func TestJavaLibsAndOnlyProtoSrcs(t *testing.T) {
+	runJavaProtoTestCase(t, Bp2buildTestCase{
+		Description:             "java_library that has only proto srcs",
+		StubbedBuildDefinitions: []string{"java-lib-1", "java-lib-2"},
+		Blueprint: `java_library_static {
+    name: "java-protos",
+    srcs: ["a.proto"],
+    libs: ["java-lib-1"],
+    static_libs: ["java-lib-2"],
+    java_version: "7",
+    sdk_version: "current",
+}
+
+java_library_static {
+    name: "java-lib-1",
+}
+
+java_library_static {
+    name: "java-lib-2",
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("proto_library", "java-protos_proto", AttrNameToString{
+				"srcs": `["a.proto"]`,
+			}),
+			MakeBazelTarget(
+				"java_lite_proto_library",
+				"java-protos_java_proto_lite",
+				AttrNameToString{
+					"deps": `[":java-protos_proto"]`,
+					"additional_proto_deps": `[
+        ":java-lib-1-neverlink",
+        ":java-lib-2",
+    ]`,
+					"java_version": `"7"`,
+					"sdk_version":  `"current"`,
+				}),
+			MakeBazelTarget("java_library", "java-protos", AttrNameToString{
+				"exports": `[
+        ":java-lib-2",
+        ":java-protos_java_proto_lite",
+    ]`,
+				"java_version": `"7"`,
+				"sdk_version":  `"current"`,
+			}),
+			MakeNeverlinkDuplicateTargetWithAttrs(
+				"java_library",
+				"java-protos",
+				AttrNameToString{
+					"java_version": `"7"`,
+					"sdk_version":  `"current"`,
+				}),
 		},
 	})
 }

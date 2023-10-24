@@ -18,6 +18,7 @@ package apex
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -735,7 +736,7 @@ func (a *apexBundle) getImageVariationPair(deviceConfig android.DeviceConfig) (s
 			vndkVersion = deviceConfig.VndkVersion()
 		} else if a.ProductSpecific() {
 			prefix = cc.ProductVariationPrefix
-			vndkVersion = deviceConfig.ProductVndkVersion()
+			vndkVersion = deviceConfig.PlatformVndkVersion()
 		}
 	}
 	if vndkVersion == "current" {
@@ -991,6 +992,13 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 				return false
 			}
 		}
+
+		//TODO: b/296491928 Vendor APEX should use libbinder.ndk instead of libbinder once VNDK is fully deprecated.
+		if useVndk && mctx.Config().IsVndkDeprecated() && child.Name() == "libbinder" {
+			log.Print("Libbinder is linked from Vendor APEX ", a.Name(), " with module ", parent.Name())
+			return false
+		}
+
 		// By default, all the transitive dependencies are collected, unless filtered out
 		// above.
 		return true
@@ -2008,6 +2016,9 @@ func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 			// If a module is directly included and also transitively depended on
 			// consider it as directly included.
 			e.transitiveDep = e.transitiveDep && f.transitiveDep
+			// If a module is added as both a JNI library and a regular shared library, consider it as a
+			// JNI library.
+			e.isJniLib = e.isJniLib || f.isJniLib
 			encountered[dest] = e
 		}
 	}
@@ -2220,6 +2231,11 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		if ch, ok := child.(*cc.Module); ok {
 			if ch.UseVndk() && a.useVndkAsStable(ctx) && ch.IsVndk() {
 				vctx.requireNativeLibs = append(vctx.requireNativeLibs, ":vndk")
+				return false
+			}
+
+			//TODO: b/296491928 Vendor APEX should use libbinder.ndk instead of libbinder once VNDK is fully deprecated.
+			if ch.UseVndk() && ctx.Config().IsVndkDeprecated() && child.Name() == "libbinder" {
 				return false
 			}
 			af := apexFileForNativeLibrary(ctx, ch, vctx.handleSpecialLibs)
@@ -2607,7 +2623,7 @@ func OverrideApexFactory() android.Module {
 	return m
 }
 
-func (o *OverrideApex) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (o *OverrideApex) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	if ctx.ModuleType() != "override_apex" {
 		return
 	}
@@ -2727,13 +2743,13 @@ func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
 	// Only override the minSdkVersion value on Apexes which already specify
 	// a min_sdk_version (it's optional for non-updatable apexes), and that its
 	// min_sdk_version value is lower than the one to override with.
-	minApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
+	minApiLevel := android.MinSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
 	if minApiLevel.IsNone() {
 		return ""
 	}
 
 	overrideMinSdkValue := ctx.DeviceConfig().ApexGlobalMinSdkVersionOverride()
-	overrideApiLevel := minSdkVersionFromValue(ctx, overrideMinSdkValue)
+	overrideApiLevel := android.MinSdkVersionFromValue(ctx, overrideMinSdkValue)
 	if !overrideApiLevel.IsNone() && overrideApiLevel.CompareTo(minApiLevel) > 0 {
 		minApiLevel = overrideApiLevel
 	}
@@ -2748,20 +2764,7 @@ func (a *apexBundle) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLe
 
 // Returns apex's min_sdk_version ApiLevel, honoring overrides
 func (a *apexBundle) minSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
-	return minSdkVersionFromValue(ctx, a.minSdkVersionValue(ctx))
-}
-
-// Construct ApiLevel object from min_sdk_version string value
-func minSdkVersionFromValue(ctx android.EarlyModuleContext, value string) android.ApiLevel {
-	if value == "" {
-		return android.NoneApiLevel
-	}
-	apiLevel, err := android.ApiLevelFromUser(ctx, value)
-	if err != nil {
-		ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
-		return android.NoneApiLevel
-	}
-	return apiLevel
+	return android.MinSdkVersionFromValue(ctx, a.minSdkVersionValue(ctx))
 }
 
 // Ensures that a lib providing stub isn't statically linked
@@ -3265,7 +3268,7 @@ const (
 )
 
 // ConvertWithBp2build performs bp2build conversion of an apex
-func (a *apexBundle) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (a *apexBundle) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	// We only convert apex and apex_test modules at this time
 	if ctx.ModuleType() != "apex" && ctx.ModuleType() != "apex_test" {
 		return
@@ -3276,7 +3279,7 @@ func (a *apexBundle) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	ctx.CreateBazelTargetModule(props, commonAttrs, &attrs)
 }
 
-func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (bazelApexBundleAttributes, bazel.BazelTargetModuleProperties, android.CommonAttributes) {
+func convertWithBp2build(a *apexBundle, ctx android.Bp2buildMutatorContext) (bazelApexBundleAttributes, bazel.BazelTargetModuleProperties, android.CommonAttributes) {
 	var manifestLabelAttribute bazel.LabelAttribute
 	manifestLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, proptools.StringDefault(a.properties.Manifest, "apex_manifest.json")))
 
@@ -3302,7 +3305,10 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		cannedFsConfigAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *a.properties.Canned_fs_config))
 	}
 
-	productVariableProps := android.ProductVariableProperties(ctx, a)
+	productVariableProps, errs := android.ProductVariableProperties(ctx, a)
+	for _, err := range errs {
+		ctx.ModuleErrorf("ProductVariableProperties error: %s", err)
+	}
 	// TODO(b/219503907) this would need to be set to a.MinSdkVersionValue(ctx) but
 	// given it's coming via config, we probably don't want to put it in here.
 	var minSdkVersion bazel.StringAttribute
@@ -3433,7 +3439,7 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 // both,                    32/32,     64/none,   32&64/32, 64/32
 // first,                   32/32,     64/none,   64/32,    64/32
 
-func convert32Libs(ctx android.TopDownMutatorContext, compileMultilb string,
+func convert32Libs(ctx android.Bp2buildMutatorContext, compileMultilb string,
 	libs []string, nativeSharedLibs *convertedNativeSharedLibs) {
 	libsLabelList := android.BazelLabelForModuleDeps(ctx, libs)
 	switch compileMultilb {
@@ -3448,7 +3454,7 @@ func convert32Libs(ctx android.TopDownMutatorContext, compileMultilb string,
 	}
 }
 
-func convert64Libs(ctx android.TopDownMutatorContext, compileMultilb string,
+func convert64Libs(ctx android.Bp2buildMutatorContext, compileMultilb string,
 	libs []string, nativeSharedLibs *convertedNativeSharedLibs) {
 	libsLabelList := android.BazelLabelForModuleDeps(ctx, libs)
 	switch compileMultilb {
@@ -3461,7 +3467,7 @@ func convert64Libs(ctx android.TopDownMutatorContext, compileMultilb string,
 	}
 }
 
-func convertBothLibs(ctx android.TopDownMutatorContext, compileMultilb string,
+func convertBothLibs(ctx android.Bp2buildMutatorContext, compileMultilb string,
 	libs []string, nativeSharedLibs *convertedNativeSharedLibs) {
 	libsLabelList := android.BazelLabelForModuleDeps(ctx, libs)
 	switch compileMultilb {
@@ -3479,7 +3485,7 @@ func convertBothLibs(ctx android.TopDownMutatorContext, compileMultilb string,
 	}
 }
 
-func convertFirstLibs(ctx android.TopDownMutatorContext, compileMultilb string,
+func convertFirstLibs(ctx android.Bp2buildMutatorContext, compileMultilb string,
 	libs []string, nativeSharedLibs *convertedNativeSharedLibs) {
 	libsLabelList := android.BazelLabelForModuleDeps(ctx, libs)
 	switch compileMultilb {
@@ -3522,7 +3528,7 @@ func makeSharedLibsAttributes(config string, libsLabelList bazel.LabelList,
 	labelListAttr.Append(list)
 }
 
-func invalidCompileMultilib(ctx android.TopDownMutatorContext, value string) {
+func invalidCompileMultilib(ctx android.Bp2buildMutatorContext, value string) {
 	ctx.PropertyErrorf("compile_multilib", "Invalid value: %s", value)
 }
 

@@ -25,7 +25,7 @@ var (
 	pctx         = android.NewPackageContext("android/soong/rust/config")
 	exportedVars = android.NewExportedVariables(pctx)
 
-	RustDefaultVersion = "1.71.0"
+	RustDefaultVersion = "1.72.0"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -54,11 +54,11 @@ var (
 		"-C symbol-mangling-version=v0",
 		"--color always",
 		"-Zdylib-lto",
+		"-Z link-native-libraries=no",
 	}
 
 	deviceGlobalRustFlags = []string{
 		"-C panic=abort",
-		"-Z link-native-libraries=no",
 		// Generate additional debug info for AutoFDO
 		"-Z debug-info-for-profiling",
 	}
@@ -81,13 +81,7 @@ var (
 
 func init() {
 	pctx.SourcePathVariable("RustDefaultBase", RustDefaultBase)
-	pctx.VariableConfigMethod("HostPrebuiltTag", func(config android.Config) string {
-		if config.UseHostMusl() {
-			return "linux-musl-x86"
-		} else {
-			return config.PrebuiltOS()
-		}
-	})
+	pctx.VariableConfigMethod("HostPrebuiltTag", HostPrebuiltTag)
 
 	pctx.VariableFunc("RustBase", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("RUST_PREBUILTS_BASE"); override != "" {
@@ -107,6 +101,14 @@ func init() {
 	pctx.StaticVariable("DeviceGlobalLinkFlags", strings.Join(deviceGlobalLinkFlags, " "))
 
 	exportedVars.ExportStringStaticVariable("RUST_DEFAULT_VERSION", RustDefaultVersion)
+}
+
+func HostPrebuiltTag(config android.Config) string {
+	if config.UseHostMusl() {
+		return "linux-musl-x86"
+	} else {
+		return config.PrebuiltOS()
+	}
 }
 
 func getRustVersionPctx(ctx android.PackageVarContext) string {
