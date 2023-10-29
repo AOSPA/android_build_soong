@@ -167,7 +167,8 @@ func (c Config) RunningInsideUnitTest() bool {
 }
 
 // DisableHiddenApiChecks returns true if hiddenapi checks have been disabled.
-// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation,
+// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation
+// Hiddenapi checks are also disabled when RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE is set to false
 // but can be enabled by setting environment variable ENABLE_HIDDENAPI_FLAGS=true.
 // For other target variants hiddenapi check are enabled by default but can be disabled by
 // setting environment variable UNSAFE_DISABLE_HIDDENAPI_FLAGS=true.
@@ -176,7 +177,8 @@ func (c Config) RunningInsideUnitTest() bool {
 func (c Config) DisableHiddenApiChecks() bool {
 	return !c.IsEnvTrue("ENABLE_HIDDENAPI_FLAGS") &&
 		(c.IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") ||
-			Bool(c.productVariables.Eng))
+			Bool(c.productVariables.Eng) ||
+			!c.ReleaseDefaultModuleBuildFromSource())
 }
 
 // MaxPageSizeSupported returns the max page size supported by the device. This
@@ -198,27 +200,36 @@ func (c Config) ReleaseVersion() string {
 }
 
 // The aconfig value set passed to aconfig, derived from RELEASE_VERSION
-func (c Config) ReleaseAconfigValueSets() string {
+func (c Config) ReleaseAconfigValueSets() []string {
 	// This logic to handle both Soong module name and bazel target is temporary in order to
 	// provide backward compatibility where aosp and internal both have the release
 	// aconfig value set but can't be updated at the same time to use bazel target
-	value := strings.Split(c.config.productVariables.ReleaseAconfigValueSets, ":")
-	value_len := len(value)
-	if value_len > 2 {
-		// This shouldn't happen as this should be either a module name or a bazel target path.
-		panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s",
-			c.config.productVariables.ReleaseAconfigValueSets))
+	var valueSets []string
+	for _, valueSet := range c.config.productVariables.ReleaseAconfigValueSets {
+		value := strings.Split(valueSet, ":")
+		valueLen := len(value)
+		if valueLen > 2 {
+			// This shouldn't happen as this should be either a module name or a bazel target path.
+			panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s", valueSet))
+		}
+		if valueLen > 0 {
+			valueSets = append(valueSets, value[valueLen-1])
+		}
 	}
-	if value_len > 0 {
-		return value[value_len-1]
-	}
-	return ""
+	return valueSets
 }
 
 // The flag default permission value passed to aconfig
 // derived from RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION
 func (c Config) ReleaseAconfigFlagDefaultPermission() string {
 	return c.config.productVariables.ReleaseAconfigFlagDefaultPermission
+}
+
+// The flag indicating behavior for the tree wrt building modules or using prebuilts
+// derived from RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE
+func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
+	return c.config.productVariables.ReleaseDefaultModuleBuildFromSource == nil ||
+		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -679,7 +690,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-media":                   {},
 		"framework-mediaprovider":           {},
 		"framework-ondevicepersonalization": {},
-		"framework-pdf":                     {},
 		"framework-permission":              {},
 		"framework-permission-s":            {},
 		"framework-scheduling":              {},
@@ -1004,12 +1014,18 @@ func (c *config) FinalApiLevels() []ApiLevel {
 
 func (c *config) PreviewApiLevels() []ApiLevel {
 	var levels []ApiLevel
-	for i, codename := range c.PlatformVersionActiveCodenames() {
+	i := 0
+	for _, codename := range c.PlatformVersionActiveCodenames() {
+		if codename == "REL" {
+			continue
+		}
+
 		levels = append(levels, ApiLevel{
 			value:     codename,
 			number:    i,
 			isPreview: true,
 		})
+		i++
 	}
 	return levels
 }
@@ -1448,7 +1464,7 @@ func (c *deviceConfig) ExtraVndkVersions() []string {
 }
 
 func (c *deviceConfig) VndkUseCoreVariant() bool {
-	return Bool(c.config.productVariables.VndkUseCoreVariant)
+	return Bool(c.config.productVariables.VndkUseCoreVariant) && Bool(c.config.productVariables.KeepVndk)
 }
 
 func (c *deviceConfig) SystemSdkVersions() []string {
