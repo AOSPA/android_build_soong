@@ -174,6 +174,7 @@ var (
 		"external/jsr330":                        Bp2BuildDefaultTrueRecursively,
 		"external/junit":                         Bp2BuildDefaultTrueRecursively,
 		"external/kotlinc":                       Bp2BuildDefaultTrueRecursively,
+		"external/kotlinx.coroutines":            Bp2BuildDefaultTrueRecursively,
 		"external/libaom":                        Bp2BuildDefaultTrueRecursively,
 		"external/libavc":                        Bp2BuildDefaultTrueRecursively,
 		"external/libcap":                        Bp2BuildDefaultTrueRecursively,
@@ -186,8 +187,8 @@ var (
 		"external/libhevc":                       Bp2BuildDefaultTrueRecursively,
 		"external/libjpeg-turbo":                 Bp2BuildDefaultTrueRecursively,
 		"external/libmpeg2":                      Bp2BuildDefaultTrueRecursively,
-		"external/libpng":                        Bp2BuildDefaultTrueRecursively,
 		"external/libphonenumber":                Bp2BuildDefaultTrueRecursively,
+		"external/libpng":                        Bp2BuildDefaultTrueRecursively,
 		"external/libvpx":                        Bp2BuildDefaultTrueRecursively,
 		"external/libyuv":                        Bp2BuildDefaultTrueRecursively,
 		"external/lz4/lib":                       Bp2BuildDefaultTrue,
@@ -203,11 +204,12 @@ var (
 		"external/pcre":                          Bp2BuildDefaultTrueRecursively,
 		"external/perfmark/api":                  Bp2BuildDefaultTrueRecursively,
 		"external/protobuf":                      Bp2BuildDefaultTrueRecursively,
-		"external/python/pyyaml/lib/yaml":        Bp2BuildDefaultTrueRecursively,
-		"external/python/six":                    Bp2BuildDefaultTrueRecursively,
 		"external/python/jinja/src":              Bp2BuildDefaultTrueRecursively,
 		"external/python/markupsafe/src":         Bp2BuildDefaultTrueRecursively,
+		"external/python/pyfakefs/pyfakefs":      Bp2BuildDefaultTrueRecursively,
+		"external/python/pyyaml/lib/yaml":        Bp2BuildDefaultTrueRecursively,
 		"external/python/setuptools":             Bp2BuildDefaultTrueRecursively,
+		"external/python/six":                    Bp2BuildDefaultTrueRecursively,
 		"external/rappor":                        Bp2BuildDefaultTrueRecursively,
 		"external/scudo":                         Bp2BuildDefaultTrueRecursively,
 		"external/selinux/checkpolicy":           Bp2BuildDefaultTrueRecursively,
@@ -218,60 +220,63 @@ var (
 		"external/tinyalsa":                      Bp2BuildDefaultTrueRecursively,
 		"external/tinyalsa_new":                  Bp2BuildDefaultTrueRecursively,
 		"external/toybox":                        Bp2BuildDefaultTrueRecursively,
+		"external/truth":                         Bp2BuildDefaultTrueRecursively,
 		"external/xz-java":                       Bp2BuildDefaultTrueRecursively,
 		"external/zlib":                          Bp2BuildDefaultTrueRecursively,
 		"external/zopfli":                        Bp2BuildDefaultTrueRecursively,
 		"external/zstd":                          Bp2BuildDefaultTrueRecursively,
 
 		"frameworks/av": Bp2BuildDefaultTrue,
-		"frameworks/av/media/audioaidlconversion":            Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/codec2/components/aom":          Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/codecs":                         Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/liberror":                       Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/libmediahelper":                 Bp2BuildDefaultTrue,
-		"frameworks/av/media/libshmem":                       Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/module/codecs":                  Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/module/foundation":              Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/module/minijail":                Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/services/minijail":                    Bp2BuildDefaultTrueRecursively,
-		"frameworks/base/apex/jobscheduler/service/jni":      Bp2BuildDefaultTrueRecursively,
-		"frameworks/base/core/java":                          Bp2BuildDefaultTrue,
-		"frameworks/base/core/res":                           Bp2BuildDefaultTrueRecursively,
-		"frameworks/base/libs/androidfw":                     Bp2BuildDefaultTrue,
-		"frameworks/base/libs/services":                      Bp2BuildDefaultTrue,
-		"frameworks/base/media/tests/MediaDump":              Bp2BuildDefaultTrue,
-		"frameworks/base/mime":                               Bp2BuildDefaultTrueRecursively,
-		"frameworks/base/proto":                              Bp2BuildDefaultTrue,
-		"frameworks/base/services/tests/servicestests/aidl":  Bp2BuildDefaultTrue,
-		"frameworks/base/startop/apps/test":                  Bp2BuildDefaultTrue,
-		"frameworks/base/tests/appwidgets/AppWidgetHostTest": Bp2BuildDefaultTrueRecursively,
-		"frameworks/base/tools/aapt":                         Bp2BuildDefaultTrue,
-		"frameworks/base/tools/aapt2":                        Bp2BuildDefaultTrue,
-		"frameworks/base/tools/codegen":                      Bp2BuildDefaultTrueRecursively,
-		"frameworks/base/tools/locked_region_code_injection": Bp2BuildDefaultTrueRecursively,
-		"frameworks/base/tools/streaming_proto":              Bp2BuildDefaultTrueRecursively,
-		"frameworks/hardware/interfaces":                     Bp2BuildDefaultTrue,
-		"frameworks/hardware/interfaces/displayservice":      Bp2BuildDefaultTrueRecursively,
-		"frameworks/hardware/interfaces/stats/aidl":          Bp2BuildDefaultTrue,
-		"frameworks/libs/modules-utils/build":                Bp2BuildDefaultTrueRecursively,
-		"frameworks/libs/modules-utils/java":                 Bp2BuildDefaultTrue,
-		"frameworks/native":                                  Bp2BuildDefaultTrue,
-		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
-		"frameworks/native/libs/arect":                       Bp2BuildDefaultTrueRecursively,
-		"frameworks/native/libs/binder":                      Bp2BuildDefaultTrue,
-		"frameworks/native/libs/gui":                         Bp2BuildDefaultTrue,
-		"frameworks/native/libs/math":                        Bp2BuildDefaultTrueRecursively,
-		"frameworks/native/libs/nativebase":                  Bp2BuildDefaultTrueRecursively,
-		"frameworks/native/libs/permission":                  Bp2BuildDefaultTrueRecursively,
-		"frameworks/native/libs/ui":                          Bp2BuildDefaultTrue,
-		"frameworks/native/libs/vr":                          Bp2BuildDefaultTrueRecursively,
-		"frameworks/native/opengl/tests/gl2_cameraeye":       Bp2BuildDefaultTrue,
-		"frameworks/native/opengl/tests/gl2_java":            Bp2BuildDefaultTrue,
-		"frameworks/native/opengl/tests/testLatency":         Bp2BuildDefaultTrue,
-		"frameworks/native/opengl/tests/testPauseResume":     Bp2BuildDefaultTrue,
-		"frameworks/native/opengl/tests/testViewport":        Bp2BuildDefaultTrue,
-		"frameworks/native/services/batteryservice":          Bp2BuildDefaultTrue,
-		"frameworks/proto_logging/stats":                     Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/audioaidlconversion":                              Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/codec2/components/aom":                            Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/codecs":                                           Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/liberror":                                         Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/libmediahelper":                                   Bp2BuildDefaultTrue,
+		"frameworks/av/media/libshmem":                                         Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/module/codecs":                                    Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/module/foundation":                                Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/module/minijail":                                  Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/services/minijail":                                      Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/apex/jobscheduler/service/jni":                        Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/core/java":                                            Bp2BuildDefaultTrue,
+		"frameworks/base/core/res":                                             Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/errorprone":                                           Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/libs/androidfw":                                       Bp2BuildDefaultTrue,
+		"frameworks/base/libs/services":                                        Bp2BuildDefaultTrue,
+		"frameworks/base/media/tests/MediaDump":                                Bp2BuildDefaultTrue,
+		"frameworks/base/mime":                                                 Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/proto":                                                Bp2BuildDefaultTrue,
+		"frameworks/base/services/tests/servicestests/aidl":                    Bp2BuildDefaultTrue,
+		"frameworks/base/startop/apps/test":                                    Bp2BuildDefaultTrue,
+		"frameworks/base/tests/appwidgets/AppWidgetHostTest":                   Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/tools/aapt":                                           Bp2BuildDefaultTrue,
+		"frameworks/base/tools/aapt2":                                          Bp2BuildDefaultTrue,
+		"frameworks/base/tools/codegen":                                        Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/tools/locked_region_code_injection":                   Bp2BuildDefaultTrueRecursively,
+		"frameworks/base/tools/streaming_proto":                                Bp2BuildDefaultTrueRecursively,
+		"frameworks/hardware/interfaces":                                       Bp2BuildDefaultTrue,
+		"frameworks/hardware/interfaces/displayservice":                        Bp2BuildDefaultTrueRecursively,
+		"frameworks/hardware/interfaces/stats/aidl":                            Bp2BuildDefaultTrue,
+		"frameworks/libs/modules-utils/build":                                  Bp2BuildDefaultTrueRecursively,
+		"frameworks/libs/modules-utils/java":                                   Bp2BuildDefaultTrueRecursively,
+		"frameworks/libs/modules-utils/java/com/android/modules/utils/testing": Bp2BuildDefaultFalseRecursively,
+		"frameworks/native":                                                    Bp2BuildDefaultTrue,
+		"frameworks/native/libs/adbd_auth":                                     Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/libs/arect":                                         Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/libs/binder":                                        Bp2BuildDefaultTrue,
+		"frameworks/native/libs/gui":                                           Bp2BuildDefaultTrue,
+		"frameworks/native/libs/math":                                          Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/libs/nativebase":                                    Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/libs/permission":                                    Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/libs/ui":                                            Bp2BuildDefaultTrue,
+		"frameworks/native/libs/vr":                                            Bp2BuildDefaultTrueRecursively,
+		"frameworks/native/opengl/tests/gl2_cameraeye":                         Bp2BuildDefaultTrue,
+		"frameworks/native/opengl/tests/gl2_java":                              Bp2BuildDefaultTrue,
+		"frameworks/native/opengl/tests/testLatency":                           Bp2BuildDefaultTrue,
+		"frameworks/native/opengl/tests/testPauseResume":                       Bp2BuildDefaultTrue,
+		"frameworks/native/opengl/tests/testViewport":                          Bp2BuildDefaultTrue,
+		"frameworks/native/services/batteryservice":                            Bp2BuildDefaultTrue,
+		"frameworks/proto_logging/stats":                                       Bp2BuildDefaultTrueRecursively,
 
 		"hardware/interfaces":                                     Bp2BuildDefaultTrue,
 		"hardware/interfaces/audio/aidl":                          Bp2BuildDefaultTrue,
@@ -324,30 +329,38 @@ var (
 
 		"libnativehelper": Bp2BuildDefaultTrueRecursively,
 
-		"packages/apps/DevCamera":                            Bp2BuildDefaultTrue,
-		"packages/apps/HTMLViewer":                           Bp2BuildDefaultTrue,
-		"packages/apps/Protips":                              Bp2BuildDefaultTrue,
-		"packages/apps/SafetyRegulatoryInfo":                 Bp2BuildDefaultTrue,
-		"packages/apps/WallpaperPicker":                      Bp2BuildDefaultTrue,
-		"packages/modules/NeuralNetworks/driver/cache":       Bp2BuildDefaultTrueRecursively,
-		"packages/modules/StatsD/lib/libstatssocket":         Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb":                               Bp2BuildDefaultTrue,
-		"packages/modules/adb/apex":                          Bp2BuildDefaultTrue,
-		"packages/modules/adb/fastdeploy":                    Bp2BuildDefaultTrue,
-		"packages/modules/adb/crypto":                        Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/libs":                          Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/pairing_auth":                  Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/pairing_connection":            Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/proto":                         Bp2BuildDefaultTrueRecursively,
-		"packages/modules/adb/tls":                           Bp2BuildDefaultTrueRecursively,
-		"packages/modules/Connectivity/staticlibs/native":    Bp2BuildDefaultTrueRecursively,
-		"packages/modules/Gki/libkver":                       Bp2BuildDefaultTrue,
-		"packages/modules/NetworkStack/common/captiveportal": Bp2BuildDefaultTrue,
-		"packages/modules/NeuralNetworks/apex":               Bp2BuildDefaultTrue,
-		"packages/modules/NeuralNetworks/apex/testing":       Bp2BuildDefaultTrue,
-		"packages/providers/MediaProvider/tools/dialogs":     Bp2BuildDefaultFalse, // TODO(b/242834374)
-		"packages/screensavers/Basic":                        Bp2BuildDefaultTrue,
-		"packages/services/Car/tests/SampleRearViewCamera":   Bp2BuildDefaultFalse, // TODO(b/242834321)
+		"packages/apps/DevCamera":                                    Bp2BuildDefaultTrue,
+		"packages/apps/HTMLViewer":                                   Bp2BuildDefaultTrue,
+		"packages/apps/Protips":                                      Bp2BuildDefaultTrue,
+		"packages/apps/SafetyRegulatoryInfo":                         Bp2BuildDefaultTrue,
+		"packages/apps/WallpaperPicker":                              Bp2BuildDefaultTrue,
+		"packages/modules/Connectivity/bpf_progs":                    Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/service-t":                    Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/service/native":               Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/staticlibs/native":            Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/staticlibs/netd":              Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/staticlibs/netd/libnetdutils": Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/tests/unit/jni":               Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Gki/libkver":                               Bp2BuildDefaultTrue,
+		"packages/modules/NetworkStack/common/captiveportal":         Bp2BuildDefaultTrue,
+		"packages/modules/NeuralNetworks/apex":                       Bp2BuildDefaultTrue,
+		"packages/modules/NeuralNetworks/apex/testing":               Bp2BuildDefaultTrue,
+		"packages/modules/NeuralNetworks/driver/cache":               Bp2BuildDefaultTrueRecursively,
+		"packages/modules/SdkExtensions/gen_sdk":                     Bp2BuildDefaultTrue,
+		"packages/modules/StatsD/lib/libstatssocket":                 Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb":                                       Bp2BuildDefaultTrue,
+		"packages/modules/adb/apex":                                  Bp2BuildDefaultTrue,
+		"packages/modules/adb/crypto":                                Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/fastdeploy":                            Bp2BuildDefaultTrue,
+		"packages/modules/adb/libs":                                  Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/pairing_auth":                          Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/pairing_connection":                    Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/proto":                                 Bp2BuildDefaultTrueRecursively,
+		"packages/modules/adb/tls":                                   Bp2BuildDefaultTrueRecursively,
+		"packages/modules/common/proto":                              Bp2BuildDefaultTrue,
+		"packages/providers/MediaProvider/tools/dialogs":             Bp2BuildDefaultFalse, // TODO(b/242834374)
+		"packages/screensavers/Basic":                                Bp2BuildDefaultTrue,
+		"packages/services/Car/tests/SampleRearViewCamera":           Bp2BuildDefaultFalse, // TODO(b/242834321)
 
 		"platform_testing/libraries/annotations":              Bp2BuildDefaultTrueRecursively,
 		"platform_testing/libraries/flag-helpers/libflagtest": Bp2BuildDefaultTrueRecursively,
@@ -355,19 +368,20 @@ var (
 
 		"prebuilts/clang/host/linux-x86":                   Bp2BuildDefaultTrueRecursively,
 		"prebuilts/gradle-plugin":                          Bp2BuildDefaultTrueRecursively,
-		"prebuilts/runtime/mainline/platform/sdk":          Bp2BuildDefaultTrueRecursively,
 		"prebuilts/module_sdk":                             Bp2BuildDefaultTrueRecursively,
+		"prebuilts/runtime/mainline/platform/sdk":          Bp2BuildDefaultTrueRecursively,
 		"prebuilts/sdk":                                    Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/androidx":                   Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/androidx-legacy":            Bp2BuildDefaultTrue,
+		"prebuilts/sdk/current/extras/app-toolkit":         Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/extras/constraint-layout-x": Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/extras/material-design-x":   Bp2BuildDefaultTrue,
-		"prebuilts/sdk/current/extras/app-toolkit":         Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/support":                    Bp2BuildDefaultTrue,
 		"prebuilts/tools":                                  Bp2BuildDefaultTrue,
 		"prebuilts/tools/common/m2":                        Bp2BuildDefaultTrue,
 		"prebuilts/r8":                                     Bp2BuildDefaultTrueRecursively,
 
+		"sdk/annotations":   Bp2BuildDefaultTrueRecursively,
 		"sdk/dumpeventlog":  Bp2BuildDefaultTrue,
 		"sdk/eventanalyzer": Bp2BuildDefaultTrue,
 
@@ -448,6 +462,7 @@ var (
 
 		"test/vts/vts_hal_hidl_target": Bp2BuildDefaultTrueRecursively,
 
+		"toolchain/pgo-profiles":                      Bp2BuildDefaultTrueRecursively,
 		"tools/apifinder":                             Bp2BuildDefaultTrue,
 		"tools/apksig":                                Bp2BuildDefaultTrue,
 		"tools/dexter/slicer":                         Bp2BuildDefaultTrueRecursively,
@@ -524,6 +539,8 @@ var (
 	}
 
 	Bp2buildModuleAlwaysConvertList = []string{
+		"aconfig.test.cpp",
+		"AconfigJavaHostTest",
 		// aconfig
 		"libonce_cell",
 		"libanyhow",
@@ -577,6 +594,7 @@ var (
 		"tagsoup",
 
 		// framework-minus-apex
+		"AndroidFrameworkLintChecker",
 		"ImmutabilityAnnotationProcessor",
 		"debian.mime.types.minimized",
 		"framework-javastream-protos",
@@ -614,6 +632,7 @@ var (
 		"codec2_soft_exports",
 		"compatibility_matrix_schema",
 		"framework-connectivity-protos",
+		"framework-connectivity-javastream-protos",
 		"gemmlowp_headers",
 		"gl_headers",
 		"libandroid_runtime_lazy",
@@ -633,7 +652,6 @@ var (
 		"libneuralnetworks",
 		"libneuralnetworks_static",
 		"libgraphicsenv",
-		"libhardware",
 		"libhardware_headers",
 		"libnativeloader-headers",
 		"libnativewindow_headers",
@@ -672,6 +690,7 @@ var (
 
 		// prebuilts
 		"prebuilt_stats-log-api-gen",
+		"prebuilt_aapt2",
 
 		// fastboot
 		"fastboot",
@@ -846,14 +865,6 @@ var (
 		// for api_fingerprint.txt generation
 		"api_fingerprint",
 
-		// allowlisting for kotlinx_coroutines
-		"annotations",
-		"kotlinx-coroutines-android-annotation-stubs",
-		"kotlinx-coroutines-core",
-		"kotlinx_coroutines",
-		"kotlinx_coroutines-device",
-		"kotlinx_coroutines-host",
-
 		// for building com.android.neuralnetworks
 		"libimapper_stablec",
 		"libimapper_providerutils",
@@ -965,7 +976,6 @@ var (
 		"protoc-gen-grpc-java-plugin",
 		"perfetto_trace-full",
 		"tf-remote-client",
-		"truth",
 		"tradefed-lite",
 		"tradefed-isolation-protos",
 		"snakeyaml_patched_src_files",
@@ -993,6 +1003,14 @@ var (
 		"tradefed-result-interfaces",
 		"tradefed-device-build-interfaces",
 		"tradefed-invocation-interfaces",
+		"tradefed-lib-core",
+
+		"libandroid_net_connectivity_com_android_net_module_util_jni",
+		"libservice-connectivity",
+
+		"mainline_modules_sdks_test",
+
+		"fake_device_config",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -1019,6 +1037,7 @@ var (
 		"ndk_headers",
 		"ndk_library",
 		"sysprop_library",
+		"versioned_ndk_headers",
 		"xsd_config",
 		// go/keep-sorted end
 	}
@@ -1044,6 +1063,8 @@ var (
 		"libminijail_sys",
 		"libfsverity_rs",
 		"libtombstoned_client_rust",
+
+		"libhardware", //Depends on unconverted libapexsupport
 
 		// TODO(b/263326760): Failed already.
 		"minijail_compiler_unittest",
@@ -1074,7 +1095,7 @@ var (
 		"versioner", // TODO(b/228313961):  depends on prebuilt shared library libclang-cpp_host as a shared library, which does not supply expected providers for a shared library
 
 		// requires host tools for apexer
-		"apexer_test", "apexer_test_host_tools", "host_apex_verifier",
+		"apexer_test", "apexer_test_host_tools", "host_apex_verifier", "host-apex-verifier",
 
 		// java bugs
 		"libbase_ndk",           // TODO(b/186826477): fails to link libctscamera2_jni for device (required for CtsCameraTestCases)
@@ -1105,6 +1126,11 @@ var (
 
 		// rust support
 		"libtombstoned_client_rust_bridge_code", "libtombstoned_client_wrapper", // rust conversions are not supported
+
+		// TODO: b/303474748 - aidl rules for java are incompatible with parcelable declarations
+		"modules-utils-list-slice",
+		"modules-utils-os",
+		"modules-utils-synchronous-result-receiver",
 
 		// unconverted deps
 		"CarHTMLViewer",                          // depends on unconverted modules android.car-stubs, car-ui-lib
@@ -1149,6 +1175,7 @@ var (
 		"libstatslog_art",           // depends on unconverted modules: statslog_art.cpp, statslog_art.h
 		"linker_reloc_bench_main",   // depends on unconverted modules: liblinker_reloc_bench_*
 		"malloc-rss-benchmark",      // depends on unconverted modules: libmeminfo
+		"modules-utils-expresslog",  // depends on unconverted modules: framework-statsd
 		"pbtombstone", "crash_dump", // depends on libdebuggerd, libunwindstack
 		"releasetools_test",             // depends on unconverted modules: com.android.apex.compressed.v1
 		"robolectric-sqlite4java-0.282", // depends on unconverted modules: robolectric-sqlite4java-import, robolectric-sqlite4java-native
@@ -1644,13 +1671,7 @@ var (
 		"libtest_with_dependency_loop_c",
 		"libtestshared",
 
-		// depends on unconverted libprotobuf-java-nano
-		"dnsresolverprotosnano",
-		"launcherprotosnano",
-		"datastallprotosnano",
-		"devicepolicyprotosnano",
-		"ota_metadata_proto_java",
-		"merge_ota",
+		"merge_ota", // depends on ota_metadata_proto_java
 
 		// releasetools
 		"verity_utils",

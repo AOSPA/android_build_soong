@@ -520,10 +520,12 @@ type ProductVariables struct {
 	ProductBrand        string   `json:",omitempty"`
 	BuildVersionTags    []string `json:",omitempty"`
 
-	ReleaseVersion          string `json:",omitempty"`
-	ReleaseAconfigValueSets string `json:",omitempty"`
+	ReleaseVersion          string   `json:",omitempty"`
+	ReleaseAconfigValueSets []string `json:",omitempty"`
 
 	ReleaseAconfigFlagDefaultPermission string `json:",omitempty"`
+
+	ReleaseDefaultModuleBuildFromSource *bool `json:",omitempty"`
 
 	KeepVndk *bool `json:",omitempty"`
 

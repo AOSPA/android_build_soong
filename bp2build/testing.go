@@ -128,21 +128,22 @@ type Bp2buildTestCase struct {
 
 func RunBp2BuildTestCaseExtraContext(t *testing.T, registerModuleTypes func(ctx android.RegistrationContext), modifyContext func(ctx *android.TestContext), tc Bp2buildTestCase) {
 	t.Helper()
-	bp2buildSetup := android.GroupFixturePreparers(
+	preparers := []android.FixturePreparer{
 		android.FixtureRegisterWithContext(registerModuleTypes),
-		android.FixtureModifyContext(modifyContext),
-		SetBp2BuildTestRunner,
+	}
+	if modifyContext != nil {
+		preparers = append(preparers, android.FixtureModifyContext(modifyContext))
+	}
+	preparers = append(preparers, SetBp2BuildTestRunner)
+	bp2buildSetup := android.GroupFixturePreparers(
+		preparers...,
 	)
 	runBp2BuildTestCaseWithSetup(t, bp2buildSetup, tc)
 }
 
 func RunBp2BuildTestCase(t *testing.T, registerModuleTypes func(ctx android.RegistrationContext), tc Bp2buildTestCase) {
 	t.Helper()
-	bp2buildSetup := android.GroupFixturePreparers(
-		android.FixtureRegisterWithContext(registerModuleTypes),
-		SetBp2BuildTestRunner,
-	)
-	runBp2BuildTestCaseWithSetup(t, bp2buildSetup, tc)
+	RunBp2BuildTestCaseExtraContext(t, registerModuleTypes, nil, tc)
 }
 
 func runBp2BuildTestCaseWithSetup(t *testing.T, extraPreparer android.FixturePreparer, tc Bp2buildTestCase) {
@@ -400,6 +401,10 @@ type customProps struct {
 	// Prop used to indicate this conversion should be 1 module -> multiple targets
 	One_to_many_prop *bool
 
+	// Prop used to simulate an unsupported property in bp2build conversion. If this
+	// is true, this module should be treated as "unconvertible" via bp2build.
+	Does_not_convert_to_bazel *bool
+
 	Api *string // File describing the APIs of this module
 
 	Test_config_setting *bool // Used to test generation of config_setting targets
@@ -535,6 +540,10 @@ func (m *customModule) dir() *string {
 }
 
 func (m *customModule) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
+	if p := m.props.Does_not_convert_to_bazel; p != nil && *p {
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "")
+		return
+	}
 	if p := m.props.One_to_many_prop; p != nil && *p {
 		customBp2buildOneToMany(ctx, m)
 		return
@@ -673,11 +682,11 @@ func makeBazelTargetHostOrDevice(typ, name string, attrs AttrNameToString, hod a
 		switch hod {
 		case android.HostSupported:
 			attrs["target_compatible_with"] = `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`
 		case android.DeviceSupported:
-			attrs["target_compatible_with"] = `["//build/bazel/platforms/os:android"]`
+			attrs["target_compatible_with"] = `["//build/bazel_common_rules/platforms/os:android"]`
 		}
 	}
 

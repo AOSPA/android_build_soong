@@ -635,6 +635,13 @@ func (ctx *parseContext) handleAssignment(a *mkparser.Assignment) []starlarkNode
 	case "+=":
 		asgn.flavor = asgnAppend
 	case "?=":
+		if _, ok := lhs.(*productConfigVariable); ok {
+			// Make sets all product configuration variables to empty strings before running product
+			// config makefiles. ?= will have no effect on a variable that has been assigned before,
+			// even if assigned to an empty string. So just skip emitting any code for this
+			// assignment.
+			return nil
+		}
 		asgn.flavor = asgnMaybeSet
 	default:
 		panic(fmt.Errorf("unexpected assignment type %s", a.Type))
@@ -941,6 +948,8 @@ func (p *inheritProductCallParser) parse(ctx *parseContext, v mkparser.Node, arg
 
 func (ctx *parseContext) handleInclude(v *mkparser.Directive) []starlarkNode {
 	loadAlways := v.Name[0] != '-'
+	v.Args.TrimRightSpaces()
+	v.Args.TrimLeftSpaces()
 	return ctx.handleSubConfig(v, ctx.parseMakeString(v, v.Args), loadAlways, func(im inheritedModule) starlarkNode {
 		return &includeNode{im, loadAlways}
 	})
