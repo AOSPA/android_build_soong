@@ -83,8 +83,6 @@ var (
 		// Making deprecated usages an error causes extreme pain when trying to
 		// deprecate anything.
 		"-Wno-error=deprecated-declarations",
-		// This rarely indicates a bug. http://b/145210666
-		"-Wno-error=reorder-init-list",
 
 		// Warnings disabled by default.
 
@@ -100,6 +98,14 @@ var (
 		// subsequent version of an interface, so this warning is currently
 		// infeasible to enable.
 		"-Wno-inconsistent-missing-override",
+		// Detects designated initializers that are in a different order than
+		// the fields in the initialized type, which causes the side effects
+		// of initializers to occur out of order with the source code.
+		// In practice, this warning has extremely poor signal to noise ratio,
+		// because it is triggered even for initializers with no side effects.
+		// Individual modules can still opt into it via cflags.
+		"-Wno-error=reorder-init-list",
+		"-Wno-reorder-init-list",
 		// Incompatible with the Google C++ style guidance to use 'int' for loop
 		// indices; poor signal to noise ratio.
 		"-Wno-sign-compare",
@@ -190,9 +196,6 @@ var (
 
 		// Emit additional debug info for AutoFDO
 		"-fdebug-info-for-profiling",
-
-		// Enable Hot Cold splitting optimization.
-		"-mllvm -hot-cold-split=true",
 	}
 
 	commonGlobalLldflags = []string{

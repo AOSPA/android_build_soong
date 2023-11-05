@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
@@ -122,7 +123,7 @@ type DroidstubsProperties struct {
 	Generate_stubs *bool
 
 	// if set to true, provides a hint to the build system that this rule uses a lot of memory,
-	// whicih can be used for scheduling purposes
+	// which can be used for scheduling purposes
 	High_mem *bool
 
 	// if set to true, Metalava will allow framework SDK to contain API levels annotations.
@@ -169,6 +170,10 @@ type ApiStubsProvider interface {
 	RemovedApiFilePath() android.Path
 
 	ApiStubsSrcProvider
+}
+
+type currentApiTimestampProvider interface {
+	CurrentApiTimestamp() android.Path
 }
 
 // droidstubs passes sources files through Metalava to generate stub .java files that only contain the API to be
@@ -238,10 +243,15 @@ func (d *Droidstubs) StubsSrcJar() android.Path {
 	return d.stubsSrcJar
 }
 
+func (d *Droidstubs) CurrentApiTimestamp() android.Path {
+	return d.checkCurrentApiTimestamp
+}
+
 var metalavaMergeAnnotationsDirTag = dependencyTag{name: "metalava-merge-annotations-dir"}
 var metalavaMergeInclusionAnnotationsDirTag = dependencyTag{name: "metalava-merge-inclusion-annotations-dir"}
 var metalavaAPILevelsAnnotationsDirTag = dependencyTag{name: "metalava-api-levels-annotations-dir"}
 var metalavaAPILevelsModuleTag = dependencyTag{name: "metalava-api-levels-module-tag"}
+var metalavaCurrentApiTimestampTag = dependencyTag{name: "metalava-current-api-timestamp-tag"}
 
 func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 	d.Javadoc.addDeps(ctx)
@@ -313,9 +323,7 @@ func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuil
 
 func (d *Droidstubs) annotationsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand) {
 	if Bool(d.properties.Annotations_enabled) {
-		cmd.Flag("--include-annotations")
-
-		cmd.FlagWithArg("--exclude-annotation ", "androidx.annotation.RequiresApi")
+		cmd.Flag(config.MetalavaAnnotationsFlags)
 
 		validatingNullability :=
 			strings.Contains(String(d.Javadoc.properties.Args), "--validate-nullability-from-merged-stubs") ||
@@ -343,14 +351,7 @@ func (d *Droidstubs) annotationsFlags(ctx android.ModuleContext, cmd *android.Ru
 			d.mergeAnnoDirFlags(ctx, cmd)
 		}
 
-		// TODO(tnorbye): find owners to fix these warnings when annotation was enabled.
-		cmd.FlagWithArg("--hide ", "HiddenTypedefConstant").
-			FlagWithArg("--hide ", "SuperfluousPrefix").
-			FlagWithArg("--hide ", "AnnotationExtraction").
-			// b/222738070
-			FlagWithArg("--hide ", "BannedThrow").
-			// b/223382732
-			FlagWithArg("--hide ", "ChangedDefault")
+		cmd.Flag(config.MetalavaAnnotationsWarningsFlags)
 	}
 }
 
@@ -497,6 +498,7 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 	if metalavaUseRbe(ctx) {
 		rule.Remoteable(android.RemoteRuleSupports{RBE: true})
 		execStrategy := ctx.Config().GetenvWithDefault("RBE_METALAVA_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
+		compare, _ := strconv.ParseBool(ctx.Config().GetenvWithDefault("RBE_METALAVA_COMPARE", "false"))
 		labels := map[string]string{"type": "tool", "name": "metalava"}
 		// TODO: metalava pool rejects these jobs
 		pool := ctx.Config().GetenvWithDefault("RBE_METALAVA_POOL", "java16")
@@ -505,12 +507,15 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 			ExecStrategy:    execStrategy,
 			ToolchainInputs: []string{config.JavaCmd(ctx).String()},
 			Platform:        map[string]string{remoteexec.PoolKey: pool},
+			Compare:         compare,
+			NumLocalRuns:    1,
+			NumRemoteRuns:   1,
 		})
 	}
 
 	cmd.BuiltTool("metalava").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "metalava.jar")).
 		Flag(config.JavacVmFlags).
-		Flag("-J--add-opens=java.base/java.util=ALL-UNNAMED").
+		Flag(config.MetalavaAddOpens).
 		FlagWithArg("--java-source ", javaVersion.String()).
 		FlagWithRspFileInputList("@", android.PathForModuleOut(ctx, "metalava.rsp"), srcs).
 		FlagWithInput("@", srcJarList)
@@ -523,27 +528,9 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 		cmd.FlagWithInputList("--classpath ", combinedPaths, ":")
 	}
 
-	cmd.Flag("--color").
-		Flag("--quiet").
-		Flag("--format=v2").
-		FlagWithArg("--repeat-errors-max ", "10").
-		FlagWithArg("--hide ", "UnresolvedImport").
-		FlagWithArg("--hide ", "InvalidNullabilityOverride").
-		// b/223382732
-		FlagWithArg("--hide ", "ChangedDefault")
-
-	// Force metalava to ignore classes on the classpath when an API file contains missing classes.
-	// See b/285140653 for more information.
-	cmd.FlagWithArg("--api-class-resolution ", "api")
-
-	// Force metalava to sort overloaded methods by their order in the source code.
-	// See b/285312164 for more information.
-	// And add concrete overrides of abstract methods, see b/299366704 for more
-	// information.
-	cmd.FlagWithArg("--format-defaults ", "overloaded-method-order=source,add-additional-overrides=yes")
-
+	cmd.Flag(config.MetalavaFlags)
 	if ctx.DeviceConfig().HideFlaggedApis() {
-		cmd.FlagWithArg("--hide-annotation ", "android.annotation.FlaggedApi")
+		cmd.Flag(config.MetalavaHideFlaggedApis)
 	}
 
 	return cmd
