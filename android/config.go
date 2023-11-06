@@ -563,7 +563,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		config: config,
 	}
 
-	config.productVariables.Build_from_text_stub = boolPtr(config.buildFromTextStub)
+	config.productVariables.Build_from_text_stub = boolPtr(config.BuildFromTextStub())
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
@@ -793,7 +793,7 @@ func (c *config) HostToolDir() string {
 }
 
 func (c *config) HostToolPath(ctx PathContext, tool string) Path {
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", false, tool)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", tool)
 	return path
 }
 
@@ -802,12 +802,12 @@ func (c *config) HostJNIToolPath(ctx PathContext, lib string) Path {
 	if runtime.GOOS == "darwin" {
 		ext = ".dylib"
 	}
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "lib64", false, lib+ext)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "lib64", lib+ext)
 	return path
 }
 
 func (c *config) HostJavaToolPath(ctx PathContext, tool string) Path {
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", false, tool)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", tool)
 	return path
 }
 
@@ -816,7 +816,7 @@ func (c *config) HostCcSharedLibPath(ctx PathContext, lib string) Path {
 	if ctx.Config().BuildArch.Multilib == "lib64" {
 		libDir = "lib64"
 	}
-	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, libDir, false, lib+".so")
+	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, libDir, lib+".so")
 }
 
 // PrebuiltOS returns the name of the host OS used in prebuilts directories.
@@ -902,6 +902,10 @@ func (c *config) EnvDeps() map[string]string {
 
 func (c *config) KatiEnabled() bool {
 	return c.katiEnabled
+}
+
+func (c *config) ProductVariables() ProductVariables {
+	return c.productVariables
 }
 
 func (c *config) BuildId() string {
@@ -2115,8 +2119,15 @@ func (c *config) ApiSurfacesDir(s ApiSurface, version string) string {
 		version)
 }
 
+func (c *config) JavaCoverageEnabled() bool {
+	return c.IsEnvTrue("EMMA_INSTRUMENT") || c.IsEnvTrue("EMMA_INSTRUMENT_STATIC") || c.IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK")
+}
+
 func (c *config) BuildFromTextStub() bool {
-	return c.buildFromTextStub
+	// TODO: b/302320354 - Remove the coverage build specific logic once the
+	// robust solution for handling native properties in from-text stub build
+	// is implemented.
+	return c.buildFromTextStub && !c.JavaCoverageEnabled()
 }
 
 func (c *config) SetBuildFromTextStub(b bool) {
