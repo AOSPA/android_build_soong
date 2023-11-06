@@ -279,8 +279,9 @@ func propsToAttributes(props map[string]string) string {
 }
 
 type conversionResults struct {
-	buildFileToTargets map[string]BazelTargets
-	metrics            CodegenMetrics
+	buildFileToTargets    map[string]BazelTargets
+	moduleNameToPartition map[string]string
+	metrics               CodegenMetrics
 }
 
 func (r conversionResults) BuildDirToTargets() map[string]BazelTargets {
@@ -707,6 +708,7 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 	metrics := CreateCodegenMetrics()
 
 	dirs := make(map[string]bool)
+	moduleNameToPartition := make(map[string]string)
 
 	var errs []error
 
@@ -753,6 +755,9 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 					// target, each of a different rule class.
 					metrics.IncrementRuleClassCount(t.ruleClass)
 				}
+
+				// record the partition
+				moduleNameToPartition[android.RemoveOptionalPrebuiltPrefix(aModule.Name())] = aModule.GetPartitionForBp2build()
 
 				// Log the module.
 				metrics.AddConvertedModule(aModule, moduleType, dir)
@@ -830,11 +835,9 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 			depLabels.Add(&depLabel)
 		}
 		a := struct {
-			Deps                bazel.LabelListAttribute
-			System_dynamic_deps bazel.LabelListAttribute
+			Deps bazel.LabelListAttribute
 		}{
-			Deps:                bazel.MakeLabelListAttribute(bazel.UniqueSortedBazelLabelList(depLabels)),
-			System_dynamic_deps: bazel.MakeLabelListAttribute(bazel.MakeLabelList([]bazel.Label{})),
+			Deps: bazel.MakeLabelListAttribute(bazel.UniqueSortedBazelLabelList(depLabels)),
 		}
 		ndkSysroot := bTarget{
 			targetName:            "ndk_sysroot",
@@ -878,8 +881,9 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 	}
 
 	return conversionResults{
-		buildFileToTargets: buildFileToTargets,
-		metrics:            metrics,
+		buildFileToTargets:    buildFileToTargets,
+		moduleNameToPartition: moduleNameToPartition,
+		metrics:               metrics,
 	}, errs
 }
 
