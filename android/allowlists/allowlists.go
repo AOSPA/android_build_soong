@@ -388,6 +388,8 @@ var (
 		"tools/metalava":                             Bp2BuildDefaultTrue,
 		"tools/platform-compat/java/android/compat":  Bp2BuildDefaultTrueRecursively,
 		"tools/tradefederation/prebuilts/filegroups": Bp2BuildDefaultTrueRecursively,
+
+		"vendor/aospa/signatures": Bp2BuildDefaultTrue,
 	}
 
 	Bp2buildKeepExistingBuildFile = map[string]bool{
@@ -441,6 +443,8 @@ var (
 
 		// TODO(b/266459895): remove this and the placeholder BUILD file after re-enabling libunwindstack
 		"external/rust/crates/rustc-demangle-capi":/* recursive = */ false,
+
+        "vendor/aospa/signatures":/* recursive = */ false,
 	}
 
 	Bp2buildModuleAlwaysConvertList = []string{
