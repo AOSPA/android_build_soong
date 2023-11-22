@@ -309,6 +309,13 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 }
 
 func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	applicationId := a.appTestHelperAppProperties.Manifest_values.ApplicationId
+	if applicationId != nil {
+		if a.overridableAppProperties.Package_name != nil {
+			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
+		}
+		a.aapt.manifestValues.applicationId = *applicationId
+	}
 	a.generateAndroidBuildActions(ctx)
 }
 
@@ -1161,6 +1168,12 @@ func AndroidAppFactory() android.Module {
 	return module
 }
 
+// A dictionary of values to be overridden in the manifest.
+type Manifest_values struct {
+	// Overrides the value of package_name in the manifest
+	ApplicationId *string
+}
+
 type appTestProperties struct {
 	// The name of the android_app module that the tests will run against.
 	Instrumentation_for *string
@@ -1170,6 +1183,8 @@ type appTestProperties struct {
 
 	// If specified, the mainline module package name in the test config is overwritten by it.
 	Mainline_package_name *string
+
+	Manifest_values Manifest_values
 }
 
 type AndroidTest struct {
@@ -1213,6 +1228,13 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if overridden {
 			a.additionalAaptFlags = append(a.additionalAaptFlags, "--rename-instrumentation-target-package "+manifestPackageName)
 		}
+	}
+	applicationId := a.appTestProperties.Manifest_values.ApplicationId
+	if applicationId != nil {
+		if a.overridableAppProperties.Package_name != nil {
+			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
+		}
+		a.aapt.manifestValues.applicationId = *applicationId
 	}
 	a.generateAndroidBuildActions(ctx)
 
@@ -1318,6 +1340,8 @@ type appTestHelperAppProperties struct {
 
 	// Install the test into a folder named for the module in all test suites.
 	Per_testcase_directory *bool
+
+	Manifest_values Manifest_values
 }
 
 type AndroidTestHelperApp struct {

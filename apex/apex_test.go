@@ -3882,13 +3882,24 @@ func TestVndkApexWithPrebuilt(t *testing.T) {
 func vndkLibrariesTxtFiles(vers ...string) (result string) {
 	for _, v := range vers {
 		if v == "current" {
-			for _, txt := range []string{"llndk", "vndkcore", "vndksp", "vndkprivate", "vndkproduct"} {
+			for _, txt := range []string{"vndkcore", "vndksp", "vndkprivate", "vndkproduct"} {
 				result += `
 					` + txt + `_libraries_txt {
 						name: "` + txt + `.libraries.txt",
+						insert_vndk_version: true,
 					}
 				`
 			}
+			result += `
+				llndk_libraries_txt {
+					name: "llndk.libraries.txt",
+				}
+				llndk_libraries_txt_for_apex {
+					name: "llndk.libraries.txt.apex",
+					stem: "llndk.libraries.txt",
+					insert_vndk_version: true,
+				}
+			`
 		} else {
 			for _, txt := range []string{"llndk", "vndkcore", "vndksp", "vndkprivate", "vndkproduct"} {
 				result += `
@@ -9078,8 +9089,8 @@ func TestApexKeysTxt(t *testing.T) {
 		}
 	`)
 
-	apexKeysText := ctx.SingletonForTests("apex_keys_text")
-	content := apexKeysText.MaybeDescription("apexkeys.txt").BuildParams.Args["content"]
+	myapex := ctx.ModuleForTests("myapex", "android_common_myapex")
+	content := myapex.Output("apexkeys.txt").BuildParams.Args["content"]
 	ensureContains(t, content, `name="myapex.apex" public_key="vendor/foo/devkeys/testkey.avbpubkey" private_key="vendor/foo/devkeys/testkey.pem" container_certificate="vendor/foo/devkeys/test.x509.pem" container_private_key="vendor/foo/devkeys/test.pk8" partition="system" sign_tool="sign_myapex"`)
 }
 
@@ -9119,10 +9130,10 @@ func TestApexKeysTxtOverrides(t *testing.T) {
 		}
 	`)
 
-	apexKeysText := ctx.SingletonForTests("apex_keys_text")
-	content := apexKeysText.MaybeDescription("apexkeys.txt").BuildParams.Args["content"]
+	content := ctx.ModuleForTests("myapex", "android_common_myapex").Output("apexkeys.txt").BuildParams.Args["content"]
+	ensureContains(t, content, `name="myapex.apex" public_key="vendor/foo/devkeys/testkey.avbpubkey" private_key="vendor/foo/devkeys/testkey.pem" container_certificate="vendor/foo/devkeys/test.x509.pem" container_private_key="vendor/foo/devkeys/test.pk8" partition="system" sign_tool="sign_myapex"`)
+	content = ctx.ModuleForTests("myapex_set", "android_common_myapex_set").Output("apexkeys.txt").BuildParams.Args["content"]
 	ensureContains(t, content, `name="myapex_set.apex" public_key="PRESIGNED" private_key="PRESIGNED" container_certificate="PRESIGNED" container_private_key="PRESIGNED" partition="system"`)
-	ensureContains(t, content, `name="myapex.apex" public_key="PRESIGNED" private_key="PRESIGNED" container_certificate="PRESIGNED" container_private_key="PRESIGNED" partition="system"`)
 }
 
 func TestAllowedFiles(t *testing.T) {
