@@ -120,6 +120,9 @@ type configImpl struct {
 	includeTags    []string
 	sourceRootDirs []string
 
+	productReleaseConfigMaps       string
+	productReleaseConfigMapsLoaded bool
+
 	// Data source to write ninja weight list
 	ninjaWeightListSource NinjaWeightListSource
 }
@@ -203,21 +206,6 @@ func loadEnvConfig(ctx Context, config *configImpl, bc string) error {
 	}
 
 	return nil
-}
-
-func UploadOnlyConfig(ctx Context, args ...string) Config {
-	ret := &configImpl{
-		environ:       OsEnvironment(),
-		sandboxConfig: &SandboxConfig{},
-	}
-	ret.parseArgs(ctx, args)
-	srcDir := absPath(ctx, ".")
-	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
-	if err := loadEnvConfig(ctx, ret, bc); err != nil {
-		ctx.Fatalln("Failed to parse env config files: %v", err)
-	}
-	ret.metricsUploader = GetMetricsUploader(srcDir, ret.environ)
-	return Config{ret}
 }
 
 func NewConfig(ctx Context, args ...string) Config {
@@ -822,16 +810,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			}
 		} else if arg == "--ensure-allowlist-integrity" {
 			c.ensureAllowlistIntegrity = true
-		} else if strings.HasPrefix(arg, "--bazel-exit-code=") {
-			bazelExitCodeStr := strings.TrimPrefix(arg, "--bazel-exit-code=")
-			val, err := strconv.Atoi(bazelExitCodeStr)
-			if err == nil {
-				c.bazelExitCode = int32(val)
-			} else {
-				ctx.Fatalf("Error parsing bazel-exit-code", err)
-			}
-		} else if strings.HasPrefix(arg, "--bes-id=") {
-			c.besId = strings.TrimPrefix(arg, "--bes-id=")
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
 				if len(arg) > 2 {
@@ -950,6 +928,9 @@ func (c *configImpl) configureLocale(ctx Context) {
 }
 
 func (c *configImpl) Environment() *Environment {
+	if c.productReleaseConfigMapsLoaded {
+		c.environ.Set("PRODUCT_RELEASE_CONFIG_MAPS", c.productReleaseConfigMaps)
+	}
 	return c.environ
 }
 
@@ -1552,6 +1533,10 @@ func (c *configImpl) SoongAndroidMk() string {
 
 func (c *configImpl) SoongMakeVarsMk() string {
 	return filepath.Join(c.SoongOutDir(), "make_vars-"+c.TargetProduct()+".mk")
+}
+
+func (c *configImpl) SoongBuildMetrics() string {
+	return filepath.Join(c.LogsDir(), "soong_build_metrics.pb")
 }
 
 func (c *configImpl) ProductOut() string {
