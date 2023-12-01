@@ -168,6 +168,8 @@ func createJavaDeviceForHostRules() []Rule {
 		"external/kotlinx.coroutines",
 		"external/robolectric-shadows",
 		"external/robolectric",
+		"frameworks/base/ravenwood",
+		"frameworks/base/tools/hoststubgen",
 		"frameworks/layoutlib",
 	}
 
