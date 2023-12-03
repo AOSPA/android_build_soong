@@ -20,6 +20,7 @@ import (
 
 	"android/soong/bazel"
 	"android/soong/bloaty"
+	"android/soong/testing"
 	"android/soong/ui/metrics/bp2build_metrics_proto"
 
 	"github.com/google/blueprint"
@@ -144,8 +145,9 @@ type Module struct {
 
 	Properties BaseProperties
 
-	hod      android.HostOrDeviceSupported
-	multilib android.Multilib
+	hod        android.HostOrDeviceSupported
+	multilib   android.Multilib
+	testModule bool
 
 	makeLinkType string
 
@@ -483,44 +485,6 @@ type RustLibraries []RustLibrary
 type RustLibrary struct {
 	Path      android.Path
 	CrateName string
-}
-
-type compiler interface {
-	initialize(ctx ModuleContext)
-	compilerFlags(ctx ModuleContext, flags Flags) Flags
-	cfgFlags(ctx ModuleContext, flags Flags) Flags
-	featureFlags(ctx ModuleContext, flags Flags) Flags
-	compilerProps() []interface{}
-	compile(ctx ModuleContext, flags Flags, deps PathDeps) buildOutput
-	compilerDeps(ctx DepsContext, deps Deps) Deps
-	crateName() string
-	rustdoc(ctx ModuleContext, flags Flags, deps PathDeps) android.OptionalPath
-
-	// Output directory in which source-generated code from dependencies is
-	// copied. This is equivalent to Cargo's OUT_DIR variable.
-	CargoOutDir() android.OptionalPath
-
-	// CargoPkgVersion returns the value of the Cargo_pkg_version property.
-	CargoPkgVersion() string
-
-	// CargoEnvCompat returns whether Cargo environment variables should be used.
-	CargoEnvCompat() bool
-
-	inData() bool
-	install(ctx ModuleContext)
-	relativeInstallPath() string
-	everInstallable() bool
-
-	nativeCoverage() bool
-
-	Disabled() bool
-	SetDisabled()
-
-	stdLinkage(ctx *depsContext) RustLinkage
-	noStdlibs() bool
-
-	unstrippedOutputFilePath() android.Path
-	strippedOutputFilePath() android.OptionalPath
 }
 
 type exportedFlagsProducer interface {
@@ -1037,6 +1001,9 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
+	}
+	if mod.testModule {
+		ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
 }
 

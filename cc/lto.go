@@ -149,7 +149,7 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 		// Reduce the inlining threshold for a better balance of binary size and
 		// performance.
 		if !ctx.Darwin() {
-			if ctx.isPgoCompile() || ctx.isAfdoCompile() {
+			if ctx.isAfdoCompile() {
 				ltoLdFlags = append(ltoLdFlags, "-Wl,-plugin-opt,-import-instr-limit=40")
 			} else {
 				ltoLdFlags = append(ltoLdFlags, "-Wl,-plugin-opt,-import-instr-limit=5")
@@ -160,8 +160,8 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 			// Register allocation MLGO flags for ARM64.
 			if ctx.Arch().ArchType == android.Arm64 {
 				// TODO: b/311889575 - 15701243645303822394 - Build Failure for libperfetto.so
-			        // ltoCFlags = append(ltoCFlags, "-mllvm -regalloc-enable-advisor=release")
-			        // ltoLdFlags = append(ltoLdFlags, "-Wl,-mllvm,-regalloc-enable-advisor=release")
+				// ltoCFlags = append(ltoCFlags, "-mllvm -regalloc-enable-advisor=release")
+				// ltoLdFlags = append(ltoLdFlags, "-Wl,-mllvm,-regalloc-enable-advisor=release")
 			}
 			// Flags for training MLGO model.
 			if ctx.Config().IsEnvTrue("THINLTO_EMIT_INDEXES_AND_IMPORTS") {

@@ -19,6 +19,7 @@ bootstrap_go_package {
         "soong-multitree",
         "soong-snapshot",
         "soong-sysprop-bp2build",
+        "soong-testing",
         "soong-tradefed",
     ],
     srcs: [
@@ -39,7 +40,6 @@ bootstrap_go_package {
         "lto.go",
         "makevars.go",
         "orderfile.go",
-        "pgo.go",
         "prebuilt.go",
         "proto.go",
         "rs.go",
