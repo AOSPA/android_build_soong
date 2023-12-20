@@ -27,7 +27,7 @@ func TestTestSpec(t *testing.T) {
 	java_test {
 		name: "java-test-module-name-two",
 	}`
-	result := runTest(t, android.FixtureExpectsNoErrors, bp)
+	result := runTestSpecTest(t, android.FixtureExpectsNoErrors, bp)
 
 	module := result.ModuleForTests(
 		"module-name", "",
@@ -78,7 +78,7 @@ func TestTestSpec(t *testing.T) {
 
 	if metadata != expectedMetadata {
 		t.Errorf(
-			"Retrieved metadata: %s is not equal to expectedMetadata: %s", metadata,
+			"Retrieved metadata: %s doesn't contain expectedMetadata: %s", metadata,
 			expectedMetadata,
 		)
 	}
@@ -121,11 +121,11 @@ func TestTestSpec(t *testing.T) {
 	}
 }
 
-func runTest(
-	t *testing.T, errorHandler android.FixtureErrorHandler, bp string,
+func runTestSpecTest(
+		t *testing.T, errorHandler android.FixtureErrorHandler, bp string,
 ) *android.TestResult {
 	return android.GroupFixturePreparers(
-		soongTesting.PrepareForTestWithTestSpecBuildComponents,
+		soongTesting.PrepareForTestWithTestingBuildComponents,
 		PrepareForIntegrationTestWithJava,
 	).
 		ExtendWithErrorHandler(errorHandler).

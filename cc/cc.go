@@ -30,6 +30,7 @@ import (
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
+	"android/soong/aconfig"
 	"android/soong/aidl_library"
 	"android/soong/android"
 	"android/soong/bazel/cquery"
@@ -932,6 +933,9 @@ type Module struct {
 	apexSdkVersion android.ApiLevel
 
 	hideApexVariantFromMake bool
+
+	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
+	transitiveAconfigFiles map[string]*android.DepSet[android.Path]
 }
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
@@ -2327,6 +2331,9 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if c.testModule {
 		ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
+	ctx.SetProvider(blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
+
+	aconfig.CollectTransitiveAconfigFiles(ctx, &c.transitiveAconfigFiles)
 
 	c.maybeInstall(ctx, apexInfo)
 }
@@ -2345,6 +2352,10 @@ func (c *Module) maybeUnhideFromMake() {
 		c.Properties.HideFromMake = false // unhide
 		// Note: this is still non-installable
 	}
+}
+
+func (c *Module) getTransitiveAconfigFiles(container string) []android.Path {
+	return c.transitiveAconfigFiles[container].ToList()
 }
 
 // maybeInstall is called at the end of both GenerateAndroidBuildActions and
@@ -2403,6 +2414,9 @@ func (c *Module) begin(ctx BaseModuleContext) {
 	}
 	if c.coverage != nil {
 		c.coverage.begin(ctx)
+	}
+	if c.afdo != nil {
+		c.afdo.begin(ctx)
 	}
 	if c.lto != nil {
 		c.lto.begin(ctx)

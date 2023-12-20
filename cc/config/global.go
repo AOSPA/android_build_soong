@@ -424,9 +424,9 @@ var (
 	}
 
 	CStdVersion               = "gnu17"
-	CppStdVersion             = "gnu++17"
+	CppStdVersion             = "gnu++20"
 	ExperimentalCStdVersion   = "gnu2x"
-	ExperimentalCppStdVersion = "gnu++2a"
+	ExperimentalCppStdVersion = "gnu++2b"
 
 	SDClang         = false
 	SDClangPath     = ""
