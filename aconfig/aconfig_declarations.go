@@ -19,14 +19,13 @@ import (
 	"strings"
 
 	"android/soong/android"
-	"android/soong/bazel"
+
 	"github.com/google/blueprint"
 )
 
 type DeclarationsModule struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
-	android.BazelModuleBase
 
 	// Properties for "aconfig_declarations"
 	properties struct {
@@ -52,7 +51,6 @@ func DeclarationsFactory() android.Module {
 	android.InitAndroidModule(module)
 	android.InitDefaultableModule(module)
 	module.AddProperties(&module.properties)
-	android.InitBazelModule(module)
 
 	return module
 }
@@ -116,9 +114,10 @@ func optionalVariable(prefix string, value string) string {
 
 // Provider published by aconfig_value_set
 type DeclarationsProviderData struct {
-	Package          string
-	Container        string
-	IntermediatePath android.WritablePath
+	Package                     string
+	Container                   string
+	IntermediateCacheOutputPath android.WritablePath
+	IntermediateDumpOutputPath  android.WritablePath
 }
 
 var DeclarationsProviderKey = blueprint.NewProvider(DeclarationsProviderData{})
@@ -126,7 +125,7 @@ var DeclarationsProviderKey = blueprint.NewProvider(DeclarationsProviderData{})
 // This is used to collect the aconfig declarations info on the transitive closure,
 // the data is keyed on the container.
 type TransitiveDeclarationsInfo struct {
-	AconfigFiles map[string]*android.DepSet[android.Path]
+	AconfigFiles map[string]android.Paths
 }
 
 var TransitiveDeclarationsInfoProvider = blueprint.NewProvider(TransitiveDeclarationsInfo{})
@@ -151,14 +150,14 @@ func (module *DeclarationsModule) GenerateAndroidBuildActions(ctx android.Module
 
 	// Intermediate format
 	declarationFiles := android.PathsForModuleSrc(ctx, module.properties.Srcs)
-	intermediatePath := android.PathForModuleOut(ctx, "intermediate.pb")
+	intermediateCacheFilePath := android.PathForModuleOut(ctx, "intermediate.pb")
 	defaultPermission := ctx.Config().ReleaseAconfigFlagDefaultPermission()
 	inputFiles := make([]android.Path, len(declarationFiles))
 	copy(inputFiles, declarationFiles)
 	inputFiles = append(inputFiles, valuesFiles...)
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        aconfigRule,
-		Output:      intermediatePath,
+		Output:      intermediateCacheFilePath,
 		Inputs:      inputFiles,
 		Description: "aconfig_declarations",
 		Args: map[string]string{
@@ -170,68 +169,64 @@ func (module *DeclarationsModule) GenerateAndroidBuildActions(ctx android.Module
 		},
 	})
 
+	intermediateDumpFilePath := android.PathForModuleOut(ctx, "intermediate.txt")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        aconfigTextRule,
+		Output:      intermediateDumpFilePath,
+		Inputs:      android.Paths{intermediateCacheFilePath},
+		Description: "aconfig_text",
+	})
+
 	ctx.SetProvider(DeclarationsProviderKey, DeclarationsProviderData{
-		Package:          module.properties.Package,
-		Container:        module.properties.Container,
-		IntermediatePath: intermediatePath,
+		Package:                     module.properties.Package,
+		Container:                   module.properties.Container,
+		IntermediateCacheOutputPath: intermediateCacheFilePath,
+		IntermediateDumpOutputPath:  intermediateDumpFilePath,
 	})
 
 }
-
-func CollectTransitiveAconfigFiles(ctx android.ModuleContext, transitiveAconfigFiles *map[string]*android.DepSet[android.Path]) {
-	if *transitiveAconfigFiles == nil {
-		*transitiveAconfigFiles = make(map[string]*android.DepSet[android.Path])
+func CollectDependencyAconfigFiles(ctx android.ModuleContext, mergedAconfigFiles *map[string]android.Paths) {
+	if *mergedAconfigFiles == nil {
+		*mergedAconfigFiles = make(map[string]android.Paths)
 	}
 	ctx.VisitDirectDeps(func(module android.Module) {
-		if dep := ctx.OtherModuleProvider(module, DeclarationsProviderKey).(DeclarationsProviderData); dep.IntermediatePath != nil {
-			aconfigMap := make(map[string]*android.DepSet[android.Path])
-			aconfigMap[dep.Container] = android.NewDepSet(android.POSTORDER, []android.Path{dep.IntermediatePath}, nil)
-			mergeTransitiveAconfigFiles(aconfigMap, *transitiveAconfigFiles)
+		if dep := ctx.OtherModuleProvider(module, DeclarationsProviderKey).(DeclarationsProviderData); dep.IntermediateCacheOutputPath != nil {
+			(*mergedAconfigFiles)[dep.Container] = append((*mergedAconfigFiles)[dep.Container], dep.IntermediateCacheOutputPath)
 			return
 		}
 		if dep := ctx.OtherModuleProvider(module, TransitiveDeclarationsInfoProvider).(TransitiveDeclarationsInfo); len(dep.AconfigFiles) > 0 {
-			mergeTransitiveAconfigFiles(dep.AconfigFiles, *transitiveAconfigFiles)
+			for container, v := range dep.AconfigFiles {
+				(*mergedAconfigFiles)[container] = append((*mergedAconfigFiles)[container], v...)
+			}
 		}
 	})
+
+	for container, aconfigFiles := range *mergedAconfigFiles {
+		(*mergedAconfigFiles)[container] = mergeAconfigFiles(ctx, aconfigFiles)
+	}
 
 	ctx.SetProvider(TransitiveDeclarationsInfoProvider, TransitiveDeclarationsInfo{
-		AconfigFiles: *transitiveAconfigFiles,
+		AconfigFiles: *mergedAconfigFiles,
 	})
 }
 
-func mergeTransitiveAconfigFiles(from, to map[string]*android.DepSet[android.Path]) {
-	for fromKey, fromValue := range from {
-		if fromValue == nil {
-			continue
-		}
-		toValue, ok := to[fromKey]
-		if !ok {
-			to[fromKey] = fromValue
-		} else {
-			to[fromKey] = android.NewDepSet(android.POSTORDER, toValue.ToList(), []*android.DepSet[android.Path]{fromValue})
-		}
-	}
-}
-
-type bazelAconfigDeclarationsAttributes struct {
-	Srcs    bazel.LabelListAttribute
-	Package string
-}
-
-func (module *DeclarationsModule) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
-	if ctx.ModuleType() != "aconfig_declarations" {
-		return
-	}
-	srcs := bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, module.properties.Srcs))
-
-	attrs := bazelAconfigDeclarationsAttributes{
-		Srcs:    srcs,
-		Package: module.properties.Package,
-	}
-	props := bazel.BazelTargetModuleProperties{
-		Rule_class:        "aconfig_declarations",
-		Bzl_load_location: "//build/bazel/rules/aconfig:aconfig_declarations.bzl",
+func mergeAconfigFiles(ctx android.ModuleContext, inputs android.Paths) android.Paths {
+	inputs = android.LastUniquePaths(inputs)
+	if len(inputs) == 1 {
+		return android.Paths{inputs[0]}
 	}
 
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, &attrs)
+	output := android.PathForModuleOut(ctx, "aconfig_merged.pb")
+
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        mergeAconfigFilesRule,
+		Description: "merge aconfig files",
+		Inputs:      inputs,
+		Output:      output,
+		Args: map[string]string{
+			"flags": android.JoinWithPrefix(inputs.Strings(), "--cache "),
+		},
+	})
+
+	return android.Paths{output}
 }

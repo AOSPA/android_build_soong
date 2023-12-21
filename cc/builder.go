@@ -1090,6 +1090,9 @@ func transformStrip(ctx android.ModuleContext, inputFile android.Path,
 	if flags.StripKeepSymbolsAndDebugFrame {
 		args += " --keep-symbols-and-debug-frame"
 	}
+	if ctx.Windows() {
+		args += " --windows"
+	}
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        strip,

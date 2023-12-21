@@ -18,22 +18,15 @@ import (
 	"android/soong/android"
 )
 
-// A singleton module that collects all of the aconfig flags declared in the
-// tree into a single combined file for export to the external flag setting
-// server (inside Google it's Gantry).
-//
-// Note that this is ALL aconfig_declarations modules present in the tree, not just
-// ones that are relevant to the product currently being built, so that that infra
-// doesn't need to pull from multiple builds and merge them.
-func AllAconfigDeclarationsFactory() android.Singleton {
-	return &allAconfigDeclarationsSingleton{}
+func ExportedJavaDeclarationsLibraryFactory() android.Singleton {
+	return &exportedJavaDeclarationsLibrarySingleton{}
 }
 
-type allAconfigDeclarationsSingleton struct {
+type exportedJavaDeclarationsLibrarySingleton struct {
 	intermediatePath android.OutputPath
 }
 
-func (this *allAconfigDeclarationsSingleton) GenerateBuildActions(ctx android.SingletonContext) {
+func (this *exportedJavaDeclarationsLibrarySingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	// Find all of the aconfig_declarations modules
 	var cacheFiles android.Paths
 	ctx.VisitAllModules(func(module android.Module) {
@@ -45,19 +38,19 @@ func (this *allAconfigDeclarationsSingleton) GenerateBuildActions(ctx android.Si
 	})
 
 	// Generate build action for aconfig
-	this.intermediatePath = android.PathForIntermediates(ctx, "all_aconfig_declarations.pb")
+	this.intermediatePath = android.PathForIntermediates(ctx, "exported_java_aconfig_library.jar")
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        AllDeclarationsRule,
+		Rule:        exportedJavaRule,
 		Inputs:      cacheFiles,
 		Output:      this.intermediatePath,
-		Description: "all_aconfig_declarations",
+		Description: "exported_java_aconfig_library",
 		Args: map[string]string{
-			"cache_files": android.JoinPathsWithPrefix(cacheFiles, "--cache "),
+			"cache_files": android.JoinPathsWithPrefix(cacheFiles, " "),
 		},
 	})
-	ctx.Phony("all_aconfig_declarations", this.intermediatePath)
+	ctx.Phony("exported_java_aconfig_library", this.intermediatePath)
 }
 
-func (this *allAconfigDeclarationsSingleton) MakeVars(ctx android.MakeVarsContext) {
-	ctx.DistForGoal("droid", this.intermediatePath)
+func (this *exportedJavaDeclarationsLibrarySingleton) MakeVars(ctx android.MakeVarsContext) {
+	ctx.DistForGoalWithFilename("sdk", this.intermediatePath, "android-flags.jar")
 }
