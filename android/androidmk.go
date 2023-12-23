@@ -159,7 +159,7 @@ type AndroidMkEntriesContext interface {
 }
 
 type AndroidMkExtraEntriesContext interface {
-	Provider(provider blueprint.ProviderKey) interface{}
+	Provider(provider blueprint.AnyProviderKey) (any, bool)
 }
 
 type androidMkExtraEntriesContext struct {
@@ -167,8 +167,8 @@ type androidMkExtraEntriesContext struct {
 	mod blueprint.Module
 }
 
-func (a *androidMkExtraEntriesContext) Provider(provider blueprint.ProviderKey) interface{} {
-	return a.ctx.ModuleProvider(a.mod, provider)
+func (a *androidMkExtraEntriesContext) Provider(provider blueprint.AnyProviderKey) (any, bool) {
+	return a.ctx.moduleProvider(a.mod, provider)
 }
 
 type AndroidMkExtraEntriesFunc func(ctx AndroidMkExtraEntriesContext, entries *AndroidMkEntries)
@@ -492,8 +492,7 @@ type fillInEntriesContext interface {
 	ModuleDir(module blueprint.Module) string
 	ModuleSubDir(module blueprint.Module) string
 	Config() Config
-	ModuleProvider(module blueprint.Module, provider blueprint.ProviderKey) interface{}
-	ModuleHasProvider(module blueprint.Module, provider blueprint.ProviderKey) bool
+	moduleProvider(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool)
 	ModuleType(module blueprint.Module) string
 }
 
@@ -619,8 +618,7 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		}
 	}
 
-	if ctx.ModuleHasProvider(mod, LicenseMetadataProvider) {
-		licenseMetadata := ctx.ModuleProvider(mod, LicenseMetadataProvider).(*LicenseMetadataInfo)
+	if licenseMetadata, ok := SingletonModuleProvider(ctx, mod, LicenseMetadataProvider); ok {
 		a.SetPath("LOCAL_SOONG_LICENSE_METADATA", licenseMetadata.LicenseMetadataPath)
 	}
 

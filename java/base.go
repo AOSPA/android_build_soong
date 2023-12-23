@@ -195,6 +195,12 @@ type CommonProperties struct {
 
 	// If true, then only the headers are built and not the implementation jar.
 	Headers_only *bool
+
+	// A list of files or dependencies to make available to the build sandbox. This is
+	// useful if source files are symlinks, the targets of the symlinks must be listed here.
+	// Note that currently not all actions implemented by android_apps are sandboxed, so you
+	// may only see this being necessary in lint builds.
+	Compile_data []string `android:"path"`
 }
 
 // Properties that are specific to device modules. Host module factories should not add these when
@@ -612,7 +618,7 @@ func (j *Module) provideHiddenAPIPropertyInfo(ctx android.ModuleContext) {
 	// Populate with package rules from the properties.
 	hiddenAPIInfo.extractPackageRulesFromProperties(&j.deviceProperties.HiddenAPIPackageProperties)
 
-	ctx.SetProvider(hiddenAPIPropertyInfoProvider, hiddenAPIInfo)
+	android.SetProvider(ctx, hiddenAPIPropertyInfoProvider, hiddenAPIInfo)
 }
 
 func (j *Module) OutputFiles(tag string) (android.Paths, error) {
@@ -679,7 +685,7 @@ func (j *Module) shouldInstrumentInApex(ctx android.BaseModuleContext) bool {
 	// Force enable the instrumentation for java code that is built for APEXes ...
 	// except for the jacocoagent itself (because instrumenting jacocoagent using jacocoagent
 	// doesn't make sense) or framework libraries (e.g. libraries found in the InstrumentFrameworkModules list) unless EMMA_INSTRUMENT_FRAMEWORK is true.
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	isJacocoAgent := ctx.ModuleName() == "jacocoagent"
 	if j.DirectlyInAnyApex() && !isJacocoAgent && !apexInfo.IsForPlatform() {
 		if !inList(ctx.ModuleName(), config.InstrumentFrameworkModules) {
@@ -1137,7 +1143,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	uniqueSrcFiles = append(uniqueSrcFiles, uniqueJavaFiles...)
 	uniqueSrcFiles = append(uniqueSrcFiles, uniqueKtFiles...)
 	j.uniqueSrcFiles = uniqueSrcFiles
-	ctx.SetProvider(blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: uniqueSrcFiles.Strings()})
+	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: uniqueSrcFiles.Strings()})
 
 	// We don't currently run annotation processors in turbine, which means we can't use turbine
 	// generated header jars when an annotation processor that generates API is enabled.  One
@@ -1172,7 +1178,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			return
 		}
 
-		ctx.SetProvider(JavaInfoProvider, JavaInfo{
+		android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
 			HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
 			TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
 			TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
@@ -1566,7 +1572,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	// Enable dex compilation for the APEX variants, unless it is disabled explicitly
 	compileDex := j.dexProperties.Compile_dex
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	if j.DirectlyInAnyApex() && !apexInfo.IsForPlatform() {
 		if compileDex == nil {
 			compileDex = proptools.BoolPtr(true)
@@ -1677,6 +1683,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		j.linter.compileSdkKind = j.SdkVersion(ctx).Kind
 		j.linter.javaLanguageLevel = flags.javaVersion.String()
 		j.linter.kotlinLanguageLevel = "1.3"
+		j.linter.compile_data = android.PathsForModuleSrc(ctx, j.properties.Compile_data)
 		if !apexInfo.IsForPlatform() && ctx.Config().UnbundledBuildApps() {
 			j.linter.buildModuleReportZip = true
 		}
@@ -1689,7 +1696,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	aconfig.CollectDependencyAconfigFiles(ctx, &j.mergedAconfigFiles)
 
-	ctx.SetProvider(JavaInfoProvider, JavaInfo{
+	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
 		HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
 		TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
 		TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
@@ -1719,7 +1726,7 @@ func (j *Module) collectProguardSpecInfo(ctx android.ModuleContext) ProguardSpec
 	transitiveProguardFlags := []*android.DepSet[android.Path]{}
 
 	ctx.VisitDirectDeps(func(m android.Module) {
-		depProguardInfo := ctx.OtherModuleProvider(m, ProguardSpecInfoProvider).(ProguardSpecInfo)
+		depProguardInfo, _ := android.OtherModuleProvider(ctx, m, ProguardSpecInfoProvider)
 		depTag := ctx.OtherModuleDependencyTag(m)
 
 		if depProguardInfo.UnconditionallyExportedProguardFlags != nil {
@@ -1905,7 +1912,7 @@ func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.M
 			return
 		}
 
-		dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+		dep, _ := android.OtherModuleProvider(ctx, module, JavaInfoProvider)
 		tag := ctx.OtherModuleDependencyTag(module)
 		_, isUsesLibDep := tag.(usesLibraryDependencyTag)
 		if tag == libTag || tag == r8LibraryJarTag || isUsesLibDep {
@@ -2030,7 +2037,7 @@ func (j *Module) collectTransitiveSrcFiles(ctx android.ModuleContext, mine andro
 	ctx.VisitDirectDeps(func(module android.Module) {
 		tag := ctx.OtherModuleDependencyTag(module)
 		if tag == staticLibTag {
-			depInfo := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			depInfo, _ := android.OtherModuleProvider(ctx, module, JavaInfoProvider)
 			if depInfo.TransitiveSrcFiles != nil {
 				fromDeps = append(fromDeps, depInfo.TransitiveSrcFiles)
 			}
@@ -2202,15 +2209,14 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case staticLibTag:
 				ctx.ModuleErrorf("dependency on java_sdk_library %q can only be in libs", otherName)
 			}
-		} else if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
-			dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
-			if sdkLinkType != javaPlatform &&
-				ctx.OtherModuleHasProvider(module, SyspropPublicStubInfoProvider) {
-				// dep is a sysprop implementation library, but this module is not linking against
-				// the platform, so it gets the sysprop public stubs library instead.  Replace
-				// dep with the JavaInfo from the SyspropPublicStubInfoProvider.
-				syspropDep := ctx.OtherModuleProvider(module, SyspropPublicStubInfoProvider).(SyspropPublicStubInfo)
-				dep = syspropDep.JavaInfo
+		} else if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
+			if sdkLinkType != javaPlatform {
+				if syspropDep, ok := android.OtherModuleProvider(ctx, module, SyspropPublicStubInfoProvider); ok {
+					// dep is a sysprop implementation library, but this module is not linking against
+					// the platform, so it gets the sysprop public stubs library instead.  Replace
+					// dep with the JavaInfo from the SyspropPublicStubInfoProvider.
+					dep = syspropDep.JavaInfo
+				}
 			}
 			switch tag {
 			case bootClasspathTag:
@@ -2282,7 +2288,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case syspropPublicStubDepTag:
 				// This is a sysprop implementation library, forward the JavaInfoProvider from
 				// the corresponding sysprop public stub library as SyspropPublicStubInfoProvider.
-				ctx.SetProvider(SyspropPublicStubInfoProvider, SyspropPublicStubInfo{
+				android.SetProvider(ctx, SyspropPublicStubInfoProvider, SyspropPublicStubInfo{
 					JavaInfo: dep,
 				})
 			}

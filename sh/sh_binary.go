@@ -271,7 +271,7 @@ func (s *ShBinary) generateAndroidBuildActions(ctx android.ModuleContext) {
 		Output: s.outputFilePath,
 		Input:  s.sourceFilePath,
 	})
-	ctx.SetProvider(blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: []string{s.sourceFilePath.String()}})
+	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: []string{s.sourceFilePath.String()}})
 }
 
 func (s *ShBinary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -452,7 +452,7 @@ func (s *ShTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			ctx.PropertyErrorf(property, "%q of type %q is not supported", dep.Name(), ctx.OtherModuleType(dep))
 		}
 	})
-	ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
+	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (s *ShTest) InstallInData() bool {
