@@ -43,7 +43,7 @@ type FdoProfileInfo struct {
 }
 
 // FdoProfileProvider is used to provide path to an fdo profile
-var FdoProfileProvider = blueprint.NewMutatorProvider(FdoProfileInfo{}, "fdo_profile")
+var FdoProfileProvider = blueprint.NewMutatorProvider[FdoProfileInfo]("fdo_profile")
 
 // FdoProfileMutatorInterface is the interface implemented by fdo_profile module type
 // module types that can depend on an fdo_profile module
@@ -62,7 +62,7 @@ func (fp *fdoProfile) GenerateAndroidBuildActions(ctx android.ModuleContext) {}
 func (fp *fdoProfile) fdoProfileMutator(ctx android.BottomUpMutatorContext) {
 	if fp.properties.Profile != nil {
 		path := android.PathForModuleSrc(ctx, *fp.properties.Profile)
-		ctx.SetProvider(FdoProfileProvider, FdoProfileInfo{
+		android.SetProvider(ctx, FdoProfileProvider, FdoProfileInfo{
 			Path: path,
 		})
 	}

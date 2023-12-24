@@ -34,9 +34,7 @@ func TestTestSpec(t *testing.T) {
 	).Module().(*soongTesting.TestSpecModule)
 
 	// Check that the provider has the right contents
-	data := result.ModuleProvider(
-		module, soongTesting.TestSpecProviderKey,
-	).(soongTesting.TestSpecProviderData)
+	data, _ := android.SingletonModuleProvider(result, module, soongTesting.TestSpecProviderKey)
 	if !strings.HasSuffix(
 		data.IntermediatePath.String(), "/intermediateTestSpecMetadata.pb",
 	) {
@@ -122,7 +120,7 @@ func TestTestSpec(t *testing.T) {
 }
 
 func runTestSpecTest(
-		t *testing.T, errorHandler android.FixtureErrorHandler, bp string,
+	t *testing.T, errorHandler android.FixtureErrorHandler, bp string,
 ) *android.TestResult {
 	return android.GroupFixturePreparers(
 		soongTesting.PrepareForTestWithTestingBuildComponents,

@@ -218,7 +218,7 @@ func (s *snapshotModule) DepsMutator(ctx android.BottomUpMutatorContext) {
 		sharedLibs[k] = v
 	}
 
-	ctx.SetProvider(SnapshotInfoProvider, SnapshotInfo{
+	android.SetProvider(ctx, SnapshotInfoProvider, SnapshotInfo{
 		HeaderLibs: headers,
 		Binaries:   binaries,
 		Objects:    objects,
@@ -233,7 +233,7 @@ type SnapshotInfo struct {
 	HeaderLibs, Binaries, Objects, StaticLibs, SharedLibs, Rlibs, Dylibs map[string]string
 }
 
-var SnapshotInfoProvider = blueprint.NewMutatorProvider(SnapshotInfo{}, "deps")
+var SnapshotInfoProvider = blueprint.NewMutatorProvider[SnapshotInfo]("deps")
 
 var _ android.ImageInterface = (*snapshotModule)(nil)
 
@@ -522,7 +522,7 @@ func (p *snapshotLibraryDecorator) link(ctx ModuleContext, flags Flags, deps Pat
 		p.tocFile = android.OptionalPathForPath(tocFile)
 		TransformSharedObjectToToc(ctx, in, tocFile)
 
-		ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
+		android.SetProvider(ctx, SharedLibraryInfoProvider, SharedLibraryInfo{
 			SharedLibrary: in,
 			Target:        ctx.Target(),
 
@@ -532,7 +532,7 @@ func (p *snapshotLibraryDecorator) link(ctx ModuleContext, flags Flags, deps Pat
 
 	if p.static() {
 		depSet := android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL).Direct(in).Build()
-		ctx.SetProvider(StaticLibraryInfoProvider, StaticLibraryInfo{
+		android.SetProvider(ctx, StaticLibraryInfoProvider, StaticLibraryInfo{
 			StaticLibrary: in,
 
 			TransitiveStaticLibrariesForOrdering: depSet,

@@ -98,7 +98,7 @@ func (i DeapexerInfo) PrebuiltExportPath(apexRelativePath string) WritablePath {
 
 // Provider that can be used from within the `GenerateAndroidBuildActions` of a module that depends
 // on a `deapexer` module to retrieve its `DeapexerInfo`.
-var DeapexerProvider = blueprint.NewProvider(DeapexerInfo{})
+var DeapexerProvider = blueprint.NewProvider[DeapexerInfo]()
 
 // NewDeapexerInfo creates and initializes a DeapexerInfo that is suitable
 // for use with a prebuilt_apex module.
@@ -150,7 +150,7 @@ type RequiresFilesFromPrebuiltApexTag interface {
 func FindDeapexerProviderForModule(ctx ModuleContext) *DeapexerInfo {
 	var di *DeapexerInfo
 	ctx.VisitDirectDepsWithTag(DeapexerTag, func(m Module) {
-		c := ctx.OtherModuleProvider(m, DeapexerProvider).(DeapexerInfo)
+		c, _ := OtherModuleProvider(ctx, m, DeapexerProvider)
 		p := &c
 		if di != nil {
 			// If two DeapexerInfo providers have been found then check if they are
@@ -167,7 +167,7 @@ func FindDeapexerProviderForModule(ctx ModuleContext) *DeapexerInfo {
 	if di != nil {
 		return di
 	}
-	ai := ctx.Provider(ApexInfoProvider).(ApexInfo)
+	ai, _ := ModuleProvider(ctx, ApexInfoProvider)
 	ctx.ModuleErrorf("No prebuilt APEX provides a deapexer module for APEX variant %s", ai.ApexVariationName)
 	return nil
 }
