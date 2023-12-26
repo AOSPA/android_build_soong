@@ -77,6 +77,8 @@ type Module interface {
 	InstallInDebugRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
+	InstallInOdm() bool
+	InstallInProduct() bool
 	InstallInVendor() bool
 	InstallForceOS() (*OsType, *ArchType)
 	PartitionTag(DeviceConfig) string
@@ -1396,6 +1398,14 @@ func (m *ModuleBase) InstallInDebugRamdisk() bool {
 
 func (m *ModuleBase) InstallInRecovery() bool {
 	return Bool(m.commonProperties.Recovery)
+}
+
+func (m *ModuleBase) InstallInOdm() bool {
+	return false
+}
+
+func (m *ModuleBase) InstallInProduct() bool {
+	return false
 }
 
 func (m *ModuleBase) InstallInVendor() bool {

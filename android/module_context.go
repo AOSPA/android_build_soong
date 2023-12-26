@@ -172,6 +172,8 @@ type ModuleContext interface {
 	InstallInDebugRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
+	InstallInOdm() bool
+	InstallInProduct() bool
 	InstallInVendor() bool
 	InstallForceOS() (*OsType, *ArchType)
 
@@ -425,6 +427,14 @@ func (m *moduleContext) InstallInRoot() bool {
 
 func (m *moduleContext) InstallForceOS() (*OsType, *ArchType) {
 	return m.module.InstallForceOS()
+}
+
+func (m *moduleContext) InstallInOdm() bool {
+	return m.module.InstallInOdm()
+}
+
+func (m *moduleContext) InstallInProduct() bool {
+	return m.module.InstallInProduct()
 }
 
 func (m *moduleContext) InstallInVendor() bool {
