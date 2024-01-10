@@ -196,9 +196,9 @@ type variableProperties struct {
 		}
 
 		Device_support_hwfde struct {
-			Cflags []string
-			Header_libs  []string
-			Shared_libs  []string
+			Cflags      []string
+			Header_libs []string
+			Shared_libs []string
 		}
 
 		Device_support_hwfde_perf struct {
@@ -256,7 +256,7 @@ type ProductVariables struct {
 	VendorApiLevel *string `json:",omitempty"`
 
 	RecoverySnapshotVersion *string `json:",omitempty"`
-	RamdiskSnapshotVersion *string `json:",omitempty"`
+	RamdiskSnapshotVersion  *string `json:",omitempty"`
 
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
@@ -298,10 +298,10 @@ type ProductVariables struct {
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 
-	Real_hal                   *bool `json:",omitempty"`
-	Qmaa_hal                   *bool `json:",omitempty"`
-	Device_support_hwfde       *bool `json:",omitempty"`
-	Device_support_hwfde_perf  *bool `json:",omitempty"`
+	Real_hal                         *bool    `json:",omitempty"`
+	Qmaa_hal                         *bool    `json:",omitempty"`
+	Device_support_hwfde             *bool    `json:",omitempty"`
+	Device_support_hwfde_perf        *bool    `json:",omitempty"`
 	Allow_missing_dependencies       *bool    `json:",omitempty"`
 	Unbundled_build                  *bool    `json:",omitempty"`
 	Unbundled_build_apps             []string `json:",omitempty"`
@@ -315,7 +315,7 @@ type ProductVariables struct {
 	Safestack                        *bool    `json:",omitempty"`
 	HostStaticBinaries               *bool    `json:",omitempty"`
 	Binder32bit                      *bool    `json:",omitempty"`
-	Device_page_size_agnostic    *bool    `json:",omitempty"`
+	Device_page_size_agnostic        *bool    `json:",omitempty"`
 	UseGoma                          *bool    `json:",omitempty"`
 	UseRBE                           *bool    `json:",omitempty"`
 	UseRBEJAVAC                      *bool    `json:",omitempty"`
@@ -329,7 +329,7 @@ type ProductVariables struct {
 	Uml                              *bool    `json:",omitempty"`
 	Arc                              *bool    `json:",omitempty"`
 	MinimizeJavaDebugInfo            *bool    `json:",omitempty"`
-	Build_from_text_stub         *bool    `json:",omitempty"`
+	Build_from_text_stub             *bool    `json:",omitempty"`
 
 	Check_elf_files *bool `json:",omitempty"`
 
@@ -472,28 +472,29 @@ type ProductVariables struct {
 	InterPartitionJavaLibraryAllowList  []string `json:",omitempty"`
 
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
-	BoardUsesRamdiskAsBoot *bool `json:",omitempty"`
+	BoardUsesRamdiskAsBoot  *bool `json:",omitempty"`
 
 	BoardKernelBinaries                []string `json:",omitempty"`
 	BoardKernelModuleInterfaceVersions []string `json:",omitempty"`
 
 	BoardMoveRecoveryResourcesToVendorBoot *bool `json:",omitempty"`
-	BoardMoveRamdiskResourcesToVendorBoot *bool `json:",omitempty"`
+	BoardMoveRamdiskResourcesToVendorBoot  *bool `json:",omitempty"`
 
 	PrebuiltHiddenApiDir *string `json:",omitempty"`
 
 	ShippingApiLevel *string `json:",omitempty"`
 
-	BuildBrokenPluginValidation        []string `json:",omitempty"`
-	BuildBrokenClangAsFlags            bool     `json:",omitempty"`
-	BuildBrokenClangCFlags             bool     `json:",omitempty"`
-	GenruleSandboxing                  *bool    `json:",omitempty"`
-	BuildBrokenEnforceSyspropOwner     bool     `json:",omitempty"`
-	BuildBrokenTrebleSyspropNeverallow bool     `json:",omitempty"`
-	BuildBrokenUsesSoongPython2Modules bool     `json:",omitempty"`
-	BuildBrokenVendorPropertyNamespace bool     `json:",omitempty"`
+	BuildBrokenPluginValidation         []string `json:",omitempty"`
+	BuildBrokenClangAsFlags             bool     `json:",omitempty"`
+	BuildBrokenClangCFlags              bool     `json:",omitempty"`
+	GenruleSandboxing                   *bool    `json:",omitempty"`
+	BuildBrokenEnforceSyspropOwner      bool     `json:",omitempty"`
+	BuildBrokenTrebleSyspropNeverallow  bool     `json:",omitempty"`
+	BuildBrokenUsesSoongPython2Modules  bool     `json:",omitempty"`
+	BuildBrokenVendorPropertyNamespace  bool     `json:",omitempty"`
 	BuildBrokenIncorrectPartitionImages bool     `json:",omitempty"`
-	BuildBrokenInputDirModules         []string `json:",omitempty"`
+	BuildBrokenInputDirModules          []string `json:",omitempty"`
+	BuildBrokenDontCheckSystemSdk       bool     `json:",omitempty"`
 
 	BuildWarningBadOptionalUsesLibsAllowlist []string `json:",omitempty"`
 
