@@ -26,8 +26,6 @@ import (
 
 	"android/soong/aidl_library"
 	"android/soong/android"
-
-	"github.com/google/blueprint"
 )
 
 func init() {
@@ -44,14 +42,6 @@ var prepareForCcTest = android.GroupFixturePreparers(
 		variables.VendorApiLevel = StringPtr("202404")
 		variables.DeviceVndkVersion = StringPtr("current")
 		variables.Platform_vndk_version = StringPtr("29")
-	}),
-)
-
-// TODO(b/316829758) Update prepareForCcTest with this configuration and remove prepareForCcTestWithoutVndk
-var prepareForCcTestWithoutVndk = android.GroupFixturePreparers(
-	PrepareForIntegrationTestWithCc,
-	android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-		variables.VendorApiLevel = StringPtr("202404")
 	}),
 )
 
@@ -2651,7 +2641,6 @@ func TestLlndkLibrary(t *testing.T) {
 		name: "libexternal_headers",
 		export_include_dirs: ["include"],
 		vendor_available: true,
-		product_available: true,
 	}
 	cc_library_headers {
 		name: "libexternal_llndk_headers",
@@ -4781,52 +4770,4 @@ func TestStrippedAllOutputFile(t *testing.T) {
 		t.Errorf("Unexpected output file: %s", outputFile.Strings()[0])
 		return
 	}
-}
-
-// TODO(b/316829758) Remove this test and do not set VNDK version from other tests
-func TestImageVariantsWithoutVndk(t *testing.T) {
-	t.Parallel()
-
-	bp := `
-	cc_binary {
-		name: "binfoo",
-		srcs: ["binfoo.cc"],
-		vendor_available: true,
-		product_available: true,
-		shared_libs: ["libbar"]
-	}
-	cc_library {
-		name: "libbar",
-		srcs: ["libbar.cc"],
-		vendor_available: true,
-		product_available: true,
-	}
-	`
-
-	ctx := prepareForCcTestWithoutVndk.RunTestWithBp(t, bp)
-
-	hasDep := func(m android.Module, wantDep android.Module) bool {
-		t.Helper()
-		var found bool
-		ctx.VisitDirectDeps(m, func(dep blueprint.Module) {
-			if dep == wantDep {
-				found = true
-			}
-		})
-		return found
-	}
-
-	testDepWithVariant := func(imageVariant string) {
-		imageVariantStr := ""
-		if imageVariant != "core" {
-			imageVariantStr = "_" + imageVariant
-		}
-		binFooModule := ctx.ModuleForTests("binfoo", "android"+imageVariantStr+"_arm64_armv8-a").Module()
-		libBarModule := ctx.ModuleForTests("libbar", "android"+imageVariantStr+"_arm64_armv8-a_shared").Module()
-		android.AssertBoolEquals(t, "binfoo should have dependency on libbar with image variant "+imageVariant, true, hasDep(binFooModule, libBarModule))
-	}
-
-	testDepWithVariant("core")
-	testDepWithVariant("vendor")
-	testDepWithVariant("product")
 }

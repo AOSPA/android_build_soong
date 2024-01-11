@@ -40,20 +40,10 @@ class TagsTest(unittest.TestCase):
         self.assertEqual(Tags(), symbolfile.get_tags('foo bar baz', {}))
 
     def test_get_tags(self) -> None:
-        self.assertEqual(Tags.from_strs(['llndk', 'apex']),
-                         symbolfile.get_tags('# llndk apex', {}))
-        self.assertEqual(Tags.from_strs(['llndk', 'apex']),
-                         symbolfile.get_tags('foo # llndk apex', {}))
-
-    def test_get_unrecognized_tags(self) -> None:
-        with self.assertRaises(symbolfile.ParseError):
-            symbolfile.get_tags('# bar', {})
-        with self.assertRaises(symbolfile.ParseError):
-            symbolfile.get_tags('foo # bar', {})
-        with self.assertRaises(symbolfile.ParseError):
-            symbolfile.get_tags('# #', {})
-        with self.assertRaises(symbolfile.ParseError):
-            symbolfile.get_tags('# apex # llndk', {})
+        self.assertEqual(Tags.from_strs(['foo', 'bar']),
+                         symbolfile.get_tags('# foo bar', {}))
+        self.assertEqual(Tags.from_strs(['bar', 'baz']),
+                         symbolfile.get_tags('foo # bar baz', {}))
 
     def test_split_tag(self) -> None:
         self.assertTupleEqual(('foo', 'bar'),
@@ -435,13 +425,13 @@ class SymbolFileParseTest(unittest.TestCase):
 
     def test_parse_version(self) -> None:
         input_file = io.StringIO(textwrap.dedent("""\
-            VERSION_1 { # weak introduced=35
+            VERSION_1 { # foo bar
                 baz;
-                qux; # apex llndk
+                qux; # woodly doodly
             };
 
             VERSION_2 {
-            } VERSION_1; # not-a-tag
+            } VERSION_1; # asdf
         """))
         parser = symbolfile.SymbolFileParser(input_file, {}, self.filter)
 
@@ -449,11 +439,11 @@ class SymbolFileParseTest(unittest.TestCase):
         version = parser.parse_version()
         self.assertEqual('VERSION_1', version.name)
         self.assertIsNone(version.base)
-        self.assertEqual(Tags.from_strs(['weak', 'introduced=35']), version.tags)
+        self.assertEqual(Tags.from_strs(['foo', 'bar']), version.tags)
 
         expected_symbols = [
             Symbol('baz', Tags()),
-            Symbol('qux', Tags.from_strs(['apex', 'llndk'])),
+            Symbol('qux', Tags.from_strs(['woodly', 'doodly'])),
         ]
         self.assertEqual(expected_symbols, version.symbols)
 
@@ -486,7 +476,7 @@ class SymbolFileParseTest(unittest.TestCase):
     def test_parse_symbol(self) -> None:
         input_file = io.StringIO(textwrap.dedent("""\
             foo;
-            bar; # llndk apex
+            bar; # baz qux
         """))
         parser = symbolfile.SymbolFileParser(input_file, {}, self.filter)
 
@@ -498,7 +488,7 @@ class SymbolFileParseTest(unittest.TestCase):
         parser.next_line()
         symbol = parser.parse_symbol()
         self.assertEqual('bar', symbol.name)
-        self.assertEqual(Tags.from_strs(['llndk', 'apex']), symbol.tags)
+        self.assertEqual(Tags.from_strs(['baz', 'qux']), symbol.tags)
 
     def test_wildcard_symbol_global(self) -> None:
         input_file = io.StringIO(textwrap.dedent("""\
@@ -547,13 +537,13 @@ class SymbolFileParseTest(unittest.TestCase):
                     hidden1;
                 global:
                     foo;
-                    bar; # llndk
+                    bar; # baz
             };
 
-            VERSION_2 { # weak
+            VERSION_2 { # wasd
                 # Implicit global scope.
                     woodly;
-                    doodly; # llndk
+                    doodly; # asdf
                 local:
                     qwerty;
             } VERSION_1;
@@ -564,12 +554,12 @@ class SymbolFileParseTest(unittest.TestCase):
         expected = [
             symbolfile.Version('VERSION_1', None, Tags(), [
                 Symbol('foo', Tags()),
-                Symbol('bar', Tags.from_strs(['llndk'])),
+                Symbol('bar', Tags.from_strs(['baz'])),
             ]),
             symbolfile.Version(
-                'VERSION_2', 'VERSION_1', Tags.from_strs(['weak']), [
+                'VERSION_2', 'VERSION_1', Tags.from_strs(['wasd']), [
                     Symbol('woodly', Tags()),
-                    Symbol('doodly', Tags.from_strs(['llndk'])),
+                    Symbol('doodly', Tags.from_strs(['asdf'])),
                 ]),
         ]
 

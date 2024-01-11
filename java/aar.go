@@ -546,7 +546,7 @@ func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptio
 
 	if a.useResourceProcessorBusyBox() {
 		rJar := android.PathForModuleOut(ctx, "busybox/R.jar")
-		resourceProcessorBusyBoxGenerateBinaryR(ctx, rTxt, a.mergedManifestFile, rJar, staticDeps, a.isLibrary, a.aaptProperties.Aaptflags)
+		resourceProcessorBusyBoxGenerateBinaryR(ctx, rTxt, a.mergedManifestFile, rJar, staticDeps, a.isLibrary)
 		aapt2ExtractExtraPackages(ctx, extraPackages, rJar)
 		transitiveRJars = append(transitiveRJars, rJar)
 		a.rJar = rJar
@@ -606,7 +606,7 @@ var resourceProcessorBusyBox = pctx.AndroidStaticRule("resourceProcessorBusyBox"
 // using Bazel's ResourceProcessorBusyBox tool, which is faster than compiling the R.java files and
 // supports producing classes for static dependencies that only include resources from that dependency.
 func resourceProcessorBusyBoxGenerateBinaryR(ctx android.ModuleContext, rTxt, manifest android.Path,
-	rJar android.WritablePath, transitiveDeps transitiveAarDeps, isLibrary bool, aaptFlags []string) {
+	rJar android.WritablePath, transitiveDeps transitiveAarDeps, isLibrary bool) {
 
 	var args []string
 	var deps android.Paths
@@ -621,17 +621,6 @@ func resourceProcessorBusyBoxGenerateBinaryR(ctx android.ModuleContext, rTxt, ma
 		// library.  Pass --finalFields=false so that the R.class file contains non-final fields so they don't get
 		// inlined into the library before the final IDs are assigned during app compilation.
 		args = append(args, "--finalFields=false")
-	}
-
-	for i, arg := range aaptFlags {
-		const AAPT_CUSTOM_PACKAGE = "--custom-package"
-		if strings.HasPrefix(arg, AAPT_CUSTOM_PACKAGE) {
-			pkg := strings.TrimSpace(strings.TrimPrefix(arg, AAPT_CUSTOM_PACKAGE))
-			if pkg == "" && i+1 < len(aaptFlags) {
-				pkg = aaptFlags[i+1]
-			}
-			args = append(args, "--packageForR "+pkg)
-		}
 	}
 
 	deps = append(deps, rTxt, manifest)
@@ -1207,7 +1196,7 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		linkFlags, linkDeps, nil, overlayRes, transitiveAssets, nil, nil)
 
 	a.rJar = android.PathForModuleOut(ctx, "busybox/R.jar")
-	resourceProcessorBusyBoxGenerateBinaryR(ctx, a.rTxt, a.manifest, a.rJar, nil, true, nil)
+	resourceProcessorBusyBoxGenerateBinaryR(ctx, a.rTxt, a.manifest, a.rJar, nil, true)
 
 	aapt2ExtractExtraPackages(ctx, a.extraAaptPackagesFile, a.rJar)
 
