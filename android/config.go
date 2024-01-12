@@ -1904,10 +1904,6 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
-func (c *deviceConfig) BuildBrokenDontCheckSystemSdk() bool {
-	return c.config.productVariables.BuildBrokenDontCheckSystemSdk
-}
-
 func (c *config) BuildWarningBadOptionalUsesLibsAllowlist() []string {
 	return c.productVariables.BuildWarningBadOptionalUsesLibsAllowlist
 }

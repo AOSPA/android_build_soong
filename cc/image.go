@@ -42,17 +42,9 @@ const (
 )
 
 const (
-	// VendorVariation is the variant name used for /vendor code that does not
-	// compile against the VNDK.
-	VendorVariation = "vendor"
-
 	// VendorVariationPrefix is the variant prefix used for /vendor code that compiles
 	// against the VNDK.
 	VendorVariationPrefix = "vendor."
-
-	// ProductVariation is the variant name used for /product code that does not
-	// compile against the VNDK.
-	ProductVariation = "product"
 
 	// ProductVariationPrefix is the variant prefix used for /product code that compiles
 	// against the VNDK.
@@ -120,12 +112,12 @@ func (c *Module) HasNonSystemVariants() bool {
 
 // Returns true if the module is "product" variant. Usually these modules are installed in /product
 func (c *Module) InProduct() bool {
-	return c.Properties.ImageVariation == ProductVariation
+	return c.Properties.ImageVariationPrefix == ProductVariationPrefix
 }
 
 // Returns true if the module is "vendor" variant. Usually these modules are installed in /vendor
 func (c *Module) InVendor() bool {
-	return c.Properties.ImageVariation == VendorVariation
+	return c.Properties.ImageVariationPrefix == VendorVariationPrefix
 }
 
 func (c *Module) InRamdisk() bool {
@@ -450,8 +442,10 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		// and vendor and product variants will be created with LLNDK stubs.
 		// The LLNDK libraries need vendor variants even if there is no VNDK.
 		coreVariantNeeded = true
-		vendorVariants = append(vendorVariants, platformVndkVersion)
-		productVariants = append(productVariants, platformVndkVersion)
+		if platformVndkVersion != "" {
+			vendorVariants = append(vendorVariants, platformVndkVersion)
+			productVariants = append(productVariants, platformVndkVersion)
+		}
 		// Generate vendor variants for boardVndkVersion only if the VNDK snapshot does not
 		// provide the LLNDK stub libraries.
 		if needVndkVersionVendorVariantForLlndk {
@@ -462,7 +456,13 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 		// for system and product.
 		coreVariantNeeded = true
 		vendorVariants = append(vendorVariants, boardVndkVersion)
-		productVariants = append(productVariants, platformVndkVersion)
+		if platformVndkVersion != "" {
+			productVariants = append(productVariants, platformVndkVersion)
+		}
+	} else if boardVndkVersion == "" {
+		// If the device isn't compiling against the VNDK, we always
+		// use the core mode.
+		coreVariantNeeded = true
 	} else if m.IsSnapshotPrebuilt() {
 		// Make vendor variants only for the versions in BOARD_VNDK_VERSION and
 		// PRODUCT_EXTRA_VNDK_VERSIONS.
@@ -569,19 +569,11 @@ func MutateImage(mctx android.BaseModuleContext, m ImageMutatableModule) {
 	}
 
 	for _, variant := range android.FirstUniqueStrings(vendorVariants) {
-		if variant == "" {
-			m.AppendExtraVariant(VendorVariation)
-		} else {
-			m.AppendExtraVariant(VendorVariationPrefix + variant)
-		}
+		m.AppendExtraVariant(VendorVariationPrefix + variant)
 	}
 
 	for _, variant := range android.FirstUniqueStrings(productVariants) {
-		if variant == "" {
-			m.AppendExtraVariant(ProductVariation)
-		} else {
-			m.AppendExtraVariant(ProductVariationPrefix + variant)
-		}
+		m.AppendExtraVariant(ProductVariationPrefix + variant)
 	}
 
 	m.SetRamdiskVariantNeeded(ramdiskVariantNeeded)
@@ -699,12 +691,9 @@ func (c *Module) SetImageVariation(ctx android.BaseModuleContext, variant string
 	} else if variant == android.RecoveryVariation {
 		m.MakeAsPlatform()
 		squashRecoverySrcs(m)
-	} else if strings.HasPrefix(variant, VendorVariation) {
-		m.Properties.ImageVariation = VendorVariation
-
-		if strings.HasPrefix(variant, VendorVariationPrefix) {
-			m.Properties.VndkVersion = strings.TrimPrefix(variant, VendorVariationPrefix)
-		}
+	} else if strings.HasPrefix(variant, VendorVariationPrefix) {
+		m.Properties.ImageVariationPrefix = VendorVariationPrefix
+		m.Properties.VndkVersion = strings.TrimPrefix(variant, VendorVariationPrefix)
 		squashVendorSrcs(m)
 
 		// Makefile shouldn't know vendor modules other than BOARD_VNDK_VERSION.
@@ -714,11 +703,9 @@ func (c *Module) SetImageVariation(ctx android.BaseModuleContext, variant string
 			m.Properties.HideFromMake = true
 			m.HideFromMake()
 		}
-	} else if strings.HasPrefix(variant, ProductVariation) {
-		m.Properties.ImageVariation = ProductVariation
-		if strings.HasPrefix(variant, ProductVariationPrefix) {
-			m.Properties.VndkVersion = strings.TrimPrefix(variant, ProductVariationPrefix)
-		}
+	} else if strings.HasPrefix(variant, ProductVariationPrefix) {
+		m.Properties.ImageVariationPrefix = ProductVariationPrefix
+		m.Properties.VndkVersion = strings.TrimPrefix(variant, ProductVariationPrefix)
 		squashProductSrcs(m)
 	}
 
