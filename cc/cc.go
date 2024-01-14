@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"android/soong/testing"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -304,8 +305,8 @@ type BaseProperties struct {
 	// Set by DepsMutator.
 	AndroidMkSystemSharedLibs []string `blueprint:"mutated"`
 
-	// The name of the image this module is built for, suffixed with a '.'
-	ImageVariationPrefix string `blueprint:"mutated"`
+	// The name of the image this module is built for
+	ImageVariation string `blueprint:"mutated"`
 
 	// The VNDK version this module is built against. If empty, the module is not
 	// build against the VNDK.
@@ -550,6 +551,7 @@ type ModuleContextIntf interface {
 	isPreventInstall() bool
 	isCfiAssemblySupportEnabled() bool
 	getSharedFlags() *SharedFlags
+	notInPlatform() bool
 }
 
 type SharedFlags struct {
@@ -630,6 +632,8 @@ type linker interface {
 
 	// Get the deps that have been explicitly specified in the properties.
 	linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps
+
+	moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON)
 }
 
 // specifiedDeps is a tuple struct representing dependencies of a linked binary owned by the linker.
@@ -1796,6 +1800,10 @@ func (ctx *moduleContextImpl) isCfiAssemblySupportEnabled() bool {
 	return ctx.mod.isCfiAssemblySupportEnabled()
 }
 
+func (ctx *moduleContextImpl) notInPlatform() bool {
+	return ctx.mod.NotInPlatform()
+}
+
 func newBaseModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Module {
 	return &Module{
 		hod:      hod,
@@ -1952,6 +1960,7 @@ var (
 		"libdl_android": true,
 		"libm":          true,
 		"libdl":         true,
+		"libz":          true,
 		// art apex
 		"libandroidio":    true,
 		"libdexfile":      true,
@@ -2149,6 +2158,39 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	android.CollectDependencyAconfigFiles(ctx, &c.mergedAconfigFiles)
 
 	c.maybeInstall(ctx, apexInfo)
+
+	if c.linker != nil {
+		moduleInfoJSON := ctx.ModuleInfoJSON()
+		c.linker.moduleInfoJSON(ctx, moduleInfoJSON)
+		moduleInfoJSON.SharedLibs = c.Properties.AndroidMkSharedLibs
+		moduleInfoJSON.StaticLibs = c.Properties.AndroidMkStaticLibs
+		moduleInfoJSON.SystemSharedLibs = c.Properties.AndroidMkSystemSharedLibs
+		moduleInfoJSON.RuntimeDependencies = c.Properties.AndroidMkRuntimeLibs
+
+		moduleInfoJSON.Dependencies = append(moduleInfoJSON.Dependencies, c.Properties.AndroidMkSharedLibs...)
+		moduleInfoJSON.Dependencies = append(moduleInfoJSON.Dependencies, c.Properties.AndroidMkStaticLibs...)
+		moduleInfoJSON.Dependencies = append(moduleInfoJSON.Dependencies, c.Properties.AndroidMkHeaderLibs...)
+		moduleInfoJSON.Dependencies = append(moduleInfoJSON.Dependencies, c.Properties.AndroidMkWholeStaticLibs...)
+
+		if c.sanitize != nil && len(moduleInfoJSON.Class) > 0 &&
+			(moduleInfoJSON.Class[0] == "STATIC_LIBRARIES" || moduleInfoJSON.Class[0] == "HEADER_LIBRARIES") {
+			if Bool(c.sanitize.Properties.SanitizeMutated.Cfi) {
+				moduleInfoJSON.SubName += ".cfi"
+			}
+			if Bool(c.sanitize.Properties.SanitizeMutated.Hwaddress) {
+				moduleInfoJSON.SubName += ".hwasan"
+			}
+			if Bool(c.sanitize.Properties.SanitizeMutated.Scs) {
+				moduleInfoJSON.SubName += ".scs"
+			}
+		}
+		moduleInfoJSON.SubName += c.Properties.SubName
+
+		if c.Properties.IsSdkVariant && c.Properties.SdkAndPlatformVariantVisibleToMake {
+			moduleInfoJSON.Uninstallable = true
+		}
+
+	}
 }
 
 func (c *Module) maybeUnhideFromMake() {
@@ -2396,9 +2438,9 @@ func GetSnapshot(c LinkableInterface, snapshotInfo **SnapshotInfo, actx android.
 		// Only retrieve the snapshot on demand in order to avoid circular dependencies
 		// between the modules in the snapshot and the snapshot itself.
 		var snapshotModule []blueprint.Module
-		if c.InVendor() && c.VndkVersion() == actx.DeviceConfig().VndkVersion() {
+		if c.InVendor() && c.VndkVersion() == actx.DeviceConfig().VndkVersion() && actx.OtherModuleExists("vendor_snapshot") {
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "vendor_snapshot")
-		} else if recoverySnapshotVersion := actx.DeviceConfig().RecoverySnapshotVersion(); recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" && c.InRecovery() {
+		} else if recoverySnapshotVersion := actx.DeviceConfig().RecoverySnapshotVersion(); recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" && c.InRecovery() && actx.OtherModuleExists("recovery_snapshot") {
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "recovery_snapshot")
 		} else if ramdiskSnapshotVersion := actx.DeviceConfig().RamdiskSnapshotVersion(); ramdiskSnapshotVersion != "current" && ramdiskSnapshotVersion != "" && c.InRamdisk() {
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "ramdisk_snapshot")
