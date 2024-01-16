@@ -18,7 +18,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -91,14 +90,6 @@ var commands = []command{
 		config:      buildActionConfig,
 		stdio:       stdio,
 		run:         runMake,
-	}, {
-		flag:        "--finalize-bazel-metrics",
-		description: "finalize b metrics and upload",
-		config:      build.UploadOnlyConfig,
-		stdio:       stdio,
-		// Finalize-bazel-metrics mode updates metrics files and calls the metrics
-		// uploader. This marks the end of a b invocation.
-		run: finalizeBazelMetrics,
 	},
 }
 
@@ -190,26 +181,25 @@ func main() {
 		CriticalPath: criticalPath,
 	}}
 
-	config := c.config(buildCtx, args...)
-	config.SetLogsPrefix(c.logsPrefix)
+	freshConfig := func() build.Config {
+		config := c.config(buildCtx, args...)
+		config.SetLogsPrefix(c.logsPrefix)
+		return config
+	}
+	config := freshConfig()
 	logsDir := config.LogsDir()
 	buildStarted = config.BuildStartedTimeOrDefault(buildStarted)
 
 	buildErrorFile := filepath.Join(logsDir, c.logsPrefix+"build_error")
 	soongMetricsFile := filepath.Join(logsDir, c.logsPrefix+"soong_metrics")
 	rbeMetricsFile := filepath.Join(logsDir, c.logsPrefix+"rbe_metrics.pb")
-	bp2buildMetricsFile := filepath.Join(logsDir, c.logsPrefix+"bp2build_metrics.pb")
-	bazelMetricsFile := filepath.Join(logsDir, c.logsPrefix+"bazel_metrics.pb")
 	soongBuildMetricsFile := filepath.Join(logsDir, c.logsPrefix+"soong_build_metrics.pb")
 
 	metricsFiles := []string{
-		buildErrorFile,           // build error strings
-		rbeMetricsFile,           // high level metrics related to remote build execution.
-		bp2buildMetricsFile,      // high level metrics related to bp2build.
-		soongMetricsFile,         // high level metrics related to this build system.
-		bazelMetricsFile,         // high level metrics related to bazel execution
-		soongBuildMetricsFile,    // high level metrics related to soong build(except bp2build)
-		config.BazelMetricsDir(), // directory that contains a set of bazel metrics.
+		buildErrorFile,        // build error strings
+		rbeMetricsFile,        // high level metrics related to remote build execution.
+		soongMetricsFile,      // high level metrics related to this build system.
+		soongBuildMetricsFile, // high level metrics related to soong build
 	}
 
 	os.MkdirAll(logsDir, 0777)
@@ -221,6 +211,15 @@ func main() {
 	log.Verbose("Command Line: ")
 	for i, arg := range os.Args {
 		log.Verbosef("  [%d] %s", i, arg)
+	}
+
+	// We need to call preProductConfigSetup before we can do product config, which is how we get
+	// PRODUCT_CONFIG_RELEASE_MAPS set for the final product config for the build.
+	// When product config uses a declarative language, we won't need to rerun product config.
+	preProductConfigSetup(buildCtx, config)
+	if build.SetProductReleaseConfigMaps(buildCtx, config) {
+		log.Verbose("Product release config maps found\n")
+		config = freshConfig()
 	}
 
 	defer func() {
@@ -235,7 +234,9 @@ func main() {
 
 }
 
-func logAndSymlinkSetup(buildCtx build.Context, config build.Config) {
+// This function must not modify config, since product config may cause us to recreate the config,
+// and we won't call this function a second time.
+func preProductConfigSetup(buildCtx build.Context, config build.Config) {
 	log := buildCtx.ContextImpl.Logger
 	logsPrefix := config.GetLogsPrefix()
 	build.SetupOutDir(buildCtx, config)
@@ -247,10 +248,9 @@ func logAndSymlinkSetup(buildCtx build.Context, config build.Config) {
 	soongMetricsFile := filepath.Join(logsDir, logsPrefix+"soong_metrics")
 	bp2buildMetricsFile := filepath.Join(logsDir, logsPrefix+"bp2build_metrics.pb")
 	soongBuildMetricsFile := filepath.Join(logsDir, logsPrefix+"soong_build_metrics.pb")
-	bazelMetricsFile := filepath.Join(logsDir, logsPrefix+"bazel_metrics.pb")
 
 	//Delete the stale metrics files
-	staleFileSlice := []string{buildErrorFile, rbeMetricsFile, soongMetricsFile, bp2buildMetricsFile, soongBuildMetricsFile, bazelMetricsFile}
+	staleFileSlice := []string{buildErrorFile, rbeMetricsFile, soongMetricsFile, bp2buildMetricsFile, soongBuildMetricsFile}
 	if err := deleteStaleMetrics(staleFileSlice); err != nil {
 		log.Fatalln(err)
 	}
@@ -289,40 +289,13 @@ func logAndSymlinkSetup(buildCtx build.Context, config build.Config) {
 		}
 	}
 
-	removeBadTargetRename(buildCtx, config)
-
 	// Create a source finder.
 	f := build.NewSourceFinder(buildCtx, config)
 	defer f.Shutdown()
 	build.FindSources(buildCtx, config, f)
 }
 
-func removeBadTargetRename(ctx build.Context, config build.Config) {
-	log := ctx.ContextImpl.Logger
-	// find bad paths
-	m, err := filepath.Glob(filepath.Join(config.OutDir(), "bazel", "output", "execroot", "__main__", "bazel-out", "mixed_builds_product-*", "bin", "tools", "metalava", "metalava"))
-	if err != nil {
-		log.Fatalf("Glob for invalid file failed %s", err)
-	}
-	for _, f := range m {
-		info, err := os.Stat(f)
-		if err != nil {
-			log.Fatalf("Stat of invalid file %q failed %s", f, err)
-		}
-		// if it's a directory, leave it, but remove the files
-		if !info.IsDir() {
-			err = os.Remove(f)
-			if err != nil {
-				log.Fatalf("Remove of invalid file %q failed %s", f, err)
-			} else {
-				log.Verbosef("Removed %q", f)
-			}
-		}
-	}
-}
-
 func dumpVar(ctx build.Context, config build.Config, args []string) {
-	logAndSymlinkSetup(ctx, config)
 	flags := flag.NewFlagSet("dumpvar", flag.ExitOnError)
 	flags.SetOutput(ctx.Writer)
 
@@ -375,7 +348,6 @@ func dumpVar(ctx build.Context, config build.Config, args []string) {
 }
 
 func dumpVars(ctx build.Context, config build.Config, args []string) {
-	logAndSymlinkSetup(ctx, config)
 
 	flags := flag.NewFlagSet("dumpvars", flag.ExitOnError)
 	flags.SetOutput(ctx.Writer)
@@ -555,7 +527,6 @@ func buildActionConfig(ctx build.Context, args ...string) build.Config {
 }
 
 func runMake(ctx build.Context, config build.Config, _ []string) {
-	logAndSymlinkSetup(ctx, config)
 	logsDir := config.LogsDir()
 	if config.IsVerbose() {
 		writer := ctx.Writer
@@ -606,81 +577,6 @@ func getCommand(args []string) (*command, []string, error) {
 	return nil, nil, fmt.Errorf("Command not found: %q\nDid you mean one of these: %q", args[1], listFlags())
 }
 
-// For Bazel support, this moves files and directories from e.g. out/dist/$f to DIST_DIR/$f if necessary.
-func populateExternalDistDir(ctx build.Context, config build.Config) {
-	// Make sure that internalDistDirPath and externalDistDirPath are both absolute paths, so we can compare them
-	var err error
-	var internalDistDirPath string
-	var externalDistDirPath string
-	if internalDistDirPath, err = filepath.Abs(config.DistDir()); err != nil {
-		ctx.Fatalf("Unable to find absolute path of %s: %s", internalDistDirPath, err)
-	}
-	if externalDistDirPath, err = filepath.Abs(config.RealDistDir()); err != nil {
-		ctx.Fatalf("Unable to find absolute path of %s: %s", externalDistDirPath, err)
-	}
-	if externalDistDirPath == internalDistDirPath {
-		return
-	}
-
-	// Make sure the internal DIST_DIR actually exists before trying to read from it
-	if _, err = os.Stat(internalDistDirPath); os.IsNotExist(err) {
-		ctx.Println("Skipping Bazel dist dir migration - nothing to do!")
-		return
-	}
-
-	// Make sure the external DIST_DIR actually exists before trying to write to it
-	if err = os.MkdirAll(externalDistDirPath, 0755); err != nil {
-		ctx.Fatalf("Unable to make directory %s: %s", externalDistDirPath, err)
-	}
-
-	ctx.Println("Populating external DIST_DIR...")
-
-	populateExternalDistDirHelper(ctx, config, internalDistDirPath, externalDistDirPath)
-}
-
-func populateExternalDistDirHelper(ctx build.Context, config build.Config, internalDistDirPath string, externalDistDirPath string) {
-	files, err := ioutil.ReadDir(internalDistDirPath)
-	if err != nil {
-		ctx.Fatalf("Can't read internal distdir %s: %s", internalDistDirPath, err)
-	}
-	for _, f := range files {
-		internalFilePath := filepath.Join(internalDistDirPath, f.Name())
-		externalFilePath := filepath.Join(externalDistDirPath, f.Name())
-
-		if f.IsDir() {
-			// Moving a directory - check if there is an existing directory to merge with
-			externalLstat, err := os.Lstat(externalFilePath)
-			if err != nil {
-				if !os.IsNotExist(err) {
-					ctx.Fatalf("Can't lstat external %s: %s", externalDistDirPath, err)
-				}
-				// Otherwise, if the error was os.IsNotExist, that's fine and we fall through to the rename at the bottom
-			} else {
-				if externalLstat.IsDir() {
-					// Existing dir - try to merge the directories?
-					populateExternalDistDirHelper(ctx, config, internalFilePath, externalFilePath)
-					continue
-				} else {
-					// Existing file being replaced with a directory. Delete the existing file...
-					if err := os.RemoveAll(externalFilePath); err != nil {
-						ctx.Fatalf("Unable to remove existing %s: %s", externalFilePath, err)
-					}
-				}
-			}
-		} else {
-			// Moving a file (not a dir) - delete any existing file or directory
-			if err := os.RemoveAll(externalFilePath); err != nil {
-				ctx.Fatalf("Unable to remove existing %s: %s", externalFilePath, err)
-			}
-		}
-
-		// The actual move - do a rename instead of a copy in order to save disk space.
-		if err := os.Rename(internalFilePath, externalFilePath); err != nil {
-			ctx.Fatalf("Unable to rename %s -> %s due to error %s", internalFilePath, externalFilePath, err)
-		}
-	}
-}
-
 func setMaxFiles(ctx build.Context) {
 	var limits syscall.Rlimit
 
@@ -691,38 +587,15 @@ func setMaxFiles(ctx build.Context) {
 	}
 
 	ctx.Verbosef("Current file limits: %d soft, %d hard", limits.Cur, limits.Max)
-	if limits.Cur == limits.Max {
-		return
-	}
+
+	// Go 1.21 modifies the file limit but restores the original when
+	// execing subprocesses if it hasn't be overridden.  Call Setrlimit
+	// here even if it doesn't appear to be necessary so that the
+	// syscall package considers it set.
 
 	limits.Cur = limits.Max
 	err = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &limits)
 	if err != nil {
 		ctx.Println("Failed to increase file limit:", err)
-	}
-}
-
-func finalizeBazelMetrics(ctx build.Context, config build.Config, args []string) {
-	updateTotalRealTime(ctx, config, args)
-
-	logsDir := config.LogsDir()
-	logsPrefix := config.GetLogsPrefix()
-	bazelMetricsFile := filepath.Join(logsDir, logsPrefix+"bazel_metrics.pb")
-	bazelProfileFile := filepath.Join(logsDir, logsPrefix+"analyzed_bazel_profile.txt")
-	build.ProcessBazelMetrics(bazelProfileFile, bazelMetricsFile, ctx, config)
-}
-func updateTotalRealTime(ctx build.Context, config build.Config, args []string) {
-	soongMetricsFile := filepath.Join(config.LogsDir(), "soong_metrics")
-
-	//read file into proto
-	data, err := os.ReadFile(soongMetricsFile)
-	if err != nil {
-		ctx.Fatal(err)
-	}
-	met := ctx.ContextImpl.Metrics
-
-	err = met.UpdateTotalRealTimeAndNonZeroExit(data, config.BazelExitCode())
-	if err != nil {
-		ctx.Fatal(err)
 	}
 }

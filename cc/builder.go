@@ -535,7 +535,7 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 		toolingCppflags += " ${config.NoOverride64GlobalCflags}"
 	}
 
-	modulePath := android.PathForModuleSrc(ctx).String()
+	modulePath := ctx.ModuleDir()
 	if android.IsThirdPartyPath(modulePath) {
 		cflags += " ${config.NoOverrideExternalGlobalCflags}"
 		toolingCflags += " ${config.NoOverrideExternalGlobalCflags}"
@@ -688,16 +688,11 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 			tidyCmd := "${config.ClangBin}/clang-tidy"
 
 			rule := clangTidy
-			reducedCFlags := moduleFlags
 			if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_CLANG_TIDY") {
 				rule = clangTidyRE
-				// b/248371171, work around RBE input processor problem
-				// some cflags rejected by input processor, but usually
-				// do not affect included files or clang-tidy
-				reducedCFlags = config.TidyReduceCFlags(reducedCFlags)
 			}
 
-			sharedCFlags := shareFlags("cFlags", reducedCFlags)
+			sharedCFlags := shareFlags("cFlags", moduleFlags)
 			srcRelPath := srcFile.Rel()
 
 			// Add the .tidy rule
@@ -892,7 +887,8 @@ func transformObjToDynamicBinary(ctx android.ModuleContext,
 // into a single .ldump sAbi dump file
 func transformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Paths, soFile android.Path,
 	baseName, exportedHeaderFlags string, symbolFile android.OptionalPath,
-	excludedSymbolVersions, excludedSymbolTags []string) android.OptionalPath {
+	excludedSymbolVersions, excludedSymbolTags []string,
+	api string) android.OptionalPath {
 
 	outputFile := android.PathForModuleOut(ctx, baseName+".lsdump")
 
@@ -909,6 +905,11 @@ func transformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Path
 	for _, tag := range excludedSymbolTags {
 		symbolFilterStr += " --exclude-symbol-tag " + tag
 	}
+	apiLevelsJson := android.GetApiLevelsJson(ctx)
+	implicits = append(implicits, apiLevelsJson)
+	symbolFilterStr += " --api-map " + apiLevelsJson.String()
+	symbolFilterStr += " --api " + api
+
 	rule := sAbiLink
 	args := map[string]string{
 		"symbolFilter":        symbolFilterStr,
@@ -1088,6 +1089,9 @@ func transformStrip(ctx android.ModuleContext, inputFile android.Path,
 	}
 	if flags.StripKeepSymbolsAndDebugFrame {
 		args += " --keep-symbols-and-debug-frame"
+	}
+	if ctx.Windows() {
+		args += " --windows"
 	}
 
 	ctx.Build(pctx, android.BuildParams{

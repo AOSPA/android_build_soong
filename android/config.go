@@ -84,22 +84,14 @@ type CmdArgs struct {
 	SoongOutDir    string
 	SoongVariables string
 
-	SymlinkForestMarker string
-	Bp2buildMarker      string
-	BazelQueryViewDir   string
-	ModuleGraphFile     string
-	ModuleActionsFile   string
-	DocFile             string
+	BazelQueryViewDir string
+	ModuleGraphFile   string
+	ModuleActionsFile string
+	DocFile           string
 
 	MultitreeBuild bool
 
-	BazelMode                bool
-	BazelModeStaging         bool
-	BazelForceEnabledModules string
-
-	UseBazelProxy bool
-
-	BuildFromTextStub bool
+	BuildFromSourceStub bool
 
 	EnsureAllowlistIntegrity bool
 }
@@ -108,12 +100,6 @@ type CmdArgs struct {
 const (
 	// Don't use bazel at all during module analysis.
 	AnalysisNoBazel SoongBuildMode = iota
-
-	// Symlink fores mode: merge two directory trees into a symlink forest
-	SymlinkForest
-
-	// Bp2build mode: Generate BUILD files from blueprint files and exit.
-	Bp2build
 
 	// Generate BUILD files which faithfully represent the dependency graph of
 	// blueprint modules. Individual BUILD targets will not, however, faitfhully
@@ -125,15 +111,6 @@ const (
 
 	// Generate a documentation file for module type definitions and exit.
 	GenerateDocFile
-
-	// Use bazel during analysis of a few allowlisted build modules. The allowlist
-	// is considered "staging, as these are modules being prepared to be released
-	// into prod mode shortly after.
-	BazelStagingMode
-
-	// Use bazel during analysis of build modules from an allowlist carefully
-	// curated by the build team to be proven stable.
-	BazelProdMode
 )
 
 // SoongOutDir returns the build output directory for the configuration.
@@ -167,8 +144,7 @@ func (c Config) RunningInsideUnitTest() bool {
 }
 
 // DisableHiddenApiChecks returns true if hiddenapi checks have been disabled.
-// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation
-// Hiddenapi checks are also disabled when RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE is set to false
+// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation,
 // but can be enabled by setting environment variable ENABLE_HIDDENAPI_FLAGS=true.
 // For other target variants hiddenapi check are enabled by default but can be disabled by
 // setting environment variable UNSAFE_DISABLE_HIDDENAPI_FLAGS=true.
@@ -177,8 +153,16 @@ func (c Config) RunningInsideUnitTest() bool {
 func (c Config) DisableHiddenApiChecks() bool {
 	return !c.IsEnvTrue("ENABLE_HIDDENAPI_FLAGS") &&
 		(c.IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") ||
-			Bool(c.productVariables.Eng) ||
-			!c.ReleaseDefaultModuleBuildFromSource())
+			Bool(c.productVariables.Eng))
+}
+
+// DisableVerifyOverlaps returns true if verify_overlaps is skipped.
+// Mismatch in version of apexes and module SDK is required for mainline prebuilts to work in
+// trunk stable.
+// Thus, verify_overlaps is disabled when RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE is set to false.
+// TODO(b/308174018): Re-enable verify_overlaps for both builr from source/mainline prebuilts.
+func (c Config) DisableVerifyOverlaps() bool {
+	return c.IsEnvTrue("DISABLE_VERIFY_OVERLAPS") || !c.ReleaseDefaultModuleBuildFromSource()
 }
 
 // MaxPageSizeSupported returns the max page size supported by the device. This
@@ -188,10 +172,12 @@ func (c Config) MaxPageSizeSupported() string {
 	return String(c.config.productVariables.DeviceMaxPageSizeSupported)
 }
 
-// PageSizeAgnostic returns true when AOSP is page size agnostic,
-// othersise it returns false.
-func (c Config) PageSizeAgnostic() bool {
-	return Bool(c.config.productVariables.DevicePageSizeAgnostic)
+// NoBionicPageSizeMacro returns true when AOSP is page size agnostic.
+// This means that the bionic's macro PAGE_SIZE won't be defined.
+// Returns false when AOSP is NOT page size agnostic.
+// This means that bionic's macro PAGE_SIZE is defined.
+func (c Config) NoBionicPageSizeMacro() bool {
+	return Bool(c.config.productVariables.DeviceNoBionicPageSizeMacro)
 }
 
 // The release version passed to aconfig, derived from RELEASE_VERSION
@@ -201,22 +187,7 @@ func (c Config) ReleaseVersion() string {
 
 // The aconfig value set passed to aconfig, derived from RELEASE_VERSION
 func (c Config) ReleaseAconfigValueSets() []string {
-	// This logic to handle both Soong module name and bazel target is temporary in order to
-	// provide backward compatibility where aosp and internal both have the release
-	// aconfig value set but can't be updated at the same time to use bazel target
-	var valueSets []string
-	for _, valueSet := range c.config.productVariables.ReleaseAconfigValueSets {
-		value := strings.Split(valueSet, ":")
-		valueLen := len(value)
-		if valueLen > 2 {
-			// This shouldn't happen as this should be either a module name or a bazel target path.
-			panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s", valueSet))
-		}
-		if valueLen > 0 {
-			valueSets = append(valueSets, value[valueLen-1])
-		}
-	}
-	return valueSets
+	return c.config.productVariables.ReleaseAconfigValueSets
 }
 
 // The flag default permission value passed to aconfig
@@ -230,6 +201,11 @@ func (c Config) ReleaseAconfigFlagDefaultPermission() string {
 func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 	return c.config.productVariables.ReleaseDefaultModuleBuildFromSource == nil ||
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
+}
+
+// Enables ABI monitoring of NDK libraries
+func (c Config) ReleaseNdkAbiMonitored() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_NDK_ABI_MONITORED")
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -250,10 +226,6 @@ type config struct {
 
 	// Only available on configs created by TestConfig
 	TestProductVariables *ProductVariables
-
-	// A specialized context object for Bazel/Soong mixed builds and migration
-	// purposes.
-	BazelContext BazelContext
 
 	ProductVariablesFileName string
 
@@ -296,9 +268,7 @@ type config struct {
 	fs         pathtools.FileSystem
 	mockBpList string
 
-	BuildMode                      SoongBuildMode
-	Bp2buildPackageConfig          Bp2BuildConversionAllowlist
-	Bp2buildSoongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions
+	BuildMode SoongBuildMode
 
 	// If MultitreeBuild is true then this is one inner tree of a multitree
 	// build directed by the multitree orchestrator.
@@ -314,32 +284,9 @@ type config struct {
 
 	OncePer
 
-	// These fields are only used for metrics collection. A module should be added
-	// to these maps only if its implementation supports Bazel handling in mixed
-	// builds. A module being in the "enabled" list indicates that there is a
-	// variant of that module for which bazel-handling actually took place.
-	// A module being in the "disabled" list indicates that there is a variant of
-	// that module for which bazel-handling was denied.
-	mixedBuildsLock           sync.Mutex
-	mixedBuildEnabledModules  map[string]struct{}
-	mixedBuildDisabledModules map[string]struct{}
-
-	// These are modules to be built with Bazel beyond the allowlisted/build-mode
-	// specified modules. They are passed via the command-line flag
-	// "--bazel-force-enabled-modules"
-	bazelForceEnabledModules map[string]struct{}
-
-	// Names of Bazel targets as defined by BUILD files in the source tree,
-	// keyed by the directory in which they are defined.
-	bazelTargetsByDir map[string][]string
-
-	// If true, for any requests to Bazel, communicate with a Bazel proxy using
-	// unix sockets, instead of spawning Bazel as a subprocess.
-	UseBazelProxy bool
-
-	// If buildFromTextStub is true then the Java API stubs are
-	// built from the signature text files, not the source Java files.
-	buildFromTextStub bool
+	// If buildFromSourceStub is true then the Java API stubs are
+	// built from the source Java files, not the signature text files.
+	buildFromSourceStub bool
 
 	// If ensureAllowlistIntegrity is true, then the presence of any allowlisted
 	// modules that aren't mixed-built for at least one variant will cause a build
@@ -547,23 +494,17 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		runGoTests:        cmdArgs.RunGoTests,
 		multilibConflicts: make(map[ArchType]bool),
 
-		moduleListFile:            cmdArgs.ModuleListFile,
-		fs:                        pathtools.NewOsFs(absSrcDir),
-		mixedBuildDisabledModules: make(map[string]struct{}),
-		mixedBuildEnabledModules:  make(map[string]struct{}),
-		bazelForceEnabledModules:  make(map[string]struct{}),
+		moduleListFile: cmdArgs.ModuleListFile,
+		fs:             pathtools.NewOsFs(absSrcDir),
 
 		MultitreeBuild: cmdArgs.MultitreeBuild,
-		UseBazelProxy:  cmdArgs.UseBazelProxy,
 
-		buildFromTextStub: cmdArgs.BuildFromTextStub,
+		buildFromSourceStub: cmdArgs.BuildFromSourceStub,
 	}
 
 	config.deviceConfig = &deviceConfig{
 		config: config,
 	}
-
-	config.productVariables.Build_from_text_stub = boolPtr(config.BuildFromTextStub())
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
@@ -649,28 +590,9 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 			config.BuildMode = mode
 		}
 	}
-	setBazelMode := func(arg bool, argName string, mode SoongBuildMode) {
-		if arg {
-			if config.BuildMode != AnalysisNoBazel {
-				fmt.Fprintf(os.Stderr, "buildMode is already set, illegal argument: %s", argName)
-				os.Exit(1)
-			}
-			config.BuildMode = mode
-		}
-	}
-	setBuildMode(cmdArgs.SymlinkForestMarker, SymlinkForest)
-	setBuildMode(cmdArgs.Bp2buildMarker, Bp2build)
 	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
-	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
-	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
-
-	for _, module := range getForceEnabledModulesFromFlag(cmdArgs.BazelForceEnabledModules) {
-		config.bazelForceEnabledModules[module] = struct{}{}
-	}
-	config.BazelContext, err = NewBazelContext(config)
-	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
 
 	// TODO(b/276958307): Replace the hardcoded list to a sdk_library local prop.
 	config.apiLibraries = map[string]struct{}{
@@ -689,7 +611,9 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-location":                {},
 		"framework-media":                   {},
 		"framework-mediaprovider":           {},
+		"framework-nfc":                     {},
 		"framework-ondevicepersonalization": {},
+		"framework-pdf":                     {},
 		"framework-permission":              {},
 		"framework-permission-s":            {},
 		"framework-scheduling":              {},
@@ -703,14 +627,9 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"i18n.module.public.api":            {},
 	}
 
-	return Config{config}, err
-}
+	config.productVariables.Build_from_text_stub = boolPtr(config.BuildFromTextStub())
 
-func getForceEnabledModulesFromFlag(forceEnabledFlag string) []string {
-	if forceEnabledFlag == "" {
-		return []string{}
-	}
-	return strings.Split(forceEnabledFlag, ",")
+	return Config{config}, err
 }
 
 // mockFileSystem replaces all reads with accesses to the provided map of
@@ -741,41 +660,6 @@ func (c *config) mockFileSystem(bp string, fs map[string][]byte) {
 
 	c.fs = pathtools.MockFs(mockFS)
 	c.mockBpList = blueprint.MockModuleListFile
-}
-
-// TODO(b/265062549): Add a field to our collected (and uploaded) metrics which
-// describes a reason that we fell back to non-mixed builds.
-// Returns true if "Bazel builds" is enabled. In this mode, part of build
-// analysis is handled by Bazel.
-func (c *config) IsMixedBuildsEnabled() bool {
-	globalMixedBuildsSupport := c.Once(OnceKey{"globalMixedBuildsSupport"}, func() interface{} {
-		if c.productVariables.DeviceArch != nil && *c.productVariables.DeviceArch == "riscv64" {
-			return false
-		}
-		// Disable Bazel when Kythe is running
-		if c.EmitXrefRules() {
-			return false
-		}
-		if c.IsEnvTrue("GLOBAL_THINLTO") {
-			return false
-		}
-		if len(c.productVariables.SanitizeHost) > 0 {
-			return false
-		}
-		if len(c.productVariables.SanitizeDevice) > 0 {
-			return false
-		}
-		if len(c.productVariables.SanitizeDeviceDiag) > 0 {
-			return false
-		}
-		if len(c.productVariables.SanitizeDeviceArch) > 0 {
-			return false
-		}
-		return true
-	}).(bool)
-
-	bazelModeEnabled := c.BuildMode == BazelProdMode || c.BuildMode == BazelStagingMode
-	return globalMixedBuildsSupport && bazelModeEnabled
 }
 
 func (c *config) SetAllowMissingDependencies() {
@@ -1053,8 +937,6 @@ func (c *config) AllSupportedApiLevels() []ApiLevel {
 // DefaultAppTargetSdk returns the API level that platform apps are targeting.
 // This converts a codename to the exact ApiLevel it represents.
 func (c *config) DefaultAppTargetSdk(ctx EarlyModuleContext) ApiLevel {
-	// This logic is replicated in starlark, if changing logic here update starlark code too
-	// https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/common/api.bzl;l=72;drc=231c7e8c8038fd478a79eb68aa5b9f5c64e0e061
 	if Bool(c.productVariables.Platform_sdk_final) {
 		return c.PlatformSdkVersion()
 	}
@@ -1412,12 +1294,12 @@ func (c *config) PrebuiltHiddenApiDir(_ PathContext) string {
 	return String(c.productVariables.PrebuiltHiddenApiDir)
 }
 
-func (c *config) BazelModulesForceEnabledByFlag() map[string]struct{} {
-	return c.bazelForceEnabledModules
-}
-
 func (c *config) IsVndkDeprecated() bool {
 	return !Bool(c.productVariables.KeepVndk)
+}
+
+func (c *config) VendorApiLevel() string {
+	return String(c.productVariables.VendorApiLevel)
 }
 
 func (c *deviceConfig) Arches() []Arch {
@@ -2076,38 +1958,6 @@ func (c *config) UseHostMusl() bool {
 	return Bool(c.productVariables.HostMusl)
 }
 
-func (c *config) GetMixedBuildsEnabledModules() map[string]struct{} {
-	return c.mixedBuildEnabledModules
-}
-
-func (c *config) GetMixedBuildsDisabledModules() map[string]struct{} {
-	return c.mixedBuildDisabledModules
-}
-
-func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
-	moduleName := ctx.Module().Name()
-	c.mixedBuildsLock.Lock()
-	defer c.mixedBuildsLock.Unlock()
-	if useBazel {
-		c.mixedBuildEnabledModules[moduleName] = struct{}{}
-	} else {
-		c.mixedBuildDisabledModules[moduleName] = struct{}{}
-	}
-}
-
-func (c *config) HasBazelBuildTargetInSource(dir string, target string) bool {
-	for _, existingTarget := range c.bazelTargetsByDir[dir] {
-		if target == existingTarget {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *config) SetBazelBuildFileTargets(bazelTargetsByDir map[string][]string) {
-	c.bazelTargetsByDir = bazelTargetsByDir
-}
-
 // ApiSurfaces directory returns the source path inside the api_surfaces repo
 // (relative to workspace root).
 func (c *config) ApiSurfacesDir(s ApiSurface, version string) string {
@@ -2123,22 +1973,22 @@ func (c *config) JavaCoverageEnabled() bool {
 	return c.IsEnvTrue("EMMA_INSTRUMENT") || c.IsEnvTrue("EMMA_INSTRUMENT_STATIC") || c.IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK")
 }
 
+func (c *deviceConfig) BuildFromSourceStub() bool {
+	return Bool(c.config.productVariables.BuildFromSourceStub)
+}
+
 func (c *config) BuildFromTextStub() bool {
 	// TODO: b/302320354 - Remove the coverage build specific logic once the
 	// robust solution for handling native properties in from-text stub build
 	// is implemented.
-	return c.buildFromTextStub && !c.JavaCoverageEnabled()
+	return !c.buildFromSourceStub &&
+		!c.JavaCoverageEnabled() &&
+		!c.deviceConfig.BuildFromSourceStub()
 }
 
 func (c *config) SetBuildFromTextStub(b bool) {
-	c.buildFromTextStub = b
+	c.buildFromSourceStub = !b
 	c.productVariables.Build_from_text_stub = boolPtr(b)
-}
-
-func (c *config) AddForceEnabledModules(forceEnabled []string) {
-	for _, forceEnabledModule := range forceEnabled {
-		c.bazelForceEnabledModules[forceEnabledModule] = struct{}{}
-	}
 }
 
 func (c *config) SetApiLibraries(libs []string) {
@@ -2150,11 +2000,6 @@ func (c *config) SetApiLibraries(libs []string) {
 
 func (c *config) GetApiLibraries() map[string]struct{} {
 	return c.apiLibraries
-}
-
-// Bp2buildMode indicates whether the config is for bp2build mode of Soong
-func (c *config) Bp2buildMode() bool {
-	return c.BuildMode == Bp2build
 }
 
 func (c *deviceConfig) CheckVendorSeappViolations() bool {
@@ -2171,4 +2016,47 @@ func (c *deviceConfig) ReleaseExposeFlaggedApi() bool {
 
 func (c *deviceConfig) HideFlaggedApis() bool {
 	return c.NextReleaseHideFlaggedApi() && !c.ReleaseExposeFlaggedApi()
+}
+
+func (c *config) GetBuildFlag(name string) (string, bool) {
+	val, ok := c.productVariables.BuildFlags[name]
+	return val, ok
+}
+
+var (
+	mainlineApexContributionBuildFlags = []string{
+		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES",
+		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH",
+		"RELEASE_APEX_CONTRIBUTIONS_ART",
+		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH",
+		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE",
+		"RELEASE_APEX_CONTRIBUTIONS_CONNECTIVITY",
+		"RELEASE_APEX_CONTRIBUTIONS_CONSCRYPT",
+		"RELEASE_APEX_CONTRIBUTIONS_CRASHRECOVERY",
+		"RELEASE_APEX_CONTRIBUTIONS_DEVICELOCK",
+		"RELEASE_APEX_CONTRIBUTIONS_HEALTHFITNESS",
+		"RELEASE_APEX_CONTRIBUTIONS_IPSEC",
+		"RELEASE_APEX_CONTRIBUTIONS_MEDIA",
+		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER",
+		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION",
+		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION",
+		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING",
+		"RELEASE_APEX_CONTRIBUTIONS_SCHEDULING",
+		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
+		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
+		"RELEASE_APEX_CONTRIBUTIONS_UWB",
+		"RELEASE_APEX_CONTRIBUTIONS_WIFI",
+	}
+)
+
+// Returns the list of _selected_ apex_contributions
+// Each mainline module will have one entry in the list
+func (c *config) AllApexContributions() []string {
+	ret := []string{}
+	for _, f := range mainlineApexContributionBuildFlags {
+		if val, exists := c.GetBuildFlag(f); exists && val != "" {
+			ret = append(ret, val)
+		}
+	}
+	return ret
 }

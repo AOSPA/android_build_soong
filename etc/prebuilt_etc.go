@@ -31,16 +31,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"reflect"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
-	"android/soong/bazel"
-	"android/soong/bazel/cquery"
 	"android/soong/snapshot"
-	"android/soong/ui/metrics/bp2build_metrics_proto"
 )
 
 var pctx = android.NewPackageContext("android/soong/etc")
@@ -65,6 +61,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
 	ctx.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
 	ctx.RegisterModuleType("prebuilt_rfsa", PrebuiltRFSAFactory)
+	ctx.RegisterModuleType("prebuilt_renderscript_bitcode", PrebuiltRenderScriptBitcodeFactory)
 
 	ctx.RegisterModuleType("prebuilt_defaults", defaultsFactory)
 
@@ -138,7 +135,6 @@ type PrebuiltEtcModule interface {
 type PrebuiltEtc struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
-	android.BazelModuleBase
 
 	snapshot.VendorSnapshotModuleInterface
 	snapshot.RecoverySnapshotModuleInterface
@@ -149,12 +145,16 @@ type PrebuiltEtc struct {
 	sourceFilePath android.Path
 	outputFilePath android.OutputPath
 	// The base install location, e.g. "etc" for prebuilt_etc, "usr/share" for prebuilt_usr_share.
-	installDirBase string
+	installDirBase               string
+	installDirBase64             string
+	installAvoidMultilibConflict bool
 	// The base install location when soc_specific property is set to true, e.g. "firmware" for
 	// prebuilt_firmware.
 	socInstallDirBase      string
 	installDirPath         android.InstallPath
 	additionalDependencies *android.Paths
+
+	makeClass string
 }
 
 type Defaults struct {
@@ -345,9 +345,16 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// If soc install dir was specified and SOC specific is set, set the installDirPath to the
 	// specified socInstallDirBase.
 	installBaseDir := p.installDirBase
+	if p.Target().Arch.ArchType.Multilib == "lib64" && p.installDirBase64 != "" {
+		installBaseDir = p.installDirBase64
+	}
 	if p.SocSpecific() && p.socInstallDirBase != "" {
 		installBaseDir = p.socInstallDirBase
 	}
+	if p.installAvoidMultilibConflict && !ctx.Host() && ctx.Config().HasMultilibConflict(ctx.Arch().ArchType) {
+		installBaseDir = filepath.Join(installBaseDir, ctx.Arch().ArchType.String())
+	}
+
 	p.installDirPath = android.PathForModuleInstall(ctx, installBaseDir, p.SubDir())
 
 	// Call InstallFile even when uninstallable to make the module included in the package
@@ -404,8 +411,14 @@ func (p *PrebuiltEtc) AndroidMkEntries() []android.AndroidMkEntries {
 	if p.InRecovery() && !p.onlyInRecovery() {
 		nameSuffix = ".recovery"
 	}
+
+	class := p.makeClass
+	if class == "" {
+		class = "ETC"
+	}
+
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
-		Class:      "ETC",
+		Class:      class,
 		SubName:    nameSuffix,
 		OutputFile: android.OptionalPathForPath(p.outputFilePath),
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
@@ -444,7 +457,6 @@ func PrebuiltEtcFactory() android.Module {
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	android.InitDefaultableModule(module)
-	android.InitBazelModule(module)
 	return module
 }
 
@@ -474,7 +486,6 @@ func PrebuiltEtcHostFactory() android.Module {
 	// This module is host-only
 	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
-	android.InitBazelModule(module)
 	return module
 }
 
@@ -485,7 +496,6 @@ func PrebuiltEtcCaCertsFactory() android.Module {
 	InitPrebuiltEtcModule(module, "cacerts")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
-	android.InitBazelModule(module)
 	return module
 }
 
@@ -508,7 +518,6 @@ func PrebuiltRootHostFactory() android.Module {
 	// This module is host-only
 	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
-	android.InitBazelModule(module)
 	return module
 }
 
@@ -520,7 +529,6 @@ func PrebuiltUserShareFactory() android.Module {
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	android.InitDefaultableModule(module)
-	android.InitBazelModule(module)
 	return module
 }
 
@@ -568,6 +576,19 @@ func PrebuiltDSPFactory() android.Module {
 	InitPrebuiltEtcModule(module, "etc/dsp")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_renderscript_bitcode installs a *.bc file into /system/lib or /system/lib64.
+func PrebuiltRenderScriptBitcodeFactory() android.Module {
+	module := &PrebuiltEtc{}
+	module.makeClass = "RENDERSCRIPT_BITCODE"
+	module.installDirBase64 = "lib64"
+	module.installAvoidMultilibConflict = true
+	InitPrebuiltEtcModule(module, "lib")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibBoth)
 	android.InitDefaultableModule(module)
 	return module
 }
@@ -698,155 +719,4 @@ func generatePrebuiltSnapshot(s snapshot.SnapshotSingleton, ctx android.Singleto
 	})
 
 	return snapshot.SnapshotPaths{OutputFiles: snapshotOutputs, NoticeFiles: snapshotNotices}
-}
-
-// For Bazel / bp2build
-
-type bazelPrebuiltFileAttributes struct {
-	Src               bazel.LabelAttribute
-	Filename          bazel.LabelAttribute
-	Dir               string
-	Installable       bazel.BoolAttribute
-	Filename_from_src bazel.BoolAttribute
-}
-
-// Bp2buildHelper returns a bazelPrebuiltFileAttributes used for the conversion
-// of prebuilt_*  modules. bazelPrebuiltFileAttributes has the common attributes
-// used by both prebuilt_etc_xml and other prebuilt_* moodules
-func (module *PrebuiltEtc) Bp2buildHelper(ctx android.Bp2buildMutatorContext) (*bazelPrebuiltFileAttributes, bool) {
-	var src bazel.LabelAttribute
-	for axis, configToProps := range module.GetArchVariantProperties(ctx, &prebuiltEtcProperties{}) {
-		for config, p := range configToProps {
-			props, ok := p.(*prebuiltEtcProperties)
-			if !ok {
-				continue
-			}
-			if props.Src != nil {
-				srcStr := proptools.String(props.Src)
-				if srcStr == ctx.ModuleName() {
-					ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "src == name")
-					return &bazelPrebuiltFileAttributes{}, false
-				}
-				label := android.BazelLabelForModuleSrcSingle(ctx, srcStr)
-				src.SetSelectValue(axis, config, label)
-			}
-		}
-		productVarProperties, errs := android.ProductVariableProperties(ctx, ctx.Module())
-		for _, err := range errs {
-			ctx.ModuleErrorf("ProductVariableProperties error: %s", err)
-		}
-		for propName, productConfigProps := range productVarProperties {
-			for configProp, propVal := range productConfigProps {
-				if propName == "Src" {
-					props, ok := propVal.(*string)
-					if !ok {
-						ctx.PropertyErrorf(" Expected Property to have type string, but was %s\n", reflect.TypeOf(propVal).String())
-						continue
-					}
-					if props != nil {
-						label := android.BazelLabelForModuleSrcSingle(ctx, *props)
-						src.SetSelectValue(configProp.ConfigurationAxis(), configProp.SelectKey(), label)
-					}
-				}
-			}
-		}
-	}
-
-	var filename string
-	var filenameFromSrc bool
-	moduleProps := module.properties
-
-	if moduleProps.Filename != nil && *moduleProps.Filename != "" {
-		filename = *moduleProps.Filename
-	} else if moduleProps.Filename_from_src != nil && *moduleProps.Filename_from_src {
-		if moduleProps.Src != nil {
-			filename = android.BazelLabelForModuleSrcSingle(ctx, *moduleProps.Src).Label
-		}
-		filenameFromSrc = true
-	} else {
-		filename = ctx.ModuleName()
-	}
-
-	var dir = module.installDirBase
-	if module.SubDir() != "" {
-		dir = dir + "/" + module.SubDir()
-	}
-
-	var installable bazel.BoolAttribute
-	if install := module.properties.Installable; install != nil {
-		installable.Value = install
-	}
-
-	attrs := &bazelPrebuiltFileAttributes{
-		Src:         src,
-		Dir:         dir,
-		Installable: installable,
-	}
-
-	if filename != "" {
-		attrs.Filename = bazel.LabelAttribute{Value: &bazel.Label{Label: filename}}
-	} else if filenameFromSrc {
-		attrs.Filename_from_src = bazel.BoolAttribute{Value: moduleProps.Filename_from_src}
-	}
-
-	return attrs, true
-}
-
-// ConvertWithBp2build performs bp2build conversion of PrebuiltEtc
-// prebuilt_* modules (except prebuilt_etc_xml) are PrebuiltEtc,
-// which we treat as *PrebuiltFile*
-func (module *PrebuiltEtc) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
-	var dir = module.installDirBase
-	// prebuilt_file only supports "etc" or "usr/share" or "." as module installDirBase
-	if !(dir == "etc" || dir == "usr/share" || dir == ".") {
-		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "dir")
-		return
-	}
-
-	attrs, convertible := module.Bp2buildHelper(ctx)
-	if !convertible {
-		return
-	}
-
-	props := bazel.BazelTargetModuleProperties{
-		Rule_class:        "prebuilt_file",
-		Bzl_load_location: "//build/bazel/rules:prebuilt_file.bzl",
-	}
-
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, attrs)
-}
-
-var _ android.MixedBuildBuildable = (*PrebuiltEtc)(nil)
-
-func (pe *PrebuiltEtc) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	return true
-}
-
-func (pe *PrebuiltEtc) QueueBazelCall(ctx android.BaseModuleContext) {
-	ctx.Config().BazelContext.QueueBazelRequest(
-		pe.GetBazelLabel(ctx, pe),
-		cquery.GetPrebuiltFileInfo,
-		android.GetConfigKey(ctx),
-	)
-}
-
-func (pe *PrebuiltEtc) ProcessBazelQueryResponse(ctx android.ModuleContext) {
-	bazelCtx := ctx.Config().BazelContext
-	pfi, err := bazelCtx.GetPrebuiltFileInfo(pe.GetBazelLabel(ctx, pe), android.GetConfigKey(ctx))
-	if err != nil {
-		ctx.ModuleErrorf(err.Error())
-		return
-	}
-
-	// Set properties for androidmk
-	pe.installDirPath = android.PathForModuleInstall(ctx, pfi.Dir)
-
-	// Installation rules
-	ip := installProperties{
-		installable:    pfi.Installable,
-		filename:       pfi.Filename,
-		sourceFilePath: android.PathForSource(ctx, pfi.Src),
-		// symlinks: pe.properties.Symlinks, // TODO: b/207489266 - Fully support all properties in prebuilt_file
-	}
-	pe.addInstallRules(ctx, ip)
 }

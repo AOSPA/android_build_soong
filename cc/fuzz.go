@@ -96,6 +96,7 @@ func fuzzMutatorDeps(mctx android.TopDownMutatorContext) {
 // your device, or $ANDROID_PRODUCT_OUT/data/fuzz in your build tree.
 func LibFuzzFactory() android.Module {
 	module := NewFuzzer(android.HostAndDeviceSupported)
+	module.testModule = true
 	return module.Init()
 }
 
@@ -302,7 +303,7 @@ func PackageFuzzModule(ctx android.ModuleContext, fuzzPackagedModule fuzz.FuzzPa
 }
 
 func NewFuzzer(hod android.HostOrDeviceSupported) *Module {
-	module, binary := newBinary(hod, false)
+	module, binary := newBinary(hod)
 	baseInstallerPath := "fuzz"
 
 	binary.baseInstaller = NewBaseInstaller(baseInstallerPath, baseInstallerPath, InstallInData)
@@ -547,7 +548,8 @@ func CollectAllSharedDependencies(ctx android.ModuleContext) (android.RuleBuilde
 		if !IsValidSharedDependency(dep) {
 			return
 		}
-		if !ctx.OtherModuleHasProvider(dep, SharedLibraryInfoProvider) {
+		sharedLibraryInfo, hasSharedLibraryInfo := android.OtherModuleProvider(ctx, dep, SharedLibraryInfoProvider)
+		if !hasSharedLibraryInfo {
 			return
 		}
 		if seen[ctx.OtherModuleName(dep)] {
@@ -556,7 +558,6 @@ func CollectAllSharedDependencies(ctx android.ModuleContext) (android.RuleBuilde
 		seen[ctx.OtherModuleName(dep)] = true
 		deps = append(deps, dep)
 
-		sharedLibraryInfo := ctx.OtherModuleProvider(dep, SharedLibraryInfoProvider).(SharedLibraryInfo)
 		installDestination := sharedLibraryInfo.SharedLibrary.Base()
 		ruleBuilderInstall := android.RuleBuilderInstall{android.OutputFileForModule(ctx, dep, "unstripped"), installDestination}
 		sharedLibraries = append(sharedLibraries, ruleBuilderInstall)
@@ -577,14 +578,14 @@ func CollectAllSharedDependencies(ctx android.ModuleContext) (android.RuleBuilde
 		if !IsValidSharedDependency(child) {
 			return false
 		}
-		if !ctx.OtherModuleHasProvider(child, SharedLibraryInfoProvider) {
+		sharedLibraryInfo, hasSharedLibraryInfo := android.OtherModuleProvider(ctx, child, SharedLibraryInfoProvider)
+		if !hasSharedLibraryInfo {
 			return false
 		}
 		if !seen[ctx.OtherModuleName(child)] {
 			seen[ctx.OtherModuleName(child)] = true
 			deps = append(deps, child)
 
-			sharedLibraryInfo := ctx.OtherModuleProvider(child, SharedLibraryInfoProvider).(SharedLibraryInfo)
 			installDestination := sharedLibraryInfo.SharedLibrary.Base()
 			ruleBuilderInstall := android.RuleBuilderInstall{android.OutputFileForModule(ctx, child, "unstripped"), installDestination}
 			sharedLibraries = append(sharedLibraries, ruleBuilderInstall)

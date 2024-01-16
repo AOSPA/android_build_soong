@@ -22,6 +22,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/java/config"
+	"android/soong/testing"
 	"android/soong/tradefed"
 
 	"github.com/google/blueprint/proptools"
@@ -66,7 +67,7 @@ type robolectricProperties struct {
 	// instead of the one built from source in external/robolectric-shadows.
 	Robolectric_prebuilt_version *string
 
-	// Use /external/robolectric rather than /external/robolectric-shadows as the version of robolectri
+	// Use /external/robolectric rather than /external/robolectric-shadows as the version of robolectric
 	// to use.  /external/robolectric closely tracks github's master, and will fully replace /external/robolectric-shadows
 	Upstream *bool
 }
@@ -192,7 +193,7 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	}
 
 	handleLibDeps := func(dep android.Module) {
-		m := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
+		m, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
 		r.libs = append(r.libs, ctx.OtherModuleName(dep))
 		if !android.InList(ctx.OtherModuleName(dep), config.FrameworkLibraries) {
 			combinedJarJars = append(combinedJarJars, m.ImplementationAndResourcesJars...)
@@ -225,7 +226,7 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	}
 
 	installPath := android.PathForModuleInstall(ctx, r.BaseModuleName())
-	var installDeps android.Paths
+	var installDeps android.InstallPaths
 
 	if r.manifest != nil {
 		r.data = append(r.data, r.manifest)
@@ -253,6 +254,7 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	}
 
 	r.installFile = ctx.InstallFile(installPath, ctx.ModuleName()+".jar", r.combinedJar, installDeps...)
+	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func generateRoboTestConfig(ctx android.ModuleContext, outputFile android.WritablePath,
@@ -303,8 +305,7 @@ func (r *robolectricTest) generateRoboSrcJar(ctx android.ModuleContext, outputFi
 	srcJarDeps := append(android.Paths(nil), instrumentedApp.srcJarDeps...)
 
 	for _, m := range ctx.GetDirectDepsWithTag(roboCoverageLibsTag) {
-		if ctx.OtherModuleHasProvider(m, JavaInfoProvider) {
-			dep := ctx.OtherModuleProvider(m, JavaInfoProvider).(JavaInfo)
+		if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
 			srcJarArgs = append(srcJarArgs, dep.SrcJarArgs...)
 			srcJarDeps = append(srcJarDeps, dep.SrcJarDeps...)
 		}

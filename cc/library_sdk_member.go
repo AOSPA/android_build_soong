@@ -251,16 +251,9 @@ func (mt *librarySdkMemberType) CreateVariantPropertiesStruct() android.SdkMembe
 	return &nativeLibInfoProperties{memberType: mt}
 }
 
-func isBazelOutDirectory(p android.Path) bool {
-	_, bazel := p.(android.BazelOutPath)
-	return bazel
-}
-
 func isGeneratedHeaderDirectory(p android.Path) bool {
 	_, gen := p.(android.WritablePath)
-	// TODO(b/183213331): Here we assume that bazel-based headers are not generated; we need
-	// to support generated headers in mixed builds.
-	return gen && !isBazelOutDirectory(p)
+	return gen
 }
 
 type includeDirsProperty struct {
@@ -518,7 +511,7 @@ func (p *nativeLibInfoProperties) PopulateFromVariant(ctx android.SdkMemberConte
 		}
 	}
 
-	exportedInfo := ctx.SdkModuleContext().OtherModuleProvider(variant, FlagExporterInfoProvider).(FlagExporterInfo)
+	exportedInfo, _ := android.OtherModuleProvider(ctx.SdkModuleContext(), variant, FlagExporterInfoProvider)
 
 	// Separate out the generated include dirs (which are arch specific) from the
 	// include dirs (which may not be).

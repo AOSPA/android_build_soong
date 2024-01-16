@@ -180,7 +180,7 @@ func (b *platformBootclasspathModule) GenerateAndroidBuildActions(ctx android.Mo
 
 	var transitiveSrcFiles android.Paths
 	for _, module := range allModules {
-		depInfo := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+		depInfo, _ := android.OtherModuleProvider(ctx, module, JavaInfoProvider)
 		if depInfo.TransitiveSrcFiles != nil {
 			transitiveSrcFiles = append(transitiveSrcFiles, depInfo.TransitiveSrcFiles.ToList()...)
 		}
@@ -202,8 +202,6 @@ func (b *platformBootclasspathModule) GenerateAndroidBuildActions(ctx android.Mo
 
 	bootDexJarByModule := b.generateHiddenAPIBuildActions(ctx, b.configuredModules, b.fragments)
 	buildRuleForBootJarsPackageCheck(ctx, bootDexJarByModule)
-
-	b.copyApexBootJarsForAppsDexpreopt(ctx, apexModules)
 }
 
 // Generate classpaths.proto config
@@ -221,7 +219,7 @@ func (b *platformBootclasspathModule) configuredJars(ctx android.ModuleContext) 
 	// Include jars from APEXes that don't populate their classpath proto config.
 	remainingJars := dexpreopt.GetGlobalConfig(ctx).ApexBootJars
 	for _, fragment := range b.fragments {
-		info := ctx.OtherModuleProvider(fragment, ClasspathFragmentProtoContentInfoProvider).(ClasspathFragmentProtoContentInfo)
+		info, _ := android.OtherModuleProvider(ctx, fragment, ClasspathFragmentProtoContentInfoProvider)
 		if info.ClasspathFragmentProtoGenerated {
 			remainingJars = remainingJars.RemoveList(info.ClasspathFragmentProtoContents)
 		}
@@ -243,7 +241,7 @@ func (b *platformBootclasspathModule) platformJars(ctx android.PathContext) andr
 func (b *platformBootclasspathModule) checkPlatformModules(ctx android.ModuleContext, modules []android.Module) {
 	// TODO(satayev): change this check to only allow core-icu4j, all apex jars should not be here.
 	for _, m := range modules {
-		apexInfo := ctx.OtherModuleProvider(m, android.ApexInfoProvider).(android.ApexInfo)
+		apexInfo, _ := android.OtherModuleProvider(ctx, m, android.ApexInfoProvider)
 		fromUpdatableApex := apexInfo.Updatable
 		if fromUpdatableApex {
 			// error: this jar is part of an updatable apex
@@ -257,7 +255,7 @@ func (b *platformBootclasspathModule) checkPlatformModules(ctx android.ModuleCon
 // checkApexModules ensures that the apex modules supplied are not from the platform.
 func (b *platformBootclasspathModule) checkApexModules(ctx android.ModuleContext, modules []android.Module) {
 	for _, m := range modules {
-		apexInfo := ctx.OtherModuleProvider(m, android.ApexInfoProvider).(android.ApexInfo)
+		apexInfo, _ := android.OtherModuleProvider(ctx, m, android.ApexInfoProvider)
 		fromUpdatableApex := apexInfo.Updatable
 		if fromUpdatableApex {
 			// ok: this jar is part of an updatable apex
@@ -391,7 +389,7 @@ func (b *platformBootclasspathModule) createAndProvideMonolithicHiddenAPIInfo(ct
 	monolithicInfo := newMonolithicHiddenAPIInfo(ctx, temporaryInput.FlagFilesByCategory, classpathElements)
 
 	// Store the information for testing.
-	ctx.SetProvider(MonolithicHiddenAPIInfoProvider, monolithicInfo)
+	android.SetProvider(ctx, MonolithicHiddenAPIInfoProvider, monolithicInfo)
 	return monolithicInfo
 }
 
@@ -414,11 +412,4 @@ func (b *platformBootclasspathModule) generateHiddenApiMakeVars(ctx android.Make
 	}
 	// INTERNAL_PLATFORM_HIDDENAPI_FLAGS is used by Make rules in art/ and cts/.
 	ctx.Strict("INTERNAL_PLATFORM_HIDDENAPI_FLAGS", b.hiddenAPIFlagsCSV.String())
-}
-
-// Copy apex module dex jars to their predefined locations. They will be used for dexpreopt for apps.
-func (b *platformBootclasspathModule) copyApexBootJarsForAppsDexpreopt(ctx android.ModuleContext, apexModules []android.Module) {
-	config := GetApexBootConfig(ctx)
-	apexBootDexJarsByModule := extractEncodedDexJarsFromModules(ctx, apexModules)
-	copyBootJarsToPredefinedLocations(ctx, apexBootDexJarsByModule, config.dexPathsByModule)
 }

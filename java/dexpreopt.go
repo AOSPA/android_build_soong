@@ -166,12 +166,12 @@ func init() {
 }
 
 func isApexVariant(ctx android.BaseModuleContext) bool {
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	return !apexInfo.IsForPlatform()
 }
 
 func forPrebuiltApex(ctx android.BaseModuleContext) bool {
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	return apexInfo.ForPrebuiltApex
 }
 
@@ -373,8 +373,6 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Wr
 
 		PreoptBootClassPathDexFiles:     dexFiles.Paths(),
 		PreoptBootClassPathDexLocations: dexLocations,
-
-		PreoptExtractedApk: false,
 
 		NoCreateAppImage:    !BoolDefault(d.dexpreoptProperties.Dex_preopt.App_image, true),
 		ForceCreateAppImage: BoolDefault(d.dexpreoptProperties.Dex_preopt.App_image, false),

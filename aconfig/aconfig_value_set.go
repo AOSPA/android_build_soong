@@ -16,7 +16,6 @@ package aconfig
 
 import (
 	"android/soong/android"
-	"android/soong/bazel"
 	"github.com/google/blueprint"
 )
 
@@ -24,7 +23,6 @@ import (
 type ValueSetModule struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
-	android.BazelModuleBase
 
 	properties struct {
 		// aconfig_values modules
@@ -38,7 +36,6 @@ func ValueSetFactory() android.Module {
 	android.InitAndroidModule(module)
 	android.InitDefaultableModule(module)
 	module.AddProperties(&module.properties)
-	android.InitBazelModule(module)
 
 	return module
 }
@@ -57,7 +54,7 @@ type valueSetProviderData struct {
 	AvailablePackages map[string]android.Paths
 }
 
-var valueSetProviderKey = blueprint.NewProvider(valueSetProviderData{})
+var valueSetProviderKey = blueprint.NewProvider[valueSetProviderData]()
 
 func (module *ValueSetModule) DepsMutator(ctx android.BottomUpMutatorContext) {
 	deps := ctx.AddDependency(ctx.Module(), valueSetTag, module.properties.Values...)
@@ -76,38 +73,14 @@ func (module *ValueSetModule) GenerateAndroidBuildActions(ctx android.ModuleCont
 	// to append values to their aconfig actions.
 	packages := make(map[string]android.Paths)
 	ctx.VisitDirectDeps(func(dep android.Module) {
-		if !ctx.OtherModuleHasProvider(dep, valuesProviderKey) {
-			// Other modules get injected as dependencies too, for example the license modules
-			return
+		if depData, ok := android.OtherModuleProvider(ctx, dep, valuesProviderKey); ok {
+			srcs := make([]android.Path, len(depData.Values))
+			copy(srcs, depData.Values)
+			packages[depData.Package] = srcs
 		}
-		depData := ctx.OtherModuleProvider(dep, valuesProviderKey).(valuesProviderData)
-
-		srcs := make([]android.Path, len(depData.Values))
-		copy(srcs, depData.Values)
-		packages[depData.Package] = srcs
 
 	})
-	ctx.SetProvider(valueSetProviderKey, valueSetProviderData{
+	android.SetProvider(ctx, valueSetProviderKey, valueSetProviderData{
 		AvailablePackages: packages,
 	})
-}
-
-type bazelAconfigValueSetAttributes struct {
-	Values bazel.LabelListAttribute
-}
-
-func (module *ValueSetModule) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
-	if ctx.ModuleType() != "aconfig_value_set" {
-		return
-	}
-
-	attrs := bazelAconfigValueSetAttributes{
-		Values: bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, module.properties.Values)),
-	}
-	props := bazel.BazelTargetModuleProperties{
-		Rule_class:        "aconfig_value_set",
-		Bzl_load_location: "//build/bazel/rules/aconfig:aconfig_value_set.bzl",
-	}
-
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, &attrs)
 }

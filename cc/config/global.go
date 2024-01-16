@@ -190,10 +190,6 @@ var (
 		"-Werror=format-security",
 		"-nostdlibinc",
 
-		// Enable MLGO for register allocation.
-		// TODO(b/300682355) re-enable
-		// "-mllvm -wc-enable-advisor=release",
-
 		// Emit additional debug info for AutoFDO
 		"-fdebug-info-for-profiling",
 	}
@@ -222,9 +218,6 @@ var (
 		"-Wl,--exclude-libs,libgcc_stripped.a",
 		"-Wl,--exclude-libs,libunwind_llvm.a",
 		"-Wl,--exclude-libs,libunwind.a",
-		// Enable MLGO for register allocation.
-		// TODO(b/300682355) re-enable
-		// "-Wl,-mllvm,-regalloc-enable-advisor=release",
 	}
 
 	deviceGlobalLldflags = append(deviceGlobalLdflags, commonGlobalLldflags...)
@@ -422,7 +415,7 @@ var (
 
 	llvmNextExtraCommonGlobalCflags = []string{
 		// Do not report warnings when testing with the top of trunk LLVM.
-		"-Wno-error",
+		"-Wno-everything",
 	}
 
 	// Flags that must not appear in any command line.
@@ -431,16 +424,16 @@ var (
 	}
 
 	CStdVersion               = "gnu17"
-	CppStdVersion             = "gnu++17"
+	CppStdVersion             = "gnu++20"
 	ExperimentalCStdVersion   = "gnu2x"
-	ExperimentalCppStdVersion = "gnu++2a"
+	ExperimentalCppStdVersion = "gnu++2b"
 
 	SDClang         = false
 	SDClangPath     = ""
 	ForceSDClangOff = false
 
 	// prebuilts/clang default settings.
-	ClangDefaultBase = "prebuilts/clang/host"
+	ClangDefaultBase         = "prebuilts/clang/host"
 	ClangDefaultVersion      = "clang-r498229b"
 	ClangDefaultShortVersion = "17"
 
@@ -456,12 +449,6 @@ var (
 	VisibilityHiddenFlag  = "-fvisibility=hidden"
 	VisibilityDefaultFlag = "-fvisibility=default"
 )
-
-// BazelCcToolchainVars generates bzl file content containing variables for
-// Bazel's cc_toolchain configuration.
-func BazelCcToolchainVars(config android.Config) string {
-	return android.BazelToolchainVars(config, exportedVars)
-}
 
 func ExportStringList(name string, value []string) {
 	exportedVars.ExportStringList(name, value)
@@ -552,6 +539,7 @@ func init() {
 		flags := noOverrideGlobalCflags
 		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
 			flags = append(noOverrideGlobalCflags, llvmNextExtraCommonGlobalCflags...)
+			IllegalFlags = []string{} // Don't fail build while testing a new compiler.
 		}
 		return strings.Join(flags, " ")
 	})

@@ -17,6 +17,7 @@ package python
 import (
 	"fmt"
 
+	"android/soong/testing"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -101,7 +102,6 @@ func (p *PythonTestModule) init() android.Module {
 	p.AddProperties(&p.testProperties)
 	android.InitAndroidArchModule(p, p.hod, p.multilib)
 	android.InitDefaultableModule(p)
-	android.InitBazelModule(p)
 	if p.isTestHost() && p.testProperties.Test_options.Unit_test == nil {
 		p.testProperties.Test_options.Unit_test = proptools.BoolPtr(true)
 	}
@@ -205,6 +205,7 @@ func (p *PythonTestModule) GenerateAndroidBuildActions(ctx android.ModuleContext
 			p.data = append(p.data, android.DataPath{SrcPath: javaDataSrcPath})
 		}
 	}
+	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (p *PythonTestModule) AndroidMkEntries() []android.AndroidMkEntries {

@@ -196,7 +196,7 @@ func rustEnvVars(ctx ModuleContext, deps PathDeps) []string {
 	}
 
 	if len(deps.SrcDeps) > 0 {
-		moduleGenDir := ctx.RustModule().compiler.CargoOutDir()
+		moduleGenDir := ctx.RustModule().compiler.cargoOutDir()
 		// We must calculate an absolute path for OUT_DIR since Rust's include! macro (which normally consumes this)
 		// assumes that paths are relative to the source file.
 		var outDirPrefix string
@@ -215,13 +215,13 @@ func rustEnvVars(ctx ModuleContext, deps PathDeps) []string {
 
 	envVars = append(envVars, "ANDROID_RUST_VERSION="+config.GetRustVersion(ctx))
 
-	if ctx.RustModule().compiler.CargoEnvCompat() {
+	if ctx.RustModule().compiler.cargoEnvCompat() {
 		if bin, ok := ctx.RustModule().compiler.(*binaryDecorator); ok {
 			envVars = append(envVars, "CARGO_BIN_NAME="+bin.getStem(ctx))
 		}
 		envVars = append(envVars, "CARGO_CRATE_NAME="+ctx.RustModule().CrateName())
 		envVars = append(envVars, "CARGO_PKG_NAME="+ctx.RustModule().CrateName())
-		pkgVersion := ctx.RustModule().compiler.CargoPkgVersion()
+		pkgVersion := ctx.RustModule().compiler.cargoPkgVersion()
 		if pkgVersion != "" {
 			envVars = append(envVars, "CARGO_PKG_VERSION="+pkgVersion)
 
@@ -236,6 +236,10 @@ func rustEnvVars(ctx ModuleContext, deps PathDeps) []string {
 				envVars = append(envVars, "CARGO_PKG_VERSION_PATCH="+semver_parts[2])
 			}
 		}
+	}
+
+	if ctx.Darwin() {
+		envVars = append(envVars, "ANDROID_RUST_DARWIN=true")
 	}
 
 	return envVars
@@ -284,7 +288,7 @@ func transformSrctoCrate(ctx ModuleContext, main android.Path, deps PathDeps, fl
 	}
 
 	// Disallow experimental features
-	modulePath := android.PathForModuleSrc(ctx).String()
+	modulePath := ctx.ModuleDir()
 	if !(android.IsThirdPartyPath(modulePath) || strings.HasPrefix(modulePath, "prebuilts")) {
 		rustcFlags = append(rustcFlags, "-Zallow-features=\"\"")
 	}
@@ -323,7 +327,7 @@ func transformSrctoCrate(ctx ModuleContext, main android.Path, deps PathDeps, fl
 	orderOnly = append(orderOnly, deps.SharedLibs...)
 
 	if len(deps.SrcDeps) > 0 {
-		moduleGenDir := ctx.RustModule().compiler.CargoOutDir()
+		moduleGenDir := ctx.RustModule().compiler.cargoOutDir()
 		var outputs android.WritablePaths
 
 		for _, genSrc := range deps.SrcDeps {
@@ -344,19 +348,6 @@ func transformSrctoCrate(ctx ModuleContext, main android.Path, deps PathDeps, fl
 			},
 		})
 		implicits = append(implicits, outputs.Paths()...)
-	}
-
-	envVars = append(envVars, "ANDROID_RUST_VERSION="+config.GetRustVersion(ctx))
-
-	if ctx.RustModule().compiler.CargoEnvCompat() {
-		if _, ok := ctx.RustModule().compiler.(*binaryDecorator); ok {
-			envVars = append(envVars, "CARGO_BIN_NAME="+strings.TrimSuffix(outputFile.Base(), outputFile.Ext()))
-		}
-		envVars = append(envVars, "CARGO_CRATE_NAME="+ctx.RustModule().CrateName())
-		pkgVersion := ctx.RustModule().compiler.CargoPkgVersion()
-		if pkgVersion != "" {
-			envVars = append(envVars, "CARGO_PKG_VERSION="+pkgVersion)
-		}
 	}
 
 	if flags.Clippy {
@@ -445,7 +436,7 @@ func Rustdoc(ctx ModuleContext, main android.Path, deps PathDeps,
 	docTimestampFile := android.PathForModuleOut(ctx, "rustdoc.timestamp")
 
 	// Silence warnings about renamed lints for third-party crates
-	modulePath := android.PathForModuleSrc(ctx).String()
+	modulePath := ctx.ModuleDir()
 	if android.IsThirdPartyPath(modulePath) {
 		rustdocFlags = append(rustdocFlags, " -A warnings")
 	}

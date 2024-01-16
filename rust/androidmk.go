@@ -17,6 +17,7 @@ package rust
 import (
 	"path/filepath"
 
+	"android/soong/aconfig"
 	"android/soong/android"
 	"android/soong/cc"
 )
@@ -67,7 +68,7 @@ func (mod *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				if mod.UseVndk() {
 					entries.SetBool("LOCAL_USE_VNDK", true)
 				}
-
+				aconfig.SetAconfigFileMkEntries(mod.AndroidModuleBase(), entries, mod.mergedAconfigFiles)
 			},
 		},
 	}

@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
@@ -48,6 +46,7 @@ func RegisterStubsBuildComponents(ctx android.RegistrationContext) {
 // Droidstubs
 type Droidstubs struct {
 	Javadoc
+	embeddableInModuleAndImport
 
 	properties              DroidstubsProperties
 	apiFile                 android.Path
@@ -184,6 +183,7 @@ func DroidstubsFactory() android.Module {
 
 	module.AddProperties(&module.properties,
 		&module.Javadoc.properties)
+	module.initModuleAndImport(module)
 
 	InitDroiddocModule(module, android.HostAndDeviceSupported)
 
@@ -498,18 +498,20 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 	if metalavaUseRbe(ctx) {
 		rule.Remoteable(android.RemoteRuleSupports{RBE: true})
 		execStrategy := ctx.Config().GetenvWithDefault("RBE_METALAVA_EXEC_STRATEGY", remoteexec.LocalExecStrategy)
-		compare, _ := strconv.ParseBool(ctx.Config().GetenvWithDefault("RBE_METALAVA_COMPARE", "false"))
+		compare := ctx.Config().IsEnvTrue("RBE_METALAVA_COMPARE")
+		remoteUpdateCache := !ctx.Config().IsEnvFalse("RBE_METALAVA_REMOTE_UPDATE_CACHE")
 		labels := map[string]string{"type": "tool", "name": "metalava"}
 		// TODO: metalava pool rejects these jobs
 		pool := ctx.Config().GetenvWithDefault("RBE_METALAVA_POOL", "java16")
 		rule.Rewrapper(&remoteexec.REParams{
-			Labels:          labels,
-			ExecStrategy:    execStrategy,
-			ToolchainInputs: []string{config.JavaCmd(ctx).String()},
-			Platform:        map[string]string{remoteexec.PoolKey: pool},
-			Compare:         compare,
-			NumLocalRuns:    1,
-			NumRemoteRuns:   1,
+			Labels:              labels,
+			ExecStrategy:        execStrategy,
+			ToolchainInputs:     []string{config.JavaCmd(ctx).String()},
+			Platform:            map[string]string{remoteexec.PoolKey: pool},
+			Compare:             compare,
+			NumLocalRuns:        1,
+			NumRemoteRuns:       1,
+			NoRemoteUpdateCache: !remoteUpdateCache,
 		})
 	}
 
@@ -773,6 +775,11 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			`         m %s-update-current-api\n\n`+
 			`      To submit the revised current.txt to the main Android repository,\n`+
 			`      you will need approval.\n`+
+			`If your build failed due to stub validation, you can resolve the errors with\n`+
+			`either of the two choices above and try re-building the target.\n`+
+			`If the mismatch between the stubs and the current.txt is intended,\n`+
+			`you can try re-building the target by executing the following command:\n`+
+			`m DISABLE_STUB_VALIDATION=true <your build target>\n`+
 			`******************************\n`, ctx.ModuleName())
 
 		rule.Command().
@@ -886,28 +893,6 @@ var (
 	}
 )
 
-// A helper function that returns the api surface of the corresponding java_api_contribution Bazel target
-// The api_surface is populated using the naming convention of the droidstubs module.
-func bazelApiSurfaceName(name string) string {
-	// Sort the keys so that longer strings appear first
-	// Otherwise substrings like system will match both system and system_server
-	sortedKeys := make([]string, 0)
-	for key := range droidstubsModuleNamingToSdkKind {
-		sortedKeys = append(sortedKeys, key)
-	}
-	sort.Slice(sortedKeys, func(i, j int) bool {
-		return len(sortedKeys[i]) > len(sortedKeys[j])
-	})
-	for _, sortedKey := range sortedKeys {
-		if strings.Contains(name, sortedKey) {
-			sdkKind := droidstubsModuleNamingToSdkKind[sortedKey]
-			return sdkKind.String() + "api"
-		}
-	}
-	// Default is publicapi
-	return android.SdkPublic.String() + "api"
-}
-
 func StubsDefaultsFactory() android.Module {
 	module := &DocDefaults{}
 
@@ -930,6 +915,8 @@ type PrebuiltStubsSourcesProperties struct {
 type PrebuiltStubsSources struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	embeddableInModuleAndImport
+
 	prebuilt android.Prebuilt
 
 	properties PrebuiltStubsSourcesProperties
@@ -1008,6 +995,7 @@ func PrebuiltStubsSourcesFactory() android.Module {
 	module := &PrebuiltStubsSources{}
 
 	module.AddProperties(&module.properties)
+	module.initModuleAndImport(module)
 
 	android.InitPrebuiltModule(module, &module.properties.Srcs)
 	InitDroiddocModule(module, android.HostAndDeviceSupported)

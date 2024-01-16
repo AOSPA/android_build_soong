@@ -30,7 +30,7 @@ const (
 	// DefaultImage is the default container image used for Android remote execution. The
 	// image was built with the Dockerfile at
 	// https://android.googlesource.com/platform/prebuilts/remoteexecution-client/+/refs/heads/master/docker/Dockerfile
-	DefaultImage = "docker://gcr.io/androidbuild-re-dockerimage/android-build-remoteexec-image@sha256:582efb38f0c229ea39952fff9e132ccbe183e14869b39888010dacf56b360d62"
+	DefaultImage = "docker://gcr.io/androidbuild-re-dockerimage/android-build-remoteexec-image@sha256:1eb7f64b9e17102b970bd7a1af7daaebdb01c3fb777715899ef462d6c6d01a45"
 
 	// DefaultWrapperPath is the default path to the remote execution wrapper.
 	DefaultWrapperPath = "prebuilts/remoteexecution-client/live/rewrapper"
@@ -91,6 +91,8 @@ type REParams struct {
 	NumLocalRuns int
 	// Number of times the action should be rerun remotely.
 	NumRemoteRuns int
+	// Boolean indicating whether to update remote cache entry. Rewrapper defaults to true, so the name is negated here.
+	NoRemoteUpdateCache bool
 }
 
 func init() {
@@ -144,6 +146,10 @@ func (r *REParams) wrapperArgs() string {
 
 	if r.Compare && r.NumLocalRuns >= 0 && r.NumRemoteRuns >= 0 {
 		args += fmt.Sprintf(" --compare=true --num_local_reruns=%d --num_remote_reruns=%d", r.NumLocalRuns, r.NumRemoteRuns)
+	}
+
+	if r.NoRemoteUpdateCache {
+		args += " --remote_update_cache=false"
 	}
 
 	if len(r.Inputs) > 0 {

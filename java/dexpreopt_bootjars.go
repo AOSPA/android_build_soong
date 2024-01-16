@@ -544,7 +544,7 @@ func gatherBootclasspathFragments(ctx android.ModuleContext) map[string]android.
 				return true
 			}
 			if tag == bootclasspathFragmentDepTag {
-				apexInfo := ctx.OtherModuleProvider(child, android.ApexInfoProvider).(android.ApexInfo)
+				apexInfo, _ := android.OtherModuleProvider(ctx, child, android.ApexInfoProvider)
 				for _, apex := range apexInfo.InApexVariants {
 					fragments[apex] = child
 				}
@@ -610,7 +610,8 @@ func generateBootImage(ctx android.ModuleContext, imageConfig *bootImageConfig) 
 	profile := bootImageProfileRule(ctx, imageConfig)
 
 	// If dexpreopt of boot image jars should be skipped, stop after generating a profile.
-	if SkipDexpreoptBootJars(ctx) {
+	global := dexpreopt.GetGlobalConfig(ctx)
+	if SkipDexpreoptBootJars(ctx) || (global.OnlyPreoptArtBootImage && imageConfig.name != "art") {
 		return
 	}
 
@@ -681,7 +682,7 @@ func extractEncodedDexJarsFromModulesOrBootclasspathFragments(ctx android.Module
 					pair.jarModule.Name(),
 					pair.apex)
 			}
-			bootclasspathFragmentInfo := ctx.OtherModuleProvider(fragment, BootclasspathFragmentApexContentInfoProvider).(BootclasspathFragmentApexContentInfo)
+			bootclasspathFragmentInfo, _ := android.OtherModuleProvider(ctx, fragment, BootclasspathFragmentApexContentInfoProvider)
 			jar, err := bootclasspathFragmentInfo.DexBootJarPathForContentModule(pair.jarModule)
 			if err != nil {
 				ctx.ModuleErrorf("%s", err)

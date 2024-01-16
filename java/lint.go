@@ -93,6 +93,7 @@ type linter struct {
 	outputs                 lintOutputs
 	properties              LintProperties
 	extraMainlineLintErrors []string
+	compile_data            android.Paths
 
 	reports android.Paths
 
@@ -412,8 +413,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	extraLintCheckModules := ctx.GetDirectDepsWithTag(extraLintCheckTag)
 	for _, extraLintCheckModule := range extraLintCheckModules {
-		if ctx.OtherModuleHasProvider(extraLintCheckModule, JavaInfoProvider) {
-			dep := ctx.OtherModuleProvider(extraLintCheckModule, JavaInfoProvider).(JavaInfo)
+		if dep, ok := android.OtherModuleProvider(ctx, extraLintCheckModule, JavaInfoProvider); ok {
 			l.extraLintCheckJars = append(l.extraLintCheckJars, dep.ImplementationAndResourcesJars...)
 		} else {
 			ctx.PropertyErrorf("lint.extra_check_modules",
@@ -448,7 +448,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	srcsList := android.PathForModuleOut(ctx, "lint", "lint-srcs.list")
 	srcsListRsp := android.PathForModuleOut(ctx, "lint-srcs.list.rsp")
-	rule.Command().Text("cp").FlagWithRspFileInputList("", srcsListRsp, l.srcs).Output(srcsList)
+	rule.Command().Text("cp").FlagWithRspFileInputList("", srcsListRsp, l.srcs).Output(srcsList).Implicits(l.compile_data)
 
 	lintPaths := l.writeLintProjectXML(ctx, rule, srcsList)
 
@@ -491,6 +491,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	cmd.BuiltTool("lint").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "lint.jar")).
 		Flag("--quiet").
+		Flag("--include-aosp-issues").
 		FlagWithInput("--project ", lintPaths.projectXML).
 		FlagWithInput("--config ", lintPaths.configXML).
 		FlagWithOutput("--html ", html).
@@ -659,7 +660,7 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 		}
 
 		if apex, ok := m.(android.ApexModule); ok && apex.NotAvailableForPlatform() {
-			apexInfo := ctx.ModuleProvider(m, android.ApexInfoProvider).(android.ApexInfo)
+			apexInfo, _ := android.SingletonModuleProvider(ctx, m, android.ApexInfoProvider)
 			if apexInfo.IsForPlatform() {
 				// There are stray platform variants of modules in apexes that are not available for
 				// the platform, and they sometimes can't be built.  Don't depend on them.

@@ -19,10 +19,7 @@ import (
 	"strings"
 
 	"android/soong/android"
-	"android/soong/bazel"
 	"android/soong/cc"
-
-	"github.com/google/blueprint/proptools"
 )
 
 var (
@@ -59,6 +56,7 @@ type ProtobufProperties struct {
 
 	// Use protobuf version 3.x. This will be deleted once we migrate all current users
 	// of protobuf off of 2.x.
+	// ludovicb@: DEPRECATED, to be removed
 	Use_protobuf3 *bool
 
 	// List of exported include paths containing proto files for dependent rust_protobuf modules.
@@ -77,10 +75,6 @@ type protobufDecorator struct {
 	protoFlags     android.ProtoFlags
 }
 
-func (proto *protobufDecorator) useProtobuf3() bool {
-	return Bool(proto.Properties.Use_protobuf3)
-}
-
 func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) android.Path {
 	var protoFlags android.ProtoFlags
 	var grpcProtoFlags android.ProtoFlags
@@ -90,12 +84,7 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 	protoFiles := android.PathsForModuleSrc(ctx, proto.Properties.Protos)
 	grpcFiles := android.PathsForModuleSrc(ctx, proto.Properties.Grpc_protos)
 
-	// For now protobuf2 (the deprecated version) remains the default. This will change in the
-	// future as we update the various users.
-	protoPluginPath := ctx.Config().HostToolPath(ctx, "protoc-gen-rust-deprecated")
-	if proto.useProtobuf3() == true {
-		protoPluginPath = ctx.Config().HostToolPath(ctx, "protoc-gen-rust")
-	}
+	protoPluginPath := ctx.Config().HostToolPath(ctx, "protoc-gen-rust")
 
 	commonProtoFlags = append(commonProtoFlags, defaultProtobufFlags...)
 	commonProtoFlags = append(commonProtoFlags, proto.Properties.Proto_flags...)
@@ -189,7 +178,7 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 	// stemFile must be first here as the first path in BaseSourceProvider.OutputFiles is the library entry-point.
 	proto.BaseSourceProvider.OutputFiles = append(android.Paths{stemFile}, outputs.Paths()...)
 
-	ctx.SetProvider(cc.FlagExporterInfoProvider, cc.FlagExporterInfo{
+	android.SetProvider(ctx, cc.FlagExporterInfoProvider, cc.FlagExporterInfo{
 		IncludeDirs: android.PathsForModuleSrc(ctx, proto.Properties.Exported_include_dirs),
 	})
 
@@ -219,13 +208,7 @@ func (proto *protobufDecorator) genModFileContents() string {
 		lines = append(
 			lines,
 			"pub mod empty {",
-			"    pub use protobuf::well_known_types::Empty;",
-			"}",
-			"pub mod wrappers {",
-			"    pub use protobuf::well_known_types::{",
-			"        DoubleValue, FloatValue, Int64Value, UInt64Value, Int32Value, UInt32Value,",
-			"        BoolValue, StringValue, BytesValue",
-			"    };",
+			"    pub use protobuf::well_known_types::empty::Empty;",
 			"}")
 	}
 
@@ -238,20 +221,10 @@ func (proto *protobufDecorator) SourceProviderProps() []interface{} {
 
 func (proto *protobufDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
 	deps = proto.BaseSourceProvider.SourceProviderDeps(ctx, deps)
-	useProtobuf3 := proto.useProtobuf3()
-	if useProtobuf3 == true {
-		deps.Rustlibs = append(deps.Rustlibs, "libprotobuf")
-	} else {
-		deps.Rustlibs = append(deps.Rustlibs, "libprotobuf_deprecated")
-	}
+	deps.Rustlibs = append(deps.Rustlibs, "libprotobuf")
 	deps.HeaderLibs = append(deps.SharedLibs, proto.Properties.Header_libs...)
 
 	if len(proto.Properties.Grpc_protos) > 0 {
-		if useProtobuf3 == true {
-			ctx.PropertyErrorf("protos", "rust_protobuf with grpc_protos defined must currently use "+
-				"`use_protobuf3: false,` in the Android.bp file. This is temporary until the "+
-				"grpcio crate is updated to use the current version of the protobuf crate.")
-		}
 		deps.Rustlibs = append(deps.Rustlibs, "libgrpcio", "libfutures")
 		deps.HeaderLibs = append(deps.HeaderLibs, "libprotobuf-cpp-full")
 	}
@@ -282,77 +255,5 @@ func NewRustProtobuf(hod android.HostOrDeviceSupported) (*Module, *protobufDecor
 
 	module := NewSourceProviderModule(hod, protobuf, false, false)
 
-	android.InitBazelModule(module)
-
 	return module, protobuf
-}
-
-type rustProtoAttributes struct {
-	Srcs       bazel.LabelListAttribute
-	Crate_name bazel.StringAttribute
-	Deps       bazel.LabelListAttribute
-}
-
-type protoLibraryAttributes struct {
-	Srcs bazel.LabelListAttribute
-}
-
-func protoLibraryBp2build(ctx android.Bp2buildMutatorContext, m *Module) {
-	var protoFiles []string
-
-	for _, propsInterface := range m.sourceProvider.SourceProviderProps() {
-		if possibleProps, ok := propsInterface.(*ProtobufProperties); ok {
-			protoFiles = possibleProps.Protos
-			break
-		}
-	}
-
-	protoLibraryName := m.Name() + "_proto"
-
-	protoDeps := bazel.LabelListAttribute{
-		Value: bazel.LabelList{
-			Includes: []bazel.Label{
-				{
-					Label:              ":" + protoLibraryName,
-					OriginalModuleName: m.Name(),
-				},
-			},
-		},
-	}
-
-	// TODO(b/295918553): Remove androidRestriction after rust toolchain for android is checked in.
-	var androidRestriction bazel.BoolAttribute
-	androidRestriction.SetSelectValue(bazel.OsConfigurationAxis, "android", proptools.BoolPtr(false))
-
-	ctx.CreateBazelTargetModuleWithRestrictions(
-		bazel.BazelTargetModuleProperties{
-			Rule_class: "proto_library",
-		},
-		android.CommonAttributes{
-			Name: protoLibraryName,
-		},
-		&protoLibraryAttributes{
-			Srcs: bazel.MakeLabelListAttribute(
-				android.BazelLabelForModuleSrc(ctx, protoFiles),
-			),
-		},
-		androidRestriction,
-	)
-
-	ctx.CreateBazelTargetModuleWithRestrictions(
-		bazel.BazelTargetModuleProperties{
-			Rule_class:        "rust_proto_library",
-			Bzl_load_location: "@rules_rust//proto/protobuf:defs.bzl",
-		},
-		android.CommonAttributes{
-			Name: m.Name(),
-		},
-		&rustProtoAttributes{
-			Crate_name: bazel.StringAttribute{
-				Value: proptools.StringPtr(m.CrateName()),
-			},
-			Deps: protoDeps,
-		},
-		androidRestriction,
-	)
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
-	"android/soong/bazel"
 	"android/soong/java/config"
 )
 
@@ -303,7 +302,7 @@ func (j *Javadoc) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.Op
 	}
 
 	flags = append(flags, android.JoinWithPrefix(aidlIncludes.Strings(), "-I"))
-	flags = append(flags, "-I"+android.PathForModuleSrc(ctx).String())
+	flags = append(flags, "-I"+ctx.ModuleDir())
 	if src := android.ExistentPathForSource(ctx, ctx.ModuleDir(), "src"); src.Valid() {
 		flags = append(flags, "-I"+src.String())
 	}
@@ -364,8 +363,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 
 		switch tag {
 		case bootClasspathTag:
-			if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
-				dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 				deps.bootClasspath = append(deps.bootClasspath, dep.ImplementationJars...)
 			} else if sm, ok := module.(SystemModulesProvider); ok {
 				// A system modules dependency has been added to the bootclasspath
@@ -377,8 +375,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 		case libTag, sdkLibTag:
 			if dep, ok := module.(SdkLibraryDependency); ok {
 				deps.classpath = append(deps.classpath, dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))...)
-			} else if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
-				dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			} else if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 				deps.classpath = append(deps.classpath, dep.HeaderJars...)
 				deps.aidlIncludeDirs = append(deps.aidlIncludeDirs, dep.AidlIncludeDirs...)
 			} else if dep, ok := module.(android.SourceFileProducer); ok {
@@ -388,8 +385,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 				ctx.ModuleErrorf("depends on non-java module %q", otherName)
 			}
 		case java9LibTag:
-			if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
-				dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 				deps.java9Classpath = append(deps.java9Classpath, dep.HeaderJars...)
 			} else {
 				ctx.ModuleErrorf("depends on non-java module %q", otherName)
@@ -852,7 +848,6 @@ type ExportedDroiddocDirProperties struct {
 
 type ExportedDroiddocDir struct {
 	android.ModuleBase
-	android.BazelModuleBase
 
 	properties ExportedDroiddocDirProperties
 
@@ -865,7 +860,6 @@ func ExportedDroiddocDirFactory() android.Module {
 	module := &ExportedDroiddocDir{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidModule(module)
-	android.InitBazelModule(module)
 	return module
 }
 
@@ -875,28 +869,6 @@ func (d *ExportedDroiddocDir) GenerateAndroidBuildActions(ctx android.ModuleCont
 	path := String(d.properties.Path)
 	d.dir = android.PathForModuleSrc(ctx, path)
 	d.deps = android.PathsForModuleSrc(ctx, []string{filepath.Join(path, "**/*")})
-}
-
-// ConvertWithBp2build implements android.BazelModule.
-func (d *ExportedDroiddocDir) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
-	props := bazel.BazelTargetModuleProperties{
-		// Use the native py_library rule.
-		Rule_class:        "droiddoc_exported_dir",
-		Bzl_load_location: "//build/bazel/rules/droiddoc:droiddoc_exported_dir.bzl",
-	}
-
-	type BazelAttrs struct {
-		Dir  *string
-		Srcs bazel.LabelListAttribute
-	}
-
-	attrs := &BazelAttrs{
-		Dir:  proptools.StringPtr(*d.properties.Path),
-		Srcs: bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, []string{filepath.Join(*d.properties.Path, "**/*")})),
-	}
-
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: d.Name()}, attrs)
-
 }
 
 // Defaults
