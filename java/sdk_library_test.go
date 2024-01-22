@@ -38,6 +38,11 @@ func TestJavaSdkLibrary(t *testing.T) {
 		android.FixtureModifyConfig(func(config android.Config) {
 			config.SetApiLibraries([]string{"foo"})
 		}),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		droiddoc_exported_dir {
 			name: "droiddoc-templates-sdk",
@@ -139,6 +144,9 @@ func TestJavaSdkLibrary(t *testing.T) {
 		"foo.api.public.latest",
 		"foo.api.system.latest",
 		"foo.stubs",
+		"foo.stubs.exportable",
+		"foo.stubs.exportable.system",
+		"foo.stubs.exportable.test",
 		"foo.stubs.source",
 		"foo.stubs.source.system",
 		"foo.stubs.source.test",
@@ -529,6 +537,11 @@ func TestJavaSdkLibrary_Deps(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("sdklib"),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		java_sdk_library {
 			name: "sdklib",
@@ -547,6 +560,7 @@ func TestJavaSdkLibrary_Deps(t *testing.T) {
 		`sdklib.api.public.latest`,
 		`sdklib.impl`,
 		`sdklib.stubs`,
+		`sdklib.stubs.exportable`,
 		`sdklib.stubs.source`,
 		`sdklib.xml`,
 	})
@@ -919,6 +933,11 @@ func TestJavaSdkLibraryImport_WithSource(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("sdklib"),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		java_sdk_library {
 			name: "sdklib",
@@ -945,6 +964,7 @@ func TestJavaSdkLibraryImport_WithSource(t *testing.T) {
 		`sdklib.api.public.latest`,
 		`sdklib.impl`,
 		`sdklib.stubs`,
+		`sdklib.stubs.exportable`,
 		`sdklib.stubs.source`,
 		`sdklib.xml`,
 	})
@@ -966,6 +986,11 @@ func testJavaSdkLibraryImport_Preferred(t *testing.T, prefer string, preparer an
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("sdklib"),
 		preparer,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		java_sdk_library {
 			name: "sdklib",
@@ -1018,6 +1043,7 @@ func testJavaSdkLibraryImport_Preferred(t *testing.T, prefer string, preparer an
 		`sdklib.api.public.latest`,
 		`sdklib.impl`,
 		`sdklib.stubs`,
+		`sdklib.stubs.exportable`,
 		`sdklib.stubs.source`,
 		`sdklib.xml`,
 	})
@@ -1423,7 +1449,7 @@ func TestJavaSdkLibraryDist(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.module, func(t *testing.T) {
-			m := result.ModuleForTests(tt.module+".stubs", "android_common").Module().(*Library)
+			m := result.ModuleForTests(apiScopePublic.exportableStubsLibraryModuleName(tt.module), "android_common").Module().(*Library)
 			dists := m.Dists()
 			if len(dists) != 1 {
 				t.Fatalf("expected exactly 1 dist entry, got %d", len(dists))
@@ -1692,4 +1718,57 @@ func TestSdkLibraryDependency(t *testing.T) {
 	barPermissions := result.ModuleForTests("bar.xml", "android_common").Rule("java_sdk_xml")
 
 	android.AssertStringDoesContain(t, "bar.xml java_sdk_xml command", barPermissions.RuleParams.Command, `dependency=\"foo\"`)
+}
+
+func TestSdkLibraryExportableStubsLibrary(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetApiLibraries([]string{"foo"})
+		}),
+	).RunTestWithBp(t, `
+		aconfig_declarations {
+			name: "bar",
+			package: "com.example.package",
+			srcs: [
+				"bar.aconfig",
+			],
+		}
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java", "b.java"],
+			api_packages: ["foo"],
+			system: {
+				enabled: true,
+			},
+			module_lib: {
+				enabled: true,
+			},
+			test: {
+				enabled: true,
+			},
+			aconfig_declarations: [
+				"bar",
+			],
+		}
+	`)
+
+	exportableStubsLibraryModuleName := apiScopePublic.exportableStubsLibraryModuleName("foo")
+	exportableSourceStubsLibraryModuleName := apiScopePublic.exportableSourceStubsLibraryModuleName("foo")
+
+	// Check modules generation
+	topLevelModule := result.ModuleForTests(exportableStubsLibraryModuleName, "android_common")
+	result.ModuleForTests(exportableSourceStubsLibraryModuleName, "android_common")
+
+	// Check static lib dependency
+	android.AssertBoolEquals(t, "exportable top level stubs library module depends on the"+
+		"exportable source stubs library module", true,
+		CheckModuleHasDependency(t, result.TestContext, exportableStubsLibraryModuleName,
+			"android_common", exportableSourceStubsLibraryModuleName),
+	)
+	android.AssertArrayString(t, "exportable source stub library is a static lib of the"+
+		"top level exportable stubs library", []string{exportableSourceStubsLibraryModuleName},
+		topLevelModule.Module().(*Library).properties.Static_libs)
 }

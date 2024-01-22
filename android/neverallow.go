@@ -56,7 +56,6 @@ func init() {
 	AddNeverAllowRules(createCcSdkVariantRules()...)
 	AddNeverAllowRules(createUncompressDexRules()...)
 	AddNeverAllowRules(createInitFirstStageRules()...)
-	AddNeverAllowRules(createBp2BuildRule())
 	AddNeverAllowRules(createCcStubsRule())
 	AddNeverAllowRules(createJavaExcludeStaticLibsRule())
 	AddNeverAllowRules(createProhibitHeaderOnlyRule())
@@ -65,14 +64,6 @@ func init() {
 // Add a NeverAllow rule to the set of rules to apply.
 func AddNeverAllowRules(rules ...Rule) {
 	neverallows = append(neverallows, rules...)
-}
-
-func createBp2BuildRule() Rule {
-	return NeverAllow().
-		With("bazel_module.bp2build_available", "true").
-		NotIn("soong_tests"). // only used in tests
-		Because("setting bp2build_available in Android.bp is not " +
-			"supported for custom conversion, use allowlists.go instead.")
 }
 
 var (

@@ -532,6 +532,7 @@ type ModuleContextIntf interface {
 	inRamdisk() bool
 	inVendorRamdisk() bool
 	inRecovery() bool
+	InVendorOrProduct() bool
 	selectedStl() string
 	baseModuleName() string
 	getVndkExtendsModuleName() string
@@ -1292,7 +1293,7 @@ func (c *Module) UseVndk() bool {
 
 func (c *Module) canUseSdk() bool {
 	return c.Os() == android.Android && c.Target().NativeBridge == android.NativeBridgeDisabled &&
-		!c.UseVndk() && !c.InRamdisk() && !c.InRecovery() && !c.InVendorRamdisk()
+		!c.InVendorOrProduct() && !c.InRamdisk() && !c.InRecovery() && !c.InVendorRamdisk()
 }
 
 func (c *Module) UseSdk() bool {
@@ -1678,6 +1679,10 @@ func (ctx *moduleContextImpl) useVndk() bool {
 	return ctx.mod.UseVndk()
 }
 
+func (ctx *moduleContextImpl) InVendorOrProduct() bool {
+	return ctx.mod.InVendorOrProduct()
+}
+
 func (ctx *moduleContextImpl) isNdk(config android.Config) bool {
 	return ctx.mod.IsNdk(config)
 }
@@ -1907,7 +1912,7 @@ func GetSubnameProperty(actx android.ModuleContext, c LinkableInterface) string 
 	}
 
 	llndk := c.IsLlndk()
-	if llndk || (c.UseVndk() && c.HasNonSystemVariants()) {
+	if llndk || (c.InVendorOrProduct() && c.HasNonSystemVariants()) {
 		// .vendor.{version} suffix is added for vendor variant or .product.{version} suffix is
 		// added for product variant only when we have vendor and product variants with core
 		// variant. The suffix is not added for vendor-only or product-only module.
@@ -1998,6 +2003,10 @@ func (c *Module) stubLibraryMultipleApexViolation(ctx android.ModuleContext) boo
 	}
 	// Default: no violation
 	return false
+}
+
+func (d *Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	android.CollectDependencyAconfigFiles(ctx, &d.mergedAconfigFiles)
 }
 
 func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
@@ -2202,7 +2211,7 @@ func (c *Module) maybeUnhideFromMake() {
 	// is explicitly referenced via .bootstrap suffix or the module is marked with
 	// 'bootstrap: true').
 	if c.HasStubsVariants() && c.NotInPlatform() && !c.InRamdisk() &&
-		!c.InRecovery() && !c.UseVndk() && !c.static() && !c.isCoverageVariant() &&
+		!c.InRecovery() && !c.InVendorOrProduct() && !c.static() && !c.isCoverageVariant() &&
 		c.IsStubs() && !c.InVendorRamdisk() {
 		c.Properties.HideFromMake = false // unhide
 		// Note: this is still non-installable
@@ -3463,12 +3472,12 @@ func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 		panic(fmt.Errorf("Not an APEX module: %q", ctx.ModuleName()))
 	}
 
-	useVndk := false
+	inVendorOrProduct := false
 	bootstrap := false
 	if linkable, ok := ctx.Module().(LinkableInterface); !ok {
 		panic(fmt.Errorf("Not a Linkable module: %q", ctx.ModuleName()))
 	} else {
-		useVndk = linkable.UseVndk()
+		inVendorOrProduct = linkable.InVendorOrProduct()
 		bootstrap = linkable.Bootstrap()
 	}
 
@@ -3476,7 +3485,7 @@ func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 
 	useStubs := false
 
-	if lib := moduleLibraryInterface(dep); lib.buildStubs() && useVndk { // LLNDK
+	if lib := moduleLibraryInterface(dep); lib.buildStubs() && inVendorOrProduct { // LLNDK
 		if !apexInfo.IsForPlatform() {
 			// For platform libraries, use current version of LLNDK
 			// If this is for use_vendor apex we will apply the same rules
@@ -3628,7 +3637,7 @@ func MakeLibName(ctx android.ModuleContext, c LinkableInterface, ccDep LinkableI
 		// The vendor module is a no-vendor-variant VNDK library.  Depend on the
 		// core module instead.
 		return libName
-	} else if ccDep.UseVndk() && nonSystemVariantsExist {
+	} else if ccDep.InVendorOrProduct() && nonSystemVariantsExist {
 		// The vendor and product modules in Make will have been renamed to not conflict with the
 		// core module, so update the dependency name here accordingly.
 		return libName + ccDep.SubName()
@@ -4099,6 +4108,9 @@ type Defaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
 	android.ApexModuleBase
+
+	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
+	mergedAconfigFiles map[string]android.Paths
 }
 
 // cc_defaults provides a set of properties that can be inherited by other cc
