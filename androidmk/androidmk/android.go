@@ -64,6 +64,7 @@ var rewriteProperties = map[string](func(variableAssignmentContext) error){
 	"LOCAL_SANITIZE_DIAG":                  sanitize("diag."),
 	"LOCAL_STRIP_MODULE":                   strip(),
 	"LOCAL_CFLAGS":                         cflags,
+	"LOCAL_PROTO_JAVA_OUTPUT_PARAMS":       protoOutputParams,
 	"LOCAL_UNINSTALLABLE_MODULE":           invert("installable"),
 	"LOCAL_PROGUARD_ENABLED":               proguardEnabled,
 	"LOCAL_MODULE_PATH":                    prebuiltModulePath,
@@ -86,6 +87,7 @@ var rewriteProperties = map[string](func(variableAssignmentContext) error){
 
 	"LOCAL_ANNOTATION_PROCESSOR_CLASSES": skip, // Soong gets the processor classes from the plugin
 	"LOCAL_CTS_TEST_PACKAGE":             skip, // Obsolete
+	"LOCAL_XTS_TEST_PACKAGE":             skip, // Obsolete
 	"LOCAL_JACK_ENABLED":                 skip, // Obselete
 	"LOCAL_JACK_FLAGS":                   skip, // Obselete
 }
@@ -757,6 +759,13 @@ func cflags(ctx variableAssignmentContext) error {
 	ctx.mkvalue = ctx.mkvalue.Clone()
 	ctx.mkvalue.ReplaceLiteral(`\"`, `"`)
 	return includeVariableNow(bpVariable{"cflags", bpparser.ListType}, ctx)
+}
+
+func protoOutputParams(ctx variableAssignmentContext) error {
+	// The Soong replacement for LOCAL_PROTO_JAVA_OUTPUT_PARAMS doesn't need ","
+	ctx.mkvalue = ctx.mkvalue.Clone()
+	ctx.mkvalue.ReplaceLiteral(`, `, ` `)
+	return includeVariableNow(bpVariable{"proto.output_params", bpparser.ListType}, ctx)
 }
 
 func proguardEnabled(ctx variableAssignmentContext) error {

@@ -402,7 +402,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.Local.YasmFlags = append(flags.Local.YasmFlags, "-I"+modulePath)
 	}
 
-	if !(ctx.useSdk() || ctx.useVndk()) || ctx.Host() {
+	if !(ctx.useSdk() || ctx.InVendorOrProduct()) || ctx.Host() {
 		flags.SystemIncludeFlags = append(flags.SystemIncludeFlags,
 			"${config.CommonGlobalIncludes}",
 			tc.IncludeFlags())
@@ -419,7 +419,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			"-isystem "+getCurrentIncludePath(ctx).Join(ctx, config.NDKTriple(tc)).String())
 	}
 
-	if ctx.useVndk() {
+	if ctx.InVendorOrProduct() {
 		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_VNDK__")
 		if ctx.inVendor() {
 			flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_VENDOR__")
@@ -745,7 +745,7 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 
 	// Compile files listed in c.Properties.Srcs into objects
 	objs := compileObjs(ctx, buildFlags, "", srcs,
-		android.PathsForModuleSrc(ctx, compiler.Properties.Tidy_disabled_srcs),
+		append(android.PathsForModuleSrc(ctx, compiler.Properties.Tidy_disabled_srcs), compiler.generatedSources...),
 		android.PathsForModuleSrc(ctx, compiler.Properties.Tidy_timeout_srcs),
 		pathDeps, compiler.cFlagsDeps)
 

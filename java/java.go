@@ -26,6 +26,7 @@ import (
 
 	"android/soong/remoteexec"
 	"android/soong/testing"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -315,7 +316,7 @@ type ApexDependency interface {
 
 // Provides build path and install path to DEX jars.
 type UsesLibraryDependency interface {
-	DexJarBuildPath() OptionalDexJarPath
+	DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath
 	DexJarInstallPath() android.Path
 	ClassLoaderContexts() dexpreopt.ClassLoaderContextMap
 }
@@ -519,6 +520,7 @@ type deps struct {
 	kotlinStdlib            android.Paths
 	kotlinAnnotations       android.Paths
 	kotlinPlugins           android.Paths
+	aconfigProtoFiles       android.Paths
 
 	disableTurbine bool
 }
@@ -2011,7 +2013,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	})
 }
 
-func (al *ApiLibrary) DexJarBuildPath() OptionalDexJarPath {
+func (al *ApiLibrary) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	return al.dexJarFile
 }
 
@@ -2378,9 +2380,9 @@ func (j *Import) ImplementationAndResourcesJars() android.Paths {
 	return android.Paths{j.combinedClasspathFile}
 }
 
-func (j *Import) DexJarBuildPath() OptionalDexJarPath {
+func (j *Import) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	if j.dexJarFileErr != nil {
-		panic(j.dexJarFileErr.Error())
+		ctx.ModuleErrorf(j.dexJarFileErr.Error())
 	}
 	return j.dexJarFile
 }
@@ -2631,7 +2633,7 @@ func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 }
 
-func (j *DexImport) DexJarBuildPath() OptionalDexJarPath {
+func (j *DexImport) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	return j.dexJarFile
 }
 
@@ -2724,6 +2726,8 @@ func DefaultsFactory() android.Module {
 		&LintProperties{},
 		&appTestHelperAppProperties{},
 		&JavaApiLibraryProperties{},
+		&bootclasspathFragmentProperties{},
+		&SourceOnlyBootclasspathProperties{},
 	)
 
 	android.InitDefaultsModule(module)
@@ -2799,7 +2803,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	// from its CLC should be added to the current CLC.
 	if sdkLib != nil {
 		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, false,
-			dep.DexJarBuildPath().PathOrNil(), dep.DexJarInstallPath(), dep.ClassLoaderContexts())
+			dep.DexJarBuildPath(ctx).PathOrNil(), dep.DexJarInstallPath(), dep.ClassLoaderContexts())
 	} else {
 		clcMap.AddContextMap(dep.ClassLoaderContexts(), depName)
 	}

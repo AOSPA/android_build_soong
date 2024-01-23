@@ -245,12 +245,22 @@ func hiddenAPIComputeMonolithicStubLibModules(config android.Config) map[*Hidden
 		testStubModules = append(testStubModules, "sdk_test_current_android")
 	} else {
 		// Use stub modules built from source
-		publicStubModules = append(publicStubModules, android.SdkPublic.DefaultJavaLibraryName())
-		systemStubModules = append(systemStubModules, android.SdkSystem.DefaultJavaLibraryName())
-		testStubModules = append(testStubModules, android.SdkTest.DefaultJavaLibraryName())
+		if config.ReleaseHiddenApiExportableStubs() {
+			publicStubModules = append(publicStubModules, android.SdkPublic.DefaultExportableJavaLibraryName())
+			systemStubModules = append(systemStubModules, android.SdkSystem.DefaultExportableJavaLibraryName())
+			testStubModules = append(testStubModules, android.SdkTest.DefaultExportableJavaLibraryName())
+		} else {
+			publicStubModules = append(publicStubModules, android.SdkPublic.DefaultJavaLibraryName())
+			systemStubModules = append(systemStubModules, android.SdkSystem.DefaultJavaLibraryName())
+			testStubModules = append(testStubModules, android.SdkTest.DefaultJavaLibraryName())
+		}
 	}
 	// We do not have prebuilts of the core platform api yet
-	corePlatformStubModules = append(corePlatformStubModules, "legacy.core.platform.api.stubs")
+	if config.ReleaseHiddenApiExportableStubs() {
+		corePlatformStubModules = append(corePlatformStubModules, "legacy.core.platform.api.stubs.exportable")
+	} else {
+		corePlatformStubModules = append(corePlatformStubModules, "legacy.core.platform.api.stubs")
+	}
 
 	// Allow products to define their own stubs for custom product jars that apps can use.
 	publicStubModules = append(publicStubModules, config.ProductHiddenAPIStubs()...)
@@ -289,9 +299,14 @@ func hiddenAPIAddStubLibDependencies(ctx android.BottomUpMutatorContext, apiScop
 func hiddenAPIRetrieveDexJarBuildPath(ctx android.ModuleContext, module android.Module, kind android.SdkKind) android.Path {
 	var dexJar OptionalDexJarPath
 	if sdkLibrary, ok := module.(SdkLibraryDependency); ok {
-		dexJar = sdkLibrary.SdkApiStubDexJar(ctx, kind)
+		if ctx.Config().ReleaseHiddenApiExportableStubs() {
+			dexJar = sdkLibrary.SdkApiExportableStubDexJar(ctx, kind)
+		} else {
+			dexJar = sdkLibrary.SdkApiStubDexJar(ctx, kind)
+		}
+
 	} else if j, ok := module.(UsesLibraryDependency); ok {
-		dexJar = j.DexJarBuildPath()
+		dexJar = j.DexJarBuildPath(ctx)
 	} else {
 		ctx.ModuleErrorf("dependency %s of module type %s does not support providing a dex jar", module, ctx.OtherModuleType(module))
 		return nil
@@ -1457,7 +1472,9 @@ func handleMissingDexBootFile(ctx android.ModuleContext, module android.Module, 
 // However, under certain conditions, e.g. errors, or special build configurations it will return
 // a path to a fake file.
 func retrieveEncodedBootDexJarFromModule(ctx android.ModuleContext, module android.Module) android.Path {
-	bootDexJar := module.(interface{ DexJarBuildPath() OptionalDexJarPath }).DexJarBuildPath()
+	bootDexJar := module.(interface {
+		DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath
+	}).DexJarBuildPath(ctx)
 	if !bootDexJar.Valid() {
 		fake := android.PathForModuleOut(ctx, fmt.Sprintf("fake/encoded-dex/%s.jar", module.Name()))
 		handleMissingDexBootFile(ctx, module, fake, bootDexJar.InvalidReason())

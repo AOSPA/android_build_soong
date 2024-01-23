@@ -274,11 +274,30 @@ var (
 				` cat $$f; ` +
 				`done > $out`,
 		})
+
+	gatherReleasedFlaggedApisRule = pctx.AndroidStaticRule("gatherReleasedFlaggedApisRule",
+		blueprint.RuleParams{
+			Command: `${aconfig} dump-cache --format='{fully_qualified_name}={state:bool}' ` +
+				`--out ${out} ` +
+				`${flags_path} ` +
+				`${filter_args} `,
+			CommandDeps: []string{"${aconfig}"},
+			Description: "aconfig_bool",
+		}, "flags_path", "filter_args")
+
+	generateMetalavaRevertAnnotationsRule = pctx.AndroidStaticRule("generateMetalavaRevertAnnotationsRule",
+		blueprint.RuleParams{
+			Command:     `${keep-flagged-apis} ${in} > ${out}`,
+			CommandDeps: []string{"${keep-flagged-apis}"},
+		})
 )
 
 func init() {
 	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/java/config")
+
+	pctx.HostBinToolVariable("aconfig", "aconfig")
+	pctx.HostBinToolVariable("keep-flagged-apis", "keep-flagged-apis")
 }
 
 type javaBuilderFlags struct {
