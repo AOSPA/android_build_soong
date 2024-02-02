@@ -24,6 +24,7 @@ import (
 	//"path"
 	//"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -287,7 +288,8 @@ var (
 		"-Wno-range-loop-construct",                 // http://b/153747076
 		"-Wno-zero-as-null-pointer-constant",        // http://b/68236239
 		"-Wno-deprecated-anon-enum-enum-conversion", // http://b/153746485
-		"-Wno-pessimizing-move",                     // http://b/154270751
+		"-Wno-deprecated-enum-enum-conversion",
+		"-Wno-pessimizing-move", // http://b/154270751
 		// New warnings to be fixed after clang-r399163
 		"-Wno-non-c-typedef-for-linkage", // http://b/161304145
 		// New warnings to be fixed after clang-r428724
@@ -352,6 +354,20 @@ var (
 		"-Wno-missing-declarations",
 		"-Wno-reorder-ctor",
 		"-Wno-unused-function",
+
+		// Irrelevant on Android because _we_ don't use exceptions, but causes
+		// lots of build noise because libcxx/libcxxabi do. This can probably
+		// go away when we're on a new enough libc++, but has to be global
+		// until then because it causes warnings in the _callers_, not the
+		// project itself.
+		"-Wno-deprecated-dynamic-exception-spec",
+
+		// Irrelevant on Android because _we_ don't use exceptions, but causes
+		// lots of build noise because libcxx/libcxxabi do. This can probably
+		// go away when we're on a new enough libc++, but has to be global
+		// until then because it causes warnings in the _callers_, not the
+		// project itself.
+		"-Wno-deprecated-dynamic-exception-spec",
 	}
 
 	noOverride64GlobalCflags = []string{}
@@ -386,6 +402,9 @@ var (
 
 		// http://b/239661264
 		"-Wno-deprecated-non-prototype",
+
+		"-Wno-unused",
+		"-Wno-deprecated",
 	}
 
 	// Similar to noOverrideGlobalCflags, but applies only to third-party code
@@ -482,7 +501,7 @@ func init() {
 	exportedVars.ExportStringList("CommonGlobalCflags", ClangFilterUnknownCflags(commonGlobalCflags))
 
 	pctx.VariableFunc("CommonGlobalCflags", func(ctx android.PackageVarContext) string {
-		flags := commonGlobalCflags
+		flags := slices.Clone(commonGlobalCflags)
 
 		// http://b/131390872
 		// Automatically initialize any uninitialized stack variables.
