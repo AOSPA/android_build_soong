@@ -17,22 +17,22 @@ package {
 }
 
 bootstrap_go_package {
-    name: "soong-testing-test_spec_proto",
-    pkgPath: "android/soong/testing/test_spec_proto",
+    name: "soong-android_team_proto",
+    pkgPath: "android/soong/android/team_proto",
     deps: [
         "golang-protobuf-reflect-protoreflect",
         "golang-protobuf-runtime-protoimpl",
     ],
     srcs: [
-        "test_spec.pb.go",
+        "team.pb.go",
     ],
 }
 
 python_library_host {
-    name: "test-spec-proto-py",
-    pkg_path: "test_spec",
+    name: "teams-proto-py",
+    pkg_path: "teams",
     srcs: [
-        "test_spec.proto",
+        "team.proto",
     ],
     libs: [
         "libprotobuf-python",
