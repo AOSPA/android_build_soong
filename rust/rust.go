@@ -20,10 +20,10 @@ import (
 
 	"android/soong/bloaty"
 	"android/soong/testing"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
-	"android/soong/aconfig"
 	"android/soong/android"
 	"android/soong/cc"
 	cc_config "android/soong/cc/config"
@@ -70,9 +70,9 @@ type BaseProperties struct {
 	AndroidMkProcMacroLibs []string `blueprint:"mutated"`
 	AndroidMkStaticLibs    []string `blueprint:"mutated"`
 
-	ImageVariationPrefix string `blueprint:"mutated"`
-	VndkVersion          string `blueprint:"mutated"`
-	SubName              string `blueprint:"mutated"`
+	ImageVariation string `blueprint:"mutated"`
+	VndkVersion    string `blueprint:"mutated"`
+	SubName        string `blueprint:"mutated"`
 
 	// SubName is used by CC for tracking image variants / SDK versions. RustSubName is used for Rust-specific
 	// subnaming which shouldn't be visible to CC modules (such as the rlib stdlinkage subname). This should be
@@ -1007,7 +1007,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
 
-	aconfig.CollectDependencyAconfigFiles(ctx, &mod.mergedAconfigFiles)
+	android.CollectDependencyAconfigFiles(ctx, &mod.mergedAconfigFiles)
 }
 
 func (mod *Module) deps(ctx DepsContext) Deps {

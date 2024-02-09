@@ -43,7 +43,7 @@ var (
 	// For create-device-config-sysprops: Generate aconfig flag value map text file
 	aconfigTextRule = pctx.AndroidStaticRule("aconfig_text",
 		blueprint.RuleParams{
-			Command: `${aconfig} dump --format bool` +
+			Command: `${aconfig} dump-cache --format='{fully_qualified_name}={state:bool}'` +
 				` --cache ${in}` +
 				` --out ${out}.tmp` +
 				` && ( if cmp -s ${out}.tmp ${out} ; then rm ${out}.tmp ; else mv ${out}.tmp ${out} ; fi )`,
@@ -56,17 +56,12 @@ var (
 	// For all_aconfig_declarations: Combine all parsed_flags proto files
 	AllDeclarationsRule = pctx.AndroidStaticRule("All_aconfig_declarations_dump",
 		blueprint.RuleParams{
-			Command: `${aconfig} dump --format protobuf --out ${out} ${cache_files}`,
+			Command: `${aconfig} dump-cache --format protobuf --out ${out} ${cache_files}`,
 			CommandDeps: []string{
 				"${aconfig}",
 			},
 		}, "cache_files")
 
-	mergeAconfigFilesRule = pctx.AndroidStaticRule("mergeAconfigFilesRule",
-		blueprint.RuleParams{
-			Command:     `${aconfig} dump --dedup --format protobuf --out $out $flags`,
-			CommandDeps: []string{"${aconfig}"},
-		}, "flags")
 	// For exported_java_aconfig_library: Generate a JAR from all
 	// java_aconfig_libraries to be consumed by apps built outside the
 	// platform
@@ -78,7 +73,7 @@ var (
 		blueprint.RuleParams{
 			Command: `rm -rf ${out}.tmp` +
 				`&& for cache in ${cache_files}; do ` +
-				`  if [ -n "$$(${aconfig} dump --cache $$cache --filter=is_exported:true --format='{fully_qualified_name}')" ]; then ` +
+				`  if [ -n "$$(${aconfig} dump-cache --cache $$cache --filter=is_exported:true --format='{fully_qualified_name}')" ]; then ` +
 				`    ${aconfig} create-java-lib --cache $$cache --mode=exported --out ${out}.tmp; ` +
 				`  fi ` +
 				`done` +

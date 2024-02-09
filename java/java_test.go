@@ -528,6 +528,15 @@ func TestHostBinaryNoJavaDebugInfoOverride(t *testing.T) {
 	}
 }
 
+// A minimal context object for use with DexJarBuildPath
+type moduleErrorfTestCtx struct {
+}
+
+func (ctx moduleErrorfTestCtx) ModuleErrorf(format string, args ...interface{}) {
+}
+
+var _ android.ModuleErrorfContext = (*moduleErrorfTestCtx)(nil)
+
 func TestPrebuilts(t *testing.T) {
 	ctx, _ := testJava(t, `
 		java_library {
@@ -595,7 +604,8 @@ func TestPrebuilts(t *testing.T) {
 		t.Errorf("foo classpath %v does not contain %q", javac.Args["classpath"], barJar.String())
 	}
 
-	barDexJar := barModule.Module().(*Import).DexJarBuildPath()
+	errCtx := moduleErrorfTestCtx{}
+	barDexJar := barModule.Module().(*Import).DexJarBuildPath(errCtx)
 	if barDexJar.IsSet() {
 		t.Errorf("bar dex jar build path expected to be set, got %s", barDexJar)
 	}
@@ -608,7 +618,7 @@ func TestPrebuilts(t *testing.T) {
 		t.Errorf("foo combineJar inputs %v does not contain %q", combineJar.Inputs, bazJar.String())
 	}
 
-	bazDexJar := bazModule.Module().(*Import).DexJarBuildPath().Path()
+	bazDexJar := bazModule.Module().(*Import).DexJarBuildPath(errCtx).Path()
 	expectedDexJar := "out/soong/.intermediates/baz/android_common/dex/baz.jar"
 	android.AssertPathRelativeToTopEquals(t, "baz dex jar build path", expectedDexJar, bazDexJar)
 
@@ -618,8 +628,6 @@ func TestPrebuilts(t *testing.T) {
 	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_library", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
 	entries = android.AndroidMkEntriesForTest(t, ctx, barModule.Module())[0]
 	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_import", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
-	entries = android.AndroidMkEntriesForTest(t, ctx, ctx.ModuleForTests("sdklib", "android_common").Module())[0]
-	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_sdk_library_import", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
 }
 
 func assertDeepEquals(t *testing.T, message string, expected interface{}, actual interface{}) {
@@ -2433,7 +2441,7 @@ func TestSdkLibraryProvidesSystemModulesToApiLibrary(t *testing.T) {
 	manifest := m.Output("metalava.sbox.textproto")
 	sboxProto := android.RuleBuilderSboxProtoForTests(t, result.TestContext, manifest)
 	manifestCommand := sboxProto.Commands[0].GetCommand()
-	classPathFlag := "--classpath __SBOX_SANDBOX_DIR__/out/.intermediates/bar/android_common/turbine-combined/bar.jar"
+	classPathFlag := "--classpath __SBOX_SANDBOX_DIR__/out/soong/.intermediates/bar/android_common/turbine-combined/bar.jar"
 	android.AssertStringDoesContain(t, "command expected to contain classpath flag", manifestCommand, classPathFlag)
 }
 
@@ -2467,7 +2475,7 @@ func TestApiLibraryDroidstubsDependency(t *testing.T) {
 		}
 	`)
 
-	currentApiTimestampPath := "api-stubs-docs-non-updatable/android_common/metalava/check_current_api.timestamp"
+	currentApiTimestampPath := "api-stubs-docs-non-updatable/android_common/everything/check_current_api.timestamp"
 	foo := result.ModuleForTests("foo", "android_common").Module().(*ApiLibrary)
 	fooValidationPathsString := strings.Join(foo.validationPaths.Strings(), " ")
 	bar := result.ModuleForTests("bar", "android_common").Module().(*ApiLibrary)

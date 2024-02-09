@@ -15,7 +15,6 @@
 package cc
 
 import (
-	"android/soong/aconfig"
 	"github.com/google/blueprint/proptools"
 
 	"fmt"
@@ -51,6 +50,7 @@ type AndroidMkContext interface {
 	InVendorRamdisk() bool
 	InRecovery() bool
 	NotInPlatform() bool
+	InVendorOrProduct() bool
 }
 
 type subAndroidMkProvider interface {
@@ -101,15 +101,6 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				if len(c.Properties.AndroidMkSharedLibs) > 0 {
 					entries.AddStrings("LOCAL_SHARED_LIBRARIES", c.Properties.AndroidMkSharedLibs...)
 				}
-				if len(c.Properties.AndroidMkStaticLibs) > 0 {
-					entries.AddStrings("LOCAL_STATIC_LIBRARIES", c.Properties.AndroidMkStaticLibs...)
-				}
-				if len(c.Properties.AndroidMkWholeStaticLibs) > 0 {
-					entries.AddStrings("LOCAL_WHOLE_STATIC_LIBRARIES", c.Properties.AndroidMkWholeStaticLibs...)
-				}
-				if len(c.Properties.AndroidMkHeaderLibs) > 0 {
-					entries.AddStrings("LOCAL_HEADER_LIBRARIES", c.Properties.AndroidMkHeaderLibs...)
-				}
 				if len(c.Properties.AndroidMkRuntimeLibs) > 0 {
 					entries.AddStrings("LOCAL_RUNTIME_LIBRARIES", c.Properties.AndroidMkRuntimeLibs...)
 				}
@@ -117,7 +108,7 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 					entries.AddStrings("LOCAL_SRC_FILES", lib.baseCompiler.srcsBeforeGen.Strings()...)
 				}
 				entries.SetString("LOCAL_SOONG_LINK_TYPE", c.makeLinkType)
-				if c.UseVndk() {
+				if c.InVendorOrProduct() {
 					entries.SetBool("LOCAL_USE_VNDK", true)
 					if c.IsVndk() && !c.static() {
 						entries.SetString("LOCAL_SOONG_VNDK_VERSION", c.VndkVersion())
@@ -137,7 +128,7 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 					entries.SetString("SOONG_SDK_VARIANT_MODULES",
 						"$(SOONG_SDK_VARIANT_MODULES) $(patsubst %.sdk,%,$(LOCAL_MODULE))")
 				}
-				aconfig.SetAconfigFileMkEntries(c.AndroidModuleBase(), entries, c.mergedAconfigFiles)
+				android.SetAconfigFileMkEntries(c.AndroidModuleBase(), entries, c.mergedAconfigFiles)
 			},
 		},
 		ExtraFooters: []android.AndroidMkExtraFootersFunc{
@@ -315,7 +306,7 @@ func (library *libraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries 
 	// they can be exceptionally used directly when APEXes are not available (e.g. during the
 	// very early stage in the boot process).
 	if len(library.Properties.Stubs.Versions) > 0 && !ctx.Host() && ctx.NotInPlatform() &&
-		!ctx.InRamdisk() && !ctx.InVendorRamdisk() && !ctx.InRecovery() && !ctx.UseVndk() && !ctx.static() {
+		!ctx.InRamdisk() && !ctx.InVendorRamdisk() && !ctx.InRecovery() && !ctx.InVendorOrProduct() && !ctx.static() {
 		if library.buildStubs() && library.isLatestStubVersion() {
 			entries.SubName = ""
 		}

@@ -86,6 +86,9 @@ type AndroidAppImport struct {
 	hideApexVariantFromMake bool
 
 	provenanceMetaDataFile android.OutputPath
+
+	// Single aconfig "cache file" merged from this module and all dependencies.
+	mergedAconfigFiles map[string]android.Paths
 }
 
 type AndroidAppImportProperties struct {
@@ -148,7 +151,9 @@ func (a *AndroidAppImport) IsInstallable() bool {
 }
 
 // Updates properties with variant-specific values.
-func (a *AndroidAppImport) processVariants(ctx android.LoadHookContext) {
+// This happens as a DefaultableHook instead of a LoadHook because we want to run it after
+// soong config variables are applied.
+func (a *AndroidAppImport) processVariants(ctx android.DefaultableHookContext) {
 	config := ctx.Config()
 
 	dpiProps := reflect.ValueOf(a.dpiVariants).Elem().FieldByName("Dpi_variants")
@@ -377,6 +382,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		artifactPath := android.PathForModuleSrc(ctx, *a.properties.Apk)
 		a.provenanceMetaDataFile = provenance.GenerateArtifactProvenanceMetaData(ctx, artifactPath, a.installPath)
 	}
+	android.CollectDependencyAconfigFiles(ctx, &a.mergedAconfigFiles)
 
 	// TODO: androidmk converter jni libs
 }
@@ -539,7 +545,7 @@ func AndroidAppImportFactory() android.Module {
 	module.AddProperties(&module.dexpreoptProperties)
 	module.AddProperties(&module.usesLibrary.usesLibraryProperties)
 	module.populateAllVariantStructs()
-	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+	module.SetDefaultableHook(func(ctx android.DefaultableHookContext) {
 		module.processVariants(ctx)
 	})
 
@@ -590,7 +596,7 @@ func AndroidTestImportFactory() android.Module {
 	module.AddProperties(&module.dexpreoptProperties)
 	module.AddProperties(&module.testProperties)
 	module.populateAllVariantStructs()
-	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+	module.SetDefaultableHook(func(ctx android.DefaultableHookContext) {
 		module.processVariants(ctx)
 	})
 

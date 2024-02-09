@@ -18,6 +18,7 @@ package android
 // product variables necessary for soong_build's operation.
 
 import (
+	"android/soong/shared"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -118,6 +119,11 @@ func (c Config) SoongOutDir() string {
 	return c.soongOutDir
 }
 
+// tempDir returns the path to out/soong/.temp, which is cleared at the beginning of every build.
+func (c Config) tempDir() string {
+	return shared.TempDirForOutDir(c.soongOutDir)
+}
+
 func (c Config) OutDir() string {
 	return c.outDir
 }
@@ -206,6 +212,10 @@ func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 // Enables ABI monitoring of NDK libraries
 func (c Config) ReleaseNdkAbiMonitored() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_NDK_ABI_MONITORED")
+}
+
+func (c Config) ReleaseHiddenApiExportableStubs() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS")
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -1898,6 +1908,10 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
+func (c *deviceConfig) BuildBrokenDontCheckSystemSdk() bool {
+	return c.config.productVariables.BuildBrokenDontCheckSystemSdk
+}
+
 func (c *config) BuildWarningBadOptionalUsesLibsAllowlist() []string {
 	return c.productVariables.BuildWarningBadOptionalUsesLibsAllowlist
 }
@@ -2004,18 +2018,6 @@ func (c *config) GetApiLibraries() map[string]struct{} {
 
 func (c *deviceConfig) CheckVendorSeappViolations() bool {
 	return Bool(c.config.productVariables.CheckVendorSeappViolations)
-}
-
-func (c *deviceConfig) NextReleaseHideFlaggedApi() bool {
-	return Bool(c.config.productVariables.NextReleaseHideFlaggedApi)
-}
-
-func (c *deviceConfig) ReleaseExposeFlaggedApi() bool {
-	return Bool(c.config.productVariables.Release_expose_flagged_api)
-}
-
-func (c *deviceConfig) HideFlaggedApis() bool {
-	return c.NextReleaseHideFlaggedApi() && !c.ReleaseExposeFlaggedApi()
 }
 
 func (c *config) GetBuildFlag(name string) (string, bool) {

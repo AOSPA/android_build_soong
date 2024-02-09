@@ -19,7 +19,6 @@ import (
 	"io"
 	"strings"
 
-	"android/soong/aconfig"
 	"android/soong/android"
 
 	"github.com/google/blueprint/proptools"
@@ -129,7 +128,7 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 					if library.dexpreopter.configPath != nil {
 						entries.SetPath("LOCAL_SOONG_DEXPREOPT_CONFIG", library.dexpreopter.configPath)
 					}
-					aconfig.SetAconfigFileMkEntries(&library.ModuleBase, entries, library.mergedAconfigFiles)
+					android.SetAconfigFileMkEntries(&library.ModuleBase, entries, library.mergedAconfigFiles)
 				},
 			},
 		})
@@ -207,11 +206,7 @@ func (j *TestHelperLibrary) AndroidMkEntries() []android.AndroidMkEntries {
 
 func (prebuilt *Import) AndroidMkEntries() []android.AndroidMkEntries {
 	if prebuilt.hideApexVariantFromMake {
-		// For a library imported from a prebuilt APEX, we don't need a Make module for itself, as we
-		// don't need to install it. However, we need to add its dexpreopt outputs as sub-modules, if it
-		// is preopted.
-		dexpreoptEntries := prebuilt.dexpreopter.AndroidMkEntriesForApex()
-		return append(dexpreoptEntries, android.AndroidMkEntries{Disabled: true})
+		return []android.AndroidMkEntries{}
 	}
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "JAVA_LIBRARIES",
@@ -306,7 +301,7 @@ func (binary *Binary) AndroidMkEntries() []android.AndroidMkEntries {
 					if len(binary.dexpreopter.builtInstalled) > 0 {
 						entries.SetString("LOCAL_SOONG_BUILT_INSTALLED", binary.dexpreopter.builtInstalled)
 					}
-					aconfig.SetAconfigFileMkEntries(&binary.ModuleBase, entries, binary.mergedAconfigFiles)
+					android.SetAconfigFileMkEntries(&binary.ModuleBase, entries, binary.mergedAconfigFiles)
 				},
 			},
 			ExtraFooters: []android.AndroidMkExtraFootersFunc{
@@ -459,7 +454,7 @@ func (app *AndroidApp) AndroidMkEntries() []android.AndroidMkEntries {
 				entries.SetOptionalPaths("LOCAL_SOONG_LINT_REPORTS", app.linter.reports)
 
 				if app.Name() != "framework-res" {
-					aconfig.SetAconfigFileMkEntries(&app.ModuleBase, entries, app.mergedAconfigFiles)
+					android.SetAconfigFileMkEntries(&app.ModuleBase, entries, app.mergedAconfigFiles)
 				}
 			},
 		},
@@ -537,7 +532,7 @@ func (a *AndroidLibrary) AndroidMkEntries() []android.AndroidMkEntries {
 		entries.SetPath("LOCAL_FULL_MANIFEST_FILE", a.mergedManifestFile)
 		entries.SetPath("LOCAL_SOONG_EXPORT_PROGUARD_FLAGS", a.combinedExportedProguardFlagsFile)
 		entries.SetBoolIfTrue("LOCAL_UNINSTALLABLE_MODULE", true)
-		aconfig.SetAconfigFileMkEntries(&a.ModuleBase, entries, a.mergedAconfigFiles)
+		android.SetAconfigFileMkEntries(&a.ModuleBase, entries, a.mergedAconfigFiles)
 	})
 
 	return entriesList

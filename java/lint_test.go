@@ -21,7 +21,7 @@ import (
 	"android/soong/android"
 )
 
-func TestJavaLint(t *testing.T) {
+func TestJavaLintDoesntUseBaselineImplicitly(t *testing.T) {
 	ctx, _ := testJavaWithFS(t, `
 		java_library {
 			name: "foo",
@@ -40,30 +40,8 @@ func TestJavaLint(t *testing.T) {
 	foo := ctx.ModuleForTests("foo", "android_common")
 
 	sboxProto := android.RuleBuilderSboxProtoForTests(t, ctx, foo.Output("lint.sbox.textproto"))
-	if !strings.Contains(*sboxProto.Commands[0].Command, "--baseline lint-baseline.xml") {
-		t.Error("did not pass --baseline flag")
-	}
-}
-
-func TestJavaLintWithoutBaseline(t *testing.T) {
-	ctx, _ := testJavaWithFS(t, `
-		java_library {
-			name: "foo",
-			srcs: [
-				"a.java",
-				"b.java",
-				"c.java",
-			],
-			min_sdk_version: "29",
-			sdk_version: "system_current",
-		}
-       `, map[string][]byte{})
-
-	foo := ctx.ModuleForTests("foo", "android_common")
-
-	sboxProto := android.RuleBuilderSboxProtoForTests(t, ctx, foo.Output("lint.sbox.textproto"))
-	if strings.Contains(*sboxProto.Commands[0].Command, "--baseline") {
-		t.Error("passed --baseline flag for non existent file")
+	if strings.Contains(*sboxProto.Commands[0].Command, "--baseline lint-baseline.xml") {
+		t.Error("Passed --baseline flag when baseline_filename was not set")
 	}
 }
 
@@ -113,9 +91,8 @@ func TestJavaLintUsesCorrectBpConfig(t *testing.T) {
 		t.Error("did not use the correct file for baseline")
 	}
 
-	if !strings.Contains(*sboxProto.Commands[0].Command, "--warning_check NewApi") {
-		// TODO(b/268261262): Change this to check for --error_check
-		t.Error("should check NewApi warnings")
+	if !strings.Contains(*sboxProto.Commands[0].Command, "--error_check NewApi") {
+		t.Error("should check NewApi errors")
 	}
 
 	if !strings.Contains(*sboxProto.Commands[0].Command, "--error_check SomeCheck") {

@@ -26,6 +26,7 @@ import (
 
 	"android/soong/remoteexec"
 	"android/soong/testing"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -315,7 +316,7 @@ type ApexDependency interface {
 
 // Provides build path and install path to DEX jars.
 type UsesLibraryDependency interface {
-	DexJarBuildPath() OptionalDexJarPath
+	DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath
 	DexJarInstallPath() android.Path
 	ClassLoaderContexts() dexpreopt.ClassLoaderContextMap
 }
@@ -519,6 +520,7 @@ type deps struct {
 	kotlinStdlib            android.Paths
 	kotlinAnnotations       android.Paths
 	kotlinPlugins           android.Paths
+	aconfigProtoFiles       android.Paths
 
 	disableTurbine bool
 }
@@ -562,9 +564,11 @@ const (
 func (v javaVersion) String() string {
 	switch v {
 	case JAVA_VERSION_6:
-		return "1.6"
+		// Java version 1.6 no longer supported, bumping to 1.8
+		return "1.8"
 	case JAVA_VERSION_7:
-		return "1.7"
+		// Java version 1.7 no longer supported, bumping to 1.8
+		return "1.8"
 	case JAVA_VERSION_8:
 		return "1.8"
 	case JAVA_VERSION_9:
@@ -581,10 +585,12 @@ func (v javaVersion) String() string {
 func (v javaVersion) StringForKotlinc() string {
 	// $ ./external/kotlinc/bin/kotlinc -jvm-target foo
 	// error: unknown JVM target version: foo
-	// Supported versions: 1.6, 1.8, 9, 10, 11, 12, 13, 14, 15, 16, 17
+	// Supported versions: 1.8, 9, 10, 11, 12, 13, 14, 15, 16, 17
 	switch v {
+	case JAVA_VERSION_6:
+		return "1.8"
 	case JAVA_VERSION_7:
-		return "1.6"
+		return "1.8"
 	case JAVA_VERSION_9:
 		return "9"
 	default:
@@ -600,9 +606,11 @@ func (v javaVersion) usesJavaModules() bool {
 func normalizeJavaVersion(ctx android.BaseModuleContext, javaVersion string) javaVersion {
 	switch javaVersion {
 	case "1.6", "6":
-		return JAVA_VERSION_6
+		// Java version 1.6 no longer supported, bumping to 1.8
+		return JAVA_VERSION_8
 	case "1.7", "7":
-		return JAVA_VERSION_7
+		// Java version 1.7 no longer supported, bumping to 1.8
+		return JAVA_VERSION_8
 	case "1.8", "8":
 		return JAVA_VERSION_8
 	case "1.9", "9":
@@ -2011,7 +2019,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	})
 }
 
-func (al *ApiLibrary) DexJarBuildPath() OptionalDexJarPath {
+func (al *ApiLibrary) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	return al.dexJarFile
 }
 
@@ -2100,6 +2108,7 @@ type Import struct {
 
 	// output file containing classes.dex and resources
 	dexJarFile        OptionalDexJarPath
+	dexJarFileErr     error
 	dexJarInstallFile android.Path
 
 	combinedClasspathFile android.Path
@@ -2250,15 +2259,19 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ai, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 		if ai.ForPrebuiltApex {
 			// Get the path of the dex implementation jar from the `deapexer` module.
-			di := android.FindDeapexerProviderForModule(ctx)
-			if di == nil {
-				return // An error has been reported by FindDeapexerProviderForModule.
+			di, err := android.FindDeapexerProviderForModule(ctx)
+			if err != nil {
+				// An error was found, possibly due to multiple apexes in the tree that export this library
+				// Defer the error till a client tries to call DexJarBuildPath
+				j.dexJarFileErr = err
+				j.initHiddenAPIError(err)
+				return
 			}
-			dexJarFileApexRootRelative := apexRootRelativePathToJavaLib(j.BaseModuleName())
+			dexJarFileApexRootRelative := ApexRootRelativePathToJavaLib(j.BaseModuleName())
 			if dexOutputPath := di.PrebuiltExportPath(dexJarFileApexRootRelative); dexOutputPath != nil {
 				dexJarFile := makeDexJarPathFromPath(dexOutputPath)
 				j.dexJarFile = dexJarFile
-				installPath := android.PathForModuleInPartitionInstall(ctx, "apex", ai.ApexVariationName, apexRootRelativePathToJavaLib(j.BaseModuleName()))
+				installPath := android.PathForModuleInPartitionInstall(ctx, "apex", ai.ApexVariationName, ApexRootRelativePathToJavaLib(j.BaseModuleName()))
 				j.dexJarInstallFile = installPath
 
 				j.dexpreopter.installPath = j.dexpreopter.getInstallPath(ctx, installPath)
@@ -2374,7 +2387,10 @@ func (j *Import) ImplementationAndResourcesJars() android.Paths {
 	return android.Paths{j.combinedClasspathFile}
 }
 
-func (j *Import) DexJarBuildPath() OptionalDexJarPath {
+func (j *Import) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
+	if j.dexJarFileErr != nil {
+		ctx.ModuleErrorf(j.dexJarFileErr.Error())
+	}
 	return j.dexJarFile
 }
 
@@ -2415,7 +2431,7 @@ func (j *Import) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 // java_sdk_library_import with the specified base module name requires to be exported from a
 // prebuilt_apex/apex_set.
 func requiredFilesFromPrebuiltApexForImport(name string, d *dexpreopter) []string {
-	dexJarFileApexRootRelative := apexRootRelativePathToJavaLib(name)
+	dexJarFileApexRootRelative := ApexRootRelativePathToJavaLib(name)
 	// Add the dex implementation jar to the set of exported files.
 	files := []string{
 		dexJarFileApexRootRelative,
@@ -2426,9 +2442,9 @@ func requiredFilesFromPrebuiltApexForImport(name string, d *dexpreopter) []strin
 	return files
 }
 
-// apexRootRelativePathToJavaLib returns the path, relative to the root of the apex's contents, for
+// ApexRootRelativePathToJavaLib returns the path, relative to the root of the apex's contents, for
 // the java library with the specified name.
-func apexRootRelativePathToJavaLib(name string) string {
+func ApexRootRelativePathToJavaLib(name string) string {
 	return filepath.Join("javalib", name+".jar")
 }
 
@@ -2624,7 +2640,7 @@ func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 }
 
-func (j *DexImport) DexJarBuildPath() OptionalDexJarPath {
+func (j *DexImport) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	return j.dexJarFile
 }
 
@@ -2717,6 +2733,8 @@ func DefaultsFactory() android.Module {
 		&LintProperties{},
 		&appTestHelperAppProperties{},
 		&JavaApiLibraryProperties{},
+		&bootclasspathFragmentProperties{},
+		&SourceOnlyBootclasspathProperties{},
 	)
 
 	android.InitDefaultsModule(module)
@@ -2792,7 +2810,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	// from its CLC should be added to the current CLC.
 	if sdkLib != nil {
 		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, false,
-			dep.DexJarBuildPath().PathOrNil(), dep.DexJarInstallPath(), dep.ClassLoaderContexts())
+			dep.DexJarBuildPath(ctx).PathOrNil(), dep.DexJarInstallPath(), dep.ClassLoaderContexts())
 	} else {
 		clcMap.AddContextMap(dep.ClassLoaderContexts(), depName)
 	}

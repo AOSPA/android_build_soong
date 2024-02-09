@@ -17,7 +17,6 @@ package codegen
 import (
 	"fmt"
 
-	"android/soong/aconfig"
 	"android/soong/android"
 	"android/soong/java"
 
@@ -31,7 +30,7 @@ type declarationsTagType struct {
 
 var declarationsTag = declarationsTagType{}
 
-var aconfigSupportedModes = []string{"production", "test", "exported"}
+var aconfigSupportedModes = []string{"production", "test", "exported", "force-read-only"}
 
 type JavaAconfigDeclarationsLibraryProperties struct {
 	// name of the aconfig_declarations module to generate a library for
@@ -40,6 +39,7 @@ type JavaAconfigDeclarationsLibraryProperties struct {
 	// default mode is "production", the other accepted modes are:
 	// "test": to generate test mode version of the library
 	// "exported": to generate exported mode version of the library
+	// "force-read-only": to generate force-read-only mode version of the library
 	// an error will be thrown if the mode is not supported
 	Mode *string
 }
@@ -62,10 +62,18 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) DepsMutator(module *ja
 		ctx.AddDependency(ctx.Module(), declarationsTag, declarations)
 	}
 
-	// Add aconfig-annotations-lib as a dependency for the optimization / code stripping annotations
-	module.AddSharedLibrary("aconfig-annotations-lib")
-	// TODO(b/303773055): Remove the annotation after access issue is resolved.
-	module.AddSharedLibrary("unsupportedappusage")
+	// "libcore_aconfig_flags_lib" module has a circular dependency because the shared libraries
+	// are built on core_current and the module is used to flag the APIs in the core_current.
+	// http://b/316554963#comment2 has the details of the circular dependency chain.
+	// If a java_aconfig_library uses "none" sdk_version, it should include and build these
+	// annotation files as the shared library themselves.
+	var addLibraries bool = module.Library.Module.SdkVersion(ctx).Kind != android.SdkNone
+	if addLibraries {
+		// Add aconfig-annotations-lib as a dependency for the optimization / code stripping annotations
+		module.AddSharedLibrary("aconfig-annotations-lib")
+		// TODO(b/303773055): Remove the annotation after access issue is resolved.
+		module.AddSharedLibrary("unsupportedappusage")
+	}
 }
 
 func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuildActions(module *java.GeneratedJavaLibraryModule, ctx android.ModuleContext) android.Path {
@@ -74,7 +82,7 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 	if len(declarationsModules) != 1 {
 		panic(fmt.Errorf("Exactly one aconfig_declarations property required"))
 	}
-	declarations, _ := android.OtherModuleProvider(ctx, declarationsModules[0], aconfig.DeclarationsProviderKey)
+	declarations, _ := android.OtherModuleProvider(ctx, declarationsModules[0], android.AconfigDeclarationsProviderKey)
 
 	// Generate the action to build the srcjar
 	srcJarPath := android.PathForModuleGen(ctx, ctx.ModuleName()+".srcjar")

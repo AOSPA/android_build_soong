@@ -22,8 +22,6 @@ import (
 	"testing"
 
 	"android/soong/android"
-
-	"github.com/google/blueprint/proptools"
 )
 
 func TestDroidstubs(t *testing.T) {
@@ -213,7 +211,7 @@ func TestDroidstubsSandbox(t *testing.T) {
 	}
 
 	manifest := android.RuleBuilderSboxProtoForTests(t, ctx, m.Output("metalava.sbox.textproto"))
-	if g, w := manifest.Commands[0].GetCommand(), "reference __SBOX_SANDBOX_DIR__/out/.intermediates/foo/gen/foo.txt"; !strings.Contains(g, w) {
+	if g, w := manifest.Commands[0].GetCommand(), "reference __SBOX_SANDBOX_DIR__/out/soong/.intermediates/foo/gen/foo.txt"; !strings.Contains(g, w) {
 		t.Errorf("Expected command to contain %q, got %q", w, g)
 	}
 }
@@ -364,12 +362,10 @@ func TestGeneratedApiContributionVisibilityTest(t *testing.T) {
 	ctx.ModuleForTests("bar", "android_common")
 }
 
-func TestDroidstubsHideFlaggedApi(t *testing.T) {
+func TestAconfigDeclarations(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForJavaTest,
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.NextReleaseHideFlaggedApi = proptools.BoolPtr(true)
-			variables.Release_expose_flagged_api = proptools.BoolPtr(false)
 		}),
 		android.FixtureMergeMockFs(map[string][]byte{
 			"a/A.java":      nil,
@@ -377,6 +373,13 @@ func TestDroidstubsHideFlaggedApi(t *testing.T) {
 			"a/removed.txt": nil,
 		}),
 	).RunTestWithBp(t, `
+	aconfig_declarations {
+		name: "bar",
+		package: "com.example.package",
+		srcs: [
+			"bar.aconfig",
+		],
+	}
 	droidstubs {
 		name: "foo",
 		srcs: ["a/A.java"],
@@ -387,11 +390,25 @@ func TestDroidstubsHideFlaggedApi(t *testing.T) {
 				removed_api_file: "a/removed.txt",
 			}
 		},
+		aconfig_declarations: [
+			"bar",
+		],
 	}
 	`)
 
+	// Check that droidstubs depend on aconfig_declarations
+	android.AssertBoolEquals(t, "foo expected to depend on bar",
+		CheckModuleHasDependency(t, result.TestContext, "foo", "android_common", "bar"), true)
+
 	m := result.ModuleForTests("foo", "android_common")
-	manifest := m.Output("metalava.sbox.textproto")
+	android.AssertStringDoesContain(t, "foo generates revert annotations file",
+		strings.Join(m.AllOutputs(), ""), "revert-annotations-exportable.txt")
+
+	// revert-annotations.txt passed to exportable stubs generation metalava command
+	manifest := m.Output("metalava_exportable.sbox.textproto")
 	cmdline := String(android.RuleBuilderSboxProtoForTests(t, result.TestContext, manifest).Commands[0].Command)
-	android.AssertStringDoesContain(t, "flagged api hide command not included", cmdline, "--revert-annotation android.annotation.FlaggedApi")
+	android.AssertStringDoesContain(t, "flagged api hide command not included", cmdline, "revert-annotations-exportable.txt")
+
+	android.AssertStringDoesContain(t, "foo generates exportable stubs jar",
+		strings.Join(m.AllOutputs(), ""), "exportable/foo-stubs.srcjar")
 }

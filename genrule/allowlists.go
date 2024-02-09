@@ -23,9 +23,8 @@ var (
 
 	SandboxingDenyModuleList = []string{
 		// go/keep-sorted start
-		"CtsApkVerityTestDebugFiles",
 		"aidl_camera_build_version",
-		"chre_atoms_log.h",
+		"com.google.pixel.camera.hal.manifest",
 		// go/keep-sorted end
 	}
 

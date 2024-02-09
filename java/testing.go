@@ -383,6 +383,7 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterSystemModulesBuildComponents(ctx)
 	registerSystemserverClasspathBuildComponents(ctx)
 	registerLintBuildComponents(ctx)
+	android.RegisterApexContributionsBuildComponents(ctx)
 }
 
 // gatherRequiredDepsForTest gathers the module definitions used by
@@ -405,6 +406,14 @@ func gatherRequiredDepsForTest() string {
 		"core.current.stubs",
 		"legacy.core.platform.api.stubs",
 		"stable.core.platform.api.stubs",
+
+		"android_stubs_current_exportable",
+		"android_system_stubs_current_exportable",
+		"android_test_stubs_current_exportable",
+		"android_module_lib_stubs_current_exportable",
+		"android_system_server_stubs_current_exportable",
+		"core.current.stubs.exportable",
+		"legacy.core.platform.api.stubs.exportable",
 
 		"kotlin-stdlib",
 		"kotlin-stdlib-jdk7",
@@ -570,6 +579,11 @@ func gatherRequiredDepsForTest() string {
 		}
 `
 
+	bp += `
+		all_apex_contributions {
+			name: "all_apex_contributions",
+		}
+`
 	return bp
 }
 
