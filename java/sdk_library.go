@@ -2879,16 +2879,13 @@ func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleCo
 				module.installFile = installPath
 				module.initHiddenAPI(ctx, dexJarFile, module.findScopePaths(apiScopePublic).stubsImplPath[0], nil)
 
-				module.dexpreopter.installPath = module.dexpreopter.getInstallPath(ctx, installPath)
+				module.dexpreopter.installPath = module.dexpreopter.getInstallPath(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), installPath)
 				module.dexpreopter.isSDKLibrary = true
-				module.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &module.dexpreopter)
+				module.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), &module.dexpreopter)
 
 				if profilePath := di.PrebuiltExportPath(dexJarFileApexRootRelative + ".prof"); profilePath != nil {
 					module.dexpreopter.inputProfilePathOnHost = profilePath
 				}
-
-				// Dexpreopting.
-				module.dexpreopt(ctx, dexOutputPath)
 			} else {
 				// This should never happen as a variant for a prebuilt_apex is only created if the
 				// prebuilt_apex has been configured to export the java library dex file.
@@ -3020,6 +3017,10 @@ var _ android.RequiredFilesFromPrebuiltApex = (*SdkLibraryImport)(nil)
 func (module *SdkLibraryImport) RequiredFilesFromPrebuiltApex(ctx android.BaseModuleContext) []string {
 	name := module.BaseModuleName()
 	return requiredFilesFromPrebuiltApexForImport(name, &module.dexpreopter)
+}
+
+func (j *SdkLibraryImport) UseProfileGuidedDexpreopt() bool {
+	return proptools.Bool(j.importDexpreoptProperties.Dex_preopt.Profile_guided)
 }
 
 // java_sdk_library_xml
