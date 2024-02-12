@@ -989,6 +989,10 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		if library.baseLinker.Properties.crt() {
 			deps.CrtBegin = append(deps.CrtBegin, ctx.toolchain().CrtBeginSharedLibrary()...)
 			deps.CrtEnd = append(deps.CrtEnd, ctx.toolchain().CrtEndSharedLibrary()...)
+
+		}
+		if library.baseLinker.Properties.crtPadSegment() {
+			deps.CrtEnd = append(deps.CrtEnd, ctx.toolchain().CrtPadSegmentSharedLibrary()...)
 		}
 		deps.WholeStaticLibs = append(deps.WholeStaticLibs, library.SharedProperties.Shared.Whole_static_libs...)
 		deps.StaticLibs = append(deps.StaticLibs, library.SharedProperties.Shared.Static_libs...)
@@ -1365,10 +1369,12 @@ func getRefAbiDumpFile(ctx android.ModuleInstallPathContext,
 		fileName+".lsdump")
 }
 
-func getRefAbiDumpDir(isNdk bool) string {
+func getRefAbiDumpDir(isNdk, isLlndk bool) string {
 	var dirName string
 	if isNdk {
 		dirName = "ndk"
+	} else if isLlndk {
+		dirName = "vndk"
 	} else {
 		dirName = "platform"
 	}
@@ -1489,9 +1495,11 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 			headerAbiChecker.Exclude_symbol_tags,
 			currVersion)
 
-		addLsdumpPath(classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
+		for _, tag := range classifySourceAbiDump(ctx) {
+			addLsdumpPath(tag + ":" + library.sAbiOutputFile.String())
+		}
 
-		dumpDir := getRefAbiDumpDir(isNdk)
+		dumpDir := getRefAbiDumpDir(isNdk, isLlndk)
 		binderBitness := ctx.DeviceConfig().BinderBitness()
 		// Check against the previous version.
 		prevVersionInt := prevRefAbiDumpVersion(ctx, dumpDir)

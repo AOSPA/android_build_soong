@@ -653,7 +653,7 @@ func (j *Library) PermittedPackagesForUpdatableBootJars() []string {
 	return j.properties.Permitted_packages
 }
 
-func shouldUncompressDex(ctx android.ModuleContext, dexpreopter *dexpreopter) bool {
+func shouldUncompressDex(ctx android.ModuleContext, libName string, dexpreopter *dexpreopter) bool {
 	// Store uncompressed (and aligned) any dex files from jars in APEXes.
 	if apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider); !apexInfo.IsForPlatform() {
 		return true
@@ -665,7 +665,7 @@ func shouldUncompressDex(ctx android.ModuleContext, dexpreopter *dexpreopter) bo
 	}
 
 	// Store uncompressed dex files that are preopted on /system.
-	if !dexpreopter.dexpreoptDisabled(ctx) && (ctx.Host() || !dexpreopter.odexOnSystemOther(ctx, dexpreopter.installPath)) {
+	if !dexpreopter.dexpreoptDisabled(ctx, libName) && (ctx.Host() || !dexpreopter.odexOnSystemOther(ctx, libName, dexpreopter.installPath)) {
 		return true
 	}
 	if ctx.Config().UncompressPrivAppDex() &&
@@ -680,7 +680,7 @@ func shouldUncompressDex(ctx android.ModuleContext, dexpreopter *dexpreopter) bo
 func setUncompressDex(ctx android.ModuleContext, dexpreopter *dexpreopter, dexer *dexer) {
 	if dexer.dexProperties.Uncompress_dex == nil {
 		// If the value was not force-set by the user, use reasonable default based on the module.
-		dexer.dexProperties.Uncompress_dex = proptools.BoolPtr(shouldUncompressDex(ctx, dexpreopter))
+		dexer.dexProperties.Uncompress_dex = proptools.BoolPtr(shouldUncompressDex(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), dexpreopter))
 	}
 }
 
@@ -712,7 +712,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.checkHeadersOnly(ctx)
 	if ctx.Device() {
 		j.dexpreopter.installPath = j.dexpreopter.getInstallPath(
-			ctx, android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar"))
+			ctx, j.Name(), android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar"))
 		j.dexpreopter.isSDKLibrary = j.deviceProperties.IsSDKLibrary
 		setUncompressDex(ctx, &j.dexpreopter, &j.dexer)
 		j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
@@ -1837,6 +1837,7 @@ func (al *ApiLibrary) extractApiSrcs(ctx android.ModuleContext, rule *android.Ru
 func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	apiContributions := al.properties.Api_contributions
 	addValidations := !ctx.Config().IsEnvTrue("DISABLE_STUB_VALIDATION") &&
+		!ctx.Config().IsEnvTrue("WITHOUT_CHECK_API") &&
 		proptools.BoolDefault(al.properties.Enable_validation, true)
 	for _, apiContributionName := range apiContributions {
 		ctx.AddDependency(ctx.Module(), javaApiContributionTag, apiContributionName)
@@ -2089,6 +2090,11 @@ type ImportProperties struct {
 		// that depend on this module, as well as to aidl for this module.
 		Export_include_dirs []string
 	}
+
+	// Name of the source soong module that gets shadowed by this prebuilt
+	// If unspecified, follows the naming convention that the source module of
+	// the prebuilt is Name() without "prebuilt_" prefix
+	Source_module_name *string
 }
 
 type Import struct {
@@ -2162,12 +2168,16 @@ func (j *Import) PrebuiltSrcs() []string {
 	return j.properties.Jars
 }
 
+func (j *Import) BaseModuleName() string {
+	return proptools.StringDefault(j.properties.Source_module_name, j.ModuleBase.Name())
+}
+
 func (j *Import) Name() string {
 	return j.prebuilt.Name(j.ModuleBase.Name())
 }
 
 func (j *Import) Stem() string {
-	return proptools.StringDefault(j.properties.Stem, j.ModuleBase.Name())
+	return proptools.StringDefault(j.properties.Stem, j.BaseModuleName())
 }
 
 func (a *Import) JacocoReportClassesFile() android.Path {
@@ -2274,15 +2284,13 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				installPath := android.PathForModuleInPartitionInstall(ctx, "apex", ai.ApexVariationName, ApexRootRelativePathToJavaLib(j.BaseModuleName()))
 				j.dexJarInstallFile = installPath
 
-				j.dexpreopter.installPath = j.dexpreopter.getInstallPath(ctx, installPath)
+				j.dexpreopter.installPath = j.dexpreopter.getInstallPath(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), installPath)
 				setUncompressDex(ctx, &j.dexpreopter, &j.dexer)
 				j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
 
 				if profilePath := di.PrebuiltExportPath(dexJarFileApexRootRelative + ".prof"); profilePath != nil {
 					j.dexpreopter.inputProfilePathOnHost = profilePath
 				}
-
-				j.dexpreopt(ctx, dexOutputPath)
 
 				// Initialize the hiddenapi structure.
 				j.initHiddenAPI(ctx, dexJarFile, outputFile, j.dexProperties.Uncompress_dex)
@@ -2304,7 +2312,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			// Dex compilation
 
 			j.dexpreopter.installPath = j.dexpreopter.getInstallPath(
-				ctx, android.PathForModuleInstall(ctx, "framework", jarName))
+				ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), android.PathForModuleInstall(ctx, "framework", jarName))
 			setUncompressDex(ctx, &j.dexpreopter, &j.dexer)
 			j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
 
@@ -2455,6 +2463,10 @@ func (j *Import) RequiredFilesFromPrebuiltApex(_ android.BaseModuleContext) []st
 	return requiredFilesFromPrebuiltApexForImport(name, &j.dexpreopter)
 }
 
+func (j *Import) UseProfileGuidedDexpreopt() bool {
+	return proptools.Bool(j.importDexpreoptProperties.Dex_preopt.Profile_guided)
+}
+
 // Add compile time check for interface implementation
 var _ android.IDEInfo = (*Import)(nil)
 var _ android.IDECustomizedModuleName = (*Import)(nil)
@@ -2592,8 +2604,8 @@ func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	j.dexpreopter.installPath = j.dexpreopter.getInstallPath(
-		ctx, android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar"))
-	j.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &j.dexpreopter)
+		ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar"))
+	j.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), &j.dexpreopter)
 
 	inputJar := ctx.ExpandSource(j.properties.Jars[0], "jars")
 	dexOutputFile := android.PathForModuleOut(ctx, ctx.ModuleName()+".jar")
@@ -2632,7 +2644,7 @@ func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	j.dexJarFile = makeDexJarPathFromPath(dexOutputFile)
 
-	j.dexpreopt(ctx, dexOutputFile)
+	j.dexpreopt(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), dexOutputFile)
 
 	if apexInfo.IsForPlatform() {
 		ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),
