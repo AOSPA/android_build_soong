@@ -210,6 +210,12 @@ func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
+// Enables flagged apis annotated with READ_WRITE aconfig flags to be included in the stubs
+// and hiddenapi flags so that they are accessible at runtime
+func (c Config) ReleaseExportRuntimeApis() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_EXPORT_RUNTIME_APIS")
+}
+
 // Enables ABI monitoring of NDK libraries
 func (c Config) ReleaseNdkAbiMonitored() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_NDK_ABI_MONITORED")
@@ -1500,18 +1506,18 @@ func (c *deviceConfig) PgoAdditionalProfileDirs() []string {
 }
 
 // AfdoProfile returns fully qualified path associated to the given module name
-func (c *deviceConfig) AfdoProfile(name string) (*string, error) {
+func (c *deviceConfig) AfdoProfile(name string) (string, error) {
 	for _, afdoProfile := range c.config.productVariables.AfdoProfiles {
 		split := strings.Split(afdoProfile, ":")
 		if len(split) != 3 {
-			return nil, fmt.Errorf("AFDO_PROFILES has invalid value: %s. "+
+			return "", fmt.Errorf("AFDO_PROFILES has invalid value: %s. "+
 				"The expected format is <module>:<fully-qualified-path-to-fdo_profile>", afdoProfile)
 		}
 		if split[0] == name {
-			return proptools.StringPtr(strings.Join([]string{split[1], split[2]}, ":")), nil
+			return strings.Join([]string{split[1], split[2]}, ":"), nil
 		}
 	}
-	return nil, nil
+	return "", nil
 }
 
 func (c *deviceConfig) VendorSepolicyDirs() []string {
@@ -1767,10 +1773,6 @@ func (c *deviceConfig) BoardMoveRamdiskResourcesToVendorBoot() bool {
 
 func (c *deviceConfig) PlatformSepolicyVersion() string {
 	return String(c.config.productVariables.PlatformSepolicyVersion)
-}
-
-func (c *deviceConfig) TotSepolicyVersion() string {
-	return String(c.config.productVariables.TotSepolicyVersion)
 }
 
 func (c *deviceConfig) PlatformSepolicyCompatVersions() []string {
