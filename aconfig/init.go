@@ -20,6 +20,20 @@ import (
 	"github.com/google/blueprint"
 )
 
+type CodegenInfo struct {
+	// AconfigDeclarations is the name of the aconfig_declarations modules that
+	// the codegen module is associated with
+	AconfigDeclarations []string
+
+	// Paths to the cache files of the associated aconfig_declaration modules
+	IntermediateCacheOutputPaths android.Paths
+
+	// Paths to the srcjar files generated from the java_aconfig_library modules
+	Srcjars android.Paths
+}
+
+var CodegenInfoProvider = blueprint.NewProvider[CodegenInfo]()
+
 var (
 	pctx = android.NewPackageContext("android/soong/aconfig")
 
@@ -61,6 +75,21 @@ var (
 				"${aconfig}",
 			},
 		}, "cache_files")
+	AllDeclarationsRuleTextProto = pctx.AndroidStaticRule("All_aconfig_declarations_dump_textproto",
+		blueprint.RuleParams{
+			Command: `${aconfig} dump-cache --dedup --format textproto --out ${out} ${cache_files}`,
+			CommandDeps: []string{
+				"${aconfig}",
+			},
+		}, "cache_files")
+
+	CreateStorageRule = pctx.AndroidStaticRule("aconfig_create_storage",
+		blueprint.RuleParams{
+			Command: `${aconfig} create-storage --container ${container} --file ${file_type} --out ${out} ${cache_files}`,
+			CommandDeps: []string{
+				"${aconfig}",
+			},
+		}, "container", "file_type", "cache_files")
 
 	// For exported_java_aconfig_library: Generate a JAR from all
 	// java_aconfig_libraries to be consumed by apps built outside the
