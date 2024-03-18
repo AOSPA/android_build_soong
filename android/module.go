@@ -34,6 +34,7 @@ import (
 var (
 	DeviceSharedLibrary = "shared_library"
 	DeviceStaticLibrary = "static_library"
+	jarJarPrefixHandler func(ctx ModuleContext)
 )
 
 type Module interface {
@@ -519,6 +520,9 @@ type commonProperties struct {
 	// trace, but influence modules among products.
 	SoongConfigTrace     soongConfigTrace `blueprint:"mutated"`
 	SoongConfigTraceHash string           `blueprint:"mutated"`
+
+	// The team (defined by the owner/vendor) who owns the property.
+	Team *string `android:"path"`
 }
 
 type distProperties struct {
@@ -530,6 +534,12 @@ type distProperties struct {
 	// distribution directory (default: $OUT/dist, configurable with $DIST_DIR)
 	Dists []Dist `android:"arch_variant"`
 }
+
+type TeamDepTagType struct {
+	blueprint.BaseDependencyTag
+}
+
+var teamDepTag = TeamDepTagType{}
 
 // CommonTestOptions represents the common `test_options` properties in
 // Android.bp.
@@ -991,6 +1001,12 @@ func (m *ModuleBase) ComponentDepsMutator(BottomUpMutatorContext) {}
 
 func (m *ModuleBase) DepsMutator(BottomUpMutatorContext) {}
 
+func (m *ModuleBase) baseDepsMutator(ctx BottomUpMutatorContext) {
+	if m.Team() != "" {
+		ctx.AddDependency(ctx.Module(), teamDepTag, m.Team())
+	}
+}
+
 // AddProperties "registers" the provided props
 // each value in props MUST be a pointer to a struct
 func (m *ModuleBase) AddProperties(props ...interface{}) {
@@ -1436,6 +1452,10 @@ func (m *ModuleBase) Owner() string {
 	return String(m.commonProperties.Owner)
 }
 
+func (m *ModuleBase) Team() string {
+	return String(m.commonProperties.Team)
+}
+
 func (m *ModuleBase) setImageVariation(variant string) {
 	m.commonProperties.ImageVariation = variant
 }
@@ -1621,12 +1641,29 @@ func (m *ModuleBase) earlyModuleContextFactory(ctx blueprint.EarlyModuleContext)
 func (m *ModuleBase) baseModuleContextFactory(ctx blueprint.BaseModuleContext) baseModuleContext {
 	return baseModuleContext{
 		bp:                 ctx,
+		archModuleContext:  m.archModuleContextFactory(ctx),
 		earlyModuleContext: m.earlyModuleContextFactory(ctx),
-		os:                 m.commonProperties.CompileOS,
-		target:             m.commonProperties.CompileTarget,
-		targetPrimary:      m.commonProperties.CompilePrimary,
-		multiTargets:       m.commonProperties.CompileMultiTargets,
 	}
+}
+
+func (m *ModuleBase) archModuleContextFactory(ctx blueprint.IncomingTransitionContext) archModuleContext {
+	config := ctx.Config().(Config)
+	target := m.Target()
+	primaryArch := false
+	if len(config.Targets[target.Os]) <= 1 {
+		primaryArch = true
+	} else {
+		primaryArch = target.Arch.ArchType == config.Targets[target.Os][0].Arch.ArchType
+	}
+
+	return archModuleContext{
+		os:            m.commonProperties.CompileOS,
+		target:        m.commonProperties.CompileTarget,
+		targetPrimary: m.commonProperties.CompilePrimary,
+		multiTargets:  m.commonProperties.CompileMultiTargets,
+		primaryArch:   primaryArch,
+	}
+
 }
 
 func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) {
@@ -1691,7 +1728,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		// ensure all direct android.Module deps are enabled
 		ctx.VisitDirectDepsBlueprint(func(bm blueprint.Module) {
 			if m, ok := bm.(Module); ok {
-				ctx.validateAndroidModule(bm, ctx.OtherModuleDependencyTag(m), ctx.baseModuleContext.strictVisitDeps)
+				ctx.validateAndroidModule(bm, ctx.OtherModuleDependencyTag(m), ctx.baseModuleContext.strictVisitDeps, false)
 			}
 		})
 
@@ -1735,7 +1772,19 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 
+		if jarJarPrefixHandler != nil {
+			jarJarPrefixHandler(ctx)
+			if ctx.Failed() {
+				return
+			}
+		}
+
 		m.module.GenerateAndroidBuildActions(ctx)
+		if ctx.Failed() {
+			return
+		}
+
+		aconfigUpdateAndroidBuildActions(ctx)
 		if ctx.Failed() {
 			return
 		}
@@ -1818,6 +1867,13 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	m.buildParams = ctx.buildParams
 	m.ruleParams = ctx.ruleParams
 	m.variables = ctx.variables
+}
+
+func SetJarJarPrefixHandler(handler func(ModuleContext)) {
+	if jarJarPrefixHandler != nil {
+		panic("jarJarPrefixHandler already set")
+	}
+	jarJarPrefixHandler = handler
 }
 
 func (m *ModuleBase) moduleInfoRegisterName(ctx ModuleContext, subName string) string {

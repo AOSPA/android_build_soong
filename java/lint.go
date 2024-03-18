@@ -325,14 +325,13 @@ func (l *linter) writeLintProjectXML(ctx android.ModuleContext, rule *android.Ru
 	cmd.FlagForEachArg("--error_check ", l.properties.Lint.Error_checks)
 	cmd.FlagForEachArg("--fatal_check ", l.properties.Lint.Fatal_checks)
 
-	// TODO(b/193460475): Re-enable strict updatability linting
-	//if l.GetStrictUpdatabilityLinting() {
-	//	// Verify the module does not baseline issues that endanger safe updatability.
-	//	if baselinePath := l.getBaselineFilepath(ctx); baselinePath.Valid() {
-	//		cmd.FlagWithInput("--baseline ", baselinePath.Path())
-	//		cmd.FlagForEachArg("--disallowed_issues ", updatabilityChecks)
-	//	}
-	//}
+	if l.GetStrictUpdatabilityLinting() {
+		// Verify the module does not baseline issues that endanger safe updatability.
+		if l.properties.Lint.Baseline_filename != nil {
+			cmd.FlagWithInput("--baseline ", android.PathForModuleSrc(ctx, *l.properties.Lint.Baseline_filename))
+			cmd.FlagForEachArg("--disallowed_issues ", updatabilityChecks)
+		}
+	}
 
 	return lintPaths{
 		projectXML: projectXMLPath,
@@ -363,6 +362,12 @@ func (l *linter) generateManifest(ctx android.ModuleContext, rule *android.RuleB
 func (l *linter) lint(ctx android.ModuleContext) {
 	if !l.enabled() {
 		return
+	}
+
+	for _, flag := range l.properties.Lint.Flags {
+		if strings.Contains(flag, "--disable") || strings.Contains(flag, "--enable") || strings.Contains(flag, "--check") {
+			ctx.PropertyErrorf("lint.flags", "Don't use --disable, --enable, or --check in the flags field, instead use the dedicated disabled_checks, warning_checks, error_checks, or fatal_checks fields")
+		}
 	}
 
 	if l.minSdkVersion.CompareTo(l.compileSdkVersion) == -1 {

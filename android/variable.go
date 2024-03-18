@@ -428,7 +428,6 @@ type ProductVariables struct {
 
 	BoardSepolicyVers       *string `json:",omitempty"`
 	PlatformSepolicyVersion *string `json:",omitempty"`
-	TotSepolicyVersion      *string `json:",omitempty"`
 
 	SystemExtSepolicyPrebuiltApiDir *string `json:",omitempty"`
 	ProductSepolicyPrebuiltApiDir   *string `json:",omitempty"`
@@ -541,6 +540,8 @@ type ProductVariables struct {
 	BuildFlags map[string]string `json:",omitempty"`
 
 	BuildFromSourceStub *bool `json:",omitempty"`
+
+	BuildIgnoreApexContributionContents []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {

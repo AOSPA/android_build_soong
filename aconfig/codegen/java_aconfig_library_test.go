@@ -60,7 +60,6 @@ func runJavaAndroidMkTest(t *testing.T, bp string) {
 	entry := android.AndroidMkEntriesForTest(t, result.TestContext, module)[0]
 
 	makeVar := entry.EntryMap["LOCAL_ACONFIG_FILES"]
-	android.AssertIntEquals(t, "len(LOCAL_ACONFIG_FILES)", 1, len(makeVar))
 	android.EnsureListContainsSuffix(t, makeVar, "android_common/aconfig_merged.pb")
 }
 
@@ -177,6 +176,7 @@ func testCodegenMode(t *testing.T, bpMode string, ruleMode string) {
 				name: "my_aconfig_declarations",
 				package: "com.example.package",
 				srcs: ["foo.aconfig"],
+				exportable: true,
 			}
 
 			java_aconfig_library {

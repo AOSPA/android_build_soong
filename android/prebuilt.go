@@ -518,7 +518,7 @@ func hideUnflaggedModules(ctx BottomUpMutatorContext, psi PrebuiltSelectionInfoM
 	// query all_apex_contributions to see if any module in this family has been selected
 	for _, moduleInFamily := range allModulesInFamily {
 		// validate that are no duplicates
-		if psi.IsSelected(moduleInFamily.Name()) {
+		if isSelected(psi, moduleInFamily) {
 			if selectedModuleInFamily == nil {
 				// Store this so we can validate that there are no duplicates
 				selectedModuleInFamily = moduleInFamily
@@ -547,13 +547,29 @@ func PrebuiltPostDepsMutator(ctx BottomUpMutatorContext) {
 	if p := GetEmbeddedPrebuilt(m); p != nil {
 		bmn, _ := m.(baseModuleName)
 		name := bmn.BaseModuleName()
+		psi := PrebuiltSelectionInfoMap{}
+		ctx.VisitDirectDepsWithTag(acDepTag, func(am Module) {
+			psi, _ = OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
+		})
+
 		if p.properties.UsePrebuilt {
 			if p.properties.SourceExists {
 				ctx.ReplaceDependenciesIf(name, func(from blueprint.Module, tag blueprint.DependencyTag, to blueprint.Module) bool {
+					if sdkLibrary, ok := m.(interface{ SdkLibraryName() *string }); ok && sdkLibrary.SdkLibraryName() != nil {
+						// Do not replace deps to the top-level prebuilt java_sdk_library hook.
+						// This hook has been special-cased in #isSelected to be _always_ active, even in next builds
+						// for dexpreopt and hiddenapi processing.
+						// If we do not special-case this here, rdeps referring to a java_sdk_library in next builds via libs
+						// will get prebuilt stubs
+						// TODO (b/308187268): Remove this after the apexes have been added to apex_contributions
+						if psi.IsSelected(*sdkLibrary.SdkLibraryName()) {
+							return false
+						}
+					}
+
 					if t, ok := tag.(ReplaceSourceWithPrebuilt); ok {
 						return t.ReplaceSourceWithPrebuilt()
 					}
-
 					return true
 				})
 			}
@@ -582,21 +598,31 @@ func PrebuiltPostDepsMutator(ctx BottomUpMutatorContext) {
 func isSelected(psi PrebuiltSelectionInfoMap, m Module) bool {
 	if sdkLibrary, ok := m.(interface{ SdkLibraryName() *string }); ok && sdkLibrary.SdkLibraryName() != nil {
 		sln := proptools.String(sdkLibrary.SdkLibraryName())
+
 		// This is the top-level library
 		// Do not supersede the existing prebuilts vs source selection mechanisms
-		if sln == m.base().BaseModuleName() {
+		// TODO (b/308187268): Remove this after the apexes have been added to apex_contributions
+		if bmn, ok := m.(baseModuleName); ok && sln == bmn.BaseModuleName() {
 			return false
 		}
 
 		// Stub library created by java_sdk_library_import
-		if p := GetEmbeddedPrebuilt(m); p != nil {
-			return psi.IsSelected(PrebuiltNameFromSource(sln))
+		// java_sdk_library creates several child modules (java_import + prebuilt_stubs_sources) dynamically.
+		// This code block ensures that these child modules are selected if the top-level java_sdk_library_import is listed
+		// in the selected apex_contributions.
+		if javaImport, ok := m.(createdByJavaSdkLibraryName); ok && javaImport.CreatedByJavaSdkLibraryName() != nil {
+			return psi.IsSelected(PrebuiltNameFromSource(proptools.String(javaImport.CreatedByJavaSdkLibraryName())))
 		}
 
 		// Stub library created by java_sdk_library
 		return psi.IsSelected(sln)
 	}
 	return psi.IsSelected(m.Name())
+}
+
+// implemented by child modules of java_sdk_library_import
+type createdByJavaSdkLibraryName interface {
+	CreatedByJavaSdkLibraryName() *string
 }
 
 // usePrebuilt returns true if a prebuilt should be used instead of the source module.  The prebuilt

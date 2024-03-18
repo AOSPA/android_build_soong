@@ -949,7 +949,7 @@ func (b *bootclasspathFragmentSdkMemberProperties) AddToPropertySet(ctx android.
 					builder.CopyToSnapshot(p, dest)
 					dests = append(dests, dest)
 				}
-				hiddenAPISet.AddProperty(category.PropertyName, dests)
+				hiddenAPISet.AddProperty(category.PropertyName(), dests)
 			}
 		}
 	}
@@ -1103,6 +1103,10 @@ func (module *PrebuiltBootclasspathFragmentModule) RequiredFilesFromPrebuiltApex
 		}
 	}
 	return nil
+}
+
+func (module *PrebuiltBootclasspathFragmentModule) UseProfileGuidedDexpreopt() bool {
+	return false
 }
 
 var _ android.RequiredFilesFromPrebuiltApex = (*PrebuiltBootclasspathFragmentModule)(nil)

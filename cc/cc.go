@@ -55,7 +55,6 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
 		ctx.BottomUp("version", versionMutator).Parallel()
 		ctx.BottomUp("begin", BeginMutator).Parallel()
-		ctx.BottomUp("fdo_profile", fdoProfileMutator)
 	})
 
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
@@ -68,16 +67,13 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 
 		ctx.TopDown("fuzz_deps", fuzzMutatorDeps)
 
-		ctx.BottomUp("coverage", coverageMutator).Parallel()
+		ctx.Transition("coverage", &coverageTransitionMutator{})
 
-		ctx.TopDown("afdo_deps", afdoDepsMutator)
-		ctx.BottomUp("afdo", afdoMutator).Parallel()
+		ctx.Transition("afdo", &afdoTransitionMutator{})
 
-		ctx.TopDown("orderfile_deps", orderfileDepsMutator)
-		ctx.BottomUp("orderfile", orderfileMutator).Parallel()
+		ctx.Transition("orderfile", &orderfileTransitionMutator{})
 
-		ctx.TopDown("lto_deps", ltoDepsMutator)
-		ctx.BottomUp("lto", ltoMutator).Parallel()
+		ctx.Transition("lto", &ltoTransitionMutator{})
 
 		ctx.BottomUp("check_linktype", checkLinkTypeMutator).Parallel()
 		ctx.TopDown("double_loadable", checkDoubleLoadableLibraries).Parallel()
@@ -536,7 +532,7 @@ type ModuleContextIntf interface {
 	selectedStl() string
 	baseModuleName() string
 	getVndkExtendsModuleName() string
-	isAfdoCompile() bool
+	isAfdoCompile(ctx ModuleContext) bool
 	isOrderfileCompile() bool
 	isCfi() bool
 	isFuzzer() bool
@@ -1390,9 +1386,9 @@ func (c *Module) IsVndk() bool {
 	return false
 }
 
-func (c *Module) isAfdoCompile() bool {
+func (c *Module) isAfdoCompile(ctx ModuleContext) bool {
 	if afdo := c.afdo; afdo != nil {
-		return afdo.Properties.FdoProfilePath != nil
+		return afdo.isAfdoCompile(ctx)
 	}
 	return false
 }
@@ -1619,9 +1615,10 @@ func (ctx *moduleContextImpl) useSdk() bool {
 
 func (ctx *moduleContextImpl) sdkVersion() string {
 	if ctx.ctx.Device() {
-		if ctx.useVndk() {
+		config := ctx.ctx.Config()
+		if !config.IsVndkDeprecated() && ctx.useVndk() {
 			vndkVer := ctx.mod.VndkVersion()
-			if inList(vndkVer, ctx.ctx.Config().PlatformVersionActiveCodenames()) {
+			if inList(vndkVer, config.PlatformVersionActiveCodenames()) {
 				return "current"
 			}
 			return vndkVer
@@ -1639,6 +1636,17 @@ func (ctx *moduleContextImpl) minSdkVersion() string {
 	if ver == "apex_inherit" || ver == "" {
 		ver = ctx.sdkVersion()
 	}
+
+	if ctx.ctx.Device() {
+		config := ctx.ctx.Config()
+		if config.IsVndkDeprecated() && ctx.inVendor() {
+			// If building for vendor with final API, then use the latest _stable_ API as "current".
+			if config.VendorApiLevelFrozen() && (ver == "" || ver == "current") {
+				ver = config.PlatformSdkVersion().String()
+			}
+		}
+	}
+
 	// For crt objects, the meaning of min_sdk_version is very different from other types of
 	// module. For them, min_sdk_version defines the oldest version that the build system will
 	// create versioned variants for. For example, if min_sdk_version is 16, then sdk variant of
@@ -1707,8 +1715,8 @@ func (ctx *moduleContextImpl) isVndk() bool {
 	return ctx.mod.IsVndk()
 }
 
-func (ctx *moduleContextImpl) isAfdoCompile() bool {
-	return ctx.mod.isAfdoCompile()
+func (ctx *moduleContextImpl) isAfdoCompile(mctx ModuleContext) bool {
+	return ctx.mod.isAfdoCompile(mctx)
 }
 
 func (ctx *moduleContextImpl) isOrderfileCompile() bool {
@@ -1755,7 +1763,7 @@ func (ctx *moduleContextImpl) useClangLld(actx ModuleContext) bool {
 }
 
 func (ctx *moduleContextImpl) baseModuleName() string {
-	return ctx.mod.ModuleBase.BaseModuleName()
+	return ctx.mod.BaseModuleName()
 }
 
 func (ctx *moduleContextImpl) getVndkExtendsModuleName() string {
@@ -2350,10 +2358,6 @@ func (c *Module) beginMutator(actx android.BottomUpMutatorContext) {
 		},
 	}
 	ctx.ctx = ctx
-
-	if !actx.Host() || !ctx.static() || ctx.staticBinary() {
-		c.afdo.addDep(ctx, actx)
-	}
 
 	c.begin(ctx)
 }
@@ -4200,6 +4204,18 @@ func (c *Module) Partition() string {
 		return p.getPartition()
 	}
 	return ""
+}
+
+type sourceModuleName interface {
+	sourceModuleName() string
+}
+
+func (c *Module) BaseModuleName() string {
+	if smn, ok := c.linker.(sourceModuleName); ok && smn.sourceModuleName() != "" {
+		// if the prebuilt module sets a source_module_name in Android.bp, use that
+		return smn.sourceModuleName()
+	}
+	return c.ModuleBase.BaseModuleName()
 }
 
 var Bool = proptools.Bool

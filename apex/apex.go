@@ -18,7 +18,6 @@ package apex
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -929,12 +928,6 @@ type DCLAInfo struct {
 
 var DCLAInfoProvider = blueprint.NewMutatorProvider[DCLAInfo]("apex_info")
 
-type ApexBundleInfo struct {
-	Contents *android.ApexContents
-}
-
-var ApexBundleInfoProvider = blueprint.NewMutatorProvider[ApexBundleInfo]("apex_info")
-
 var _ ApexInfoMutator = (*apexBundle)(nil)
 
 func (a *apexBundle) ApexVariationName() string {
@@ -1008,10 +1001,8 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 			}
 		}
 
-		//TODO: b/296491928 Vendor APEX should use libbinder.ndk instead of libbinder once VNDK is fully deprecated.
 		if useVndk && mctx.Config().IsVndkDeprecated() && child.Name() == "libbinder" {
-			log.Print("Libbinder is linked from Vendor APEX ", a.Name(), " with module ", parent.Name())
-			return false
+			mctx.ModuleErrorf("Module %s in the vendor APEX %s should not use libbinder. Use libbinder_ndk instead.", parent.Name(), a.Name())
 		}
 
 		// By default, all the transitive dependencies are collected, unless filtered out
@@ -1035,7 +1026,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 
 	// The membership information is saved for later access
 	apexContents := android.NewApexContents(contents)
-	android.SetProvider(mctx, ApexBundleInfoProvider, ApexBundleInfo{
+	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{
 		Contents: apexContents,
 	})
 
@@ -1171,6 +1162,7 @@ var (
 		"com.android.ondevicepersonalization",
 		"com.android.os.statsd",
 		"com.android.permission",
+		"com.android.profiling",
 		"com.android.rkpd",
 		"com.android.scheduling",
 		"com.android.tethering",
@@ -1243,7 +1235,7 @@ func apexTestForMutator(mctx android.BottomUpMutatorContext) {
 	if _, ok := mctx.Module().(android.ApexModule); ok {
 		var contents []*android.ApexContents
 		for _, testFor := range mctx.GetDirectDepsWithTag(testForTag) {
-			abInfo, _ := android.OtherModuleProvider(mctx, testFor, ApexBundleInfoProvider)
+			abInfo, _ := android.OtherModuleProvider(mctx, testFor, android.ApexBundleInfoProvider)
 			contents = append(contents, abInfo.Contents)
 		}
 		android.SetProvider(mctx, android.ApexTestForInfoProvider, android.ApexTestForInfo{
@@ -1418,7 +1410,7 @@ func (a *apexBundle) TaggedOutputs() map[string]android.Paths {
 var _ cc.Coverage = (*apexBundle)(nil)
 
 // Implements cc.Coverage
-func (a *apexBundle) IsNativeCoverageNeeded(ctx android.BaseModuleContext) bool {
+func (a *apexBundle) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
 	return ctx.DeviceConfig().NativeCoverageEnabled()
 }
 
@@ -2185,14 +2177,10 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				return false
 			}
 
-			//TODO: b/296491928 Vendor APEX should use libbinder.ndk instead of libbinder once VNDK is fully deprecated.
-			if ch.InVendorOrProduct() && ctx.Config().IsVndkDeprecated() && child.Name() == "libbinder" {
-				return false
-			}
 			af := apexFileForNativeLibrary(ctx, ch, vctx.handleSpecialLibs)
 			af.transitiveDep = true
 
-			abInfo, _ := android.ModuleProvider(ctx, ApexBundleInfoProvider)
+			abInfo, _ := android.ModuleProvider(ctx, android.ApexBundleInfoProvider)
 			if !abInfo.Contents.DirectlyInApex(depName) && (ch.IsStubs() || ch.HasStubsVariants()) {
 				// If the dependency is a stubs lib, don't include it in this APEX,
 				// but make sure that the lib is installed on the device.
@@ -2658,7 +2646,7 @@ func (a *apexBundle) checkStaticLinkingToStubLibraries(ctx android.ModuleContext
 		return
 	}
 
-	abInfo, _ := android.ModuleProvider(ctx, ApexBundleInfoProvider)
+	abInfo, _ := android.ModuleProvider(ctx, android.ApexBundleInfoProvider)
 
 	a.WalkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		if ccm, ok := to.(*cc.Module); ok {

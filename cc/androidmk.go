@@ -83,8 +83,9 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 		// causing multiple ART APEXes (com.android.art and com.android.art.debug)
 		// to be installed. And this is breaking some older devices (like marlin)
 		// where system.img is small.
-		Required: c.Properties.AndroidMkRuntimeLibs,
-		Include:  "$(BUILD_SYSTEM)/soong_cc_rust_prebuilt.mk",
+		Required:     c.Properties.AndroidMkRuntimeLibs,
+		OverrideName: c.BaseModuleName(),
+		Include:      "$(BUILD_SYSTEM)/soong_cc_rust_prebuilt.mk",
 
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
@@ -109,7 +110,6 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				}
 				entries.SetString("LOCAL_SOONG_LINK_TYPE", c.makeLinkType)
 				if c.InVendorOrProduct() {
-					entries.SetBool("LOCAL_USE_VNDK", true)
 					if c.IsVndk() && !c.static() {
 						entries.SetString("LOCAL_SOONG_VNDK_VERSION", c.VndkVersion())
 						// VNDK libraries available to vendor are not installed because
@@ -118,6 +118,11 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 							entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
 						}
 					}
+				}
+				if c.InVendor() {
+					entries.SetBool("LOCAL_IN_VENDOR", true)
+				} else if c.InProduct() {
+					entries.SetBool("LOCAL_IN_PRODUCT", true)
 				}
 				if c.Properties.IsSdkVariant && c.Properties.SdkAndPlatformVariantVisibleToMake {
 					// Make the SDK variant uninstallable so that there are not two rules to install
