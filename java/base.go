@@ -95,6 +95,9 @@ type CommonProperties struct {
 	// if not blank, used as prefix to generate repackage rule
 	Jarjar_prefix *string
 
+	// if set to true, skip the jarjar repackaging
+	Skip_jarjar_repackage *bool
+
 	// If not blank, set the java version passed to javac as -source and -target
 	Java_version *string
 
@@ -1101,11 +1104,13 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	jarjarProviderData := j.collectJarJarRules(ctx)
 	if jarjarProviderData != nil {
 		android.SetProvider(ctx, JarJarProvider, *jarjarProviderData)
-		text := getJarJarRuleText(jarjarProviderData)
-		if text != "" {
-			ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
-			android.WriteFileRule(ctx, ruleTextFile, text)
-			j.repackageJarjarRules = ruleTextFile
+		if !proptools.Bool(j.properties.Skip_jarjar_repackage) {
+			text := getJarJarRuleText(jarjarProviderData)
+			if text != "" {
+				ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
+				android.WriteFileRule(ctx, ruleTextFile, text)
+				j.repackageJarjarRules = ruleTextFile
+			}
 		}
 	}
 
@@ -1307,7 +1312,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		}
 	}
 
-	jars := append(android.Paths(nil), kotlinJars...)
+	jars := slices.Clone(kotlinJars)
 
 	j.compiledSrcJars = srcJars
 
@@ -1322,7 +1327,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			// allow for the use of annotation processors that do function correctly
 			// with sharding enabled. See: b/77284273.
 		}
-		extraJars := append(android.CopyOf(extraCombinedJars), kotlinHeaderJars...)
+		extraJars := append(slices.Clone(kotlinHeaderJars), extraCombinedJars...)
 		headerJarFileWithoutDepsOrJarjar, j.headerJarFile, j.repackagedHeaderJarFile =
 			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName, extraJars)
 		if ctx.Failed() {
@@ -1395,6 +1400,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			return
 		}
 	}
+
+	jars = append(jars, extraCombinedJars...)
 
 	j.srcJarArgs, j.srcJarDeps = resourcePathsToJarArgs(srcFiles), srcFiles
 
@@ -1481,8 +1488,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		})
 		jars = append(jars, servicesJar)
 	}
-
-	jars = append(android.CopyOf(extraCombinedJars), jars...)
 
 	// Combine the classes built from sources, any manifests, and any static libraries into
 	// classes.jar. If there is only one input jar this step will be skipped.
@@ -2408,7 +2413,8 @@ type JarJarProviderData struct {
 
 func (this JarJarProviderData) GetDebugString() string {
 	result := ""
-	for k, v := range this.Rename {
+	for _, k := range android.SortedKeys(this.Rename) {
+		v := this.Rename[k]
 		if strings.Contains(k, "android.companion.virtual.flags.FakeFeatureFlagsImpl") {
 			result += k + "--&gt;" + v + ";"
 		}
@@ -2664,7 +2670,8 @@ func (module *Module) collectJarJarRules(ctx android.ModuleContext) *JarJarProvi
 // to "" won't be in this list because they shouldn't be renamed yet.
 func getJarJarRuleText(provider *JarJarProviderData) string {
 	result := ""
-	for orig, renamed := range provider.Rename {
+	for _, orig := range android.SortedKeys(provider.Rename) {
+		renamed := provider.Rename[orig]
 		if renamed != "" {
 			result += "rule " + orig + " " + renamed + "\n"
 		}
