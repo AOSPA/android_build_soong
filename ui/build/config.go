@@ -75,7 +75,6 @@ type configImpl struct {
 	queryview                bool
 	reportMkMetrics          bool // Collect and report mk2bp migration progress metrics.
 	soongDocs                bool
-	multitreeBuild           bool // This is a multitree build.
 	skipConfig               bool
 	skipKati                 bool
 	skipKatiNinja            bool
@@ -387,22 +386,21 @@ func NewConfig(ctx Context, args ...string) Config {
 
 	// Configure Java-related variables, including adding it to $PATH
 	java8Home := filepath.Join("prebuilts/jdk/jdk8", ret.HostPrebuiltTag())
-	java17Home := filepath.Join("prebuilts/jdk/jdk17", ret.HostPrebuiltTag())
 	java21Home := filepath.Join("prebuilts/jdk/jdk21", ret.HostPrebuiltTag())
 	javaHome := func() string {
 		if override, ok := ret.environ.Get("OVERRIDE_ANDROID_JAVA_HOME"); ok {
 			return override
 		}
-		if ret.environ.IsEnvTrue("EXPERIMENTAL_USE_OPENJDK21_TOOLCHAIN") {
-			return java21Home
-		}
 		if toolchain11, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN"); ok && toolchain11 != "true" {
-			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN is no longer supported. An OpenJDK 11 toolchain is now the global default.")
+			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN is no longer supported. An OpenJDK 21 toolchain is now the global default.")
 		}
 		if toolchain17, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN"); ok && toolchain17 != "true" {
-			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN is no longer supported. An OpenJDK 17 toolchain is now the global default.")
+			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN is no longer supported. An OpenJDK 21 toolchain is now the global default.")
 		}
-		return java17Home
+		if toolchain21, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK21_TOOLCHAIN"); ok && toolchain21 != "true" {
+			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK21_TOOLCHAIN is no longer supported. An OpenJDK 21 toolchain is now the global default.")
+		}
+		return java21Home
 	}()
 	absJavaHome := absPath(ctx, javaHome)
 
@@ -423,10 +421,6 @@ func NewConfig(ctx Context, args ...string) Config {
 	// to unzip to enable zipbomb detection that incorrectly handle zip64 and data descriptors and fail on large
 	// zip files produced by soong_zip.  Disable zipbomb detection.
 	ret.environ.Set("UNZIP_DISABLE_ZIPBOMB_DETECTION", "TRUE")
-
-	if ret.MultitreeBuild() {
-		ret.environ.Set("MULTITREE_BUILD", "true")
-	}
 
 	outDir := ret.OutDir()
 	buildDateTimeFile := filepath.Join(outDir, "build_date.txt")
@@ -789,8 +783,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.skipMetricsUpload = true
 		} else if arg == "--mk-metrics" {
 			c.reportMkMetrics = true
-		} else if arg == "--multitree-build" {
-			c.multitreeBuild = true
 		} else if arg == "--search-api-dir" {
 			c.searchApiDir = true
 		} else if strings.HasPrefix(arg, "--ninja_weight_source=") {
@@ -1095,10 +1087,6 @@ func (c *configImpl) IsVerbose() bool {
 	return c.verbose
 }
 
-func (c *configImpl) MultitreeBuild() bool {
-	return c.multitreeBuild
-}
-
 func (c *configImpl) NinjaWeightListSource() NinjaWeightListSource {
 	return c.ninjaWeightListSource
 }
@@ -1398,7 +1386,9 @@ func (c *configImpl) rbeAuth() (string, string) {
 }
 
 func (c *configImpl) rbeSockAddr(dir string) (string, error) {
-	maxNameLen := len(syscall.RawSockaddrUnix{}.Path)
+	// Absolute path socket addresses have a prefix of //. This should
+	// be included in the length limit.
+	maxNameLen := len(syscall.RawSockaddrUnix{}.Path) - 2
 	base := fmt.Sprintf("reproxy_%v.sock", rbeRandPrefix)
 
 	name := filepath.Join(dir, base)
