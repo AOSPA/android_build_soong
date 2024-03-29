@@ -24,7 +24,6 @@ import (
 	"sort"
 	"strings"
 
-	"android/soong/aconfig"
 	"android/soong/remoteexec"
 	"android/soong/testing"
 
@@ -83,8 +82,8 @@ func RegisterJavaSdkMemberTypes() {
 	// Register sdk member types.
 	android.RegisterSdkMemberType(javaHeaderLibsSdkMemberType)
 	android.RegisterSdkMemberType(javaLibsSdkMemberType)
-	android.RegisterSdkMemberType(javaBootLibsSdkMemberType)
-	android.RegisterSdkMemberType(javaSystemserverLibsSdkMemberType)
+	android.RegisterSdkMemberType(JavaBootLibsSdkMemberType)
+	android.RegisterSdkMemberType(JavaSystemserverLibsSdkMemberType)
 	android.RegisterSdkMemberType(javaTestSdkMemberType)
 }
 
@@ -155,7 +154,7 @@ var (
 	// either java_libs, or java_header_libs would end up exporting more information than was strictly
 	// necessary. The java_boot_libs property to allow those modules to be exported as part of the
 	// sdk/module_exports without exposing any unnecessary information.
-	javaBootLibsSdkMemberType = &librarySdkMemberType{
+	JavaBootLibsSdkMemberType = &librarySdkMemberType{
 		android.SdkMemberTypeBase{
 			PropertyName: "java_boot_libs",
 			SupportsSdk:  true,
@@ -194,7 +193,7 @@ var (
 	// either java_libs, or java_header_libs would end up exporting more information than was strictly
 	// necessary. The java_systemserver_libs property to allow those modules to be exported as part of
 	// the sdk/module_exports without exposing any unnecessary information.
-	javaSystemserverLibsSdkMemberType = &librarySdkMemberType{
+	JavaSystemserverLibsSdkMemberType = &librarySdkMemberType{
 		android.SdkMemberTypeBase{
 			PropertyName: "java_systemserver_libs",
 			SupportsSdk:  true,
@@ -310,6 +309,10 @@ type JavaInfo struct {
 	// implementation jars. If the provider is set by java_sdk_library, the link type is "unknown"
 	// and selection between the stub jar vs implementation jar is deferred to SdkLibrary.sdkJars(...)
 	StubsLinkType StubsLinkType
+
+	// AconfigIntermediateCacheOutputPaths is a path to the cache files collected from the
+	// java_aconfig_library modules that are statically linked to this module.
+	AconfigIntermediateCacheOutputPaths android.Paths
 }
 
 var JavaInfoProvider = blueprint.NewProvider[JavaInfo]()
@@ -346,6 +349,12 @@ func (j *Module) XrefJavaFiles() android.Paths {
 	return j.kytheFiles
 }
 
+func (d dependencyTag) PropagateAconfigValidation() bool {
+	return d.static
+}
+
+var _ android.PropagateAconfigValidationDependencyTag = dependencyTag{}
+
 type dependencyTag struct {
 	blueprint.BaseDependencyTag
 	name string
@@ -355,6 +364,8 @@ type dependencyTag struct {
 
 	// True if the dependency is a toolchain, for example an annotation processor.
 	toolchain bool
+
+	static bool
 }
 
 // installDependencyTag is a dependency tag that is annotated to cause the installed files of the
@@ -400,7 +411,7 @@ func IsJniDepTag(depTag blueprint.DependencyTag) bool {
 var (
 	dataNativeBinsTag       = dependencyTag{name: "dataNativeBins"}
 	dataDeviceBinsTag       = dependencyTag{name: "dataDeviceBins"}
-	staticLibTag            = dependencyTag{name: "staticlib"}
+	staticLibTag            = dependencyTag{name: "staticlib", static: true}
 	libTag                  = dependencyTag{name: "javalib", runtimeLinked: true}
 	sdkLibTag               = dependencyTag{name: "sdklib", runtimeLinked: true}
 	java9LibTag             = dependencyTag{name: "java9lib", runtimeLinked: true}
@@ -890,7 +901,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 	}
 
-	j.stem = proptools.StringDefault(j.overridableDeviceProperties.Stem, ctx.ModuleName())
+	j.stem = proptools.StringDefault(j.overridableProperties.Stem, ctx.ModuleName())
 
 	proguardSpecInfo := j.collectProguardSpecInfo(ctx)
 	android.SetProvider(ctx, ProguardSpecInfoProvider, proguardSpecInfo)
@@ -1687,7 +1698,7 @@ func (j *Binary) HostToolPath() android.OptionalPath {
 }
 
 func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	j.stem = proptools.StringDefault(j.overridableDeviceProperties.Stem, ctx.ModuleName())
+	j.stem = proptools.StringDefault(j.overridableProperties.Stem, ctx.ModuleName())
 
 	if ctx.Arch().ArchType == android.Common {
 		// Compile the jar
@@ -2173,7 +2184,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		case aconfigDeclarationTag:
 			if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
 				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.IntermediateCacheOutputPath)
-			} else if provider, ok := android.OtherModuleProvider(ctx, dep, aconfig.CodegenInfoProvider); ok {
+			} else if provider, ok := android.OtherModuleProvider(ctx, dep, android.CodegenInfoProvider); ok {
 				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.IntermediateCacheOutputPaths...)
 			} else {
 				ctx.ModuleErrorf("Only aconfig_declarations and aconfig_declarations_group "+
@@ -2998,7 +3009,7 @@ func DefaultsFactory() android.Module {
 	module.AddProperties(
 		&CommonProperties{},
 		&DeviceProperties{},
-		&OverridableDeviceProperties{},
+		&OverridableProperties{},
 		&DexProperties{},
 		&DexpreoptProperties{},
 		&android.ProtoProperties{},

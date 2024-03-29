@@ -20,20 +20,6 @@ import (
 	"github.com/google/blueprint"
 )
 
-type CodegenInfo struct {
-	// AconfigDeclarations is the name of the aconfig_declarations modules that
-	// the codegen module is associated with
-	AconfigDeclarations []string
-
-	// Paths to the cache files of the associated aconfig_declaration modules
-	IntermediateCacheOutputPaths android.Paths
-
-	// Paths to the srcjar files generated from the java_aconfig_library modules
-	Srcjars android.Paths
-}
-
-var CodegenInfoProvider = blueprint.NewProvider[CodegenInfo]()
-
 var (
 	pctx = android.NewPackageContext("android/soong/aconfig")
 
@@ -42,6 +28,7 @@ var (
 		blueprint.RuleParams{
 			Command: `${aconfig} create-cache` +
 				` --package ${package}` +
+				` ${container}` +
 				` ${declarations}` +
 				` ${values}` +
 				` ${default-permission}` +
@@ -52,7 +39,7 @@ var (
 				"${aconfig}",
 			},
 			Restat: true,
-		}, "release_version", "package", "declarations", "values", "default-permission")
+		}, "release_version", "package", "container", "declarations", "values", "default-permission")
 
 	// For create-device-config-sysprops: Generate aconfig flag value map text file
 	aconfigTextRule = pctx.AndroidStaticRule("aconfig_text",

@@ -30,7 +30,7 @@ var (
 	x86_64Cppflags = []string{}
 
 	x86_64Ldflags = []string{
-		"-Wl,--hash-style=gnu",
+		"-Wl,-z,separate-loadable-segments",
 	}
 
 	X86_64Lldflags = x86_64Ldflags

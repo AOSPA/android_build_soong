@@ -2643,6 +2643,70 @@ func TestMultiplePrebuilts(t *testing.T) {
 	}
 }
 
+func TestMultiplePlatformCompatConfigPrebuilts(t *testing.T) {
+	bp := `
+		// multiple variations of platform_compat_config
+		// source
+		platform_compat_config {
+			name: "myconfig",
+		}
+		// prebuilt "v1"
+		prebuilt_platform_compat_config {
+			name: "myconfig",
+			metadata: "myconfig.xml",
+		}
+		// prebuilt "v2"
+		prebuilt_platform_compat_config {
+			name: "myconfig.v2",
+			source_module_name: "myconfig", // without source_module_name, the singleton will merge two .xml files
+			metadata: "myconfig.v2.xml",
+		}
+
+		// selectors
+		apex_contributions {
+			name: "myapex_contributions",
+			contents: ["%v"],
+		}
+	`
+	testCases := []struct {
+		desc                            string
+		selectedDependencyName          string
+		expectedPlatformCompatConfigXml string
+	}{
+		{
+			desc:                            "Source platform_compat_config is selected using apex_contributions",
+			selectedDependencyName:          "myconfig",
+			expectedPlatformCompatConfigXml: "out/soong/.intermediates/myconfig/android_common/myconfig_meta.xml",
+		},
+		{
+			desc:                            "Prebuilt platform_compat_config v1 is selected using apex_contributions",
+			selectedDependencyName:          "prebuilt_myconfig",
+			expectedPlatformCompatConfigXml: "myconfig.xml",
+		},
+		{
+			desc:                            "Prebuilt platform_compat_config v2 is selected using apex_contributions",
+			selectedDependencyName:          "prebuilt_myconfig.v2",
+			expectedPlatformCompatConfigXml: "myconfig.v2.xml",
+		},
+	}
+
+	for _, tc := range testCases {
+		ctx := android.GroupFixturePreparers(
+			prepareForJavaTest,
+			PrepareForTestWithPlatformCompatConfig,
+			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+				variables.BuildFlags = map[string]string{
+					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "myapex_contributions",
+				}
+			}),
+		).RunTestWithBp(t, fmt.Sprintf(bp, tc.selectedDependencyName))
+
+		mergedGlobalConfig := ctx.SingletonForTests("platform_compat_config_singleton").Output("compat_config/merged_compat_config.xml")
+		android.AssertIntEquals(t, "The merged compat config file should only have a single dependency", 1, len(mergedGlobalConfig.Implicits))
+		android.AssertStringEquals(t, "The merged compat config file is missing the appropriate platform compat config", mergedGlobalConfig.Implicits[0].String(), tc.expectedPlatformCompatConfigXml)
+	}
+}
+
 func TestApiLibraryAconfigDeclarations(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForJavaTest,
@@ -2692,4 +2756,39 @@ func TestApiLibraryAconfigDeclarations(t *testing.T) {
 	manifest := m.Output("metalava.sbox.textproto")
 	cmdline := String(android.RuleBuilderSboxProtoForTests(t, result.TestContext, manifest).Commands[0].Command)
 	android.AssertStringDoesContain(t, "flagged api hide command not included", cmdline, "revert-annotations-exportable.txt")
+}
+
+func TestJavaLibHostWithStem(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_library_host {
+			name: "foo",
+			srcs: ["a.java"],
+			stem: "foo-new",
+		}
+	`)
+
+	buildOS := ctx.Config().BuildOS.String()
+	foo := ctx.ModuleForTests("foo", buildOS+"_common")
+
+	outputs := fmt.Sprint(foo.AllOutputs())
+	if !strings.Contains(outputs, "foo-new.jar") {
+		t.Errorf("Module output does not contain expected jar %s", "foo-new.jar")
+	}
+}
+
+func TestJavaLibWithStem(t *testing.T) {
+	ctx, _ := testJava(t, `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+			stem: "foo-new",
+		}
+	`)
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+
+	outputs := fmt.Sprint(foo.AllOutputs())
+	if !strings.Contains(outputs, "foo-new.jar") {
+		t.Errorf("Module output does not contain expected jar %s", "foo-new.jar")
+	}
 }
