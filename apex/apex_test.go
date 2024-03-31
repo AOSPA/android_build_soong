@@ -2068,7 +2068,7 @@ func TestApexMinSdkVersion_InVendorApex(t *testing.T) {
 
 	// Ensure that mylib links with "current" LLNDK
 	libFlags := names(mylib.Rule("ld").Args["libFlags"])
-	ensureListContains(t, libFlags, "out/soong/.intermediates/libbar/"+vendorVariant+"_shared_current/libbar.so")
+	ensureListContains(t, libFlags, "out/soong/.intermediates/libbar/"+vendorVariant+"_shared/libbar.so")
 
 	// Ensure that mylib is targeting 29
 	ccRule := ctx.ModuleForTests("mylib", vendorVariant+"_static_apex29").Output("obj/mylib.o")
@@ -11030,7 +11030,7 @@ func TestFileSystemShouldSkipApexLibraries(t *testing.T) {
 		}
 	`)
 
-	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("deps.zip").Implicits
+	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("myfilesystem.img").Implicits
 	android.AssertStringListDoesNotContain(t, "filesystem should not have libbar",
 		inputs.Strings(),
 		"out/soong/.intermediates/libbar/android_arm64_armv8-a_shared/libbar.so")

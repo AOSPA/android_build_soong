@@ -2314,9 +2314,15 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 }
 
 func addAconfigFiles(vctx *visitorContext, ctx android.ModuleContext, module blueprint.Module) {
-	dep, _ := android.OtherModuleProvider(ctx, module, android.AconfigTransitiveDeclarationsInfoProvider)
-	if len(dep.AconfigFiles) > 0 && dep.AconfigFiles[ctx.ModuleName()] != nil {
-		vctx.aconfigFiles = append(vctx.aconfigFiles, dep.AconfigFiles[ctx.ModuleName()]...)
+	if dep, ok := android.OtherModuleProvider(ctx, module, android.AconfigTransitiveDeclarationsInfoProvider); ok {
+		if len(dep.AconfigFiles) > 0 && dep.AconfigFiles[ctx.ModuleName()] != nil {
+			vctx.aconfigFiles = append(vctx.aconfigFiles, dep.AconfigFiles[ctx.ModuleName()]...)
+		}
+	}
+
+	validationFlag := ctx.DeviceConfig().AconfigContainerValidation()
+	if validationFlag == "error" || validationFlag == "warning" {
+		android.VerifyAconfigBuildMode(ctx, ctx.ModuleName(), module, validationFlag == "error")
 	}
 }
 
@@ -2417,6 +2423,18 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Set a provider for dexpreopt of bootjars
 	a.provideApexExportsInfo(ctx)
+
+	a.providePrebuiltInfo(ctx)
+}
+
+// Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
+// with information about whether source or prebuilt of an apex was used during the build.
+func (a *apexBundle) providePrebuiltInfo(ctx android.ModuleContext) {
+	info := android.PrebuiltInfo{
+		Name:        a.Name(),
+		Is_prebuilt: false,
+	}
+	android.SetProvider(ctx, android.PrebuiltInfoProvider, info)
 }
 
 // Set a provider containing information about the jars and .prof provided by the apex
