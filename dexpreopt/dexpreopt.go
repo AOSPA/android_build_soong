@@ -425,11 +425,11 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 			// Apps loaded into system server, and apps the product default to being compiled with the
 			// 'speed' compiler filter.
 			compilerFilter = "speed"
+		} else if global.DefaultCompilerFilter != "" {
+			compilerFilter = global.DefaultCompilerFilter
 		} else if profile != nil {
 			// For non system server jars, use speed-profile when we have a profile.
 			compilerFilter = "speed-profile"
-		} else if global.DefaultCompilerFilter != "" {
-			compilerFilter = global.DefaultCompilerFilter
 		} else {
 			compilerFilter = "quicken"
 		}
