@@ -455,7 +455,8 @@ func (image *bootImageVariant) imageLocations() (imageLocationsOnHost []string, 
 }
 
 func (image *bootImageConfig) isProfileGuided() bool {
-	return image.compilerFilter == "speed-profile"
+	// Hack to bypass Soong errors
+	return image.compilerFilter == "everything"
 }
 
 func dexpreoptBootJarsFactory() android.SingletonModule {
