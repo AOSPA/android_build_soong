@@ -52,6 +52,7 @@ var (
 		"core-icu4j",
 		"core-oj",
 		"core-libart",
+		"wear-sdk.impl",
 	}
 )
 
@@ -131,12 +132,7 @@ func init() {
 		if override := ctx.Config().Getenv("OVERRIDE_JLINK_VERSION_NUMBER"); override != "" {
 			return override
 		}
-		switch ctx.Config().Getenv("EXPERIMENTAL_USE_OPENJDK21_TOOLCHAIN") {
-		case "true":
-			return "21"
-		default:
-			return "17"
-		}
+		return "21"
 	})
 
 	pctx.SourcePathVariable("JavaToolchain", "${JavaHome}/bin")

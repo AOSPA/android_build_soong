@@ -18,7 +18,6 @@ package android
 // product variables necessary for soong_build's operation.
 
 import (
-	"android/soong/shared"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -29,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"android/soong/shared"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
@@ -90,8 +91,6 @@ type CmdArgs struct {
 	ModuleGraphFile   string
 	ModuleActionsFile string
 	DocFile           string
-
-	MultitreeBuild bool
 
 	BuildFromSourceStub bool
 
@@ -169,7 +168,10 @@ func (c Config) DisableHiddenApiChecks() bool {
 // Thus, verify_overlaps is disabled when RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE is set to false.
 // TODO(b/308174018): Re-enable verify_overlaps for both builr from source/mainline prebuilts.
 func (c Config) DisableVerifyOverlaps() bool {
-	return c.IsEnvTrue("DISABLE_VERIFY_OVERLAPS") || !c.ReleaseDefaultModuleBuildFromSource()
+	if c.IsEnvFalse("DISABLE_VERIFY_OVERLAPS") && c.ReleaseDisableVerifyOverlaps() {
+		panic("The current release configuration does not support verify_overlaps. DISABLE_VERIFY_OVERLAPS cannot be set to false")
+	}
+	return c.IsEnvTrue("DISABLE_VERIFY_OVERLAPS") || c.ReleaseDisableVerifyOverlaps() || !c.ReleaseDefaultModuleBuildFromSource()
 }
 
 // MaxPageSizeSupported returns the max page size supported by the device. This
@@ -210,10 +212,14 @@ func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
+func (c Config) ReleaseDisableVerifyOverlaps() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_DISABLE_VERIFY_OVERLAPS_CHECK")
+}
+
 // Enables flagged apis annotated with READ_WRITE aconfig flags to be included in the stubs
 // and hiddenapi flags so that they are accessible at runtime
 func (c Config) ReleaseExportRuntimeApis() bool {
-	return c.config.productVariables.GetBuildFlagBool("RELEASE_EXPORT_RUNTIME_APIS")
+	return Bool(c.config.productVariables.ExportRuntimeApis)
 }
 
 // Enables ABI monitoring of NDK libraries
@@ -222,7 +228,8 @@ func (c Config) ReleaseNdkAbiMonitored() bool {
 }
 
 func (c Config) ReleaseHiddenApiExportableStubs() bool {
-	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS")
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS") ||
+		Bool(c.config.productVariables.HiddenapiExportableStubs)
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -286,10 +293,6 @@ type config struct {
 	mockBpList string
 
 	BuildMode SoongBuildMode
-
-	// If MultitreeBuild is true then this is one inner tree of a multitree
-	// build directed by the multitree orchestrator.
-	MultitreeBuild bool
 
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
 	// in tests when a path doesn't exist.
@@ -539,8 +542,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 
 		moduleListFile: cmdArgs.ModuleListFile,
 		fs:             pathtools.NewOsFs(absSrcDir),
-
-		MultitreeBuild: cmdArgs.MultitreeBuild,
 
 		buildFromSourceStub: cmdArgs.BuildFromSourceStub,
 	}
@@ -1352,12 +1353,15 @@ func (c *config) PrevVendorApiLevel() string {
 		panic(fmt.Errorf("Cannot parse vendor API level %s to an integer: %s",
 			c.VendorApiLevel(), err))
 	}
-	if vendorApiLevel < 202404 || vendorApiLevel%100 != 4 {
-		panic("Unknown vendor API level " + c.VendorApiLevel())
-	}
 	// The version before trunk stable is 34.
 	if vendorApiLevel == 202404 {
 		return "34"
+	}
+	if vendorApiLevel >= 1 && vendorApiLevel <= 34 {
+		return strconv.Itoa(vendorApiLevel - 1)
+	}
+	if vendorApiLevel < 202404 || vendorApiLevel%100 != 4 {
+		panic("Unknown vendor API level " + c.VendorApiLevel())
 	}
 	return strconv.Itoa(vendorApiLevel - 100)
 }
@@ -1994,6 +1998,10 @@ func (c *deviceConfig) GenerateAidlNdkPlatformBackend() bool {
 	return c.config.productVariables.GenerateAidlNdkPlatformBackend
 }
 
+func (c *deviceConfig) AconfigContainerValidation() string {
+	return c.config.productVariables.AconfigContainerValidation
+}
+
 func (c *config) IgnorePrefer32OnDevice() bool {
 	return c.productVariables.IgnorePrefer32OnDevice
 }
@@ -2081,25 +2089,35 @@ func (c *config) UseResourceProcessorByDefault() bool {
 
 var (
 	mainlineApexContributionBuildFlags = []string{
+		"RELEASE_APEX_CONTRIBUTIONS_ADBD",
 		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES",
 		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH",
 		"RELEASE_APEX_CONTRIBUTIONS_ART",
 		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH",
+		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN",
+		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST",
 		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE",
 		"RELEASE_APEX_CONTRIBUTIONS_CONNECTIVITY",
 		"RELEASE_APEX_CONTRIBUTIONS_CONSCRYPT",
 		"RELEASE_APEX_CONTRIBUTIONS_CRASHRECOVERY",
 		"RELEASE_APEX_CONTRIBUTIONS_DEVICELOCK",
+		"RELEASE_APEX_CONTRIBUTIONS_DOCUMENTSUIGOOGLE",
+		"RELEASE_APEX_CONTRIBUTIONS_EXTSERVICES",
 		"RELEASE_APEX_CONTRIBUTIONS_HEALTHFITNESS",
 		"RELEASE_APEX_CONTRIBUTIONS_IPSEC",
 		"RELEASE_APEX_CONTRIBUTIONS_MEDIA",
 		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER",
+		"RELEASE_APEX_CONTRIBUTIONS_NETWORKSTACKGOOGLE",
+		"RELEASE_APEX_CONTRIBUTIONS_NEURALNETWORKS",
 		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION",
 		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION",
 		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING",
+		"RELEASE_APEX_CONTRIBUTIONS_RESOLV",
 		"RELEASE_APEX_CONTRIBUTIONS_SCHEDULING",
 		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
+		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC",
 		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
+		"RELEASE_APEX_CONTRIBUTIONS_TZDATA",
 		"RELEASE_APEX_CONTRIBUTIONS_UWB",
 		"RELEASE_APEX_CONTRIBUTIONS_WIFI",
 	}
@@ -2117,6 +2135,6 @@ func (c *config) AllApexContributions() []string {
 	return ret
 }
 
-func (c *config) BuildIgnoreApexContributionContents() []string {
+func (c *config) BuildIgnoreApexContributionContents() *bool {
 	return c.productVariables.BuildIgnoreApexContributionContents
 }

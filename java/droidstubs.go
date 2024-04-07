@@ -52,6 +52,19 @@ func (s StubsType) String() string {
 	}
 }
 
+func StringToStubsType(s string) StubsType {
+	switch strings.ToLower(s) {
+	case Everything.String():
+		return Everything
+	case Runtime.String():
+		return Runtime
+	case Exportable.String():
+		return Exportable
+	default:
+		return Unavailable
+	}
+}
+
 func init() {
 	RegisterStubsBuildComponents(android.InitRegistrationContext)
 }
@@ -355,7 +368,7 @@ func (d *Droidstubs) ApiFilePath(stubsType StubsType) (ret android.Path, err err
 		ret, err = nil, fmt.Errorf("api file path not supported for the stub type %s", stubsType.String())
 	}
 	if ret == nil && err == nil {
-		err = fmt.Errorf("stubs srcjar is null for the stub type %s", stubsType.String())
+		err = fmt.Errorf("api file is null for the stub type %s", stubsType.String())
 	}
 	return ret, err
 }
@@ -465,34 +478,41 @@ func (d *Droidstubs) sdkValuesFlags(ctx android.ModuleContext, cmd *android.Rule
 }
 
 func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsDir android.OptionalPath, stubsType StubsType, checkApi bool) {
-	if checkApi || String(d.properties.Api_filename) != "" {
-		filename := proptools.StringDefault(d.properties.Api_filename, ctx.ModuleName()+"_api.txt")
-		uncheckedApiFile := android.PathForModuleOut(ctx, stubsType.String(), filename)
-		cmd.FlagWithOutput("--api ", uncheckedApiFile)
 
+	apiFileName := proptools.StringDefault(d.properties.Api_filename, ctx.ModuleName()+"_api.txt")
+	uncheckedApiFile := android.PathForModuleOut(ctx, stubsType.String(), apiFileName)
+	cmd.FlagWithOutput("--api ", uncheckedApiFile)
+	if checkApi || String(d.properties.Api_filename) != "" {
 		if stubsType == Everything {
 			d.apiFile = uncheckedApiFile
 		} else if stubsType == Exportable {
 			d.exportableApiFile = uncheckedApiFile
 		}
 	} else if sourceApiFile := proptools.String(d.properties.Check_api.Current.Api_file); sourceApiFile != "" {
-		// If check api is disabled then make the source file available for export.
-		d.apiFile = android.PathForModuleSrc(ctx, sourceApiFile)
+		if stubsType == Everything {
+			// If check api is disabled then make the source file available for export.
+			d.apiFile = android.PathForModuleSrc(ctx, sourceApiFile)
+		} else if stubsType == Exportable {
+			d.exportableApiFile = uncheckedApiFile
+		}
 	}
 
+	removedApiFileName := proptools.StringDefault(d.properties.Removed_api_filename, ctx.ModuleName()+"_removed.txt")
+	uncheckedRemovedFile := android.PathForModuleOut(ctx, stubsType.String(), removedApiFileName)
+	cmd.FlagWithOutput("--removed-api ", uncheckedRemovedFile)
 	if checkApi || String(d.properties.Removed_api_filename) != "" {
-		filename := proptools.StringDefault(d.properties.Removed_api_filename, ctx.ModuleName()+"_removed.txt")
-		uncheckedRemovedFile := android.PathForModuleOut(ctx, stubsType.String(), filename)
-		cmd.FlagWithOutput("--removed-api ", uncheckedRemovedFile)
-
 		if stubsType == Everything {
 			d.removedApiFile = uncheckedRemovedFile
 		} else if stubsType == Exportable {
 			d.exportableRemovedApiFile = uncheckedRemovedFile
 		}
 	} else if sourceRemovedApiFile := proptools.String(d.properties.Check_api.Current.Removed_api_file); sourceRemovedApiFile != "" {
-		// If check api is disabled then make the source removed api file available for export.
-		d.removedApiFile = android.PathForModuleSrc(ctx, sourceRemovedApiFile)
+		if stubsType == Everything {
+			// If check api is disabled then make the source removed api file available for export.
+			d.removedApiFile = android.PathForModuleSrc(ctx, sourceRemovedApiFile)
+		} else if stubsType == Exportable {
+			d.exportableRemovedApiFile = uncheckedRemovedFile
+		}
 	}
 
 	if stubsDir.Valid() {
@@ -723,7 +743,7 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 // defined for a module, simply revert all flagged apis annotations. If aconfig_declarations
 // property is defined, apply transformations and only revert the flagged apis that are not
 // enabled via release configurations and are not specified in aconfig_declarations
-func (d *Droidstubs) generateRevertAnnotationArgs(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsType StubsType, aconfigFlagsPaths android.Paths) {
+func generateRevertAnnotationArgs(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsType StubsType, aconfigFlagsPaths android.Paths) {
 
 	if len(aconfigFlagsPaths) == 0 {
 		cmd.Flag("--revert-annotation android.annotation.FlaggedApi")
@@ -1063,7 +1083,7 @@ func (d *Droidstubs) optionalStubCmd(ctx android.ModuleContext, params stubsComm
 
 	cmd := d.commonMetalavaStubCmd(ctx, rule, params)
 
-	d.generateRevertAnnotationArgs(ctx, cmd, params.stubConfig.stubsType, params.stubConfig.deps.aconfigProtoFiles)
+	generateRevertAnnotationArgs(ctx, cmd, params.stubConfig.stubsType, params.stubConfig.deps.aconfigProtoFiles)
 
 	if params.stubConfig.doApiLint {
 		// Pass the lint baseline file as an input to resolve the lint errors.

@@ -82,8 +82,8 @@ func RegisterJavaSdkMemberTypes() {
 	// Register sdk member types.
 	android.RegisterSdkMemberType(javaHeaderLibsSdkMemberType)
 	android.RegisterSdkMemberType(javaLibsSdkMemberType)
-	android.RegisterSdkMemberType(javaBootLibsSdkMemberType)
-	android.RegisterSdkMemberType(javaSystemserverLibsSdkMemberType)
+	android.RegisterSdkMemberType(JavaBootLibsSdkMemberType)
+	android.RegisterSdkMemberType(JavaSystemserverLibsSdkMemberType)
 	android.RegisterSdkMemberType(javaTestSdkMemberType)
 }
 
@@ -154,7 +154,7 @@ var (
 	// either java_libs, or java_header_libs would end up exporting more information than was strictly
 	// necessary. The java_boot_libs property to allow those modules to be exported as part of the
 	// sdk/module_exports without exposing any unnecessary information.
-	javaBootLibsSdkMemberType = &librarySdkMemberType{
+	JavaBootLibsSdkMemberType = &librarySdkMemberType{
 		android.SdkMemberTypeBase{
 			PropertyName: "java_boot_libs",
 			SupportsSdk:  true,
@@ -193,7 +193,7 @@ var (
 	// either java_libs, or java_header_libs would end up exporting more information than was strictly
 	// necessary. The java_systemserver_libs property to allow those modules to be exported as part of
 	// the sdk/module_exports without exposing any unnecessary information.
-	javaSystemserverLibsSdkMemberType = &librarySdkMemberType{
+	JavaSystemserverLibsSdkMemberType = &librarySdkMemberType{
 		android.SdkMemberTypeBase{
 			PropertyName: "java_systemserver_libs",
 			SupportsSdk:  true,
@@ -309,6 +309,10 @@ type JavaInfo struct {
 	// implementation jars. If the provider is set by java_sdk_library, the link type is "unknown"
 	// and selection between the stub jar vs implementation jar is deferred to SdkLibrary.sdkJars(...)
 	StubsLinkType StubsLinkType
+
+	// AconfigIntermediateCacheOutputPaths is a path to the cache files collected from the
+	// java_aconfig_library modules that are statically linked to this module.
+	AconfigIntermediateCacheOutputPaths android.Paths
 }
 
 var JavaInfoProvider = blueprint.NewProvider[JavaInfo]()
@@ -345,6 +349,12 @@ func (j *Module) XrefJavaFiles() android.Paths {
 	return j.kytheFiles
 }
 
+func (d dependencyTag) PropagateAconfigValidation() bool {
+	return d.static
+}
+
+var _ android.PropagateAconfigValidationDependencyTag = dependencyTag{}
+
 type dependencyTag struct {
 	blueprint.BaseDependencyTag
 	name string
@@ -354,6 +364,8 @@ type dependencyTag struct {
 
 	// True if the dependency is a toolchain, for example an annotation processor.
 	toolchain bool
+
+	static bool
 }
 
 // installDependencyTag is a dependency tag that is annotated to cause the installed files of the
@@ -399,7 +411,7 @@ func IsJniDepTag(depTag blueprint.DependencyTag) bool {
 var (
 	dataNativeBinsTag       = dependencyTag{name: "dataNativeBins"}
 	dataDeviceBinsTag       = dependencyTag{name: "dataDeviceBins"}
-	staticLibTag            = dependencyTag{name: "staticlib"}
+	staticLibTag            = dependencyTag{name: "staticlib", static: true}
 	libTag                  = dependencyTag{name: "javalib", runtimeLinked: true}
 	sdkLibTag               = dependencyTag{name: "sdklib", runtimeLinked: true}
 	java9LibTag             = dependencyTag{name: "java9lib", runtimeLinked: true}
@@ -679,10 +691,11 @@ func shouldUncompressDex(ctx android.ModuleContext, libName string, dexpreopter 
 		return true
 	}
 
-	// Store uncompressed dex files that are preopted on /system.
-	if !dexpreopter.dexpreoptDisabled(ctx, libName) && (ctx.Host() || !dexpreopter.odexOnSystemOther(ctx, libName, dexpreopter.installPath)) {
+	// Store uncompressed dex files that are preopted on /system or /system_other.
+	if !dexpreopter.dexpreoptDisabled(ctx, libName) {
 		return true
 	}
+
 	if ctx.Config().UncompressPrivAppDex() &&
 		inList(ctx.ModuleName(), ctx.Config().ModulesLoadedByPrivilegedModules()) {
 		return true
@@ -888,7 +901,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 	}
 
-	j.stem = proptools.StringDefault(j.overridableDeviceProperties.Stem, ctx.ModuleName())
+	j.stem = proptools.StringDefault(j.overridableProperties.Stem, ctx.ModuleName())
 
 	proguardSpecInfo := j.collectProguardSpecInfo(ctx)
 	android.SetProvider(ctx, ProguardSpecInfoProvider, proguardSpecInfo)
@@ -1685,7 +1698,7 @@ func (j *Binary) HostToolPath() android.OptionalPath {
 }
 
 func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	j.stem = proptools.StringDefault(j.overridableDeviceProperties.Stem, ctx.ModuleName())
+	j.stem = proptools.StringDefault(j.overridableProperties.Stem, ctx.ModuleName())
 
 	if ctx.Arch().ArchType == android.Common {
 		// Compile the jar
@@ -1863,6 +1876,10 @@ type ApiLibrary struct {
 	dexJarFile OptionalDexJarPath
 
 	validationPaths android.Paths
+
+	stubsType StubsType
+
+	aconfigProtoFiles android.Paths
 }
 
 type JavaApiLibraryProperties struct {
@@ -1904,6 +1921,20 @@ type JavaApiLibraryProperties struct {
 	// in sync with the source Java files. However, the environment variable
 	// DISABLE_STUB_VALIDATION has precedence over this property.
 	Enable_validation *bool
+
+	// Type of stubs the module should generate. Must be one of "everything", "runtime" or
+	// "exportable". Defaults to "everything".
+	// - "everything" stubs include all non-flagged apis and flagged apis, regardless of the state
+	// of the flag.
+	// - "runtime" stubs include all non-flagged apis and flagged apis that are ENABLED or
+	// READ_WRITE, and all other flagged apis are stripped.
+	// - "exportable" stubs include all non-flagged apis and flagged apis that are ENABLED and
+	// READ_ONLY, and all other flagged apis are stripped.
+	Stubs_type *string
+
+	// List of aconfig_declarations module names that the stubs generated in this module
+	// depend on.
+	Aconfig_declarations []string
 }
 
 func ApiLibraryFactory() android.Module {
@@ -2067,6 +2098,9 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if al.properties.System_modules != nil {
 		ctx.AddVariationDependencies(nil, systemModulesTag, String(al.properties.System_modules))
 	}
+	for _, aconfigDeclarationsName := range al.properties.Aconfig_declarations {
+		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfigDeclarationsName)
+	}
 }
 
 // Map where key is the api scope name and value is the int value
@@ -2087,7 +2121,23 @@ func (al *ApiLibrary) sortApiFilesByApiScope(ctx android.ModuleContext, srcFiles
 	return srcFilesInfo
 }
 
+var validstubsType = []StubsType{Everything, Runtime, Exportable}
+
+func (al *ApiLibrary) validateProperties(ctx android.ModuleContext) {
+	if al.properties.Stubs_type == nil {
+		ctx.ModuleErrorf("java_api_library module type must specify stubs_type property.")
+	} else {
+		al.stubsType = StringToStubsType(proptools.String(al.properties.Stubs_type))
+	}
+
+	if !android.InList(al.stubsType, validstubsType) {
+		ctx.PropertyErrorf("stubs_type", "%s is not a valid stubs_type property value. "+
+			"Must be one of %s.", proptools.String(al.properties.Stubs_type), validstubsType)
+	}
+}
+
 func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	al.validateProperties(ctx)
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 
@@ -2131,6 +2181,18 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			if currentApiTimestampProvider, ok := dep.(currentApiTimestampProvider); ok {
 				al.validationPaths = append(al.validationPaths, currentApiTimestampProvider.CurrentApiTimestamp())
 			}
+		case aconfigDeclarationTag:
+			if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.IntermediateCacheOutputPath)
+			} else if provider, ok := android.OtherModuleProvider(ctx, dep, android.CodegenInfoProvider); ok {
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.IntermediateCacheOutputPaths...)
+			} else {
+				ctx.ModuleErrorf("Only aconfig_declarations and aconfig_declarations_group "+
+					"module type is allowed for flags_packages property, but %s is neither "+
+					"of these supported module types",
+					dep.Name(),
+				)
+			}
 		}
 	})
 
@@ -2155,6 +2217,8 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	al.addValidation(ctx, cmd, al.validationPaths)
+
+	generateRevertAnnotationArgs(ctx, cmd, al.stubsType, al.aconfigProtoFiles)
 
 	al.stubsSrcJar = android.PathForModuleOut(ctx, "metalava", ctx.ModuleName()+"-"+"stubs.srcjar")
 	al.stubsJarWithoutStaticLibs = android.PathForModuleOut(ctx, "metalava", "stubs.jar")
@@ -2945,7 +3009,7 @@ func DefaultsFactory() android.Module {
 	module.AddProperties(
 		&CommonProperties{},
 		&DeviceProperties{},
-		&OverridableDeviceProperties{},
+		&OverridableProperties{},
 		&DexProperties{},
 		&DexpreoptProperties{},
 		&android.ProtoProperties{},

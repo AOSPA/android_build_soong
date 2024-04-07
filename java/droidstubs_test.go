@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"android/soong/android"
+
+	"github.com/google/blueprint/proptools"
 )
 
 func TestDroidstubs(t *testing.T) {
@@ -335,6 +337,7 @@ func TestGeneratedApiContributionVisibilityTest(t *testing.T) {
 			name: "bar",
 			api_surface: "public",
 			api_contributions: ["foo.api.contribution"],
+			stubs_type: "everything",
 		}
 	`
 	ctx, _ := testJavaWithFS(t, `
@@ -419,8 +422,8 @@ func TestReleaseExportRuntimeApis(t *testing.T) {
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 			variables.BuildFlags = map[string]string{
 				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-				"RELEASE_EXPORT_RUNTIME_APIS":         "true",
 			}
+			variables.ExportRuntimeApis = proptools.BoolPtr(true)
 		}),
 		android.FixtureMergeMockFs(map[string][]byte{
 			"a/A.java":      nil,

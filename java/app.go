@@ -170,9 +170,6 @@ type overridableAppProperties struct {
 	// binaries would be installed by default (in PRODUCT_PACKAGES) the other binary will be removed
 	// from PRODUCT_PACKAGES.
 	Overrides []string
-
-	// Names of aconfig_declarations modules that specify aconfig flags that the app depends on.
-	Flags_packages []string
 }
 
 type AndroidApp struct {
@@ -291,6 +288,10 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	a.usesLibrary.deps(ctx, sdkDep.hasFrameworkLibs())
+
+	for _, aconfig_declaration := range a.aaptProperties.Flags_packages {
+		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfig_declaration)
+	}
 }
 
 func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutatorContext) {
@@ -317,10 +318,6 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 			ctx.PropertyErrorf("additional_certificates",
 				`must be names of android_app_certificate modules in the form ":module"`)
 		}
-	}
-
-	for _, aconfig_declaration := range a.overridableAppProperties.Flags_packages {
-		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfig_declaration)
 	}
 }
 
@@ -458,6 +455,21 @@ func (a *AndroidApp) renameResourcesPackage() bool {
 	return proptools.BoolDefault(a.overridableAppProperties.Rename_resources_package, true)
 }
 
+func getAconfigFilePaths(ctx android.ModuleContext) (aconfigTextFilePaths android.Paths) {
+	ctx.VisitDirectDepsWithTag(aconfigDeclarationTag, func(dep android.Module) {
+		if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
+			aconfigTextFilePaths = append(aconfigTextFilePaths, provider.IntermediateDumpOutputPath)
+		} else {
+			ctx.ModuleErrorf("Only aconfig_declarations module type is allowed for "+
+				"flags_packages property, but %s is not aconfig_declarations module type",
+				dep.Name(),
+			)
+		}
+	})
+
+	return aconfigTextFilePaths
+}
+
 func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	usePlatformAPI := proptools.Bool(a.Module.deviceProperties.Platform_apis)
 	if ctx.Module().(android.SdkContext).SdkVersion(ctx).Kind == android.SdkModule {
@@ -508,26 +520,17 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 		a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
 	}
 
-	var aconfigTextFilePaths android.Paths
-	ctx.VisitDirectDepsWithTag(aconfigDeclarationTag, func(dep android.Module) {
-		if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
-			aconfigTextFilePaths = append(aconfigTextFilePaths, provider.IntermediateDumpOutputPath)
-		} else {
-			ctx.ModuleErrorf("Only aconfig_declarations module type is allowed for "+
-				"flags_packages property, but %s is not aconfig_declarations module type",
-				dep.Name(),
-			)
-		}
-	})
-
+	// Use non final ids if we are doing optimized shrinking and are using R8.
+	nonFinalIds := Bool(a.dexProperties.Optimize.Optimized_shrink_resources) && a.dexer.effectiveOptimizeEnabled()
 	a.aapt.buildActions(ctx,
 		aaptBuildActionOptions{
 			sdkContext:                     android.SdkContext(a),
 			classLoaderContexts:            a.classLoaderContexts,
 			excludedLibs:                   a.usesLibraryProperties.Exclude_uses_libs,
 			enforceDefaultTargetSdkVersion: a.enforceDefaultTargetSdkVersion(),
+			forceNonFinalResourceIDs:       nonFinalIds,
 			extraLinkFlags:                 aaptLinkFlags,
-			aconfigTextFiles:               aconfigTextFilePaths,
+			aconfigTextFiles:               getAconfigFilePaths(ctx),
 		},
 	)
 
@@ -548,7 +551,13 @@ func (a *AndroidApp) proguardBuildActions(ctx android.ModuleContext) {
 	staticLibProguardFlagFiles = android.FirstUniquePaths(staticLibProguardFlagFiles)
 
 	a.Module.extraProguardFlagsFiles = append(a.Module.extraProguardFlagsFiles, staticLibProguardFlagFiles...)
-	a.Module.extraProguardFlagsFiles = append(a.Module.extraProguardFlagsFiles, a.proguardOptionsFile)
+	if !Bool(a.dexProperties.Optimize.Optimized_shrink_resources) {
+		// When using the optimized shrinking the R8 enqueuer will traverse the xml files that become
+		// live for code references and (transitively) mark these as live.
+		// In this case we explicitly don't wan't the aapt2 generated keep files (which would keep the now
+		// dead code alive)
+		a.Module.extraProguardFlagsFiles = append(a.Module.extraProguardFlagsFiles, a.proguardOptionsFile)
+	}
 }
 
 func (a *AndroidApp) installPath(ctx android.ModuleContext) android.InstallPath {
@@ -581,7 +590,7 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) (android.Path, a
 	var packageResources = a.exportPackage
 
 	if ctx.ModuleName() != "framework-res" {
-		if Bool(a.dexProperties.Optimize.Shrink_resources) {
+		if a.dexProperties.resourceShrinkingEnabled() {
 			protoFile := android.PathForModuleOut(ctx, packageResources.Base()+".proto.apk")
 			aapt2Convert(ctx, protoFile, packageResources, "proto")
 			a.dexer.resourcesInput = android.OptionalPathForPath(protoFile)
@@ -604,7 +613,7 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) (android.Path, a
 		}
 
 		a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars)
-		if Bool(a.dexProperties.Optimize.Shrink_resources) {
+		if a.dexProperties.resourceShrinkingEnabled() {
 			binaryResources := android.PathForModuleOut(ctx, packageResources.Base()+".binary.out.apk")
 			aapt2Convert(ctx, binaryResources, a.dexer.resourcesOutput.Path(), "binary")
 			packageResources = binaryResources
@@ -756,7 +765,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Unlike installApkName, a.stem should respect base module name for override_android_app.
 	// Therefore, use ctx.ModuleName() instead of a.Name().
-	a.stem = proptools.StringDefault(a.overridableDeviceProperties.Stem, ctx.ModuleName())
+	a.stem = proptools.StringDefault(a.overridableProperties.Stem, ctx.ModuleName())
 
 	// Check if the install APK name needs to be overridden.
 	// Both android_app and override_android_app module are expected to possess
@@ -764,7 +773,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	// from the base module. Therefore, use a.Name() which represents
 	// the module name for both android_app and override_android_app.
 	a.installApkName = ctx.DeviceConfig().OverridePackageNameFor(
-		proptools.StringDefault(a.overridableDeviceProperties.Stem, a.Name()))
+		proptools.StringDefault(a.overridableProperties.Stem, a.Name()))
 
 	if ctx.ModuleName() == "framework-res" {
 		// framework-res.apk is installed as system/framework/framework-res.apk
@@ -966,6 +975,13 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 			}
 		}
 	}
+
+	providePrebuiltInfo(ctx,
+		prebuiltInfoProps{
+			baseModuleName: a.BaseModuleName(),
+			isPrebuilt:     false,
+		},
+	)
 }
 
 type appDepsInterface interface {
@@ -1370,6 +1386,12 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.extraTestConfigs = android.PathsForModuleSrc(ctx, a.testProperties.Test_options.Extra_test_configs)
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
 	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
+	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
+		InstalledFiles:          a.data,
+		OutputFile:              a.OutputFile(),
+		TestConfig:              a.testConfig,
+		HostRequiredModuleNames: a.HostRequiredModuleNames(),
+	})
 }
 
 func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig android.Path) android.Path {
@@ -1548,7 +1570,7 @@ func (i *OverrideAndroidApp) GenerateAndroidBuildActions(_ android.ModuleContext
 func OverrideAndroidAppModuleFactory() android.Module {
 	m := &OverrideAndroidApp{}
 	m.AddProperties(
-		&OverridableDeviceProperties{},
+		&OverridableProperties{},
 		&overridableAppProperties{},
 	)
 

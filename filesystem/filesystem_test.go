@@ -16,9 +16,11 @@ package filesystem
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"android/soong/android"
+	"android/soong/bpf"
 	"android/soong/cc"
 	"android/soong/etc"
 
@@ -31,6 +33,7 @@ func TestMain(m *testing.M) {
 
 var fixture = android.GroupFixturePreparers(
 	android.PrepareForIntegrationTestWithAndroid,
+	bpf.PrepareForTestWithBpf,
 	etc.PrepareForTestWithPrebuiltEtc,
 	cc.PrepareForIntegrationTestWithCc,
 	PrepareForTestWithFilesystemBuildComponents,
@@ -40,11 +43,71 @@ func TestFileSystemDeps(t *testing.T) {
 	result := fixture.RunTestWithBp(t, `
 		android_filesystem {
 			name: "myfilesystem",
+			multilib: {
+				common: {
+					deps: [
+						"bpf.o",
+					],
+				},
+				lib32: {
+					deps: [
+						"foo",
+						"libbar",
+					],
+				},
+				lib64: {
+					deps: [
+						"libbar",
+					],
+				},
+			},
+			compile_multilib: "both",
+		}
+
+		bpf {
+			name: "bpf.o",
+			srcs: ["bpf.c"],
+		}
+
+		cc_binary {
+			name: "foo",
+			compile_multilib: "prefer32",
+		}
+
+		cc_library {
+			name: "libbar",
 		}
 	`)
 
 	// produces "myfilesystem.img"
 	result.ModuleForTests("myfilesystem", "android_common").Output("myfilesystem.img")
+
+	fs := result.ModuleForTests("myfilesystem", "android_common").Module().(*filesystem)
+	expected := []string{
+		"bin/foo",
+		"lib/libbar.so",
+		"lib64/libbar.so",
+		"etc/bpf/bpf.o",
+	}
+	for _, e := range expected {
+		android.AssertStringListContains(t, "missing entry", fs.entries, e)
+	}
+}
+
+func TestIncludeMakeBuiltFiles(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem {
+			name: "myfilesystem",
+			include_make_built_files: "system",
+		}
+	`)
+
+	output := result.ModuleForTests("myfilesystem", "android_common").Output("myfilesystem.img")
+
+	stampFile := filepath.Join(result.Config.OutDir(), "target/product/test_device/obj/PACKAGING/system_intermediates/staging_dir.stamp")
+	fileListFile := filepath.Join(result.Config.OutDir(), "target/product/test_device/obj/PACKAGING/system_intermediates/file_list.txt")
+	android.AssertStringListContains(t, "deps of filesystem must include the staging dir stamp file", output.Implicits.Strings(), stampFile)
+	android.AssertStringListContains(t, "deps of filesystem must include the staging dir file list", output.Implicits.Strings(), fileListFile)
 }
 
 func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
@@ -224,7 +287,7 @@ func TestFileSystemShouldInstallCoreVariantIfTargetBuildAppsIsSet(t *testing.T) 
 		}
 	`)
 
-	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("deps.zip").Implicits
+	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("myfilesystem.img").Implicits
 	android.AssertStringListContains(t, "filesystem should have libbar even for unbundled build",
 		inputs.Strings(),
 		"out/soong/.intermediates/libbar/android_arm64_armv8-a_shared/libbar.so")
@@ -268,7 +331,7 @@ func TestFileSystemWithCoverageVariants(t *testing.T) {
 	`)
 
 	filesystem := result.ModuleForTests("myfilesystem", "android_common_cov")
-	inputs := filesystem.Output("deps.zip").Implicits
+	inputs := filesystem.Output("myfilesystem.img").Implicits
 	android.AssertStringListContains(t, "filesystem should have libfoo(cov)",
 		inputs.Strings(),
 		"out/soong/.intermediates/libfoo/android_arm64_armv8-a_shared_cov/libfoo.so")

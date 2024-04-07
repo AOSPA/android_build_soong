@@ -24,6 +24,7 @@ import (
 
 	"android/soong/apex"
 	"android/soong/cc"
+	"android/soong/java"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -89,19 +90,6 @@ type generatedContents struct {
 	indentLevel int
 }
 
-// generatedFile abstracts operations for writing contents into a file and emit a build rule
-// for the file.
-type generatedFile struct {
-	generatedContents
-	path android.OutputPath
-}
-
-func newGeneratedFile(ctx android.ModuleContext, path ...string) *generatedFile {
-	return &generatedFile{
-		path: android.PathForModuleOut(ctx, path...).OutputPath,
-	}
-}
-
 func (gc *generatedContents) Indent() {
 	gc.indentLevel++
 }
@@ -120,26 +108,6 @@ func (gc *generatedContents) IndentedPrintf(format string, args ...interface{}) 
 // the arguments.
 func (gc *generatedContents) UnindentedPrintf(format string, args ...interface{}) {
 	_, _ = fmt.Fprintf(&(gc.content), format, args...)
-}
-
-func (gf *generatedFile) build(pctx android.PackageContext, ctx android.BuilderContext, implicits android.Paths) {
-	rb := android.NewRuleBuilder(pctx, ctx)
-
-	content := gf.content.String()
-
-	// ninja consumes newline characters in rspfile_content. Prevent it by
-	// escaping the backslash in the newline character. The extra backslash
-	// is removed when the rspfile is written to the actual script file
-	content = strings.ReplaceAll(content, "\n", "\\n")
-
-	rb.Command().
-		Implicits(implicits).
-		Text("echo -n").Text(proptools.ShellEscape(content)).
-		// convert \\n to \n
-		Text("| sed 's/\\\\n/\\n/g' >").Output(gf.path)
-	rb.Command().
-		Text("chmod a+x").Output(gf.path)
-	rb.Build(gf.path.Base(), "Build "+gf.path.Base())
 }
 
 // Collect all the members.
@@ -170,7 +138,7 @@ func (s *sdk) collectMembers(ctx android.ModuleContext) {
 
 			var container android.Module
 			if parent != ctx.Module() {
-				container = parent.(android.Module)
+				container = parent
 			}
 
 			minApiLevel := android.MinApiLevelForSdkSnapshot(ctx, child)
@@ -179,7 +147,7 @@ func (s *sdk) collectMembers(ctx android.ModuleContext) {
 			s.memberVariantDeps = append(s.memberVariantDeps, sdkMemberVariantDep{
 				sdkVariant:             s,
 				memberType:             memberType,
-				variant:                child.(android.Module),
+				variant:                child,
 				minApiLevel:            minApiLevel,
 				container:              container,
 				export:                 export,
@@ -375,7 +343,7 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 
 	snapshotDir := android.PathForModuleOut(ctx, "snapshot")
 
-	bp := newGeneratedFile(ctx, "snapshot", "Android.bp")
+	bp := android.PathForModuleOut(ctx, "snapshot", "Android.bp")
 
 	bpFile := &bpFile{
 		modules: make(map[string]*bpModule),
@@ -389,7 +357,7 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		sdk:                   s,
 		snapshotDir:           snapshotDir.OutputPath,
 		copies:                make(map[string]string),
-		filesToZip:            []android.Path{bp.path},
+		filesToZip:            []android.Path{bp},
 		bpFile:                bpFile,
 		prebuiltModules:       make(map[string]*bpModule),
 		allMembersByName:      allMembersByName,
@@ -421,6 +389,7 @@ be unnecessary as every module in the sdk already has its own licenses property.
 
 	// Create the prebuilt modules for each of the member modules.
 	traits := s.gatherTraits()
+	memberNames := []string{} // soong module names of the members. contains the prebuilt_ prefix.
 	for _, member := range members {
 		memberType := member.memberType
 		if !memberType.ArePrebuiltsRequired() {
@@ -442,6 +411,38 @@ be unnecessary as every module in the sdk already has its own licenses property.
 
 		prebuiltModule := memberType.AddPrebuiltModule(memberCtx, member)
 		s.createMemberSnapshot(memberCtx, member, prebuiltModule.(*bpModule))
+
+		if member.memberType != android.LicenseModuleSdkMemberType && !builder.isInternalMember(member.name) {
+			// More exceptions
+			// 1. Skip BCP and SCCP fragments
+			// 2. Skip non-sdk contents of BCP and SCCP fragments
+			//
+			// The non-sdk contents of BCP/SSCP fragments should only be used for dexpreopt and hiddenapi,
+			// and are not available to the rest of the build.
+			if android.InList(member.memberType,
+				[]android.SdkMemberType{
+					// bcp
+					java.BootclasspathFragmentSdkMemberType,
+					java.JavaBootLibsSdkMemberType,
+					// sscp
+					java.SystemServerClasspathFragmentSdkMemberType,
+					java.JavaSystemserverLibsSdkMemberType,
+				},
+			) {
+				continue
+			}
+
+			memberNames = append(memberNames, android.PrebuiltNameFromSource(member.name))
+		}
+	}
+
+	// create an apex_contributions_defaults for this module's sdk.
+	// this module type is supported in V and above.
+	if targetApiLevel.GreaterThan(android.ApiLevelUpsideDownCake) {
+		ac := newModule("apex_contributions_defaults")
+		ac.AddProperty("name", s.Name()+".contributions")
+		ac.AddProperty("contents", memberNames)
+		bpFile.AddModule(ac)
 	}
 
 	// Create a transformer that will transform a module by replacing any references
@@ -463,17 +464,14 @@ be unnecessary as every module in the sdk already has its own licenses property.
 	}
 
 	// generate Android.bp
-	bp = newGeneratedFile(ctx, "snapshot", "Android.bp")
-	generateBpContents(&bp.generatedContents, bpFile)
-
-	contents := bp.content.String()
+	contents := generateBpContents(bpFile)
 	// If the snapshot is being generated for the current build release then check the syntax to make
 	// sure that it is compatible.
 	if targetBuildRelease == buildReleaseCurrent {
 		syntaxCheckSnapshotBpFile(ctx, contents)
 	}
 
-	bp.build(pctx, ctx, nil)
+	android.WriteFileRuleVerbatim(ctx, bp, contents)
 
 	// Copy the build number file into the snapshot.
 	builder.CopyToSnapshot(ctx.Config().BuildNumberFile(ctx), BUILD_NUMBER_FILE)
@@ -522,16 +520,14 @@ be unnecessary as every module in the sdk already has its own licenses property.
 	modules := s.generateInfoData(ctx, memberVariantDeps)
 
 	// Output the modules information as pretty printed JSON.
-	info := newGeneratedFile(ctx, fmt.Sprintf("%s%s.info", ctx.ModuleName(), snapshotFileSuffix))
+	info := android.PathForModuleOut(ctx, fmt.Sprintf("%s%s.info", ctx.ModuleName(), snapshotFileSuffix))
 	output, err := json.MarshalIndent(modules, "", "  ")
 	if err != nil {
 		ctx.ModuleErrorf("error generating %q: %s", info, err)
 	}
 	builder.infoContents = string(output)
-	info.generatedContents.UnindentedPrintf("%s", output)
-	info.build(pctx, ctx, nil)
-	infoPath := info.path
-	installedInfo := ctx.InstallFile(android.PathForMainlineSdksInstall(ctx), infoPath.Base(), infoPath)
+	android.WriteFileRuleVerbatim(ctx, info, builder.infoContents)
+	installedInfo := ctx.InstallFile(android.PathForMainlineSdksInstall(ctx), info.Base(), info)
 	s.infoFile = android.OptionalPathForPath(installedInfo)
 
 	// Install the zip, making sure that the info file has been installed as well.
@@ -718,105 +714,6 @@ func extractCommonProperties(ctx android.ModuleContext, extractor *commonValueEx
 	}
 }
 
-// snapshotModuleStaticProperties contains snapshot static (i.e. not dynamically generated) properties.
-type snapshotModuleStaticProperties struct {
-	Compile_multilib string `android:"arch_variant"`
-}
-
-// combinedSnapshotModuleProperties are the properties that are associated with the snapshot module.
-type combinedSnapshotModuleProperties struct {
-	// The sdk variant from which this information was collected.
-	sdkVariant *sdk
-
-	// Static snapshot module properties.
-	staticProperties *snapshotModuleStaticProperties
-
-	// The dynamically generated member list properties.
-	dynamicProperties interface{}
-}
-
-// collateSnapshotModuleInfo collates all the snapshot module info from supplied sdk variants.
-func (s *sdk) collateSnapshotModuleInfo(ctx android.BaseModuleContext, sdkVariants []*sdk, memberVariantDeps []sdkMemberVariantDep) []*combinedSnapshotModuleProperties {
-	sdkVariantToCombinedProperties := map[*sdk]*combinedSnapshotModuleProperties{}
-	var list []*combinedSnapshotModuleProperties
-	for _, sdkVariant := range sdkVariants {
-		staticProperties := &snapshotModuleStaticProperties{
-			Compile_multilib: sdkVariant.multilibUsages.String(),
-		}
-		dynamicProperties := s.dynamicSdkMemberTypes.createMemberTypeListProperties()
-
-		combinedProperties := &combinedSnapshotModuleProperties{
-			sdkVariant:        sdkVariant,
-			staticProperties:  staticProperties,
-			dynamicProperties: dynamicProperties,
-		}
-		sdkVariantToCombinedProperties[sdkVariant] = combinedProperties
-
-		list = append(list, combinedProperties)
-	}
-
-	for _, memberVariantDep := range memberVariantDeps {
-		// If the member dependency is internal then do not add the dependency to the snapshot member
-		// list properties.
-		if !memberVariantDep.export {
-			continue
-		}
-
-		combined := sdkVariantToCombinedProperties[memberVariantDep.sdkVariant]
-		memberListProperty := s.memberTypeListProperty(memberVariantDep.memberType)
-		memberName := ctx.OtherModuleName(memberVariantDep.variant)
-
-		if memberListProperty.getter == nil {
-			continue
-		}
-
-		// Append the member to the appropriate list, if it is not already present in the list.
-		memberList := memberListProperty.getter(combined.dynamicProperties)
-		if !android.InList(memberName, memberList) {
-			memberList = append(memberList, memberName)
-		}
-		memberListProperty.setter(combined.dynamicProperties, memberList)
-	}
-
-	return list
-}
-
-func (s *sdk) optimizeSnapshotModuleProperties(ctx android.ModuleContext, list []*combinedSnapshotModuleProperties) *combinedSnapshotModuleProperties {
-
-	// Extract the dynamic properties and add them to a list of propertiesContainer.
-	propertyContainers := []propertiesContainer{}
-	for _, i := range list {
-		propertyContainers = append(propertyContainers, sdkVariantPropertiesContainer{
-			sdkVariant: i.sdkVariant,
-			properties: i.dynamicProperties,
-		})
-	}
-
-	// Extract the common members, removing them from the original properties.
-	commonDynamicProperties := s.dynamicSdkMemberTypes.createMemberTypeListProperties()
-	extractor := newCommonValueExtractor(commonDynamicProperties)
-	extractCommonProperties(ctx, extractor, commonDynamicProperties, propertyContainers)
-
-	// Extract the static properties and add them to a list of propertiesContainer.
-	propertyContainers = []propertiesContainer{}
-	for _, i := range list {
-		propertyContainers = append(propertyContainers, sdkVariantPropertiesContainer{
-			sdkVariant: i.sdkVariant,
-			properties: i.staticProperties,
-		})
-	}
-
-	commonStaticProperties := &snapshotModuleStaticProperties{}
-	extractor = newCommonValueExtractor(commonStaticProperties)
-	extractCommonProperties(ctx, extractor, &commonStaticProperties, propertyContainers)
-
-	return &combinedSnapshotModuleProperties{
-		sdkVariant:        nil,
-		staticProperties:  commonStaticProperties,
-		dynamicProperties: commonDynamicProperties,
-	}
-}
-
 type propertyTag struct {
 	name string
 }
@@ -885,7 +782,8 @@ func (t pruneEmptySetTransformer) transformPropertySetAfterContents(_ string, pr
 	}
 }
 
-func generateBpContents(contents *generatedContents, bpFile *bpFile) {
+func generateBpContents(bpFile *bpFile) string {
+	contents := &generatedContents{}
 	contents.IndentedPrintf("// This is auto-generated. DO NOT EDIT.\n")
 	for _, bpModule := range bpFile.order {
 		contents.IndentedPrintf("\n")
@@ -893,6 +791,7 @@ func generateBpContents(contents *generatedContents, bpFile *bpFile) {
 		outputPropertySet(contents, bpModule.bpPropertySet)
 		contents.IndentedPrintf("}\n")
 	}
+	return contents.content.String()
 }
 
 func outputPropertySet(contents *generatedContents, set *bpPropertySet) {
@@ -1007,7 +906,7 @@ func outputUnnamedValue(contents *generatedContents, value reflect.Value) {
 		contents.IndentedPrintf("}")
 
 	default:
-		panic(fmt.Errorf("Unknown type: %T of value %#v", value, value))
+		panic(fmt.Errorf("unknown type: %T of value %#v", value, value))
 	}
 }
 
@@ -1018,9 +917,7 @@ func multiLineValue(value reflect.Value) bool {
 }
 
 func (s *sdk) GetAndroidBpContentsForTests() string {
-	contents := &generatedContents{}
-	generateBpContents(contents, s.builderForTests.bpFile)
-	return contents.content.String()
+	return generateBpContents(s.builderForTests.bpFile)
 }
 
 func (s *sdk) GetInfoContentsForTests() string {
@@ -1334,7 +1231,7 @@ func (m multilibUsage) addArchType(archType android.ArchType) multilibUsage {
 	case "lib64":
 		return m | multilib64
 	default:
-		panic(fmt.Errorf("Unknown Multilib field in ArchType, expected 'lib32' or 'lib64', found %q", multilib))
+		panic(fmt.Errorf("unknown Multilib field in ArchType, expected 'lib32' or 'lib64', found %q", multilib))
 	}
 }
 
@@ -1349,7 +1246,7 @@ func (m multilibUsage) String() string {
 	case multilibBoth:
 		return "both"
 	default:
-		panic(fmt.Errorf("Unknown multilib value, found %b, expected one of %b, %b, %b or %b",
+		panic(fmt.Errorf("unknown multilib value, found %b, expected one of %b, %b, %b or %b",
 			m, multilibNone, multilib32, multilib64, multilibBoth))
 	}
 }
@@ -2300,20 +2197,6 @@ type propertiesContainer interface {
 
 	// Get the properties that need optimizing.
 	optimizableProperties() interface{}
-}
-
-// A wrapper for sdk variant related properties to allow them to be optimized.
-type sdkVariantPropertiesContainer struct {
-	sdkVariant *sdk
-	properties interface{}
-}
-
-func (c sdkVariantPropertiesContainer) optimizableProperties() interface{} {
-	return c.properties
-}
-
-func (c sdkVariantPropertiesContainer) String() string {
-	return c.sdkVariant.String()
 }
 
 // Extract common properties from a slice of property structures of the same type.

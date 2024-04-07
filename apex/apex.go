@@ -841,10 +841,12 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 
 		addDependenciesForNativeModules(ctx, deps, target, imageVariation)
-		ctx.AddFarVariationDependencies([]blueprint.Variation{
-			{Mutator: "os", Variation: target.OsVariation()},
-			{Mutator: "arch", Variation: target.ArchVariation()},
-		}, shBinaryTag, a.properties.Sh_binaries...)
+		if isPrimaryAbi {
+			ctx.AddFarVariationDependencies([]blueprint.Variation{
+				{Mutator: "os", Variation: target.OsVariation()},
+				{Mutator: "arch", Variation: target.ArchVariation()},
+			}, shBinaryTag, a.properties.Sh_binaries...)
+		}
 	}
 
 	// Common-arch dependencies come next
@@ -2070,8 +2072,10 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				return true // track transitive dependencies
 			case *java.AndroidAppImport:
 				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
+				addAconfigFiles(vctx, ctx, child)
 			case *java.AndroidTestHelperApp:
 				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
+				addAconfigFiles(vctx, ctx, child)
 			case *java.AndroidAppSet:
 				appDir := "app"
 				if ap.Privileged() {
@@ -2085,6 +2089,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				af := newApexFile(ctx, ap.OutputFile(), ap.BaseModuleName(), appDirName, appSet, ap)
 				af.certificate = java.PresignedCertificate
 				vctx.filesInfo = append(vctx.filesInfo, af)
+				addAconfigFiles(vctx, ctx, child)
 			default:
 				ctx.PropertyErrorf("apps", "%q is not an android_app module", depName)
 			}
@@ -2113,6 +2118,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		case prebuiltTag:
 			if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
 				vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, depName))
+				addAconfigFiles(vctx, ctx, child)
 			} else {
 				ctx.PropertyErrorf("prebuilts", "%q is not a prebuilt_etc module", depName)
 			}
@@ -2136,6 +2142,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 					af := apexFileForExecutable(ctx, ccTest)
 					af.class = nativeTest
 					vctx.filesInfo = append(vctx.filesInfo, af)
+					addAconfigFiles(vctx, ctx, child)
 				}
 				return true // track transitive dependencies
 			} else {
@@ -2221,11 +2228,13 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 
 			vctx.filesInfo = append(vctx.filesInfo, af)
+			addAconfigFiles(vctx, ctx, child)
 			return true // track transitive dependencies
 		} else if rm, ok := child.(*rust.Module); ok {
 			af := apexFileForRustLibrary(ctx, rm)
 			af.transitiveDep = true
 			vctx.filesInfo = append(vctx.filesInfo, af)
+			addAconfigFiles(vctx, ctx, child)
 			return true // track transitive dependencies
 		}
 	} else if cc.IsTestPerSrcDepTag(depTag) {
@@ -2254,6 +2263,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			af := apexFileForRustLibrary(ctx, rustm)
 			af.transitiveDep = true
 			vctx.filesInfo = append(vctx.filesInfo, af)
+			addAconfigFiles(vctx, ctx, child)
 			return true // track transitive dependencies
 		}
 	} else if rust.IsRlibDepTag(depTag) {
@@ -2272,6 +2282,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				return false
 			}
 			vctx.filesInfo = append(vctx.filesInfo, af)
+			addAconfigFiles(vctx, ctx, child)
 			return true // track transitive dependencies
 		default:
 			ctx.PropertyErrorf("bootclasspath_fragments",
@@ -2286,6 +2297,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			if profileAf := apexFileForJavaModuleProfile(ctx, child.(javaModule)); profileAf != nil {
 				vctx.filesInfo = append(vctx.filesInfo, *profileAf)
 			}
+			addAconfigFiles(vctx, ctx, child)
 			return true // track transitive dependencies
 		default:
 			ctx.PropertyErrorf("systemserverclasspath_fragments",
@@ -2302,9 +2314,15 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 }
 
 func addAconfigFiles(vctx *visitorContext, ctx android.ModuleContext, module blueprint.Module) {
-	dep, _ := android.OtherModuleProvider(ctx, module, android.AconfigTransitiveDeclarationsInfoProvider)
-	if len(dep.AconfigFiles) > 0 && dep.AconfigFiles[ctx.ModuleName()] != nil {
-		vctx.aconfigFiles = append(vctx.aconfigFiles, dep.AconfigFiles[ctx.ModuleName()]...)
+	if dep, ok := android.OtherModuleProvider(ctx, module, android.AconfigTransitiveDeclarationsInfoProvider); ok {
+		if len(dep.AconfigFiles) > 0 && dep.AconfigFiles[ctx.ModuleName()] != nil {
+			vctx.aconfigFiles = append(vctx.aconfigFiles, dep.AconfigFiles[ctx.ModuleName()]...)
+		}
+	}
+
+	validationFlag := ctx.DeviceConfig().AconfigContainerValidation()
+	if validationFlag == "error" || validationFlag == "warning" {
+		android.VerifyAconfigBuildMode(ctx, ctx.ModuleName(), module, validationFlag == "error")
 	}
 }
 
@@ -2405,6 +2423,18 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Set a provider for dexpreopt of bootjars
 	a.provideApexExportsInfo(ctx)
+
+	a.providePrebuiltInfo(ctx)
+}
+
+// Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
+// with information about whether source or prebuilt of an apex was used during the build.
+func (a *apexBundle) providePrebuiltInfo(ctx android.ModuleContext) {
+	info := android.PrebuiltInfo{
+		Name:        a.Name(),
+		Is_prebuilt: false,
+	}
+	android.SetProvider(ctx, android.PrebuiltInfoProvider, info)
 }
 
 // Set a provider containing information about the jars and .prof provided by the apex

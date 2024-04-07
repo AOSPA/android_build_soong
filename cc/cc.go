@@ -773,6 +773,12 @@ func (d libraryDependencyTag) InstallDepNeeded() bool {
 
 var _ android.InstallNeededDependencyTag = libraryDependencyTag{}
 
+func (d libraryDependencyTag) PropagateAconfigValidation() bool {
+	return d.static()
+}
+
+var _ android.PropagateAconfigValidationDependencyTag = libraryDependencyTag{}
+
 // dependencyTag is used for tagging miscellaneous dependency types that don't fit into
 // libraryDependencyTag.  Each tag object is created globally and reused for multiple
 // dependencies (although since the object contains no references, assigning a tag to a
@@ -3390,7 +3396,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					c.sabi.Properties.ReexportedIncludes, depExporterInfo.IncludeDirs.Strings()...)
 			}
 
-			makeLibName := MakeLibName(ctx, c, ccDep, depName) + libDepTag.makeSuffix
+			makeLibName := MakeLibName(ctx, c, ccDep, ccDep.BaseModuleName()) + libDepTag.makeSuffix
 			switch {
 			case libDepTag.header():
 				c.Properties.AndroidMkHeaderLibs = append(
@@ -3431,7 +3437,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			switch depTag {
 			case runtimeDepTag:
 				c.Properties.AndroidMkRuntimeLibs = append(
-					c.Properties.AndroidMkRuntimeLibs, MakeLibName(ctx, c, ccDep, depName)+libDepTag.makeSuffix)
+					c.Properties.AndroidMkRuntimeLibs, MakeLibName(ctx, c, ccDep, ccDep.BaseModuleName())+libDepTag.makeSuffix)
 				// Record BaseLibName for snapshots.
 				c.Properties.SnapshotRuntimeLibs = append(c.Properties.SnapshotRuntimeLibs, BaseLibName(depName))
 			case objDepTag:

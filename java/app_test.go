@@ -931,8 +931,8 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
 			},
 			appCombined: []string{
-				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
+				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
 				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
 			},
@@ -948,10 +948,10 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			directSrcJars: nil,
 			directClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
-				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
-				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
-				"out/soong/.intermediates/transitive/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
 				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
 			},
@@ -981,9 +981,9 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			sharedSrcJars: nil,
 			sharedClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
+				"out/soong/.intermediates/shared/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared_transitive_static/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared_transitive_shared/android_common/busybox/R.jar",
-				"out/soong/.intermediates/shared/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared_transitive_shared/android_common/turbine-combined/shared_transitive_shared.jar",
 				"out/soong/.intermediates/shared_transitive_static/android_common/turbine-combined/shared_transitive_static.jar",
 			},
@@ -1037,8 +1037,8 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
 			},
 			appCombined: []string{
-				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
+				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
 				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
 			},
@@ -1094,9 +1094,9 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			directSrcJars: nil,
 			directClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
-				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
-				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
 				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
 			},
@@ -4400,4 +4400,21 @@ func TestNoDexpreoptOptionalUsesLibDoesNotHaveImpl(t *testing.T) {
 	result := prepareForJavaTest.RunTestWithBp(t, bp)
 	dexpreopt := result.ModuleForTests("app", "android_common").MaybeRule("dexpreopt").Rule
 	android.AssertBoolEquals(t, "dexpreopt should be disabled if optional_uses_libs does not have an implementation", true, dexpreopt == nil)
+}
+
+func TestAppStem(t *testing.T) {
+	ctx := testApp(t, `
+				android_app {
+					name: "foo",
+					srcs: ["a.java"],
+					stem: "foo-new",
+					sdk_version: "current",
+				}`)
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+
+	outputs := fmt.Sprint(foo.AllOutputs())
+	if !strings.Contains(outputs, "foo-new.apk") {
+		t.Errorf("Module output does not contain expected apk %s", "foo-new.apk")
+	}
 }

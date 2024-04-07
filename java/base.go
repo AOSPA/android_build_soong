@@ -26,7 +26,6 @@ import (
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 
-	"android/soong/aconfig"
 	"android/soong/android"
 	"android/soong/dexpreopt"
 	"android/soong/java/config"
@@ -94,6 +93,9 @@ type CommonProperties struct {
 
 	// if not blank, used as prefix to generate repackage rule
 	Jarjar_prefix *string
+
+	// if set to true, skip the jarjar repackaging
+	Skip_jarjar_repackage *bool
 
 	// If not blank, set the java version passed to javac as -source and -target
 	Java_version *string
@@ -303,8 +305,8 @@ type DeviceProperties struct {
 	HiddenAPIFlagFileProperties
 }
 
-// Device properties that can be overridden by overriding module (e.g. override_android_app)
-type OverridableDeviceProperties struct {
+// Properties that can be overridden by overriding module (e.g. override_android_app)
+type OverridableProperties struct {
 	// set the name of the output. If not set, `name` is used.
 	// To override a module with this property set, overriding module might need to set this as well.
 	// Otherwise, both the overridden and the overriding modules will have the same output name, which
@@ -432,7 +434,7 @@ type Module struct {
 	protoProperties  android.ProtoProperties
 	deviceProperties DeviceProperties
 
-	overridableDeviceProperties OverridableDeviceProperties
+	overridableProperties OverridableProperties
 
 	// jar file containing header classes including static library dependencies, suitable for
 	// inserting into the bootclasspath/classpath of another compile
@@ -614,6 +616,7 @@ func (j *Module) checkHeadersOnly(ctx android.ModuleContext) {
 func (j *Module) addHostProperties() {
 	j.AddProperties(
 		&j.properties,
+		&j.overridableProperties,
 		&j.protoProperties,
 		&j.usesLibraryProperties,
 	)
@@ -623,7 +626,6 @@ func (j *Module) addHostAndDeviceProperties() {
 	j.addHostProperties()
 	j.AddProperties(
 		&j.deviceProperties,
-		&j.overridableDeviceProperties,
 		&j.dexer.dexProperties,
 		&j.dexpreoptProperties,
 		&j.linter.properties,
@@ -1101,11 +1103,13 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	jarjarProviderData := j.collectJarJarRules(ctx)
 	if jarjarProviderData != nil {
 		android.SetProvider(ctx, JarJarProvider, *jarjarProviderData)
-		text := getJarJarRuleText(jarjarProviderData)
-		if text != "" {
-			ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
-			android.WriteFileRule(ctx, ruleTextFile, text)
-			j.repackageJarjarRules = ruleTextFile
+		if !proptools.Bool(j.properties.Skip_jarjar_repackage) {
+			text := getJarJarRuleText(jarjarProviderData)
+			if text != "" {
+				ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
+				android.WriteFileRule(ctx, ruleTextFile, text)
+				j.repackageJarjarRules = ruleTextFile
+			}
 		}
 	}
 
@@ -1215,14 +1219,15 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		}
 
 		android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
-			HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
-			TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
-			TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
-			AidlIncludeDirs:                j.exportAidlIncludeDirs,
-			ExportedPlugins:                j.exportedPluginJars,
-			ExportedPluginClasses:          j.exportedPluginClasses,
-			ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
-			StubsLinkType:                  j.stubsLinkType,
+			HeaderJars:                          android.PathsIfNonNil(j.headerJarFile),
+			TransitiveLibsHeaderJars:            j.transitiveLibsHeaderJars,
+			TransitiveStaticLibsHeaderJars:      j.transitiveStaticLibsHeaderJars,
+			AidlIncludeDirs:                     j.exportAidlIncludeDirs,
+			ExportedPlugins:                     j.exportedPluginJars,
+			ExportedPluginClasses:               j.exportedPluginClasses,
+			ExportedPluginDisableTurbine:        j.exportedDisableTurbine,
+			StubsLinkType:                       j.stubsLinkType,
+			AconfigIntermediateCacheOutputPaths: deps.aconfigProtoFiles,
 		})
 
 		j.outputFile = j.headerJarFile
@@ -1307,7 +1312,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		}
 	}
 
-	jars := append(android.Paths(nil), kotlinJars...)
+	jars := slices.Clone(kotlinJars)
 
 	j.compiledSrcJars = srcJars
 
@@ -1322,7 +1327,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			// allow for the use of annotation processors that do function correctly
 			// with sharding enabled. See: b/77284273.
 		}
-		extraJars := append(android.CopyOf(extraCombinedJars), kotlinHeaderJars...)
+		extraJars := append(slices.Clone(kotlinHeaderJars), extraCombinedJars...)
 		headerJarFileWithoutDepsOrJarjar, j.headerJarFile, j.repackagedHeaderJarFile =
 			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName, extraJars)
 		if ctx.Failed() {
@@ -1395,6 +1400,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			return
 		}
 	}
+
+	jars = append(jars, extraCombinedJars...)
 
 	j.srcJarArgs, j.srcJarDeps = resourcePathsToJarArgs(srcFiles), srcFiles
 
@@ -1481,8 +1488,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		})
 		jars = append(jars, servicesJar)
 	}
-
-	jars = append(android.CopyOf(extraCombinedJars), jars...)
 
 	// Combine the classes built from sources, any manifests, and any static libraries into
 	// classes.jar. If there is only one input jar this step will be skipped.
@@ -1725,22 +1730,23 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	android.CollectDependencyAconfigFiles(ctx, &j.mergedAconfigFiles)
 
 	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
-		HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
-		RepackagedHeaderJars:           android.PathsIfNonNil(j.repackagedHeaderJarFile),
-		TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
-		TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
-		ImplementationAndResourcesJars: android.PathsIfNonNil(j.implementationAndResourcesJar),
-		ImplementationJars:             android.PathsIfNonNil(j.implementationJarFile),
-		ResourceJars:                   android.PathsIfNonNil(j.resourceJar),
-		AidlIncludeDirs:                j.exportAidlIncludeDirs,
-		SrcJarArgs:                     j.srcJarArgs,
-		SrcJarDeps:                     j.srcJarDeps,
-		TransitiveSrcFiles:             j.transitiveSrcFiles,
-		ExportedPlugins:                j.exportedPluginJars,
-		ExportedPluginClasses:          j.exportedPluginClasses,
-		ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
-		JacocoReportClassesFile:        j.jacocoReportClassesFile,
-		StubsLinkType:                  j.stubsLinkType,
+		HeaderJars:                          android.PathsIfNonNil(j.headerJarFile),
+		RepackagedHeaderJars:                android.PathsIfNonNil(j.repackagedHeaderJarFile),
+		TransitiveLibsHeaderJars:            j.transitiveLibsHeaderJars,
+		TransitiveStaticLibsHeaderJars:      j.transitiveStaticLibsHeaderJars,
+		ImplementationAndResourcesJars:      android.PathsIfNonNil(j.implementationAndResourcesJar),
+		ImplementationJars:                  android.PathsIfNonNil(j.implementationJarFile),
+		ResourceJars:                        android.PathsIfNonNil(j.resourceJar),
+		AidlIncludeDirs:                     j.exportAidlIncludeDirs,
+		SrcJarArgs:                          j.srcJarArgs,
+		SrcJarDeps:                          j.srcJarDeps,
+		TransitiveSrcFiles:                  j.transitiveSrcFiles,
+		ExportedPlugins:                     j.exportedPluginJars,
+		ExportedPluginClasses:               j.exportedPluginClasses,
+		ExportedPluginDisableTurbine:        j.exportedDisableTurbine,
+		JacocoReportClassesFile:             j.jacocoReportClassesFile,
+		StubsLinkType:                       j.stubsLinkType,
+		AconfigIntermediateCacheOutputPaths: deps.aconfigProtoFiles,
 	})
 
 	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource
@@ -2291,6 +2297,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 				// annotation processor that generates API is incompatible with the turbine
 				// optimization.
 				deps.disableTurbine = deps.disableTurbine || dep.ExportedPluginDisableTurbine
+				deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.AconfigIntermediateCacheOutputPaths...)
 			case pluginTag:
 				if plugin, ok := module.(*Plugin); ok {
 					if plugin.pluginProperties.Processor_class != nil {
@@ -2349,6 +2356,8 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 				deps.staticJars = append(deps.staticJars, dep.Srcs()...)
 				deps.staticHeaderJars = append(deps.staticHeaderJars, dep.Srcs()...)
 			}
+		} else if dep, ok := android.OtherModuleProvider(ctx, module, android.CodegenInfoProvider); ok {
+			deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.IntermediateCacheOutputPaths...)
 		} else {
 			switch tag {
 			case bootClasspathTag:
@@ -2408,7 +2417,8 @@ type JarJarProviderData struct {
 
 func (this JarJarProviderData) GetDebugString() string {
 	result := ""
-	for k, v := range this.Rename {
+	for _, k := range android.SortedKeys(this.Rename) {
+		v := this.Rename[k]
 		if strings.Contains(k, "android.companion.virtual.flags.FakeFeatureFlagsImpl") {
 			result += k + "--&gt;" + v + ";"
 		}
@@ -2545,7 +2555,7 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 				default:
 					return RenameUseExclude, "srcfile"
 				}
-			} else if _, ok := android.OtherModuleProvider(ctx, m, aconfig.CodegenInfoProvider); ok {
+			} else if _, ok := android.OtherModuleProvider(ctx, m, android.CodegenInfoProvider); ok {
 				return RenameUseInclude, "aconfig_declarations_group"
 			} else {
 				switch tag {
@@ -2664,7 +2674,8 @@ func (module *Module) collectJarJarRules(ctx android.ModuleContext) *JarJarProvi
 // to "" won't be in this list because they shouldn't be renamed yet.
 func getJarJarRuleText(provider *JarJarProviderData) string {
 	result := ""
-	for orig, renamed := range provider.Rename {
+	for _, orig := range android.SortedKeys(provider.Rename) {
+		renamed := provider.Rename[orig]
 		if renamed != "" {
 			result += "rule " + orig + " " + renamed + "\n"
 		}

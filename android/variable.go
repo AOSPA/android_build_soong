@@ -209,8 +209,9 @@ type variableProperties struct {
 		// release_aidl_use_unfrozen is "true" when a device can
 		// use the unfrozen versions of AIDL interfaces.
 		Release_aidl_use_unfrozen struct {
-			Cflags []string
-			Cmd    *string
+			Cflags          []string
+			Cmd             *string
+			Vintf_fragments []string
 		}
 	} `android:"arch_variant"`
 }
@@ -541,7 +542,13 @@ type ProductVariables struct {
 
 	BuildFromSourceStub *bool `json:",omitempty"`
 
-	BuildIgnoreApexContributionContents []string `json:",omitempty"`
+	BuildIgnoreApexContributionContents *bool `json:",omitempty"`
+
+	HiddenapiExportableStubs *bool `json:",omitempty"`
+
+	ExportRuntimeApis *bool `json:",omitempty"`
+
+	AconfigContainerValidation string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {

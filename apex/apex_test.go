@@ -2068,7 +2068,7 @@ func TestApexMinSdkVersion_InVendorApex(t *testing.T) {
 
 	// Ensure that mylib links with "current" LLNDK
 	libFlags := names(mylib.Rule("ld").Args["libFlags"])
-	ensureListContains(t, libFlags, "out/soong/.intermediates/libbar/"+vendorVariant+"_shared_current/libbar.so")
+	ensureListContains(t, libFlags, "out/soong/.intermediates/libbar/"+vendorVariant+"_shared/libbar.so")
 
 	// Ensure that mylib is targeting 29
 	ccRule := ctx.ModuleForTests("mylib", vendorVariant+"_static_apex29").Output("obj/mylib.o")
@@ -5046,6 +5046,7 @@ func TestApexWithShBinary(t *testing.T) {
 			key: "myapex.key",
 			sh_binaries: ["myscript"],
 			updatable: false,
+			compile_multilib: "both",
 		}
 
 		apex_key {
@@ -6198,7 +6199,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		`)
 	})
 
-	t.Run("Co-existing unflagged apexes should create a duplicate deapexer error in hiddenapi processing", func(t *testing.T) {
+	t.Run("Co-existing unflagged apexes should create a duplicate module error", func(t *testing.T) {
 		bp := `
 		// Source
 		apex {
@@ -6272,7 +6273,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		}
 	`
 
-		testDexpreoptWithApexes(t, bp, "Multiple installable prebuilt APEXes provide ambiguous deapexers: prebuilt_myapex.v1 and prebuilt_myapex.v2", preparer, fragment)
+		testDexpreoptWithApexes(t, bp, "Multiple prebuilt modules prebuilt_myapex.v1 and prebuilt_myapex.v2 have been marked as preferred for this source module", preparer, fragment)
 	})
 
 }
@@ -11029,7 +11030,7 @@ func TestFileSystemShouldSkipApexLibraries(t *testing.T) {
 		}
 	`)
 
-	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("deps.zip").Implicits
+	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("myfilesystem.img").Implicits
 	android.AssertStringListDoesNotContain(t, "filesystem should not have libbar",
 		inputs.Strings(),
 		"out/soong/.intermediates/libbar/android_arm64_armv8-a_shared/libbar.so")
@@ -11127,10 +11128,10 @@ func TestAconfigFilesJavaDeps(t *testing.T) {
 		t.Fatalf("Expected 5 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[4], "^cp -f .*/aconfig_flags.pb .*/image.apex$")
-	ensureMatches(t, copyCmds[5], "^cp -f .*/package.map .*/image.apex$")
-	ensureMatches(t, copyCmds[6], "^cp -f .*/flag.map .*/image.apex$")
-	ensureMatches(t, copyCmds[7], "^cp -f .*/flag.val .*/image.apex$")
+	ensureMatches(t, copyCmds[4], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[5], "^cp -f .*/package.map .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[6], "^cp -f .*/flag.map .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[7], "^cp -f .*/flag.val .*/image.apex/etc$")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -11251,10 +11252,10 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 		t.Fatalf("Expected 12 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[8], "^cp -f .*/aconfig_flags.pb .*/image.apex$")
-	ensureMatches(t, copyCmds[9], "^cp -f .*/package.map .*/image.apex$")
-	ensureMatches(t, copyCmds[10], "^cp -f .*/flag.map .*/image.apex$")
-	ensureMatches(t, copyCmds[11], "^cp -f .*/flag.val .*/image.apex$")
+	ensureMatches(t, copyCmds[8], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[9], "^cp -f .*/package.map .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[10], "^cp -f .*/flag.map .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[11], "^cp -f .*/flag.val .*/image.apex/etc$")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -11392,13 +11393,15 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 		t.Fatalf("Expected 26 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[22], "^cp -f .*/aconfig_flags.pb .*/image.apex$")
-	ensureMatches(t, copyCmds[23], "^cp -f .*/package.map .*/image.apex$")
-	ensureMatches(t, copyCmds[24], "^cp -f .*/flag.map .*/image.apex$")
-	ensureMatches(t, copyCmds[25], "^cp -f .*/flag.val .*/image.apex$")
+	ensureMatches(t, copyCmds[22], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[23], "^cp -f .*/package.map .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[24], "^cp -f .*/flag.map .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[25], "^cp -f .*/flag.val .*/image.apex/etc$")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
+		"my_aconfig_declarations_bar/intermediate.pb",
+		"my_aconfig_declarations_baz/intermediate.pb",
 		"my_rust_binary/android_arm64_armv8-a_apex10000/myapex/aconfig_merged.pb",
 	}
 	VerifyAconfigRule(t, &mod, "combine_aconfig_declarations", inputs, "android_common_myapex/aconfig_flags.pb", "", "")

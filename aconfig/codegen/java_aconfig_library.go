@@ -17,7 +17,6 @@ package codegen
 import (
 	"fmt"
 
-	"android/soong/aconfig"
 	"android/soong/android"
 	"android/soong/java"
 
@@ -92,12 +91,12 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 	if !isModeSupported(mode) {
 		ctx.PropertyErrorf("mode", "%q is not a supported mode", mode)
 	}
-	// TODO: uncomment this part after internal clean up
-	//if mode == "exported" && !declarations.Exportable {
-	//	// if mode is exported, the corresponding aconfig_declaration must mark its
-	//	// exportable property true
-	//	ctx.PropertyErrorf("mode", "exported mode requires its aconfig_declaration has exportable prop true")
-	//}
+
+	if mode == "exported" && !declarations.Exportable {
+		// if mode is exported, the corresponding aconfig_declaration must mark its
+		// exportable property true
+		ctx.PropertyErrorf("mode", "exported mode requires its aconfig_declaration has exportable prop true")
+	}
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        javaRule,
@@ -119,10 +118,15 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 		module.AddJarJarRenameRule(declarations.Package+".FakeFeatureFlagsImpl", "")
 	}
 
-	android.SetProvider(ctx, aconfig.CodegenInfoProvider, aconfig.CodegenInfo{
+	android.SetProvider(ctx, android.CodegenInfoProvider, android.CodegenInfo{
 		AconfigDeclarations:          []string{declarationsModules[0].Name()},
 		IntermediateCacheOutputPaths: android.Paths{declarations.IntermediateCacheOutputPath},
 		Srcjars:                      android.Paths{srcJarPath},
+		ModeInfos: map[string]android.ModeInfo{
+			ctx.ModuleName(): {
+				Container: declarations.Container,
+				Mode:      mode,
+			}},
 	})
 
 	return srcJarPath
