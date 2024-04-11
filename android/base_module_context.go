@@ -219,7 +219,7 @@ type BaseModuleContext interface {
 
 	// EvaluateConfiguration makes ModuleContext a valid proptools.ConfigurableEvaluator, so this context
 	// can be used to evaluate the final value of Configurable properties.
-	EvaluateConfiguration(parser.SelectType, string) (string, bool)
+	EvaluateConfiguration(parser.SelectType, string, string) (string, bool)
 }
 
 type baseModuleContext struct {
@@ -303,6 +303,12 @@ func (b *baseModuleContext) getMissingDependencies() []string {
 type AllowDisabledModuleDependency interface {
 	blueprint.DependencyTag
 	AllowDisabledModuleDependency(target Module) bool
+}
+
+type AlwaysAllowDisabledModuleDependencyTag struct{}
+
+func (t AlwaysAllowDisabledModuleDependencyTag) AllowDisabledModuleDependency(Module) bool {
+	return true
 }
 
 func (b *baseModuleContext) validateAndroidModule(module blueprint.Module, tag blueprint.DependencyTag, strict bool, ignoreBlueprint bool) Module {
@@ -571,31 +577,6 @@ func (b *baseModuleContext) GetPathString(skipFirst bool) string {
 	return sb.String()
 }
 
-func (m *baseModuleContext) EvaluateConfiguration(ty parser.SelectType, condition string) (string, bool) {
-	switch ty {
-	case parser.SelectTypeReleaseVariable:
-		if v, ok := m.Config().productVariables.BuildFlags[condition]; ok {
-			return v, true
-		}
-		return "", false
-	case parser.SelectTypeProductVariable:
-		// TODO(b/323382414): Might add these on a case-by-case basis
-		m.ModuleErrorf("TODO(b/323382414): Product variables are not yet supported in selects")
-		return "", false
-	case parser.SelectTypeSoongConfigVariable:
-		parts := strings.Split(condition, ":")
-		namespace := parts[0]
-		variable := parts[1]
-		if n, ok := m.Config().productVariables.VendorVars[namespace]; ok {
-			if v, ok := n[variable]; ok {
-				return v, true
-			}
-		}
-		return "", false
-	case parser.SelectTypeVariant:
-		m.ModuleErrorf("TODO(b/323382414): Variants are not yet supported in selects")
-		return "", false
-	default:
-		panic("Should be unreachable")
-	}
+func (m *baseModuleContext) EvaluateConfiguration(ty parser.SelectType, property, condition string) (string, bool) {
+	return m.Module().ConfigurableEvaluator(m).EvaluateConfiguration(ty, property, condition)
 }

@@ -15,14 +15,12 @@
 package cc
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"testing"
 
 	"android/soong/android"
 	"android/soong/genrule"
 	"android/soong/multitree"
-	"android/soong/snapshot"
 )
 
 func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
@@ -314,10 +312,7 @@ func commonDefaultModules() string {
 			ramdisk_available: true,
 			host_supported: true,
 			min_sdk_version: "29",
-			vndk: {
-				enabled: true,
-				support_system_process: true,
-			},
+			double_loadable: true,
 			apex_available: [
 				"//apex_available:platform",
 				"//apex_available:anyapex",
@@ -636,21 +631,6 @@ var PrepareForTestOnLinuxBionic = android.GroupFixturePreparers(
 	android.FixtureOverrideTextFile(linuxBionicDefaultsPath, withLinuxBionic()),
 )
 
-// This adds some additional modules and singletons which might negatively impact the performance
-// of tests so they are not included in the PrepareForIntegrationTestWithCc.
-var PrepareForTestWithCcIncludeVndk = android.GroupFixturePreparers(
-	PrepareForIntegrationTestWithCc,
-	android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
-		snapshot.VendorSnapshotImageSingleton.Init(ctx)
-		snapshot.RecoverySnapshotImageSingleton.Init(ctx)
-		snapshot.RamdiskSnapshotImageSingleton.Init(ctx)
-		RegisterVendorSnapshotModules(ctx)
-		RegisterRecoverySnapshotModules(ctx)
-		RegisterRamdiskSnapshotModules(ctx)
-		ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
-	}),
-)
-
 // PrepareForTestWithHostMusl sets the host configuration to musl libc instead of glibc.  It also disables the test
 // on mac, which doesn't support musl libc, and adds musl modules.
 var PrepareForTestWithHostMusl = android.GroupFixturePreparers(
@@ -732,13 +712,6 @@ func CreateTestContext(config android.Config) *android.TestContext {
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 
-	snapshot.VendorSnapshotImageSingleton.Init(ctx)
-	snapshot.RecoverySnapshotImageSingleton.Init(ctx)
-	snapshot.RamdiskSnapshotImageSingleton.Init(ctx)
-	RegisterVendorSnapshotModules(ctx)
-	RegisterRecoverySnapshotModules(ctx)
-	RegisterRamdiskSnapshotModules(ctx)
-	ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 	RegisterVndkLibraryTxtTypes(ctx)
 
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
@@ -792,14 +765,6 @@ func CheckSnapshotRule(t *testing.T, ctx *android.TestContext, singleton android
 	checkSnapshotIncludeExclude(t, ctx, singleton, moduleName, snapshotFilename, subDir, variant, true, true)
 }
 
-func AssertExcludeFromVendorSnapshotIs(t *testing.T, ctx *android.TestContext, name string, expected bool, variant string) {
-	t.Helper()
-	m := ctx.ModuleForTests(name, variant).Module().(LinkableInterface)
-	if m.ExcludeFromVendorSnapshot() != expected {
-		t.Errorf("expected %q ExcludeFromVendorSnapshot to be %t", m.String(), expected)
-	}
-}
-
 func GetOutputPaths(ctx *android.TestContext, variant string, moduleNames []string) (paths android.Paths) {
 	for _, moduleName := range moduleNames {
 		module := ctx.ModuleForTests(moduleName, variant).Module().(*Module)
@@ -807,31 +772,4 @@ func GetOutputPaths(ctx *android.TestContext, variant string, moduleNames []stri
 		paths = append(paths, output)
 	}
 	return paths
-}
-
-func AssertExcludeFromRecoverySnapshotIs(t *testing.T, ctx *android.TestContext, name string, expected bool, variant string) {
-	t.Helper()
-	m := ctx.ModuleForTests(name, variant).Module().(LinkableInterface)
-	if m.ExcludeFromRecoverySnapshot() != expected {
-		t.Errorf("expected %q ExcludeFromRecoverySnapshot to be %t", m.String(), expected)
-	}
-}
-
-func checkOverrides(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, jsonPath string, expected []string) {
-	t.Helper()
-	out := singleton.MaybeOutput(jsonPath)
-	content := android.ContentFromFileRuleForTests(t, ctx, out)
-
-	var flags snapshotJsonFlags
-	if err := json.Unmarshal([]byte(content), &flags); err != nil {
-		t.Errorf("Error while unmarshalling json %q: %s", jsonPath, err.Error())
-		return
-	}
-
-	for _, moduleName := range expected {
-		if !android.InList(moduleName, flags.Overrides) {
-			t.Errorf("expected %q to be in %q: %q", moduleName, flags.Overrides, content)
-			return
-		}
-	}
 }

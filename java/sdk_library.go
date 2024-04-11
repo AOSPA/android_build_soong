@@ -30,6 +30,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/dexpreopt"
+	"android/soong/etc"
 )
 
 const (
@@ -948,6 +949,10 @@ type commonToSdkLibraryAndImport struct {
 
 	// Functionality related to this being used as a component of a java_sdk_library.
 	EmbeddableSdkLibraryComponent
+
+	// Path to the header jars of the implementation library
+	// This is non-empty only when api_only is false.
+	implLibraryHeaderJars android.Paths
 }
 
 func (c *commonToSdkLibraryAndImport) initCommon(module commonSdkLibraryAndImportModule) {
@@ -1355,13 +1360,6 @@ type SdkLibraryDependency interface {
 	// class changes but it does not contain and implementation or JavaDoc.
 	SdkHeaderJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths
 
-	// Get the implementation jars appropriate for the supplied sdk version.
-	//
-	// These are either the implementation jar for the whole sdk library or the implementation
-	// jars for the stubs. The latter should only be needed when generating JavaDoc as otherwise
-	// they are identical to the corresponding header jars.
-	SdkImplementationJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths
-
 	// SdkApiStubDexJar returns the dex jar for the stubs for the prebuilt
 	// java_sdk_library_import module. It is needed by the hiddenapi processing tool which
 	// processes dex files.
@@ -1597,6 +1595,12 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 			scopeTag.extractDepInfo(ctx, to, scopePaths)
 
 			exportedComponents[ctx.OtherModuleName(to)] = struct{}{}
+		}
+
+		if tag == implLibraryTag {
+			if dep, ok := android.OtherModuleProvider(ctx, to, JavaInfoProvider); ok {
+				module.implLibraryHeaderJars = append(module.implLibraryHeaderJars, dep.HeaderJars...)
+			}
 		}
 	})
 
@@ -2237,7 +2241,7 @@ func withinSameApexesAs(ctx android.BaseModuleContext, other android.Module) boo
 	return len(otherApexInfo.InApexVariants) > 0 && reflect.DeepEqual(apexInfo.InApexVariants, otherApexInfo.InApexVariants)
 }
 
-func (module *SdkLibrary) sdkJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec, headerJars bool) android.Paths {
+func (module *SdkLibrary) sdkJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths {
 	// If the client doesn't set sdk_version, but if this library prefers stubs over
 	// the impl library, let's provide the widest API surface possible. To do so,
 	// force override sdk_version to module_current so that the closest possible API
@@ -2254,11 +2258,7 @@ func (module *SdkLibrary) sdkJars(ctx android.BaseModuleContext, sdkVersion andr
 		// * No sdk_version specified on the referencing module.
 		// * The referencing module is in the same apex as this.
 		if sdkVersion.Kind == android.SdkPrivate || withinSameApexesAs(ctx, module) {
-			if headerJars {
-				return module.HeaderJars()
-			} else {
-				return module.ImplementationJars()
-			}
+			return module.implLibraryHeaderJars
 		}
 	}
 
@@ -2267,12 +2267,7 @@ func (module *SdkLibrary) sdkJars(ctx android.BaseModuleContext, sdkVersion andr
 
 // to satisfy SdkLibraryDependency interface
 func (module *SdkLibrary) SdkHeaderJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths {
-	return module.sdkJars(ctx, sdkVersion, true /*headerJars*/)
-}
-
-// to satisfy SdkLibraryDependency interface
-func (module *SdkLibrary) SdkImplementationJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths {
-	return module.sdkJars(ctx, sdkVersion, false /*headerJars*/)
+	return module.sdkJars(ctx, sdkVersion)
 }
 
 var javaSdkLibrariesKey = android.NewOnceKey("javaSdkLibraries")
@@ -2982,12 +2977,6 @@ func (module *SdkLibraryImport) SdkHeaderJars(ctx android.BaseModuleContext, sdk
 	return module.sdkJars(ctx, sdkVersion, true)
 }
 
-// to satisfy SdkLibraryDependency interface
-func (module *SdkLibraryImport) SdkImplementationJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths {
-	// This module is just a wrapper for the stubs.
-	return module.sdkJars(ctx, sdkVersion, false)
-}
-
 // to satisfy UsesLibraryDependency interface
 func (module *SdkLibraryImport) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	// The dex implementation jar extracted from the .apex file should be used in preference to the
@@ -3174,9 +3163,11 @@ func (module *sdkLibraryXml) SubDir() string {
 }
 
 // from android.PrebuiltEtcModule
-func (module *sdkLibraryXml) OutputFile() android.OutputPath {
-	return module.outputFilePath
+func (module *sdkLibraryXml) OutputFiles(tag string) (android.Paths, error) {
+	return android.OutputPaths{module.outputFilePath}.Paths(), nil
 }
+
+var _ etc.PrebuiltEtcModule = (*sdkLibraryXml)(nil)
 
 // from android.ApexModule
 func (module *sdkLibraryXml) AvailableFor(what string) bool {

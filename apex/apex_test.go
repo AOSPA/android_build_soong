@@ -218,7 +218,6 @@ var prepareForApexTest = android.GroupFixturePreparers(
 	),
 
 	android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-		variables.DeviceVndkVersion = proptools.StringPtr("current")
 		variables.DefaultAppCertificate = proptools.StringPtr("vendor/foo/devkeys/test")
 		variables.CertificateOverrides = []string{"myapex_keytest:myapex.certificate.override"}
 		variables.Platform_sdk_codename = proptools.StringPtr("Q")
@@ -226,7 +225,6 @@ var prepareForApexTest = android.GroupFixturePreparers(
 		// "Tiramisu" needs to be in the next line for compatibility with soong code,
 		// not because of these tests specifically (it's not used by the tests)
 		variables.Platform_version_active_codenames = []string{"Q", "Tiramisu"}
-		variables.Platform_vndk_version = proptools.StringPtr("29")
 		variables.BuildId = proptools.StringPtr("TEST.BUILD_ID")
 	}),
 )
@@ -2062,9 +2060,9 @@ func TestApexMinSdkVersion_InVendorApex(t *testing.T) {
 		}
 	`)
 
-	vendorVariant := "android_vendor.29_arm64_armv8-a"
+	vendorVariant := "android_vendor_arm64_armv8-a"
 
-	mylib := ctx.ModuleForTests("mylib", vendorVariant+"_shared_myapex")
+	mylib := ctx.ModuleForTests("mylib", vendorVariant+"_shared_apex29")
 
 	// Ensure that mylib links with "current" LLNDK
 	libFlags := names(mylib.Rule("ld").Args["libFlags"])
@@ -3025,158 +3023,6 @@ func TestVendorApex(t *testing.T) {
 	ensureListNotContains(t, requireNativeLibs, ":vndk")
 }
 
-func TestVendorApex_use_vndk_as_stable_TryingToIncludeVNDKLib(t *testing.T) {
-	testApexError(t, `Trying to include a VNDK library`, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			native_shared_libs: ["libc++"], // libc++ is a VNDK lib
-			vendor: true,
-			use_vndk_as_stable: true,
-			updatable: false,
-		}
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}`)
-}
-
-func TestVendorApex_use_vndk_as_stable(t *testing.T) {
-	//   myapex                  myapex2
-	//    |                       |
-	//  mybin ------.           mybin2
-	//   \           \          /  |
-	// (stable)   .---\--------`   |
-	//     \     /     \           |
-	//      \   /       \         /
-	//      libvndk       libvendor
-	//      (vndk)
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			binaries: ["mybin"],
-			vendor: true,
-			use_vndk_as_stable: true,
-			updatable: false,
-		}
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-		cc_binary {
-			name: "mybin",
-			vendor: true,
-			shared_libs: ["libvndk", "libvendor"],
-		}
-		cc_library {
-			name: "libvndk",
-			vndk: {
-				enabled: true,
-			},
-			vendor_available: true,
-			product_available: true,
-		}
-		cc_library {
-			name: "libvendor",
-			vendor: true,
-			stl: "none",
-		}
-		apex {
-			name: "myapex2",
-			key: "myapex.key",
-			binaries: ["mybin2"],
-			vendor: true,
-			use_vndk_as_stable: false,
-			updatable: false,
-		}
-		cc_binary {
-			name: "mybin2",
-			vendor: true,
-			shared_libs: ["libvndk", "libvendor"],
-		}
-	`,
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.TestProductVariables.KeepVndk = proptools.BoolPtr(true)
-		}),
-	)
-
-	vendorVariant := "android_vendor.29_arm64_armv8-a"
-
-	for _, tc := range []struct {
-		name                 string
-		apexName             string
-		moduleName           string
-		moduleVariant        string
-		libs                 []string
-		contents             []string
-		requireVndkNamespace bool
-	}{
-		{
-			name:          "use_vndk_as_stable",
-			apexName:      "myapex",
-			moduleName:    "mybin",
-			moduleVariant: vendorVariant + "_apex10000",
-			libs: []string{
-				// should link with vendor variants of VNDK libs(libvndk/libc++)
-				"out/soong/.intermediates/libvndk/" + vendorVariant + "_shared/libvndk.so",
-				"out/soong/.intermediates/" + cc.DefaultCcCommonTestModulesDir + "libc++/" + vendorVariant + "_shared/libc++.so",
-				// unstable Vendor libs as APEX variant
-				"out/soong/.intermediates/libvendor/" + vendorVariant + "_shared_apex10000/libvendor.so",
-			},
-			contents: []string{
-				"bin/mybin",
-				"lib64/libvendor.so",
-				// VNDK libs (libvndk/libc++) are not included
-			},
-			requireVndkNamespace: true,
-		},
-		{
-			name:          "!use_vndk_as_stable",
-			apexName:      "myapex2",
-			moduleName:    "mybin2",
-			moduleVariant: vendorVariant + "_myapex2",
-			libs: []string{
-				// should link with "unique" APEX(myapex2) variant of VNDK libs(libvndk/libc++)
-				"out/soong/.intermediates/libvndk/" + vendorVariant + "_shared_myapex2/libvndk.so",
-				"out/soong/.intermediates/" + cc.DefaultCcCommonTestModulesDir + "libc++/" + vendorVariant + "_shared_myapex2/libc++.so",
-				// unstable vendor libs have "merged" APEX variants
-				"out/soong/.intermediates/libvendor/" + vendorVariant + "_shared_apex10000/libvendor.so",
-			},
-			contents: []string{
-				"bin/mybin2",
-				"lib64/libvendor.so",
-				// VNDK libs are included as well
-				"lib64/libvndk.so",
-				"lib64/libc++.so",
-			},
-			requireVndkNamespace: false,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Check linked libs
-			ldRule := ctx.ModuleForTests(tc.moduleName, tc.moduleVariant).Rule("ld")
-			libs := names(ldRule.Args["libFlags"])
-			for _, lib := range tc.libs {
-				ensureListContains(t, libs, lib)
-			}
-			// Check apex contents
-			ensureExactContents(t, ctx, tc.apexName, "android_common_"+tc.apexName, tc.contents)
-
-			// Check "requireNativeLibs"
-			apexManifestRule := ctx.ModuleForTests(tc.apexName, "android_common_"+tc.apexName).Rule("apexManifestRule")
-			requireNativeLibs := names(apexManifestRule.Args["requireNativeLibs"])
-			if tc.requireVndkNamespace {
-				ensureListContains(t, requireNativeLibs, ":vndk")
-			} else {
-				ensureListNotContains(t, requireNativeLibs, ":vndk")
-			}
-		})
-	}
-}
-
 func TestProductVariant(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -3202,7 +3048,7 @@ func TestProductVariant(t *testing.T) {
 	`)
 
 	cflags := strings.Fields(
-		ctx.ModuleForTests("foo", "android_product.29_arm64_armv8-a_myapex").Rule("cc").Args["cFlags"])
+		ctx.ModuleForTests("foo", "android_product_arm64_armv8-a_apex10000").Rule("cc").Args["cFlags"])
 	ensureListContains(t, cflags, "-D__ANDROID_VNDK__")
 	ensureListContains(t, cflags, "-D__ANDROID_APEX__")
 	ensureListContains(t, cflags, "-D__ANDROID_PRODUCT__")
@@ -3823,166 +3669,6 @@ func ensureExactDeapexedContents(t *testing.T, ctx *android.TestContext, moduleN
 	assertFileListEquals(t, files, actualFiles)
 }
 
-func TestVndkApexCurrent(t *testing.T) {
-	commonFiles := []string{
-		"lib/libc++.so",
-		"lib64/libc++.so",
-		"etc/llndk.libraries.29.txt",
-		"etc/vndkcore.libraries.29.txt",
-		"etc/vndksp.libraries.29.txt",
-		"etc/vndkprivate.libraries.29.txt",
-		"etc/vndkproduct.libraries.29.txt",
-	}
-	testCases := []struct {
-		vndkVersion   string
-		expectedFiles []string
-	}{
-		{
-			vndkVersion: "current",
-			expectedFiles: append(commonFiles,
-				"lib/libvndk.so",
-				"lib/libvndksp.so",
-				"lib64/libvndk.so",
-				"lib64/libvndksp.so"),
-		},
-	}
-	for _, tc := range testCases {
-		t.Run("VNDK.current with DeviceVndkVersion="+tc.vndkVersion, func(t *testing.T) {
-			ctx := testApex(t, `
-			apex_vndk {
-				name: "com.android.vndk.current",
-				key: "com.android.vndk.current.key",
-				updatable: false,
-			}
-
-			apex_key {
-				name: "com.android.vndk.current.key",
-				public_key: "testkey.avbpubkey",
-				private_key: "testkey.pem",
-			}
-
-			cc_library {
-				name: "libvndk",
-				srcs: ["mylib.cpp"],
-				vendor_available: true,
-				product_available: true,
-				vndk: {
-					enabled: true,
-				},
-				system_shared_libs: [],
-				stl: "none",
-				apex_available: [ "com.android.vndk.current" ],
-			}
-
-			cc_library {
-				name: "libvndksp",
-				srcs: ["mylib.cpp"],
-				vendor_available: true,
-				product_available: true,
-				vndk: {
-					enabled: true,
-					support_system_process: true,
-				},
-				system_shared_libs: [],
-				stl: "none",
-				apex_available: [ "com.android.vndk.current" ],
-			}
-
-			// VNDK-Ext should not cause any problems
-
-			cc_library {
-				name: "libvndk.ext",
-				srcs: ["mylib2.cpp"],
-				vendor: true,
-				vndk: {
-					enabled: true,
-					extends: "libvndk",
-				},
-				system_shared_libs: [],
-				stl: "none",
-			}
-
-			cc_library {
-				name: "libvndksp.ext",
-				srcs: ["mylib2.cpp"],
-				vendor: true,
-				vndk: {
-					enabled: true,
-					support_system_process: true,
-					extends: "libvndksp",
-				},
-				system_shared_libs: [],
-				stl: "none",
-			}
-		`+vndkLibrariesTxtFiles("current"), android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.DeviceVndkVersion = proptools.StringPtr(tc.vndkVersion)
-				variables.KeepVndk = proptools.BoolPtr(true)
-			}))
-			ensureExactContents(t, ctx, "com.android.vndk.current", "android_common", tc.expectedFiles)
-		})
-	}
-}
-
-func TestVndkApexWithPrebuilt(t *testing.T) {
-	ctx := testApex(t, `
-		apex_vndk {
-			name: "com.android.vndk.current",
-			key: "com.android.vndk.current.key",
-			updatable: false,
-		}
-
-		apex_key {
-			name: "com.android.vndk.current.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_prebuilt_library_shared {
-			name: "libvndk",
-			srcs: ["libvndk.so"],
-			vendor_available: true,
-			product_available: true,
-			vndk: {
-				enabled: true,
-			},
-			system_shared_libs: [],
-			stl: "none",
-			apex_available: [ "com.android.vndk.current" ],
-		}
-
-		cc_prebuilt_library_shared {
-			name: "libvndk.arm",
-			srcs: ["libvndk.arm.so"],
-			vendor_available: true,
-			product_available: true,
-			vndk: {
-				enabled: true,
-			},
-			enabled: false,
-			arch: {
-				arm: {
-					enabled: true,
-				},
-			},
-			system_shared_libs: [],
-			stl: "none",
-			apex_available: [ "com.android.vndk.current" ],
-		}
-		`+vndkLibrariesTxtFiles("current"),
-		withFiles(map[string][]byte{
-			"libvndk.so":     nil,
-			"libvndk.arm.so": nil,
-		}))
-	ensureExactContents(t, ctx, "com.android.vndk.current", "android_common", []string{
-		"lib/libvndk.so",
-		"lib/libvndk.arm.so",
-		"lib64/libvndk.so",
-		"lib/libc++.so",
-		"lib64/libc++.so",
-		"etc/*",
-	})
-}
-
 func vndkLibrariesTxtFiles(vers ...string) (result string) {
 	for _, v := range vers {
 		if v == "current" {
@@ -4090,9 +3776,10 @@ func TestVndkApexVersion(t *testing.T) {
 func TestVndkApexNameRule(t *testing.T) {
 	ctx := testApex(t, `
 		apex_vndk {
-			name: "com.android.vndk.current",
+			name: "com.android.vndk.v29",
 			key: "myapex.key",
 			file_contexts: ":myapex-file_contexts",
+			vndk_version: "29",
 			updatable: false,
 		}
 		apex_vndk {
@@ -4106,7 +3793,7 @@ func TestVndkApexNameRule(t *testing.T) {
 			name: "myapex.key",
 			public_key: "testkey.avbpubkey",
 			private_key: "testkey.pem",
-		}`+vndkLibrariesTxtFiles("28", "current"))
+		}`+vndkLibrariesTxtFiles("28", "29"))
 
 	assertApexName := func(expected, moduleName string) {
 		module := ctx.ModuleForTests(moduleName, "android_common")
@@ -4114,49 +3801,8 @@ func TestVndkApexNameRule(t *testing.T) {
 		ensureContains(t, apexManifestRule.Args["opt"], "-v name "+expected)
 	}
 
-	assertApexName("com.android.vndk.v29", "com.android.vndk.current")
+	assertApexName("com.android.vndk.v29", "com.android.vndk.v29")
 	assertApexName("com.android.vndk.v28", "com.android.vndk.v28")
-}
-
-func TestVndkApexSkipsNativeBridgeSupportedModules(t *testing.T) {
-	ctx := testApex(t, `
-		apex_vndk {
-			name: "com.android.vndk.current",
-			key: "com.android.vndk.current.key",
-			file_contexts: ":myapex-file_contexts",
-			updatable: false,
-		}
-
-		apex_key {
-			name: "com.android.vndk.current.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "libvndk",
-			srcs: ["mylib.cpp"],
-			vendor_available: true,
-			product_available: true,
-			native_bridge_supported: true,
-			host_supported: true,
-			vndk: {
-				enabled: true,
-			},
-			system_shared_libs: [],
-			stl: "none",
-			apex_available: [ "com.android.vndk.current" ],
-		}
-		`+vndkLibrariesTxtFiles("current"),
-		withNativeBridgeEnabled)
-
-	ensureExactContents(t, ctx, "com.android.vndk.current", "android_common", []string{
-		"lib/libvndk.so",
-		"lib64/libvndk.so",
-		"lib/libc++.so",
-		"lib64/libc++.so",
-		"etc/*",
-	})
 }
 
 func TestVndkApexDoesntSupportNativeBridgeSupported(t *testing.T) {
@@ -4257,215 +3903,6 @@ func TestVndkApexWithBinder32(t *testing.T) {
 		"lib/libvndk27binder32.so",
 		"etc/*",
 	})
-}
-
-func TestVndkApexShouldNotProvideNativeLibs(t *testing.T) {
-	ctx := testApex(t, `
-		apex_vndk {
-			name: "com.android.vndk.current",
-			key: "com.android.vndk.current.key",
-			file_contexts: ":myapex-file_contexts",
-			updatable: false,
-		}
-
-		apex_key {
-			name: "com.android.vndk.current.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "libz",
-			vendor_available: true,
-			product_available: true,
-			vndk: {
-				enabled: true,
-			},
-			stubs: {
-				symbol_file: "libz.map.txt",
-				versions: ["30"],
-			}
-		}
-	`+vndkLibrariesTxtFiles("current"), withFiles(map[string][]byte{
-		"libz.map.txt": nil,
-	}))
-
-	apexManifestRule := ctx.ModuleForTests("com.android.vndk.current", "android_common").Rule("apexManifestRule")
-	provideNativeLibs := names(apexManifestRule.Args["provideNativeLibs"])
-	ensureListEmpty(t, provideNativeLibs)
-	ensureExactContents(t, ctx, "com.android.vndk.current", "android_common", []string{
-		"out/soong/.intermediates/libz/android_vendor.29_arm64_armv8-a_shared/libz.so:lib64/libz.so",
-		"out/soong/.intermediates/libz/android_vendor.29_arm_armv7-a-neon_shared/libz.so:lib/libz.so",
-		"*/*",
-	})
-}
-
-func TestVendorApexWithVndkPrebuilts(t *testing.T) {
-	ctx := testApex(t, "",
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.DeviceVndkVersion = proptools.StringPtr("27")
-		}),
-		android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
-			cc.RegisterVendorSnapshotModules(ctx)
-		}),
-		withFiles(map[string][]byte{
-			"vendor/foo/Android.bp": []byte(`
-				apex {
-					name: "myapex",
-					binaries: ["foo"],
-					key: "myapex.key",
-					min_sdk_version: "27",
-					vendor: true,
-				}
-
-				cc_binary {
-					name: "foo",
-					vendor: true,
-					srcs: ["abc.cpp"],
-					shared_libs: [
-						"libllndk",
-						"libvndk",
-					],
-					nocrt: true,
-					system_shared_libs: [],
-					min_sdk_version: "27",
-				}
-
-				apex_key {
-					name: "myapex.key",
-					public_key: "testkey.avbpubkey",
-					private_key: "testkey.pem",
-				}
-			`),
-			// Simulate VNDK prebuilts with vendor_snapshot
-			"prebuilts/vndk/Android.bp": []byte(`
-				vndk_prebuilt_shared {
-					name: "libllndk",
-					version: "27",
-					vendor_available: true,
-					product_available: true,
-					target_arch: "arm64",
-					arch: {
-						arm64: {
-							srcs: ["libllndk.so"],
-						},
-					},
-				}
-
-				vndk_prebuilt_shared {
-					name: "libvndk",
-					version: "27",
-					vendor_available: true,
-					product_available: true,
-					target_arch: "arm64",
-					arch: {
-						arm64: {
-							srcs: ["libvndk.so"],
-						},
-					},
-					vndk: {
-						enabled: true,
-					},
-					min_sdk_version: "27",
-				}
-
-				vndk_prebuilt_shared {
-					name: "libc++",
-					version: "27",
-					target_arch: "arm64",
-					vendor_available: true,
-					product_available: true,
-					vndk: {
-						enabled: true,
-						support_system_process: true,
-					},
-					arch: {
-						arm64: {
-							srcs: ["libc++.so"],
-						},
-					},
-					min_sdk_version: "apex_inherit",
-				}
-
-				vendor_snapshot {
-					name: "vendor_snapshot",
-					version: "27",
-					arch: {
-						arm64: {
-							vndk_libs: [
-								"libc++",
-								"libllndk",
-								"libvndk",
-							],
-							static_libs: [
-								"libc++demangle",
-								"libclang_rt.builtins",
-								"libunwind",
-							],
-						},
-					}
-				}
-
-				vendor_snapshot_static {
-					name: "libclang_rt.builtins",
-					version: "27",
-					target_arch: "arm64",
-					vendor: true,
-					arch: {
-						arm64: {
-							src: "libclang_rt.builtins-aarch64-android.a",
-						},
-					},
-				}
-
-				vendor_snapshot_static {
-					name: "libc++demangle",
-					version: "27",
-					target_arch: "arm64",
-					compile_multilib: "64",
-					vendor: true,
-					arch: {
-						arm64: {
-							src: "libc++demangle.a",
-						},
-					},
-					min_sdk_version: "apex_inherit",
-				}
-
-				vendor_snapshot_static {
-					name: "libunwind",
-					version: "27",
-					target_arch: "arm64",
-					compile_multilib: "64",
-					vendor: true,
-					arch: {
-						arm64: {
-							src: "libunwind.a",
-						},
-					},
-					min_sdk_version: "apex_inherit",
-				}
-			`),
-		}))
-
-	// Should embed the prebuilt VNDK libraries in the apex
-	ensureExactContents(t, ctx, "myapex", "android_common_myapex", []string{
-		"bin/foo",
-		"prebuilts/vndk/libc++.so:lib64/libc++.so",
-		"prebuilts/vndk/libvndk.so:lib64/libvndk.so",
-	})
-
-	// Should link foo with prebuilt libraries (shared/static)
-	ldRule := ctx.ModuleForTests("foo", "android_vendor.27_arm64_armv8-a_myapex").Rule("ld")
-	android.AssertStringDoesContain(t, "should link to prebuilt llndk", ldRule.Args["libFlags"], "prebuilts/vndk/libllndk.so")
-	android.AssertStringDoesContain(t, "should link to prebuilt vndk", ldRule.Args["libFlags"], "prebuilts/vndk/libvndk.so")
-	android.AssertStringDoesContain(t, "should link to prebuilt libc++demangle", ldRule.Args["libFlags"], "prebuilts/vndk/libc++demangle.a")
-	android.AssertStringDoesContain(t, "should link to prebuilt libunwind", ldRule.Args["libFlags"], "prebuilts/vndk/libunwind.a")
-
-	// Should declare the LLNDK library as a "required" external dependency
-	manifestRule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("apexManifestRule")
-	requireNativeLibs := names(manifestRule.Args["requireNativeLibs"])
-	ensureListContains(t, requireNativeLibs, "libllndk.so")
 }
 
 func TestDependenciesInApexManifest(t *testing.T) {
@@ -7334,6 +6771,15 @@ func TestOverrideApex(t *testing.T) {
 			bpfs: ["overrideBpf"],
 			prebuilts: ["override_myetc"],
 			overrides: ["unknownapex"],
+			compile_multilib: "first",
+			multilib: {
+				lib32: {
+					native_shared_libs: ["mylib32"],
+				},
+				lib64: {
+					native_shared_libs: ["mylib64"],
+				},
+			},
 			logging_parent: "com.foo.bar",
 			package_name: "test.overridden.package",
 			key: "mynewapex.key",
@@ -7390,6 +6836,16 @@ func TestOverrideApex(t *testing.T) {
 		prebuilt_etc {
 			name: "override_myetc",
 			src: "override_myprebuilt",
+		}
+
+		cc_library {
+			name: "mylib32",
+			apex_available: [ "myapex" ],
+		}
+
+		cc_library {
+			name: "mylib64",
+			apex_available: [ "myapex" ],
 		}
 	`, withManifestPackageNameOverrides([]string{"myapex:com.android.myapex"}))
 
@@ -7710,7 +7166,7 @@ func TestJavaSDKLibrary_WithinApex(t *testing.T) {
 
 	// The bar library should depend on the implementation jar.
 	barLibrary := ctx.ModuleForTests("bar", "android_common_myapex").Rule("javac")
-	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.impl\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
 		t.Errorf("expected %q, found %#q", expected, actual)
 	}
 }
@@ -10047,7 +9503,6 @@ func TestAndroidMk_RequiredModules(t *testing.T) {
 			key: "myapex.key",
 			updatable: false,
 			java_libs: ["foo"],
-			required: ["otherapex"],
 		}
 
 		apex_key {
@@ -11305,6 +10760,33 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 			],
 		}
 
+		rust_library {
+			name: "libaconfig_storage_read_api", // test mock
+			crate_name: "aconfig_storage_read_api",
+			srcs: ["src/lib.rs"],
+			apex_available: [
+				"myapex",
+			],
+		}
+
+		rust_library {
+			name: "liblogger", // test mock
+			crate_name: "logger",
+			srcs: ["src/lib.rs"],
+			apex_available: [
+				"myapex",
+			],
+		}
+
+		rust_library {
+			name: "liblog_rust", // test mock
+			crate_name: "log_rust",
+			srcs: ["src/lib.rs"],
+			apex_available: [
+				"myapex",
+			],
+		}
+
 		rust_ffi_shared {
 			name: "libmy_rust_library",
 			srcs: ["src/lib.rs"],
@@ -11389,14 +10871,14 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 26 {
-		t.Fatalf("Expected 26 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 32 {
+		t.Fatalf("Expected 28 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[22], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[23], "^cp -f .*/package.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[24], "^cp -f .*/flag.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[25], "^cp -f .*/flag.val .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[28], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[29], "^cp -f .*/package.map .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[30], "^cp -f .*/flag.map .*/image.apex/etc$")
+	ensureMatches(t, copyCmds[31], "^cp -f .*/flag.val .*/image.apex/etc$")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",

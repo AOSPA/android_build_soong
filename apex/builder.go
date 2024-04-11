@@ -277,7 +277,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 	// VNDK APEX name is determined at runtime, so update "name" in apex_manifest
 	optCommands := []string{}
 	if a.vndkApex {
-		apexName := vndkApexNamePrefix + a.vndkVersion(ctx.DeviceConfig())
+		apexName := vndkApexNamePrefix + a.vndkVersion()
 		optCommands = append(optCommands, "-v name "+apexName)
 	}
 
@@ -293,7 +293,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 	}
 
 	if android.InList(":vndk", requireNativeLibs) {
-		if _, vndkVersion := a.getImageVariationPair(ctx.DeviceConfig()); vndkVersion != "" {
+		if _, vndkVersion := a.getImageVariationPair(); vndkVersion != "" {
 			optCommands = append(optCommands, "-v vndkVersion "+vndkVersion)
 		}
 	}
@@ -485,7 +485,7 @@ func markManifestTestOnly(ctx android.ModuleContext, androidManifestFile android
 }
 
 func isVintfFragment(fi apexFile) bool {
-	isVintfFragment, _ := path.Match("etc/vintf/*.xml", fi.path())
+	isVintfFragment, _ := path.Match("etc/vintf/*", fi.path())
 	return isVintfFragment
 }
 
@@ -1043,7 +1043,7 @@ func (a *apexBundle) getOverrideManifestPackageName(ctx android.ModuleContext) s
 	if a.vndkApex {
 		overrideName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(vndkApexName)
 		if overridden {
-			return overrideName + ".v" + a.vndkVersion(ctx.DeviceConfig())
+			return overrideName + ".v" + a.vndkVersion()
 		}
 		return ""
 	}

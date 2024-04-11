@@ -21,6 +21,7 @@ import (
 
 type systemImage struct {
 	filesystem
+	android.DefaultableModuleBase
 
 	properties systemImageProperties
 }
@@ -39,6 +40,7 @@ func systemImageFactory() android.Module {
 	module.filesystem.buildExtraFiles = module.buildExtraFiles
 	module.filesystem.filterPackagingSpec = module.filterPackagingSpec
 	initFilesystemModule(&module.filesystem)
+	android.InitDefaultableModule(module)
 	return module
 }
 
@@ -56,19 +58,40 @@ func (s *systemImage) buildLinkerConfigFile(ctx android.ModuleContext, root andr
 	output := root.Join(ctx, "system", "etc", "linker.config.pb")
 
 	// we need "Module"s for packaging items
-	var otherModules []android.Module
+	modulesInPackageByModule := make(map[android.Module]bool)
+	modulesInPackageByName := make(map[string]bool)
+
 	deps := s.gatherFilteredPackagingSpecs(ctx)
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		for _, ps := range child.PackagingSpecs() {
 			if _, ok := deps[ps.RelPathInPackage()]; ok {
-				otherModules = append(otherModules, child)
+				modulesInPackageByModule[child] = true
+				modulesInPackageByName[child.Name()] = true
+				return true
 			}
 		}
 		return true
 	})
 
+	provideModules := make([]android.Module, 0, len(modulesInPackageByModule))
+	for mod := range modulesInPackageByModule {
+		provideModules = append(provideModules, mod)
+	}
+
+	var requireModules []android.Module
+	ctx.WalkDeps(func(child, parent android.Module) bool {
+		_, parentInPackage := modulesInPackageByModule[parent]
+		_, childInPackageName := modulesInPackageByName[child.Name()]
+
+		// When parent is in the package, and child (or its variant) is not, this can be from an interface.
+		if parentInPackage && !childInPackageName {
+			requireModules = append(requireModules, child)
+		}
+		return true
+	})
+
 	builder := android.NewRuleBuilder(pctx, ctx)
-	linkerconfig.BuildLinkerConfig(ctx, builder, input, otherModules, output)
+	linkerconfig.BuildLinkerConfig(ctx, builder, input, provideModules, requireModules, output)
 	builder.Build("conv_linker_config", "Generate linker config protobuf "+output.String())
 	return output
 }
@@ -78,4 +101,18 @@ func (s *systemImage) buildLinkerConfigFile(ctx android.ModuleContext, root andr
 // for symbol lookup by imitating "activated" paths.
 func (s *systemImage) filterPackagingSpec(ps android.PackagingSpec) bool {
 	return ps.Partition() == "system"
+}
+
+type systemImageDefaults struct {
+	android.ModuleBase
+	android.DefaultsModuleBase
+}
+
+// android_system_image_defaults is a default module for android_system_image module.
+func systemImageDefaultsFactory() android.Module {
+	module := &systemImageDefaults{}
+	module.AddProperties(&android.PackagingProperties{})
+	module.AddProperties(&systemImageProperties{})
+	android.InitDefaultsModule(module)
+	return module
 }

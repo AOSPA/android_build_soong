@@ -54,8 +54,12 @@ type LibraryCompilerProperties struct {
 	Shared VariantLibraryProperties `android:"arch_variant"`
 	Static VariantLibraryProperties `android:"arch_variant"`
 
-	// path to include directories to pass to cc_* modules, only relevant for static/shared variants.
+	// TODO: Remove this when all instances of Include_dirs have been removed from rust_ffi modules.
+	// path to include directories to pass to cc_* modules, only relevant for static/shared variants (deprecated, use export_include_dirs instead).
 	Include_dirs []string `android:"path,arch_variant"`
+
+	// path to include directories to export to cc_* modules, only relevant for static/shared variants.
+	Export_include_dirs []string `android:"path,arch_variant"`
 
 	// Whether this library is part of the Rust toolchain sysroot.
 	Sysroot *bool
@@ -99,8 +103,6 @@ type libraryDecorator struct {
 	MutatedProperties LibraryMutatedProperties
 	includeDirs       android.Paths
 	sourceProvider    SourceProvider
-
-	collectedSnapshotHeaders android.Paths
 
 	// table-of-contents file for cdylib crates to optimize out relinking when possible
 	tocFile android.OptionalPath
@@ -465,6 +467,7 @@ func (library *libraryDecorator) compilerFlags(ctx ModuleContext, flags Flags) F
 	flags.RustFlags = append(flags.RustFlags, "-C metadata="+ctx.ModuleName())
 	if library.shared() || library.static() {
 		library.includeDirs = append(library.includeDirs, android.PathsForModuleSrc(ctx, library.Properties.Include_dirs)...)
+		library.includeDirs = append(library.includeDirs, android.PathsForModuleSrc(ctx, library.Properties.Export_include_dirs)...)
 	}
 	if library.shared() {
 		if ctx.Darwin() {
@@ -743,56 +746,4 @@ func LibstdMutator(mctx android.BottomUpMutatorContext) {
 			}
 		}
 	}
-}
-
-func (l *libraryDecorator) snapshotHeaders() android.Paths {
-	if l.collectedSnapshotHeaders == nil {
-		panic("snapshotHeaders() must be called after collectHeadersForSnapshot()")
-	}
-	return l.collectedSnapshotHeaders
-}
-
-// collectHeadersForSnapshot collects all exported headers from library.
-// It globs header files in the source tree for exported include directories,
-// and tracks generated header files separately.
-//
-// This is to be called from GenerateAndroidBuildActions, and then collected
-// header files can be retrieved by snapshotHeaders().
-func (l *libraryDecorator) collectHeadersForSnapshot(ctx android.ModuleContext, deps PathDeps) {
-	ret := android.Paths{}
-
-	// Glob together the headers from the modules include_dirs property
-	for _, path := range android.CopyOfPaths(l.includeDirs) {
-		dir := path.String()
-		globDir := dir + "/**/*"
-		glob, err := ctx.GlobWithDeps(globDir, nil)
-		if err != nil {
-			ctx.ModuleErrorf("glob of %q failed: %s", globDir, err)
-			return
-		}
-
-		for _, header := range glob {
-			// Filter out only the files with extensions that are headers.
-			found := false
-			for _, ext := range cc.HeaderExts {
-				if strings.HasSuffix(header, ext) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-			ret = append(ret, android.PathForSource(ctx, header))
-		}
-	}
-
-	// Glob together the headers from C dependencies as well, starting with non-generated headers.
-	ret = append(ret, cc.GlobHeadersForSnapshot(ctx, append(android.CopyOfPaths(deps.depIncludePaths), deps.depSystemIncludePaths...))...)
-
-	// Collect generated headers from C dependencies.
-	ret = append(ret, cc.GlobGeneratedHeadersForSnapshot(ctx, deps.depGeneratedHeaders)...)
-
-	// TODO(185577950): If support for generated headers is added, they need to be collected here as well.
-	l.collectedSnapshotHeaders = ret
 }

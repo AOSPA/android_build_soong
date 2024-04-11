@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"android/soong/android"
-	"android/soong/snapshot"
 )
 
 // Efficiently converts a list of include directories to a single string
@@ -56,19 +55,20 @@ func flagsToBuilderFlags(in Flags) builderFlags {
 		localCppFlags:        strings.Join(in.Local.CppFlags, " "),
 		localLdFlags:         strings.Join(in.Local.LdFlags, " "),
 
-		aidlFlags:     strings.Join(in.aidlFlags, " "),
-		rsFlags:       strings.Join(in.rsFlags, " "),
-		libFlags:      strings.Join(in.libFlags, " "),
-		extraLibFlags: strings.Join(in.extraLibFlags, " "),
-		tidyFlags:     strings.Join(in.TidyFlags, " "),
-		sAbiFlags:     strings.Join(in.SAbiFlags, " "),
-		toolchain:     in.Toolchain,
-		sdclang:       in.Sdclang,
-		gcovCoverage:  in.GcovCoverage,
-		tidy:          in.Tidy,
-		needTidyFiles: in.NeedTidyFiles,
-		sAbiDump:      in.SAbiDump,
-		emitXrefs:     in.EmitXrefs,
+		noOverrideFlags: strings.Join(in.NoOverrideFlags, " "),
+		aidlFlags:       strings.Join(in.aidlFlags, " "),
+		rsFlags:         strings.Join(in.rsFlags, " "),
+		libFlags:        strings.Join(in.libFlags, " "),
+		extraLibFlags:   strings.Join(in.extraLibFlags, " "),
+		tidyFlags:       strings.Join(in.TidyFlags, " "),
+		sAbiFlags:       strings.Join(in.SAbiFlags, " "),
+		toolchain:       in.Toolchain,
+		sdclang:         in.Sdclang,
+		gcovCoverage:    in.GcovCoverage,
+		tidy:            in.Tidy,
+		needTidyFiles:   in.NeedTidyFiles,
+		sAbiDump:        in.SAbiDump,
+		emitXrefs:       in.EmitXrefs,
 
 		systemIncludeFlags: strings.Join(in.SystemIncludeFlags, " "),
 
@@ -101,6 +101,12 @@ func makeSymlinkCmd(linkDirOnDevice string, linkName string, target string) stri
 		"ln -sf " + target + " " + filepath.Join(dir, linkName)
 }
 
+func WriteStringToFileRule(ctx android.SingletonContext, content, out string) android.OutputPath {
+	outPath := android.PathForOutput(ctx, out)
+	android.WriteFileRule(ctx, outPath, content)
+	return outPath
+}
+
 // Dump a map to a list file as:
 //
 // {key1} {value1}
@@ -116,5 +122,5 @@ func installMapListFileRule(ctx android.SingletonContext, m map[string]string, p
 		txtBuilder.WriteString(" ")
 		txtBuilder.WriteString(m[k])
 	}
-	return snapshot.WriteStringToFileRule(ctx, txtBuilder.String(), path)
+	return WriteStringToFileRule(ctx, txtBuilder.String(), path)
 }
