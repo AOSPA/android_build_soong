@@ -29,6 +29,7 @@ import (
 	"android/soong/bazel"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/parser"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -123,6 +124,8 @@ type Module interface {
 	// TransitivePackagingSpecs returns the PackagingSpecs for this module and any transitive
 	// dependencies with dependency tags for which IsInstallDepNeeded() returns true.
 	TransitivePackagingSpecs() []PackagingSpec
+
+	ConfigurableEvaluator(ctx ConfigAndErrorContext) proptools.ConfigurableEvaluator
 }
 
 // Qualified id for a module
@@ -433,6 +436,10 @@ type commonProperties struct {
 	// Set by osMutator
 	CompileOS OsType `blueprint:"mutated"`
 
+	// Set to true after the arch mutator has run on this module and set CompileTarget,
+	// CompileMultiTargets, and CompilePrimary
+	ArchReady bool `blueprint:"mutated"`
+
 	// The Target of artifacts that this module variant is responsible for creating.
 	//
 	// Set by archMutator
@@ -541,6 +548,15 @@ type TeamDepTagType struct {
 }
 
 var teamDepTag = TeamDepTagType{}
+
+// Dependency tag for required, host_required, and target_required modules.
+var RequiredDepTag = struct {
+	blueprint.BaseDependencyTag
+	InstallAlwaysNeededDependencyTag
+	// Requiring disabled module has been supported (as a side effect of this being implemented
+	// in Make). We may want to make it an error, but for now, let's keep the existing behavior.
+	AlwaysAllowDisabledModuleDependencyTag
+}{}
 
 // CommonTestOptions represents the common `test_options` properties in
 // Android.bp.
@@ -1006,6 +1022,95 @@ func (m *ModuleBase) baseDepsMutator(ctx BottomUpMutatorContext) {
 	if m.Team() != "" {
 		ctx.AddDependency(ctx.Module(), teamDepTag, m.Team())
 	}
+
+	// TODO(jiyong): remove below case. This is to work around build errors happening
+	// on branches with reduced manifest like aosp_kernel-build-tools.
+	// In the branch, a build error occurs as follows.
+	// 1. aosp_kernel-build-tools is a reduced manifest branch. It doesn't have some git
+	// projects like external/bouncycastle
+	// 2. `boot_signer` is `required` by modules like `build_image` which is explicitly list as
+	// the top-level build goal (in the shell file that invokes Soong).
+	// 3. `boot_signer` depends on `bouncycastle-unbundled` which is in the missing git project.
+	// 4. aosp_kernel-build-tools invokes soong with `--skip-make`. Therefore, the absence of
+	// ALLOW_MISSING_DEPENDENCIES didn't cause a problem.
+	// 5. Now, since Soong understands `required` deps, it tries to build `boot_signer` and the
+	// absence of external/bouncycastle fails the build.
+	//
+	// Unfortunately, there's no way for Soong to correctly determine if it's running in a
+	// reduced manifest branch. Instead, here, we use the absence of DeviceArch or DeviceName as
+	// a strong signal, because that's very common across reduced manifest branches.
+	pv := ctx.Config().productVariables
+	fullManifest := pv.DeviceArch != nil && pv.DeviceName != nil
+	if fullManifest {
+		m.addRequiredDeps(ctx)
+	}
+}
+
+// addRequiredDeps adds required, target_required, and host_required as dependencies.
+func (m *ModuleBase) addRequiredDeps(ctx BottomUpMutatorContext) {
+	addDep := func(target Target, depName string) {
+		if !ctx.OtherModuleExists(depName) {
+			if ctx.Config().AllowMissingDependencies() {
+				return
+			}
+		}
+
+		// If Android native module requires another Android native module, ensure that
+		// they have the same bitness. This mimics the policy in select-bitness-of-required-modules
+		// in build/make/core/main.mk.
+		// TODO(jiyong): the Make-side does this only when the required module is a shared
+		// library or a native test.
+		bothInAndroid := m.Device() && target.Os.Class == Device
+		nativeArch := InList(m.Arch().ArchType.Multilib, []string{"lib32", "lib64"})
+		sameBitness := m.Arch().ArchType.Multilib == target.Arch.ArchType.Multilib
+		if bothInAndroid && nativeArch && !sameBitness {
+			return
+		}
+
+		variation := target.Variations()
+		if ctx.OtherModuleFarDependencyVariantExists(variation, depName) {
+			ctx.AddFarVariationDependencies(variation, RequiredDepTag, depName)
+		}
+	}
+
+	var deviceTargets []Target
+	deviceTargets = append(deviceTargets, ctx.Config().Targets[Android]...)
+	deviceTargets = append(deviceTargets, ctx.Config().AndroidCommonTarget)
+
+	var hostTargets []Target
+	hostTargets = append(hostTargets, ctx.Config().Targets[ctx.Config().BuildOS]...)
+	hostTargets = append(hostTargets, ctx.Config().BuildOSCommonTarget)
+
+	if m.Device() {
+		for _, depName := range m.RequiredModuleNames() {
+			for _, target := range deviceTargets {
+				addDep(target, depName)
+			}
+		}
+		for _, depName := range m.HostRequiredModuleNames() {
+			for _, target := range hostTargets {
+				addDep(target, depName)
+			}
+		}
+	}
+
+	if m.Host() {
+		for _, depName := range m.RequiredModuleNames() {
+			for _, target := range hostTargets {
+				// When a host module requires another host module, don't make a
+				// dependency if they have different OSes (i.e. hostcross).
+				if m.Target().HostCross != target.HostCross {
+					continue
+				}
+				addDep(target, depName)
+			}
+		}
+		for _, depName := range m.TargetRequiredModuleNames() {
+			for _, target := range deviceTargets {
+				addDep(target, depName)
+			}
+		}
+	}
 }
 
 // AddProperties "registers" the provided props
@@ -1133,6 +1238,10 @@ func (m *ModuleBase) GenerateTaggedDistFiles(ctx BaseModuleContext) TaggedDistFi
 	}
 
 	return distFiles
+}
+
+func (m *ModuleBase) ArchReady() bool {
+	return m.commonProperties.ArchReady
 }
 
 func (m *ModuleBase) Target() Target {
@@ -1658,6 +1767,7 @@ func (m *ModuleBase) archModuleContextFactory(ctx blueprint.IncomingTransitionCo
 	}
 
 	return archModuleContext{
+		ready:         m.commonProperties.ArchReady,
 		os:            m.commonProperties.CompileOS,
 		target:        m.commonProperties.CompileTarget,
 		targetPrimary: m.commonProperties.CompilePrimary,
@@ -2003,6 +2113,65 @@ func (m *ModuleBase) MakeAsSystemExt() {
 // IsNativeBridgeSupported returns true if "native_bridge_supported" is explicitly set as "true"
 func (m *ModuleBase) IsNativeBridgeSupported() bool {
 	return proptools.Bool(m.commonProperties.Native_bridge_supported)
+}
+
+type ConfigAndErrorContext interface {
+	Config() Config
+	OtherModulePropertyErrorf(module Module, property string, fmt string, args ...interface{})
+}
+
+type configurationEvalutor struct {
+	ctx ConfigAndErrorContext
+	m   Module
+}
+
+func (m *ModuleBase) ConfigurableEvaluator(ctx ConfigAndErrorContext) proptools.ConfigurableEvaluator {
+	return configurationEvalutor{
+		ctx: ctx,
+		m:   m.module,
+	}
+}
+
+func (e configurationEvalutor) PropertyErrorf(property string, fmt string, args ...interface{}) {
+	e.ctx.OtherModulePropertyErrorf(e.m, property, fmt, args)
+}
+
+func (e configurationEvalutor) EvaluateConfiguration(ty parser.SelectType, property, condition string) (string, bool) {
+	ctx := e.ctx
+	m := e.m
+	switch ty {
+	case parser.SelectTypeReleaseVariable:
+		if v, ok := ctx.Config().productVariables.BuildFlags[condition]; ok {
+			return v, true
+		}
+		return "", false
+	case parser.SelectTypeProductVariable:
+		// TODO(b/323382414): Might add these on a case-by-case basis
+		ctx.OtherModulePropertyErrorf(m, property, "TODO(b/323382414): Product variables are not yet supported in selects")
+		return "", false
+	case parser.SelectTypeSoongConfigVariable:
+		parts := strings.Split(condition, ":")
+		namespace := parts[0]
+		variable := parts[1]
+		if n, ok := ctx.Config().productVariables.VendorVars[namespace]; ok {
+			if v, ok := n[variable]; ok {
+				return v, true
+			}
+		}
+		return "", false
+	case parser.SelectTypeVariant:
+		if condition == "arch" {
+			if !m.base().ArchReady() {
+				ctx.OtherModulePropertyErrorf(m, property, "A select on arch was attempted before the arch mutator ran")
+				return "", false
+			}
+			return m.base().Arch().ArchType.Name, true
+		}
+		ctx.OtherModulePropertyErrorf(m, property, "Unknown variant %s", condition)
+		return "", false
+	default:
+		panic("Should be unreachable")
+	}
 }
 
 // ModuleNameWithPossibleOverride returns the name of the OverrideModule that overrides the current

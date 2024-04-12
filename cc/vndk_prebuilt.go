@@ -131,16 +131,6 @@ func (p *vndkPrebuiltLibraryDecorator) singleSourcePath(ctx ModuleContext) andro
 
 func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 	flags Flags, deps PathDeps, objs Objects) android.Path {
-	platformVndkVersion := ctx.DeviceConfig().PlatformVndkVersion()
-	if platformVndkVersion != "" {
-		platformVndkApiLevel := android.ApiLevelOrPanic(ctx, platformVndkVersion)
-		if platformVndkApiLevel.LessThanOrEqualTo(android.ApiLevelOrPanic(ctx, p.Version())) {
-			// This prebuilt VNDK module is not required for the current build
-			ctx.Module().HideFromMake()
-			return nil
-		}
-	}
-
 	if !p.MatchesWithDevice(ctx.DeviceConfig()) {
 		ctx.Module().HideFromMake()
 		return nil
@@ -168,11 +158,6 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 		TransformSharedObjectToToc(ctx, in, tocFile)
 
 		p.androidMkSuffix = p.NameSuffix()
-
-		vndkVersion := ctx.DeviceConfig().VndkVersion()
-		if vndkVersion == p.Version() {
-			p.androidMkSuffix = ""
-		}
 
 		android.SetProvider(ctx, SharedLibraryInfoProvider, SharedLibraryInfo{
 			SharedLibrary: in,

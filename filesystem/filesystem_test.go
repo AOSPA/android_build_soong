@@ -23,6 +23,8 @@ import (
 	"android/soong/bpf"
 	"android/soong/cc"
 	"android/soong/etc"
+	"android/soong/java"
+	"android/soong/phony"
 
 	"github.com/google/blueprint/proptools"
 )
@@ -33,9 +35,13 @@ func TestMain(m *testing.M) {
 
 var fixture = android.GroupFixturePreparers(
 	android.PrepareForIntegrationTestWithAndroid,
+	android.PrepareForTestWithAndroidBuildComponents,
 	bpf.PrepareForTestWithBpf,
-	etc.PrepareForTestWithPrebuiltEtc,
 	cc.PrepareForIntegrationTestWithCc,
+	etc.PrepareForTestWithPrebuiltEtc,
+	java.PrepareForTestWithJavaBuildComponents,
+	java.PrepareForTestWithJavaDefaultModules,
+	phony.PrepareForTestWithPhony,
 	PrepareForTestWithFilesystemBuildComponents,
 )
 
@@ -47,6 +53,7 @@ func TestFileSystemDeps(t *testing.T) {
 				common: {
 					deps: [
 						"bpf.o",
+						"phony",
 					],
 				},
 				lib32: {
@@ -76,6 +83,29 @@ func TestFileSystemDeps(t *testing.T) {
 
 		cc_library {
 			name: "libbar",
+			required: ["libbaz"],
+		}
+
+		cc_library {
+			name: "libbaz",
+		}
+
+		phony {
+			name: "phony",
+			required: [
+				"libquz",
+				"myapp",
+			],
+		}
+
+		cc_library {
+			name: "libquz",
+		}
+
+		android_app {
+			name: "myapp",
+			platform_apis: true,
+			installable: true,
 		}
 	`)
 
@@ -84,9 +114,12 @@ func TestFileSystemDeps(t *testing.T) {
 
 	fs := result.ModuleForTests("myfilesystem", "android_common").Module().(*filesystem)
 	expected := []string{
+		"app/myapp/myapp.apk",
 		"bin/foo",
 		"lib/libbar.so",
 		"lib64/libbar.so",
+		"lib64/libbaz.so",
+		"lib64/libquz.so",
 		"etc/bpf/bpf.o",
 	}
 	for _, e := range expected {
@@ -343,5 +376,74 @@ func TestFileSystemWithCoverageVariants(t *testing.T) {
 	prebuiltInput := result.ModuleForTests("prebuilt", "android_arm64_armv8-a").Rule("Cp").Input
 	if filesystemOutput != prebuiltInput {
 		t.Error("prebuilt should use cov variant of filesystem")
+	}
+}
+
+func TestSystemImageDefaults(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_system_image_defaults {
+			name: "defaults",
+			multilib: {
+				common: {
+					deps: [
+						"phony",
+					],
+				},
+				lib64: {
+					deps: [
+						"libbar",
+					],
+				},
+			},
+			compile_multilib: "both",
+		}
+
+		android_system_image {
+			name: "system",
+			defaults: ["defaults"],
+			multilib: {
+				lib32: {
+					deps: [
+						"foo",
+						"libbar",
+					],
+				},
+			},
+		}
+
+		cc_binary {
+			name: "foo",
+			compile_multilib: "prefer32",
+		}
+
+		cc_library {
+			name: "libbar",
+			required: ["libbaz"],
+		}
+
+		cc_library {
+			name: "libbaz",
+		}
+
+		phony {
+			name: "phony",
+			required: ["libquz"],
+		}
+
+		cc_library {
+			name: "libquz",
+		}
+	`)
+
+	fs := result.ModuleForTests("system", "android_common").Module().(*systemImage)
+	expected := []string{
+		"bin/foo",
+		"lib/libbar.so",
+		"lib64/libbar.so",
+		"lib64/libbaz.so",
+		"lib64/libquz.so",
+	}
+	for _, e := range expected {
+		android.AssertStringListContains(t, "missing entry", fs.entries, e)
 	}
 }

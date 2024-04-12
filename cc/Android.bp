@@ -17,7 +17,6 @@ bootstrap_go_package {
         "soong-fuzz",
         "soong-genrule",
         "soong-multitree",
-        "soong-snapshot",
         "soong-testing",
         "soong-tradefed",
     ],
@@ -45,12 +44,10 @@ bootstrap_go_package {
         "sabi.go",
         "sdk.go",
         "snapshot_prebuilt.go",
-        "snapshot_utils.go",
         "stl.go",
         "strip.go",
         "tidy.go",
         "util.go",
-        "vendor_snapshot.go",
         "vndk.go",
         "vndk_prebuilt.go",
 
@@ -111,7 +108,6 @@ bootstrap_go_package {
         "test_data_test.go",
         "tidy_test.go",
         "vendor_public_library_test.go",
-        "vendor_snapshot_test.go",
     ],
     pluginFor: ["soong_build"],
 }

@@ -693,6 +693,7 @@ func addTargetProperties(m Module, target Target, multiTargets []Target, primary
 	m.base().commonProperties.CompileTarget = target
 	m.base().commonProperties.CompileMultiTargets = multiTargets
 	m.base().commonProperties.CompilePrimary = primaryTarget
+	m.base().commonProperties.ArchReady = true
 }
 
 // decodeMultilib returns the appropriate compile_multilib property for the module, or the default
@@ -979,7 +980,7 @@ func filterArchStruct(field reflect.StructField, prefix string) (bool, reflect.S
 			panic(fmt.Errorf("unexpected tag format %q", field.Tag))
 		}
 		// these tags don't need to be present in the runtime generated struct type.
-		values = RemoveListFromList(values, []string{"arch_variant", "variant_prepend", "path"})
+		values = RemoveListFromList(values, []string{"arch_variant", "variant_prepend", "path", "replace_instead_of_append"})
 		if len(values) > 0 {
 			panic(fmt.Errorf("unknown tags %q in field %q", values, prefix+field.Name))
 		}
