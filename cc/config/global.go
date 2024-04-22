@@ -160,6 +160,9 @@ var (
 
 		// Make paths in deps files relative.
 		"-no-canonical-prefixes",
+
+		// http://b/315250603 temporarily disabled
+		"-Wno-error=format",
 	}
 
 	commonGlobalConlyflags = []string{}
@@ -270,8 +273,6 @@ var (
 		// "-Werror=fortify-source",
 		// http://b/315246135 temporarily disabled
 		"-Wno-unused-variable",
-		// http://b/315250603 temporarily disabled
-		"-Wno-error=format",
 		// Disabled because it produces many false positives. http://b/323050926
 		"-Wno-missing-field-initializers",
 		// http://b/323050889

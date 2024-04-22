@@ -845,6 +845,7 @@ type Module struct {
 
 	VendorProperties VendorProperties
 	Properties       BaseProperties
+	sourceProperties android.SourceProperties
 
 	// initialize before calling Init
 	hod        android.HostOrDeviceSupported
@@ -1261,6 +1262,10 @@ func (c *Module) Init() android.Module {
 	}
 	for _, feature := range c.features {
 		c.AddProperties(feature.props()...)
+	}
+	// Allow test-only on libraries that are not cc_test_library
+	if c.library != nil && !c.testLibrary() {
+		c.AddProperties(&c.sourceProperties)
 	}
 
 	android.InitAndroidArchModule(c, c.hod, c.multilib)
@@ -1990,6 +1995,20 @@ func (d *Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 
 func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
+	ctx := moduleContextFromAndroidModuleContext(actx, c)
+
+	// If Test_only is set on a module in bp file, respect the setting, otherwise
+	// see if is a known test module type.
+	testOnly := c.testModule || c.testLibrary()
+	if c.sourceProperties.Test_only != nil {
+		testOnly = Bool(c.sourceProperties.Test_only)
+	}
+	// Keep before any early returns.
+	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
+		TestOnly:       testOnly,
+		TopLevelTarget: c.testModule,
+	})
+
 	// Handle the case of a test module split by `test_per_src` mutator.
 	//
 	// The `test_per_src` mutator adds an extra variation named "", depending on all the other
@@ -2007,8 +2026,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	c.makeLinkType = GetMakeLinkType(actx, c)
-
-	ctx := moduleContextFromAndroidModuleContext(actx, c)
 
 	deps := c.depsToPaths(ctx)
 	if ctx.Failed() {
@@ -2134,6 +2151,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if c.testModule {
 		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
+
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
 
 	android.CollectDependencyAconfigFiles(ctx, &c.mergedAconfigFiles)
@@ -3322,10 +3340,10 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				// Add these re-exported flags to help header-abi-dumper to infer the abi exported by a library.
 				// Re-exported shared library headers must be included as well since they can help us with type information
 				// about template instantiations (instantiated from their headers).
-				// -isystem headers are not included since for bionic libraries, abi-filtering is taken care of by version
-				// scripts.
 				c.sabi.Properties.ReexportedIncludes = append(
 					c.sabi.Properties.ReexportedIncludes, depExporterInfo.IncludeDirs.Strings()...)
+				c.sabi.Properties.ReexportedSystemIncludes = append(
+					c.sabi.Properties.ReexportedSystemIncludes, depExporterInfo.SystemIncludeDirs.Strings()...)
 			}
 
 			makeLibName := MakeLibName(ctx, c, ccDep, ccDep.BaseModuleName()) + libDepTag.makeSuffix
@@ -3396,6 +3414,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	if c.sabi != nil {
 		c.sabi.Properties.ReexportedIncludes = android.FirstUniqueStrings(c.sabi.Properties.ReexportedIncludes)
+		c.sabi.Properties.ReexportedSystemIncludes = android.FirstUniqueStrings(c.sabi.Properties.ReexportedSystemIncludes)
 	}
 
 	return depPaths

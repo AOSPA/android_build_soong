@@ -958,11 +958,16 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		j.installFile = ctx.InstallFile(installDir, j.Stem()+".jar", j.outputFile, extraInstallDeps...)
 	}
+
+	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
+		TestOnly:       Bool(j.sourceProperties.Test_only),
+		TopLevelTarget: j.sourceProperties.Top_level_test_target,
+	})
 }
 
 func (j *Library) DepsMutator(ctx android.BottomUpMutatorContext) {
-	j.deps(ctx)
 	j.usesLibrary.deps(ctx, false)
+	j.deps(ctx)
 }
 
 const (
@@ -1123,6 +1128,7 @@ func LibraryFactory() android.Module {
 	module := &Library{}
 
 	module.addHostAndDeviceProperties()
+	module.AddProperties(&module.sourceProperties)
 
 	module.initModuleAndImport(module)
 
@@ -1604,6 +1610,8 @@ func TestFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.Module.dexpreopter.isTest = true
 	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Test_only = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Top_level_test_target = true
 
 	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
@@ -1619,6 +1627,7 @@ func TestHelperLibraryFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.Module.dexpreopter.isTest = true
 	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Test_only = proptools.BoolPtr(true)
 
 	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
@@ -1674,6 +1683,8 @@ func InitTestHost(th *TestHost, installable *bool, testSuites []string, autoGenC
 	th.properties.Installable = installable
 	th.testProperties.Auto_gen_config = autoGenConfig
 	th.testProperties.Test_suites = testSuites
+	th.sourceProperties.Test_only = proptools.BoolPtr(true)
+	th.sourceProperties.Top_level_test_target = true
 }
 
 //
@@ -1799,7 +1810,7 @@ func BinaryFactory() android.Module {
 	module := &Binary{}
 
 	module.addHostAndDeviceProperties()
-	module.AddProperties(&module.binaryProperties)
+	module.AddProperties(&module.binaryProperties, &module.sourceProperties)
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
@@ -2564,7 +2575,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// header jar for this module.
 	reuseImplementationJarAsHeaderJar := slices.Equal(staticJars, staticHeaderJars)
 
-	var headerOutputFile android.WritablePath
+	var headerOutputFile android.ModuleOutPath
 	if reuseImplementationJarAsHeaderJar {
 		headerOutputFile = outputFile
 	} else {
@@ -2587,8 +2598,12 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			headerOutputFile = outputFile
 		}
 	}
-	j.combinedHeaderFile = headerOutputFile
-	j.combinedImplementationFile = outputFile
+
+	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource.
+	// Also strip the relative path from the header output file so that the reuseImplementationJarAsHeaderJar check
+	// in a module that depends on this module considers them equal.
+	j.combinedHeaderFile = headerOutputFile.WithoutRel()
+	j.combinedImplementationFile = outputFile.WithoutRel()
 
 	j.maybeInstall(ctx, jarName, outputFile)
 
@@ -3147,10 +3162,32 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	// <uses_library> and should not be added to CLC, but the transitive <uses-library> dependencies
 	// from its CLC should be added to the current CLC.
 	if sdkLib != nil {
-		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, false,
+		optional := false
+		if module, ok := ctx.Module().(ModuleWithUsesLibrary); ok {
+			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs) {
+				optional = true
+			}
+		}
+		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, optional,
 			dep.DexJarBuildPath(ctx).PathOrNil(), dep.DexJarInstallPath(), dep.ClassLoaderContexts())
 	} else {
 		clcMap.AddContextMap(dep.ClassLoaderContexts(), depName)
+	}
+}
+
+func addMissingOptionalUsesLibsFromDep(ctx android.ModuleContext, depModule android.Module,
+	usesLibrary *usesLibrary) {
+
+	dep, ok := depModule.(ModuleWithUsesLibrary)
+	if !ok {
+		return
+	}
+
+	for _, lib := range dep.UsesLibrary().usesLibraryProperties.Missing_optional_uses_libs {
+		if !android.InList(lib, usesLibrary.usesLibraryProperties.Missing_optional_uses_libs) {
+			usesLibrary.usesLibraryProperties.Missing_optional_uses_libs =
+				append(usesLibrary.usesLibraryProperties.Missing_optional_uses_libs, lib)
+		}
 	}
 }
 
