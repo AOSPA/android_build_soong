@@ -139,6 +139,8 @@ type variableProperties struct {
 			Srcs         []string
 			Exclude_srcs []string
 			Cmd          *string
+
+			Deps []string
 		}
 
 		// eng is true for -eng builds, and can be used to turn on additional heavyweight debugging
@@ -222,26 +224,28 @@ type ProductVariables struct {
 	// Suffix to add to generated Makefiles
 	Make_suffix *string `json:",omitempty"`
 
-	BuildId         *string `json:",omitempty"`
-	BuildNumberFile *string `json:",omitempty"`
+	BuildId             *string `json:",omitempty"`
+	BuildNumberFile     *string `json:",omitempty"`
+	BuildHostnameFile   *string `json:",omitempty"`
+	BuildThumbprintFile *string `json:",omitempty"`
+	DisplayBuildNumber  *bool   `json:",omitempty"`
 
-	Platform_version_name                     *string  `json:",omitempty"`
-	Platform_sdk_version                      *int     `json:",omitempty"`
-	Platform_sdk_codename                     *string  `json:",omitempty"`
-	Platform_sdk_version_or_codename          *string  `json:",omitempty"`
-	Platform_sdk_final                        *bool    `json:",omitempty"`
-	Platform_sdk_extension_version            *int     `json:",omitempty"`
-	Platform_base_sdk_extension_version       *int     `json:",omitempty"`
-	Platform_version_active_codenames         []string `json:",omitempty"`
-	Platform_version_all_preview_codenames    []string `json:",omitempty"`
-	Platform_vndk_version                     *string  `json:",omitempty"`
-	Platform_systemsdk_versions               []string `json:",omitempty"`
-	Platform_security_patch                   *string  `json:",omitempty"`
-	Platform_preview_sdk_version              *string  `json:",omitempty"`
-	Platform_min_supported_target_sdk_version *string  `json:",omitempty"`
-	Platform_base_os                          *string  `json:",omitempty"`
-	Platform_version_last_stable              *string  `json:",omitempty"`
-	Platform_version_known_codenames          *string  `json:",omitempty"`
+	Platform_display_version_name          *string  `json:",omitempty"`
+	Platform_version_name                  *string  `json:",omitempty"`
+	Platform_sdk_version                   *int     `json:",omitempty"`
+	Platform_sdk_codename                  *string  `json:",omitempty"`
+	Platform_sdk_version_or_codename       *string  `json:",omitempty"`
+	Platform_sdk_final                     *bool    `json:",omitempty"`
+	Platform_sdk_extension_version         *int     `json:",omitempty"`
+	Platform_base_sdk_extension_version    *int     `json:",omitempty"`
+	Platform_version_active_codenames      []string `json:",omitempty"`
+	Platform_version_all_preview_codenames []string `json:",omitempty"`
+	Platform_systemsdk_versions            []string `json:",omitempty"`
+	Platform_security_patch                *string  `json:",omitempty"`
+	Platform_preview_sdk_version           *string  `json:",omitempty"`
+	Platform_base_os                       *string  `json:",omitempty"`
+	Platform_version_last_stable           *string  `json:",omitempty"`
+	Platform_version_known_codenames       *string  `json:",omitempty"`
 
 	DeviceName                            *string  `json:",omitempty"`
 	DeviceProduct                         *string  `json:",omitempty"`
@@ -332,6 +336,8 @@ type ProductVariables struct {
 	Arc                              *bool    `json:",omitempty"`
 	MinimizeJavaDebugInfo            *bool    `json:",omitempty"`
 	Build_from_text_stub             *bool    `json:",omitempty"`
+
+	BuildType *string `json:",omitempty"`
 
 	Check_elf_files *bool `json:",omitempty"`
 
@@ -519,9 +525,8 @@ type ProductVariables struct {
 
 	AfdoProfiles []string `json:",omitempty"`
 
-	ProductManufacturer string   `json:",omitempty"`
-	ProductBrand        string   `json:",omitempty"`
-	BuildVersionTags    []string `json:",omitempty"`
+	ProductManufacturer string `json:",omitempty"`
+	ProductBrand        string `json:",omitempty"`
 
 	ReleaseVersion          string   `json:",omitempty"`
 	ReleaseAconfigValueSets []string `json:",omitempty"`
@@ -549,6 +554,14 @@ type ProductVariables struct {
 	ExportRuntimeApis *bool `json:",omitempty"`
 
 	AconfigContainerValidation string `json:",omitempty"`
+
+	ProductLocales []string `json:",omitempty"`
+
+	ProductDefaultWifiChannels []string `json:",omitempty"`
+
+	BoardUseVbmetaDigestInFingerprint *bool `json:",omitempty"`
+
+	OemProperties []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
@@ -631,7 +644,6 @@ func (v *ProductVariables) SetDefaultConfig() {
 		Platform_sdk_final:                     boolPtr(false),
 		Platform_version_active_codenames:      []string{"S"},
 		Platform_version_all_preview_codenames: []string{"S"},
-		Platform_vndk_version:                  stringPtr("S"),
 
 		HostArch:                    stringPtr("x86_64"),
 		HostSecondaryArch:           stringPtr("x86"),

@@ -30,6 +30,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/dexpreopt"
+	"android/soong/etc"
 )
 
 const (
@@ -948,6 +949,10 @@ type commonToSdkLibraryAndImport struct {
 
 	// Functionality related to this being used as a component of a java_sdk_library.
 	EmbeddableSdkLibraryComponent
+
+	// Path to the header jars of the implementation library
+	// This is non-empty only when api_only is false.
+	implLibraryHeaderJars android.Paths
 }
 
 func (c *commonToSdkLibraryAndImport) initCommon(module commonSdkLibraryAndImportModule) {
@@ -1355,13 +1360,6 @@ type SdkLibraryDependency interface {
 	// class changes but it does not contain and implementation or JavaDoc.
 	SdkHeaderJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths
 
-	// Get the implementation jars appropriate for the supplied sdk version.
-	//
-	// These are either the implementation jar for the whole sdk library or the implementation
-	// jars for the stubs. The latter should only be needed when generating JavaDoc as otherwise
-	// they are identical to the corresponding header jars.
-	SdkImplementationJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths
-
 	// SdkApiStubDexJar returns the dex jar for the stubs for the prebuilt
 	// java_sdk_library_import module. It is needed by the hiddenapi processing tool which
 	// processes dex files.
@@ -1597,6 +1595,12 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 			scopeTag.extractDepInfo(ctx, to, scopePaths)
 
 			exportedComponents[ctx.OtherModuleName(to)] = struct{}{}
+		}
+
+		if tag == implLibraryTag {
+			if dep, ok := android.OtherModuleProvider(ctx, to, JavaInfoProvider); ok {
+				module.implLibraryHeaderJars = append(module.implLibraryHeaderJars, dep.HeaderJars...)
+			}
 		}
 	})
 
@@ -2237,7 +2241,7 @@ func withinSameApexesAs(ctx android.BaseModuleContext, other android.Module) boo
 	return len(otherApexInfo.InApexVariants) > 0 && reflect.DeepEqual(apexInfo.InApexVariants, otherApexInfo.InApexVariants)
 }
 
-func (module *SdkLibrary) sdkJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec, headerJars bool) android.Paths {
+func (module *SdkLibrary) sdkJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths {
 	// If the client doesn't set sdk_version, but if this library prefers stubs over
 	// the impl library, let's provide the widest API surface possible. To do so,
 	// force override sdk_version to module_current so that the closest possible API
@@ -2254,11 +2258,7 @@ func (module *SdkLibrary) sdkJars(ctx android.BaseModuleContext, sdkVersion andr
 		// * No sdk_version specified on the referencing module.
 		// * The referencing module is in the same apex as this.
 		if sdkVersion.Kind == android.SdkPrivate || withinSameApexesAs(ctx, module) {
-			if headerJars {
-				return module.HeaderJars()
-			} else {
-				return module.ImplementationJars()
-			}
+			return module.implLibraryHeaderJars
 		}
 	}
 
@@ -2267,12 +2267,7 @@ func (module *SdkLibrary) sdkJars(ctx android.BaseModuleContext, sdkVersion andr
 
 // to satisfy SdkLibraryDependency interface
 func (module *SdkLibrary) SdkHeaderJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths {
-	return module.sdkJars(ctx, sdkVersion, true /*headerJars*/)
-}
-
-// to satisfy SdkLibraryDependency interface
-func (module *SdkLibrary) SdkImplementationJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths {
-	return module.sdkJars(ctx, sdkVersion, false /*headerJars*/)
+	return module.sdkJars(ctx, sdkVersion)
 }
 
 var javaSdkLibrariesKey = android.NewOnceKey("javaSdkLibraries")
@@ -2982,12 +2977,6 @@ func (module *SdkLibraryImport) SdkHeaderJars(ctx android.BaseModuleContext, sdk
 	return module.sdkJars(ctx, sdkVersion, true)
 }
 
-// to satisfy SdkLibraryDependency interface
-func (module *SdkLibraryImport) SdkImplementationJars(ctx android.BaseModuleContext, sdkVersion android.SdkSpec) android.Paths {
-	// This module is just a wrapper for the stubs.
-	return module.sdkJars(ctx, sdkVersion, false)
-}
-
 // to satisfy UsesLibraryDependency interface
 func (module *SdkLibraryImport) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	// The dex implementation jar extracted from the .apex file should be used in preference to the
@@ -3174,9 +3163,11 @@ func (module *sdkLibraryXml) SubDir() string {
 }
 
 // from android.PrebuiltEtcModule
-func (module *sdkLibraryXml) OutputFile() android.OutputPath {
-	return module.outputFilePath
+func (module *sdkLibraryXml) OutputFiles(tag string) (android.Paths, error) {
+	return android.OutputPaths{module.outputFilePath}.Paths(), nil
 }
+
+var _ etc.PrebuiltEtcModule = (*sdkLibraryXml)(nil)
 
 // from android.ApexModule
 func (module *sdkLibraryXml) AvailableFor(what string) bool {
@@ -3247,14 +3238,14 @@ func formattedOptionalAttribute(attrName string, value *string) string {
 	if value == nil {
 		return ""
 	}
-	return fmt.Sprintf(`        %s=\"%s\"\n`, attrName, *value)
+	return fmt.Sprintf("        %s=\"%s\"\n", attrName, *value)
 }
 
 func formattedDependenciesAttribute(dependencies []string) string {
 	if dependencies == nil {
 		return ""
 	}
-	return fmt.Sprintf(`        dependency=\"%s\"\n`, strings.Join(dependencies, ":"))
+	return fmt.Sprintf("        dependency=\"%s\"\n", strings.Join(dependencies, ":"))
 }
 
 func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) string {
@@ -3271,28 +3262,28 @@ func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) stri
 	// similarly, min_device_sdk is only understood from T. So if a library is using that, we need to use the apex-library to make sure this library is not loaded before T
 	var libraryTag string
 	if module.properties.Min_device_sdk != nil {
-		libraryTag = `    <apex-library\n`
+		libraryTag = "    <apex-library\n"
 	} else {
-		libraryTag = `    <library\n`
+		libraryTag = "    <library\n"
 	}
 
 	return strings.Join([]string{
-		`<?xml version=\"1.0\" encoding=\"utf-8\"?>\n`,
-		`<!-- Copyright (C) 2018 The Android Open Source Project\n`,
-		`\n`,
-		`    Licensed under the Apache License, Version 2.0 (the \"License\");\n`,
-		`    you may not use this file except in compliance with the License.\n`,
-		`    You may obtain a copy of the License at\n`,
-		`\n`,
-		`        http://www.apache.org/licenses/LICENSE-2.0\n`,
-		`\n`,
-		`    Unless required by applicable law or agreed to in writing, software\n`,
-		`    distributed under the License is distributed on an \"AS IS\" BASIS,\n`,
-		`    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n`,
-		`    See the License for the specific language governing permissions and\n`,
-		`    limitations under the License.\n`,
-		`-->\n`,
-		`<permissions>\n`,
+		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n",
+		"<!-- Copyright (C) 2018 The Android Open Source Project\n",
+		"\n",
+		"    Licensed under the Apache License, Version 2.0 (the \"License\");\n",
+		"    you may not use this file except in compliance with the License.\n",
+		"    You may obtain a copy of the License at\n",
+		"\n",
+		"        http://www.apache.org/licenses/LICENSE-2.0\n",
+		"\n",
+		"    Unless required by applicable law or agreed to in writing, software\n",
+		"    distributed under the License is distributed on an \"AS IS\" BASIS,\n",
+		"    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n",
+		"    See the License for the specific language governing permissions and\n",
+		"    limitations under the License.\n",
+		"-->\n",
+		"<permissions>\n",
 		libraryTag,
 		libNameAttr,
 		filePathAttr,
@@ -3301,8 +3292,9 @@ func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) stri
 		minSdkAttr,
 		maxSdkAttr,
 		dependenciesAttr,
-		`    />\n`,
-		`</permissions>\n`}, "")
+		"    />\n",
+		"</permissions>\n",
+	}, "")
 }
 
 func (module *sdkLibraryXml) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -3314,12 +3306,7 @@ func (module *sdkLibraryXml) GenerateAndroidBuildActions(ctx android.ModuleConte
 	xmlContent := module.permissionsContents(ctx)
 
 	module.outputFilePath = android.PathForModuleOut(ctx, libName+".xml").OutputPath
-	rule := android.NewRuleBuilder(pctx, ctx)
-	rule.Command().
-		Text("/bin/bash -c \"echo -e '" + xmlContent + "'\" > ").
-		Output(module.outputFilePath)
-
-	rule.Build("java_sdk_xml", "Permission XML")
+	android.WriteFileRuleVerbatim(ctx, module.outputFilePath, xmlContent)
 
 	module.installDirPath = android.PathForModuleInstall(ctx, "etc", module.SubDir())
 }

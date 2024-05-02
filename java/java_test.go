@@ -588,10 +588,11 @@ func TestPrebuilts(t *testing.T) {
 	javac := fooModule.Rule("javac")
 	combineJar := ctx.ModuleForTests("foo", "android_common").Description("for javac")
 	barModule := ctx.ModuleForTests("bar", "android_common")
-	barJar := barModule.Rule("combineJar").Output
+	barJar := barModule.Output("combined/bar.jar").Output
 	bazModule := ctx.ModuleForTests("baz", "android_common")
 	bazJar := bazModule.Rule("combineJar").Output
-	sdklibStubsJar := ctx.ModuleForTests("sdklib.stubs", "android_common").Rule("combineJar").Output
+	sdklibStubsJar := ctx.ModuleForTests("sdklib.stubs", "android_common").
+		Output("combined/sdklib.stubs.jar").Output
 
 	fooLibrary := fooModule.Module().(*Library)
 	assertDeepEquals(t, "foo unique sources incorrect",
@@ -1035,7 +1036,7 @@ func TestExcludeFileGroupInSrcs(t *testing.T) {
 	}
 }
 
-func TestJavaLibrary(t *testing.T) {
+func TestJavaLibraryOutputFiles(t *testing.T) {
 	testJavaWithFS(t, "", map[string][]byte{
 		"libcore/Android.bp": []byte(`
 				java_library {
@@ -1052,7 +1053,7 @@ func TestJavaLibrary(t *testing.T) {
 	})
 }
 
-func TestJavaImport(t *testing.T) {
+func TestJavaImportOutputFiles(t *testing.T) {
 	testJavaWithFS(t, "", map[string][]byte{
 		"libcore/Android.bp": []byte(`
 				java_import {
@@ -1066,6 +1067,85 @@ func TestJavaImport(t *testing.T) {
 				}
 		`),
 	})
+}
+
+func TestJavaImport(t *testing.T) {
+	bp := `
+		java_library {
+			name: "source_library",
+			srcs: ["source.java"],
+		}
+
+		java_import {
+			name: "import_with_no_deps",
+			jars: ["no_deps.jar"],
+		}
+
+		java_import {
+			name: "import_with_source_deps",
+			jars: ["source_deps.jar"],
+			static_libs: ["source_library"],
+		}
+
+		java_import {
+			name: "import_with_import_deps",
+			jars: ["import_deps.jar"],
+			static_libs: ["import_with_no_deps"],
+		}
+	`
+	ctx := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, bp)
+
+	source := ctx.ModuleForTests("source_library", "android_common")
+	sourceJar := source.Output("javac/source_library.jar")
+	sourceHeaderJar := source.Output("turbine-combined/source_library.jar")
+	sourceJavaInfo, _ := android.SingletonModuleProvider(ctx, source.Module(), JavaInfoProvider)
+
+	// The source library produces separate implementation and header jars
+	android.AssertPathsRelativeToTopEquals(t, "source library implementation jar",
+		[]string{sourceJar.Output.String()}, sourceJavaInfo.ImplementationAndResourcesJars)
+	android.AssertPathsRelativeToTopEquals(t, "source library header jar",
+		[]string{sourceHeaderJar.Output.String()}, sourceJavaInfo.HeaderJars)
+
+	importWithNoDeps := ctx.ModuleForTests("import_with_no_deps", "android_common")
+	importWithNoDepsJar := importWithNoDeps.Output("combined/import_with_no_deps.jar")
+	importWithNoDepsJavaInfo, _ := android.SingletonModuleProvider(ctx, importWithNoDeps.Module(), JavaInfoProvider)
+
+	// An import with no deps produces a single jar used as both the header and implementation jar.
+	android.AssertPathsRelativeToTopEquals(t, "import with no deps implementation jar",
+		[]string{importWithNoDepsJar.Output.String()}, importWithNoDepsJavaInfo.ImplementationAndResourcesJars)
+	android.AssertPathsRelativeToTopEquals(t, "import with no deps header jar",
+		[]string{importWithNoDepsJar.Output.String()}, importWithNoDepsJavaInfo.HeaderJars)
+	android.AssertPathsRelativeToTopEquals(t, "import with no deps combined inputs",
+		[]string{"no_deps.jar"}, importWithNoDepsJar.Inputs)
+
+	importWithSourceDeps := ctx.ModuleForTests("import_with_source_deps", "android_common")
+	importWithSourceDepsJar := importWithSourceDeps.Output("combined/import_with_source_deps.jar")
+	importWithSourceDepsHeaderJar := importWithSourceDeps.Output("turbine-combined/import_with_source_deps.jar")
+	importWithSourceDepsJavaInfo, _ := android.SingletonModuleProvider(ctx, importWithSourceDeps.Module(), JavaInfoProvider)
+
+	// An import with source deps produces separate header and implementation jars.
+	android.AssertPathsRelativeToTopEquals(t, "import with source deps implementation jar",
+		[]string{importWithSourceDepsJar.Output.String()}, importWithSourceDepsJavaInfo.ImplementationAndResourcesJars)
+	android.AssertPathsRelativeToTopEquals(t, "import with source deps header jar",
+		[]string{importWithSourceDepsHeaderJar.Output.String()}, importWithSourceDepsJavaInfo.HeaderJars)
+	android.AssertPathsRelativeToTopEquals(t, "import with source deps combined implementation jar inputs",
+		[]string{"source_deps.jar", sourceJar.Output.String()}, importWithSourceDepsJar.Inputs)
+	android.AssertPathsRelativeToTopEquals(t, "import with source deps combined header jar inputs",
+		[]string{"source_deps.jar", sourceHeaderJar.Output.String()}, importWithSourceDepsHeaderJar.Inputs)
+
+	importWithImportDeps := ctx.ModuleForTests("import_with_import_deps", "android_common")
+	importWithImportDepsJar := importWithImportDeps.Output("combined/import_with_import_deps.jar")
+	importWithImportDepsJavaInfo, _ := android.SingletonModuleProvider(ctx, importWithImportDeps.Module(), JavaInfoProvider)
+
+	// An import with only import deps produces a single jar used as both the header and implementation jar.
+	android.AssertPathsRelativeToTopEquals(t, "import with import deps implementation jar",
+		[]string{importWithImportDepsJar.Output.String()}, importWithImportDepsJavaInfo.ImplementationAndResourcesJars)
+	android.AssertPathsRelativeToTopEquals(t, "import with import deps header jar",
+		[]string{importWithImportDepsJar.Output.String()}, importWithImportDepsJavaInfo.HeaderJars)
+	android.AssertPathsRelativeToTopEquals(t, "import with import deps combined implementation jar inputs",
+		[]string{"import_deps.jar", importWithNoDepsJar.Output.String()}, importWithImportDepsJar.Inputs)
 }
 
 var compilerFlagsTestCases = []struct {
@@ -2758,6 +2838,99 @@ func TestApiLibraryAconfigDeclarations(t *testing.T) {
 	android.AssertStringDoesContain(t, "flagged api hide command not included", cmdline, "revert-annotations-exportable.txt")
 }
 
+func TestTestOnly(t *testing.T) {
+	t.Parallel()
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+	).RunTestWithBp(t, `
+                // These should be test-only
+		java_library {
+			name: "lib1-test-only",
+                        srcs: ["a.java"],
+                        test_only: true,
+		}
+                java_test {
+                        name: "java-test",
+                }
+                java_test_host {
+                        name: "java-test-host",
+                }
+                java_test_helper_library {
+                        name: "helper-library",
+                }
+                java_binary {
+                        name: "java-data-binary",
+			srcs: ["foo.java"],
+			main_class: "foo.bar.jb",
+                        test_only: true,
+                }
+
+                // These are NOT
+		java_library {
+			name: "lib2-app",
+                        srcs: ["b.java"],
+		}
+		java_import {
+			name: "bar",
+			jars: ["bar.jar"],
+		}
+                java_binary {
+                        name: "java-binary",
+			srcs: ["foo.java"],
+			main_class: "foo.bar.jb",
+                }
+	`)
+
+	expectedTestOnlyModules := []string{
+		"lib1-test-only",
+		"java-test",
+		"java-test-host",
+		"helper-library",
+		"java-data-binary",
+	}
+	expectedTopLevelTests := []string{
+		"java-test",
+		"java-test-host",
+	}
+	assertTestOnlyAndTopLevel(t, ctx, expectedTestOnlyModules, expectedTopLevelTests)
+}
+
+// Don't allow setting test-only on things that are always tests or never tests.
+func TestInvalidTestOnlyTargets(t *testing.T) {
+	testCases := []string{
+		` java_test {  name: "java-test", test_only: true, srcs: ["foo.java"],  } `,
+		` java_test_host {  name: "java-test-host", test_only: true, srcs: ["foo.java"],  } `,
+		` java_test_import {  name: "java-test-import", test_only: true, } `,
+		` java_api_library {  name: "java-api-library", test_only: true, } `,
+		` java_test_helper_library { name: "test-help-lib", test_only: true, } `,
+		` java_defaults { name: "java-defaults", test_only: true, } `,
+	}
+
+	for i, bp := range testCases {
+		android.GroupFixturePreparers(prepareForJavaTest).
+			ExtendWithErrorHandler(
+				expectOneError("unrecognized property \"test_only\"",
+					fmt.Sprintf("testcase: %d", i))).
+			RunTestWithBp(t, bp)
+	}
+}
+
+// Expect exactly one that matches 'expected'.
+// Append 'msg' to the Errorf that printed.
+func expectOneError(expected string, msg string) android.FixtureErrorHandler {
+	return android.FixtureCustomErrorHandler(func(t *testing.T, result *android.TestResult) {
+		t.Helper()
+		if len(result.Errs) != 1 {
+			t.Errorf("Expected exactly one error, but found: %d when  setting test_only on: %s", len(result.Errs), msg)
+			return
+		}
+		actualErrMsg := result.Errs[0].Error()
+		if !strings.Contains(actualErrMsg, expected) {
+			t.Errorf("Different error than expected.  Received: [%v] on %s expected: %s", actualErrMsg, msg, expected)
+		}
+	})
+}
+
 func TestJavaLibHostWithStem(t *testing.T) {
 	ctx, _ := testJava(t, `
 		java_library_host {
@@ -2790,5 +2963,81 @@ func TestJavaLibWithStem(t *testing.T) {
 	outputs := fmt.Sprint(foo.AllOutputs())
 	if !strings.Contains(outputs, "foo-new.jar") {
 		t.Errorf("Module output does not contain expected jar %s", "foo-new.jar")
+	}
+}
+
+func TestJavaLibraryOutputFilesRel(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		java_library {
+			name: "foo",
+			srcs: ["a.java"],
+		}
+
+		java_import {
+			name: "bar",
+			jars: ["bar.aar"],
+
+		}
+
+		java_import {
+			name: "baz",
+			jars: ["baz.aar"],
+			static_libs: ["bar"],
+		}
+	`)
+
+	foo := result.ModuleForTests("foo", "android_common")
+	bar := result.ModuleForTests("bar", "android_common")
+	baz := result.ModuleForTests("baz", "android_common")
+
+	fooOutputPath := android.OutputFileForModule(android.PathContext(nil), foo.Module(), "")
+	barOutputPath := android.OutputFileForModule(android.PathContext(nil), bar.Module(), "")
+	bazOutputPath := android.OutputFileForModule(android.PathContext(nil), baz.Module(), "")
+
+	android.AssertPathRelativeToTopEquals(t, "foo output path",
+		"out/soong/.intermediates/foo/android_common/javac/foo.jar", fooOutputPath)
+	android.AssertPathRelativeToTopEquals(t, "bar output path",
+		"out/soong/.intermediates/bar/android_common/combined/bar.jar", barOutputPath)
+	android.AssertPathRelativeToTopEquals(t, "baz output path",
+		"out/soong/.intermediates/baz/android_common/combined/baz.jar", bazOutputPath)
+
+	android.AssertStringEquals(t, "foo relative output path",
+		"foo.jar", fooOutputPath.Rel())
+	android.AssertStringEquals(t, "bar relative output path",
+		"bar.jar", barOutputPath.Rel())
+	android.AssertStringEquals(t, "baz relative output path",
+		"baz.jar", bazOutputPath.Rel())
+}
+
+func assertTestOnlyAndTopLevel(t *testing.T, ctx *android.TestResult, expectedTestOnly []string, expectedTopLevel []string) {
+	t.Helper()
+	actualTrueModules := []string{}
+	actualTopLevelTests := []string{}
+	addActuals := func(m blueprint.Module, key blueprint.ProviderKey[android.TestModuleInformation]) {
+		if provider, ok := android.OtherModuleProvider(ctx.TestContext.OtherModuleProviderAdaptor(), m, key); ok {
+			if provider.TestOnly {
+				actualTrueModules = append(actualTrueModules, m.Name())
+			}
+			if provider.TopLevelTarget {
+				actualTopLevelTests = append(actualTopLevelTests, m.Name())
+			}
+		}
+	}
+
+	ctx.VisitAllModules(func(m blueprint.Module) {
+		addActuals(m, android.TestOnlyProviderKey)
+
+	})
+
+	notEqual, left, right := android.ListSetDifference(expectedTestOnly, actualTrueModules)
+	if notEqual {
+		t.Errorf("test-only: Expected but not found: %v, Found but not expected: %v", left, right)
+	}
+
+	notEqual, left, right = android.ListSetDifference(expectedTopLevel, actualTopLevelTests)
+	if notEqual {
+		t.Errorf("top-level: Expected but not found: %v, Found but not expected: %v", left, right)
 	}
 }

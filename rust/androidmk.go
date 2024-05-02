@@ -63,6 +63,7 @@ func (mod *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				entries.AddStrings("LOCAL_PROC_MACRO_LIBRARIES", mod.Properties.AndroidMkProcMacroLibs...)
 				entries.AddStrings("LOCAL_SHARED_LIBRARIES", mod.transitiveAndroidMkSharedLibs.ToList()...)
 				entries.AddStrings("LOCAL_STATIC_LIBRARIES", mod.Properties.AndroidMkStaticLibs...)
+				entries.AddStrings("LOCAL_HEADER_LIBRARIES", mod.Properties.AndroidMkHeaderLibs...)
 				entries.AddStrings("LOCAL_SOONG_LINK_TYPE", mod.makeLinkType)
 				if mod.InVendor() {
 					entries.SetBool("LOCAL_IN_VENDOR", true)
@@ -155,11 +156,6 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 				entries.SetString("LOCAL_SOONG_TOC", library.tocFile.String())
 			}
 		})
-}
-
-func (library *snapshotLibraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkEntries) {
-	ctx.SubAndroidMk(ret, library.libraryDecorator)
-	ret.SubName = library.SnapshotAndroidMkSuffix()
 }
 
 func (procMacro *procMacroDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkEntries) {

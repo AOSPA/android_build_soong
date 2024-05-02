@@ -94,9 +94,6 @@ type CommonProperties struct {
 	// if not blank, used as prefix to generate repackage rule
 	Jarjar_prefix *string
 
-	// if set to true, skip the jarjar repackaging
-	Skip_jarjar_repackage *bool
-
 	// If not blank, set the java version passed to javac as -source and -target
 	Java_version *string
 
@@ -199,6 +196,9 @@ type CommonProperties struct {
 
 	// Additional srcJars tacked in by GeneratedJavaLibraryModule
 	Generated_srcjars []android.Path `android:"mutated"`
+
+	// intermediate aconfig cache file tacked in by GeneratedJavaLibraryModule
+	Aconfig_Cache_files []android.Path `android:"mutated"`
 
 	// If true, then only the headers are built and not the implementation jar.
 	Headers_only *bool
@@ -435,6 +435,7 @@ type Module struct {
 	deviceProperties DeviceProperties
 
 	overridableProperties OverridableProperties
+	sourceProperties      android.SourceProperties
 
 	// jar file containing header classes including static library dependencies, suitable for
 	// inserting into the bootclasspath/classpath of another compile
@@ -544,6 +545,11 @@ type Module struct {
 	jarjarRenameRules map[string]string
 
 	stubsLinkType StubsLinkType
+
+	// Paths to the aconfig intermediate cache files that are provided by the
+	// java_aconfig_library or java_library modules that are statically linked
+	// to this module. Does not contain cache files from all transitive dependencies.
+	aconfigCacheFiles android.Paths
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -804,7 +810,7 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	// Add dependency on libraries that provide additional hidden api annotations.
 	ctx.AddVariationDependencies(nil, hiddenApiAnnotationsTag, j.properties.Hiddenapi_additional_annotations...)
 
-	if ctx.DeviceConfig().VndkVersion() != "" && ctx.Config().EnforceInterPartitionJavaSdkLibrary() {
+	if ctx.Config().EnforceInterPartitionJavaSdkLibrary() {
 		// Require java_sdk_library at inter-partition java dependency to ensure stable
 		// interface between partitions. If inter-partition java_library dependency is detected,
 		// raise build error because java_library doesn't have a stable interface.
@@ -837,9 +843,11 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 		if dep != nil {
 			if component, ok := dep.(SdkLibraryComponentDependency); ok {
 				if lib := component.OptionalSdkLibraryImplementation(); lib != nil {
-					// Add library as optional if it's one of the optional compatibility libs.
+					// Add library as optional if it's one of the optional compatibility libs or it's
+					// explicitly listed in the optional_uses_libs property.
 					tag := usesLibReqTag
-					if android.InList(*lib, dexpreopt.OptionalCompatUsesLibs) {
+					if android.InList(*lib, dexpreopt.OptionalCompatUsesLibs) ||
+						android.InList(*lib, j.usesLibrary.usesLibraryProperties.Optional_uses_libs) {
 						tag = usesLibOptTag
 					}
 					ctx.AddVariationDependencies(nil, tag, *lib)
@@ -1103,13 +1111,11 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	jarjarProviderData := j.collectJarJarRules(ctx)
 	if jarjarProviderData != nil {
 		android.SetProvider(ctx, JarJarProvider, *jarjarProviderData)
-		if !proptools.Bool(j.properties.Skip_jarjar_repackage) {
-			text := getJarJarRuleText(jarjarProviderData)
-			if text != "" {
-				ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
-				android.WriteFileRule(ctx, ruleTextFile, text)
-				j.repackageJarjarRules = ruleTextFile
-			}
+		text := getJarJarRuleText(jarjarProviderData)
+		if text != "" {
+			ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
+			android.WriteFileRule(ctx, ruleTextFile, text)
+			j.repackageJarjarRules = ruleTextFile
 		}
 	}
 
@@ -1201,6 +1207,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	// any dependencies so that it can override any non-final R classes from dependencies with the
 	// final R classes from the app.
 	flags.classpath = append(android.CopyOf(extraClasspathJars), flags.classpath...)
+
+	j.aconfigCacheFiles = append(deps.aconfigProtoFiles, j.properties.Aconfig_Cache_files...)
 
 	// If compiling headers then compile them and skip the rest
 	if proptools.Bool(j.properties.Headers_only) {
@@ -1294,10 +1302,12 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			return
 		}
 
+		kotlinJarPath := j.repackageFlagsIfNecessary(ctx, kotlinJar.OutputPath, jarName, "kotlinc")
+
 		// Make javac rule depend on the kotlinc rule
 		flags.classpath = append(classpath{kotlinHeaderJar}, flags.classpath...)
 
-		kotlinJars = append(kotlinJars, kotlinJar)
+		kotlinJars = append(kotlinJars, kotlinJarPath)
 		kotlinHeaderJars = append(kotlinHeaderJars, kotlinHeaderJar)
 
 		// Jar kotlin classes into the final jar after javac
@@ -1377,6 +1387,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 				for idx, shardSrc := range shardSrcs {
 					classes := j.compileJavaClasses(ctx, jarName, idx, shardSrc,
 						nil, flags, extraJarDeps)
+					classes = j.repackageFlagsIfNecessary(ctx, classes, jarName, "javac-"+strconv.Itoa(idx))
 					jars = append(jars, classes)
 				}
 			}
@@ -1389,11 +1400,13 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 				for idx, shardSrcJars := range shardSrcJarsList {
 					classes := j.compileJavaClasses(ctx, jarName, startIdx+idx,
 						nil, shardSrcJars, flags, extraJarDeps)
+					classes = j.repackageFlagsIfNecessary(ctx, classes, jarName, "javac-"+strconv.Itoa(startIdx+idx))
 					jars = append(jars, classes)
 				}
 			}
 		} else {
 			classes := j.compileJavaClasses(ctx, jarName, -1, uniqueJavaFiles, srcJars, flags, extraJarDeps)
+			classes = j.repackageFlagsIfNecessary(ctx, classes, jarName, "javac")
 			jars = append(jars, classes)
 		}
 		if ctx.Failed() {
@@ -1547,16 +1560,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			j.resourceJar = resourceJarJarFile
 		}
 
-		if ctx.Failed() {
-			return
-		}
-	}
-
-	// Automatic jarjar rules propagation
-	if j.repackageJarjarRules != nil {
-		repackagedJarjarFile := android.PathForModuleOut(ctx, "repackaged-jarjar", jarName).OutputPath
-		TransformJarJar(ctx, repackagedJarjarFile, outputFile, j.repackageJarjarRules)
-		outputFile = repackagedJarjarFile
 		if ctx.Failed() {
 			return
 		}
@@ -1746,7 +1749,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		ExportedPluginDisableTurbine:        j.exportedDisableTurbine,
 		JacocoReportClassesFile:             j.jacocoReportClassesFile,
 		StubsLinkType:                       j.stubsLinkType,
-		AconfigIntermediateCacheOutputPaths: deps.aconfigProtoFiles,
+		AconfigIntermediateCacheOutputPaths: j.aconfigCacheFiles,
 	})
 
 	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource
@@ -1757,10 +1760,7 @@ func (j *Module) useCompose() bool {
 	return android.InList("androidx.compose.runtime_runtime", j.properties.Static_libs)
 }
 
-func (j *Module) collectProguardSpecInfo(ctx android.ModuleContext) ProguardSpecInfo {
-	transitiveUnconditionalExportedFlags := []*android.DepSet[android.Path]{}
-	transitiveProguardFlags := []*android.DepSet[android.Path]{}
-
+func collectDepProguardSpecInfo(ctx android.ModuleContext) (transitiveProguardFlags, transitiveUnconditionalExportedFlags []*android.DepSet[android.Path]) {
 	ctx.VisitDirectDeps(func(m android.Module) {
 		depProguardInfo, _ := android.OtherModuleProvider(ctx, m, ProguardSpecInfoProvider)
 		depTag := ctx.OtherModuleDependencyTag(m)
@@ -1774,6 +1774,12 @@ func (j *Module) collectProguardSpecInfo(ctx android.ModuleContext) ProguardSpec
 			transitiveProguardFlags = append(transitiveProguardFlags, depProguardInfo.ProguardFlagsFiles)
 		}
 	})
+
+	return transitiveProguardFlags, transitiveUnconditionalExportedFlags
+}
+
+func (j *Module) collectProguardSpecInfo(ctx android.ModuleContext) ProguardSpecInfo {
+	transitiveProguardFlags, transitiveUnconditionalExportedFlags := collectDepProguardSpecInfo(ctx)
 
 	directUnconditionalExportedFlags := android.Paths{}
 	proguardFlagsForThisModule := android.PathsForModuleSrc(ctx, j.dexProperties.Optimize.Proguard_flags_files)
@@ -2357,7 +2363,10 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 				deps.staticHeaderJars = append(deps.staticHeaderJars, dep.Srcs()...)
 			}
 		} else if dep, ok := android.OtherModuleProvider(ctx, module, android.CodegenInfoProvider); ok {
-			deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.IntermediateCacheOutputPaths...)
+			switch tag {
+			case staticLibTag:
+				deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.IntermediateCacheOutputPaths...)
+			}
 		} else {
 			switch tag {
 			case bootClasspathTag:
@@ -2380,6 +2389,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 		}
 
 		addCLCFromDep(ctx, module, j.classLoaderContexts)
+		addMissingOptionalUsesLibsFromDep(ctx, module, &j.usesLibrary)
 	})
 
 	return deps
@@ -2683,6 +2693,16 @@ func getJarJarRuleText(provider *JarJarProviderData) string {
 	return result
 }
 
+// Repackage the flags if the jarjar rule txt for the flags is generated
+func (j *Module) repackageFlagsIfNecessary(ctx android.ModuleContext, infile android.WritablePath, jarName, info string) android.WritablePath {
+	if j.repackageJarjarRules == nil {
+		return infile
+	}
+	repackagedJarjarFile := android.PathForModuleOut(ctx, "repackaged-jarjar", info+jarName)
+	TransformJarJar(ctx, repackagedJarjarFile, infile, j.repackageJarjarRules)
+	return repackagedJarjarFile
+}
+
 func addPlugins(deps *deps, pluginJars android.Paths, pluginClasses ...string) {
 	deps.processorPath = append(deps.processorPath, pluginJars...)
 	deps.processorClasses = append(deps.processorClasses, pluginClasses...)
@@ -2703,3 +2723,13 @@ type ModuleWithStem interface {
 }
 
 var _ ModuleWithStem = (*Module)(nil)
+
+type ModuleWithUsesLibrary interface {
+	UsesLibrary() *usesLibrary
+}
+
+func (j *Module) UsesLibrary() *usesLibrary {
+	return &j.usesLibrary
+}
+
+var _ ModuleWithUsesLibrary = (*Module)(nil)

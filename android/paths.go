@@ -673,7 +673,8 @@ func PathsAndMissingDepsRelativeToModuleSourceDir(input SourceInput) (Paths, []s
 		expandedSrcFiles = append(expandedSrcFiles, srcFiles...)
 	}
 
-	return expandedSrcFiles, append(missingDeps, missingExcludeDeps...)
+	// TODO: b/334169722 - Replace with an error instead of implicitly removing duplicates.
+	return FirstUniquePaths(expandedSrcFiles), append(missingDeps, missingExcludeDeps...)
 }
 
 type missingDependencyError struct {
@@ -1831,17 +1832,13 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 	return base.Join(ctx, pathComponents...)
 }
 
-func pathForNdkOrSdkInstall(ctx PathContext, prefix string, paths []string) InstallPath {
-	base := pathForPartitionInstallDir(ctx, "", prefix, false)
-	return base.Join(ctx, paths...)
-}
-
-func PathForNdkInstall(ctx PathContext, paths ...string) InstallPath {
-	return pathForNdkOrSdkInstall(ctx, "ndk", paths)
+func PathForNdkInstall(ctx PathContext, paths ...string) OutputPath {
+	return PathForOutput(ctx, append([]string{"ndk"}, paths...)...)
 }
 
 func PathForMainlineSdksInstall(ctx PathContext, paths ...string) InstallPath {
-	return pathForNdkOrSdkInstall(ctx, "mainline-sdks", paths)
+	base := pathForPartitionInstallDir(ctx, "", "mainline-sdks", false)
+	return base.Join(ctx, paths...)
 }
 
 func InstallPathToOnDevicePath(ctx PathContext, path InstallPath) string {

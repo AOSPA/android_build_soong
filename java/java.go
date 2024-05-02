@@ -21,6 +21,7 @@ package java
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -799,6 +800,7 @@ var (
 		"android.hardware.security.keymint-V2-java":         true,
 		"android.hardware.security.keymint-V3-java":         true,
 		"android.hardware.security.keymint-V4-java":         true,
+		"android.hardware.security.secretkeeper-V1-java":    true,
 		"android.hardware.security.secureclock-V1-java":     true,
 		"android.hardware.security.secureclock-V2-java":     true,
 		"android.hardware.thermal-V1-java":                  true,
@@ -956,11 +958,16 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		j.installFile = ctx.InstallFile(installDir, j.Stem()+".jar", j.outputFile, extraInstallDeps...)
 	}
+
+	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
+		TestOnly:       Bool(j.sourceProperties.Test_only),
+		TopLevelTarget: j.sourceProperties.Top_level_test_target,
+	})
 }
 
 func (j *Library) DepsMutator(ctx android.BottomUpMutatorContext) {
-	j.deps(ctx)
 	j.usesLibrary.deps(ctx, false)
+	j.deps(ctx)
 }
 
 const (
@@ -1121,6 +1128,7 @@ func LibraryFactory() android.Module {
 	module := &Library{}
 
 	module.addHostAndDeviceProperties()
+	module.AddProperties(&module.sourceProperties)
 
 	module.initModuleAndImport(module)
 
@@ -1437,6 +1445,14 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	j.Test.generateAndroidBuildActionsWithConfig(ctx, configs)
 	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
+	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
+		InstalledFiles:      j.data,
+		OutputFile:          j.outputFile,
+		TestConfig:          j.testConfig,
+		RequiredModuleNames: j.RequiredModuleNames(),
+		TestSuites:          j.testProperties.Test_suites,
+		IsHost:              true,
+	})
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -1594,6 +1610,8 @@ func TestFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.Module.dexpreopter.isTest = true
 	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Test_only = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Top_level_test_target = true
 
 	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
@@ -1609,6 +1627,7 @@ func TestHelperLibraryFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.Module.dexpreopter.isTest = true
 	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Test_only = proptools.BoolPtr(true)
 
 	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
@@ -1664,6 +1683,8 @@ func InitTestHost(th *TestHost, installable *bool, testSuites []string, autoGenC
 	th.properties.Installable = installable
 	th.testProperties.Auto_gen_config = autoGenConfig
 	th.testProperties.Test_suites = testSuites
+	th.sourceProperties.Test_only = proptools.BoolPtr(true)
+	th.sourceProperties.Top_level_test_target = true
 }
 
 //
@@ -1789,7 +1810,7 @@ func BinaryFactory() android.Module {
 	module := &Binary{}
 
 	module.addHostAndDeviceProperties()
-	module.AddProperties(&module.binaryProperties)
+	module.AddProperties(&module.binaryProperties, &module.sourceProperties)
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
@@ -2337,6 +2358,9 @@ type ImportProperties struct {
 	// List of shared java libs that this module has dependencies to
 	Libs []string
 
+	// List of static java libs that this module has dependencies to
+	Static_libs []string
+
 	// List of files to remove from the jar file(s)
 	Exclude_files []string
 
@@ -2389,9 +2413,10 @@ type Import struct {
 	dexJarFileErr     error
 	dexJarInstallFile android.Path
 
-	combinedClasspathFile android.Path
-	classLoaderContexts   dexpreopt.ClassLoaderContextMap
-	exportAidlIncludeDirs android.Paths
+	combinedImplementationFile android.Path
+	combinedHeaderFile         android.Path
+	classLoaderContexts        dexpreopt.ClassLoaderContextMap
+	exportAidlIncludeDirs      android.Paths
 
 	hideApexVariantFromMake bool
 
@@ -2475,6 +2500,7 @@ func (j *Import) setStrictUpdatabilityLinting(bool) {
 
 func (j *Import) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
+	ctx.AddVariationDependencies(nil, staticLibTag, j.properties.Static_libs...)
 
 	if ctx.Device() && Bool(j.dexProperties.Compile_dex) {
 		sdkDeps(ctx, android.SdkContext(j), j.dexer)
@@ -2504,23 +2530,13 @@ func (j *Import) commonBuildActions(ctx android.ModuleContext) {
 func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.commonBuildActions(ctx)
 
-	jars := android.PathsForModuleSrc(ctx, j.properties.Jars)
-
-	jarName := j.Stem() + ".jar"
-	outputFile := android.PathForModuleOut(ctx, "combined", jarName)
-	TransformJarsToJar(ctx, outputFile, "for prebuilts", jars, android.OptionalPath{},
-		false, j.properties.Exclude_files, j.properties.Exclude_dirs)
-	if Bool(j.properties.Jetifier) {
-		inputFile := outputFile
-		outputFile = android.PathForModuleOut(ctx, "jetifier", jarName)
-		TransformJetifier(ctx, outputFile, inputFile)
-	}
-	j.combinedClasspathFile = outputFile
 	j.classLoaderContexts = make(dexpreopt.ClassLoaderContextMap)
 
 	var flags javaBuilderFlags
 
 	j.collectTransitiveHeaderJars(ctx)
+	var staticJars android.Paths
+	var staticHeaderJars android.Paths
 	ctx.VisitDirectDeps(func(module android.Module) {
 		tag := ctx.OtherModuleDependencyTag(module)
 		if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
@@ -2530,6 +2546,8 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				flags.dexClasspath = append(flags.dexClasspath, dep.HeaderJars...)
 			case staticLibTag:
 				flags.classpath = append(flags.classpath, dep.HeaderJars...)
+				staticJars = append(staticJars, dep.ImplementationAndResourcesJars...)
+				staticHeaderJars = append(staticHeaderJars, dep.HeaderJars...)
 			case bootClasspathTag:
 				flags.bootClasspath = append(flags.bootClasspath, dep.HeaderJars...)
 			}
@@ -2542,6 +2560,50 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 		addCLCFromDep(ctx, module, j.classLoaderContexts)
 	})
+
+	jars := android.PathsForModuleSrc(ctx, j.properties.Jars)
+	jarName := j.Stem() + ".jar"
+
+	// Always pass the input jars to TransformJarsToJar, even if there is only a single jar, we need the output
+	// file of the module to be named jarName.
+	outputFile := android.PathForModuleOut(ctx, "combined", jarName)
+	implementationJars := append(slices.Clone(jars), staticJars...)
+	TransformJarsToJar(ctx, outputFile, "combine prebuilt implementation jars", implementationJars, android.OptionalPath{},
+		false, j.properties.Exclude_files, j.properties.Exclude_dirs)
+
+	// If no dependencies have separate header jars then there is no need to create a separate
+	// header jar for this module.
+	reuseImplementationJarAsHeaderJar := slices.Equal(staticJars, staticHeaderJars)
+
+	var headerOutputFile android.ModuleOutPath
+	if reuseImplementationJarAsHeaderJar {
+		headerOutputFile = outputFile
+	} else {
+		headerJars := append(slices.Clone(jars), staticHeaderJars...)
+		headerOutputFile = android.PathForModuleOut(ctx, "turbine-combined", jarName)
+		TransformJarsToJar(ctx, headerOutputFile, "combine prebuilt header jars", headerJars, android.OptionalPath{},
+			false, j.properties.Exclude_files, j.properties.Exclude_dirs)
+	}
+
+	if Bool(j.properties.Jetifier) {
+		inputFile := outputFile
+		outputFile = android.PathForModuleOut(ctx, "jetifier", jarName)
+		TransformJetifier(ctx, outputFile, inputFile)
+
+		if !reuseImplementationJarAsHeaderJar {
+			headerInputFile := headerOutputFile
+			headerOutputFile = android.PathForModuleOut(ctx, "jetifier-headers", jarName)
+			TransformJetifier(ctx, headerOutputFile, headerInputFile)
+		} else {
+			headerOutputFile = outputFile
+		}
+	}
+
+	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource.
+	// Also strip the relative path from the header output file so that the reuseImplementationJarAsHeaderJar check
+	// in a module that depends on this module considers them equal.
+	j.combinedHeaderFile = headerOutputFile.WithoutRel()
+	j.combinedImplementationFile = outputFile.WithoutRel()
 
 	j.maybeInstall(ctx, jarName, outputFile)
 
@@ -2626,11 +2688,11 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
-		HeaderJars:                     android.PathsIfNonNil(j.combinedClasspathFile),
+		HeaderJars:                     android.PathsIfNonNil(j.combinedHeaderFile),
 		TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
 		TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
-		ImplementationAndResourcesJars: android.PathsIfNonNil(j.combinedClasspathFile),
-		ImplementationJars:             android.PathsIfNonNil(j.combinedClasspathFile),
+		ImplementationAndResourcesJars: android.PathsIfNonNil(j.combinedImplementationFile),
+		ImplementationJars:             android.PathsIfNonNil(j.combinedImplementationFile),
 		AidlIncludeDirs:                j.exportAidlIncludeDirs,
 		StubsLinkType:                  j.stubsLinkType,
 		// TODO(b/289117800): LOCAL_ACONFIG_FILES for prebuilts
@@ -2658,7 +2720,7 @@ func (j *Import) maybeInstall(ctx android.ModuleContext, jarName string, outputF
 func (j *Import) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
 	case "", ".jar":
-		return android.Paths{j.combinedClasspathFile}, nil
+		return android.Paths{j.combinedImplementationFile}, nil
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 	}
@@ -2667,17 +2729,11 @@ func (j *Import) OutputFiles(tag string) (android.Paths, error) {
 var _ android.OutputFileProducer = (*Import)(nil)
 
 func (j *Import) HeaderJars() android.Paths {
-	if j.combinedClasspathFile == nil {
-		return nil
-	}
-	return android.Paths{j.combinedClasspathFile}
+	return android.PathsIfNonNil(j.combinedHeaderFile)
 }
 
 func (j *Import) ImplementationAndResourcesJars() android.Paths {
-	if j.combinedClasspathFile == nil {
-		return nil
-	}
-	return android.Paths{j.combinedClasspathFile}
+	return android.PathsIfNonNil(j.combinedImplementationFile)
 }
 
 func (j *Import) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
@@ -3106,10 +3162,32 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	// <uses_library> and should not be added to CLC, but the transitive <uses-library> dependencies
 	// from its CLC should be added to the current CLC.
 	if sdkLib != nil {
-		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, false,
+		optional := false
+		if module, ok := ctx.Module().(ModuleWithUsesLibrary); ok {
+			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs) {
+				optional = true
+			}
+		}
+		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, optional,
 			dep.DexJarBuildPath(ctx).PathOrNil(), dep.DexJarInstallPath(), dep.ClassLoaderContexts())
 	} else {
 		clcMap.AddContextMap(dep.ClassLoaderContexts(), depName)
+	}
+}
+
+func addMissingOptionalUsesLibsFromDep(ctx android.ModuleContext, depModule android.Module,
+	usesLibrary *usesLibrary) {
+
+	dep, ok := depModule.(ModuleWithUsesLibrary)
+	if !ok {
+		return
+	}
+
+	for _, lib := range dep.UsesLibrary().usesLibraryProperties.Missing_optional_uses_libs {
+		if !android.InList(lib, usesLibrary.usesLibraryProperties.Missing_optional_uses_libs) {
+			usesLibrary.usesLibraryProperties.Missing_optional_uses_libs =
+				append(usesLibrary.usesLibraryProperties.Missing_optional_uses_libs, lib)
+		}
 	}
 }
 

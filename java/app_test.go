@@ -829,12 +829,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			directResources: nil,
@@ -849,12 +849,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			directClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/turbine-combined/transitive_import.jar",
 			},
 			directCombined: []string{
 				"out/soong/.intermediates/direct/android_common/javac/direct.jar",
 				"out/soong/.intermediates/transitive/android_common/javac/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/combined/transitive_import.jar",
 			},
 
 			transitiveResources: []string{"out/soong/.intermediates/transitive/android_common/aapt2/transitive/res/values_strings.arsc.flat"},
@@ -928,13 +928,13 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			directResources: nil,
@@ -953,12 +953,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
 				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/turbine-combined/transitive_import.jar",
 			},
 			directCombined: []string{
 				"out/soong/.intermediates/direct/android_common/javac/direct.jar",
 				"out/soong/.intermediates/transitive/android_common/javac/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/combined/transitive_import.jar",
 			},
 
 			transitiveResources: []string{"out/soong/.intermediates/transitive/android_common/aapt2/transitive/res/values_strings.arsc.flat"},
@@ -1034,13 +1034,13 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			dontVerifyDirect:           true,
@@ -1075,12 +1075,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			directResources: nil,
@@ -1098,12 +1098,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
 				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/turbine-combined/transitive_import.jar",
 			},
 			directCombined: []string{
 				"out/soong/.intermediates/direct/android_common/javac/direct.jar",
 				"out/soong/.intermediates/transitive/android_common/javac/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/combined/transitive_import.jar",
 			},
 
 			dontVerifyTransitive:       true,
@@ -1137,12 +1137,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			directResources: nil,
@@ -1157,12 +1157,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			directClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/turbine-combined/transitive_import.jar",
 			},
 			directCombined: []string{
 				"out/soong/.intermediates/direct/android_common/javac/direct.jar",
 				"out/soong/.intermediates/transitive/android_common/javac/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/combined/transitive_import.jar",
 			},
 
 			transitiveResources: []string{"out/soong/.intermediates/transitive/android_common/aapt2/transitive/res/values_strings.arsc.flat"},
@@ -3244,7 +3244,10 @@ func TestUsesLibraries(t *testing.T) {
 			name: "static-y",
 			srcs: ["a.java"],
 			uses_libs: ["runtime-required-y"],
-			optional_uses_libs: ["runtime-optional-y"],
+			optional_uses_libs: [
+				"runtime-optional-y",
+				"missing-lib-a",
+			],
 			sdk_version: "current",
 		}
 
@@ -3280,7 +3283,7 @@ func TestUsesLibraries(t *testing.T) {
 			sdk_version: "current",
 			optional_uses_libs: [
 				"bar",
-				"baz",
+				"missing-lib-b",
 			],
 		}
 
@@ -3295,7 +3298,7 @@ func TestUsesLibraries(t *testing.T) {
 			],
 			optional_uses_libs: [
 				"bar",
-				"baz",
+				"missing-lib-b",
 			],
 		}
 	`
@@ -3317,10 +3320,10 @@ func TestUsesLibraries(t *testing.T) {
 	// propagated from dependencies.
 	actualManifestFixerArgs := app.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
 	expectManifestFixerArgs := `--extract-native-libs=true ` +
-		`--uses-library qux ` +
-		`--uses-library quuz ` +
 		`--uses-library foo ` +
 		`--uses-library com.non.sdk.lib ` +
+		`--uses-library qux ` +
+		`--uses-library quuz ` +
 		`--uses-library runtime-library ` +
 		`--uses-library runtime-required-x ` +
 		`--uses-library runtime-required-y ` +
@@ -3339,9 +3342,10 @@ func TestUsesLibraries(t *testing.T) {
 		`--uses-library runtime-required-x ` +
 		`--uses-library runtime-required-y ` +
 		`--optional-uses-library bar ` +
-		`--optional-uses-library baz ` +
 		`--optional-uses-library runtime-optional-x ` +
-		`--optional-uses-library runtime-optional-y `
+		`--optional-uses-library runtime-optional-y ` +
+		`--missing-optional-uses-library missing-lib-b ` +
+		`--missing-optional-uses-library missing-lib-a`
 	android.AssertStringDoesContain(t, "verify cmd args", verifyCmd, verifyArgs)
 
 	// Test that all libraries are verified for an APK (library order matters).
@@ -3350,7 +3354,7 @@ func TestUsesLibraries(t *testing.T) {
 		`--uses-library com.non.sdk.lib ` +
 		`--uses-library android.test.runner ` +
 		`--optional-uses-library bar ` +
-		`--optional-uses-library baz `
+		`--missing-optional-uses-library missing-lib-b `
 	android.AssertStringDoesContain(t, "verify apk cmd args", verifyApkCmd, verifyApkArgs)
 
 	// Test that necessary args are passed for constructing CLC in Ninja phase.
@@ -3625,7 +3629,10 @@ func TestExportedProguardFlagFiles(t *testing.T) {
 		android_app {
 			name: "foo",
 			sdk_version: "current",
-			static_libs: ["lib1"],
+			static_libs: [
+				"lib1",
+				"lib3",
+			],
 		}
 
 		android_library {
@@ -3633,22 +3640,49 @@ func TestExportedProguardFlagFiles(t *testing.T) {
 			sdk_version: "current",
 			optimize: {
 				proguard_flags_files: ["lib1proguard.cfg"],
+			},
+			static_libs: ["lib2"],
+		}
+
+		android_library {
+			name: "lib2",
+			sdk_version: "current",
+			optimize: {
+				proguard_flags_files: ["lib2proguard.cfg"],
 			}
 		}
+
+		android_library_import {
+			name: "lib3",
+			sdk_version: "current",
+			aars: ["lib3.aar"],
+			static_libs: ["lib4"],
+		}
+
+		android_library {
+			name: "lib4",
+			sdk_version: "current",
+			optimize: {
+				proguard_flags_files: ["lib4proguard.cfg"],
+			}
+		}
+
+
 	`)
 
 	m := ctx.ModuleForTests("foo", "android_common")
-	hasLib1Proguard := false
-	for _, s := range m.Rule("java.r8").Implicits.Strings() {
-		if s == "lib1proguard.cfg" {
-			hasLib1Proguard = true
-			break
-		}
-	}
+	r8 := m.Rule("java.r8")
+	implicits := r8.Implicits.RelativeToTop().Strings()
+	android.AssertStringListContains(t, "r8 implicits", implicits, "lib1proguard.cfg")
+	android.AssertStringListContains(t, "r8 implicits", implicits, "lib2proguard.cfg")
+	android.AssertStringListContains(t, "r8 implicits", implicits, "lib4proguard.cfg")
+	android.AssertStringListContains(t, "r8 implicits", implicits, "out/soong/.intermediates/lib3/android_common/aar/proguard.txt")
 
-	if !hasLib1Proguard {
-		t.Errorf("App does not use library proguard config")
-	}
+	flags := r8.Args["r8Flags"]
+	android.AssertStringDoesContain(t, "r8 flags", flags, "-include lib1proguard.cfg")
+	android.AssertStringDoesContain(t, "r8 flags", flags, "-include lib2proguard.cfg")
+	android.AssertStringDoesContain(t, "r8 flags", flags, "-include lib4proguard.cfg")
+	android.AssertStringDoesContain(t, "r8 flags", flags, "-include out/soong/.intermediates/lib3/android_common/aar/proguard.txt")
 }
 
 func TestTargetSdkVersionManifestFixer(t *testing.T) {
@@ -4400,6 +4434,44 @@ func TestNoDexpreoptOptionalUsesLibDoesNotHaveImpl(t *testing.T) {
 	result := prepareForJavaTest.RunTestWithBp(t, bp)
 	dexpreopt := result.ModuleForTests("app", "android_common").MaybeRule("dexpreopt").Rule
 	android.AssertBoolEquals(t, "dexpreopt should be disabled if optional_uses_libs does not have an implementation", true, dexpreopt == nil)
+}
+
+func TestTestOnlyApp(t *testing.T) {
+	t.Parallel()
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+	).RunTestWithBp(t, `
+                // These should be test-only
+                android_test {
+                        name: "android-test",
+                }
+                android_test_helper_app {
+                        name: "helper-app",
+                }
+                override_android_test {
+                        name: "override-test",
+                        base: "android-app",
+                }
+                // And these should not be
+		android_app {
+			name: "android-app",
+                        srcs: ["b.java"],
+			sdk_version: "current",
+		}
+	`)
+
+	expectedTestOnly := []string{
+		"android-test",
+		"helper-app",
+		"override-test",
+	}
+
+	expectedTopLevel := []string{
+		"android-test",
+		"override-test",
+	}
+
+	assertTestOnlyAndTopLevel(t, ctx, expectedTestOnly, expectedTopLevel)
 }
 
 func TestAppStem(t *testing.T) {

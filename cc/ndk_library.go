@@ -225,7 +225,7 @@ var stubLibraryCompilerFlags = []string{
 }
 
 func init() {
-	config.ExportStringList("StubLibraryCompilerFlags", stubLibraryCompilerFlags)
+	pctx.StaticVariable("StubLibraryCompilerFlags", strings.Join(stubLibraryCompilerFlags, " "))
 }
 
 func addStubLibraryCompilerFlags(flags Flags) Flags {
@@ -323,13 +323,6 @@ func (this *stubDecorator) findPrebuiltAbiDump(ctx ModuleContext,
 // Feature flag.
 func canDumpAbi(config android.Config) bool {
 	if runtime.GOOS == "darwin" {
-		return false
-	}
-	// abidw doesn't currently handle top-byte-ignore correctly. Disable ABI
-	// dumping for those configs while we wait for a fix. We'll still have ABI
-	// checking coverage from non-hwasan builds.
-	// http://b/190554910
-	if android.InList("hwaddress", config.SanitizeDevice()) {
 		return false
 	}
 	// http://b/156513478
@@ -525,19 +518,25 @@ func (stub *stubDecorator) nativeCoverage() bool {
 
 // Returns the install path for unversioned NDK libraries (currently only static
 // libraries).
-func getUnversionedLibraryInstallPath(ctx ModuleContext) android.InstallPath {
+func getUnversionedLibraryInstallPath(ctx ModuleContext) android.OutputPath {
 	return getNdkSysrootBase(ctx).Join(ctx, "usr/lib", config.NDKTriple(ctx.toolchain()))
 }
 
 // Returns the install path for versioned NDK libraries. These are most often
 // stubs, but the same paths are used for CRT objects.
-func getVersionedLibraryInstallPath(ctx ModuleContext, apiLevel android.ApiLevel) android.InstallPath {
+func getVersionedLibraryInstallPath(ctx ModuleContext, apiLevel android.ApiLevel) android.OutputPath {
 	return getUnversionedLibraryInstallPath(ctx).Join(ctx, apiLevel.String())
 }
 
 func (stub *stubDecorator) install(ctx ModuleContext, path android.Path) {
 	installDir := getVersionedLibraryInstallPath(ctx, stub.apiLevel)
-	stub.installPath = ctx.InstallFile(installDir, path.Base(), path)
+	out := installDir.Join(ctx, path.Base())
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   android.Cp,
+		Input:  path,
+		Output: out,
+	})
+	stub.installPath = out
 }
 
 func newStubLibrary() *Module {

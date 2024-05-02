@@ -114,6 +114,8 @@ const (
 	GenerateDocFile
 )
 
+const testKeyDir = "build/make/target/product/security"
+
 // SoongOutDir returns the build output directory for the configuration.
 func (c Config) SoongOutDir() string {
 	return c.soongOutDir
@@ -230,6 +232,11 @@ func (c Config) ReleaseNdkAbiMonitored() bool {
 func (c Config) ReleaseHiddenApiExportableStubs() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS") ||
 		Bool(c.config.productVariables.HiddenapiExportableStubs)
+}
+
+// Enable read flag from new storage
+func (c Config) ReleaseReadFromNewStorage() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_READ_FROM_NEW_STORAGE")
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -841,6 +848,10 @@ func (c *config) BuildId() string {
 	return String(c.productVariables.BuildId)
 }
 
+func (c *config) DisplayBuildNumber() bool {
+	return Bool(c.productVariables.DisplayBuildNumber)
+}
+
 // BuildNumberFile returns the path to a text file containing metadata
 // representing the current build's number.
 //
@@ -850,6 +861,23 @@ func (c *config) BuildId() string {
 // rebuild on every incremental build when the build number changes.
 func (c *config) BuildNumberFile(ctx PathContext) Path {
 	return PathForOutput(ctx, String(c.productVariables.BuildNumberFile))
+}
+
+// BuildHostnameFile returns the path to a text file containing metadata
+// representing the current build's host name.
+func (c *config) BuildHostnameFile(ctx PathContext) Path {
+	return PathForOutput(ctx, String(c.productVariables.BuildHostnameFile))
+}
+
+// BuildThumbprintFile returns the path to a text file containing metadata
+// representing the current build's thumbprint.
+//
+// Rules that want to reference the build thumbprint should read from this file
+// without depending on it. They will run whenever their other dependencies
+// require them to run and get the current build thumbprint. This ensures they
+// don't rebuild on every incremental build when the build thumbprint changes.
+func (c *config) BuildThumbprintFile(ctx PathContext) Path {
+	return PathForArbitraryOutput(ctx, "target", "product", c.DeviceName(), String(c.productVariables.BuildThumbprintFile))
 }
 
 // DeviceName returns the name of the current device target.
@@ -873,12 +901,20 @@ func (c *config) HasDeviceProduct() bool {
 	return c.productVariables.DeviceProduct != nil
 }
 
+func (c *config) DeviceAbi() []string {
+	return c.productVariables.DeviceAbi
+}
+
 func (c *config) DeviceResourceOverlays() []string {
 	return c.productVariables.DeviceResourceOverlays
 }
 
 func (c *config) ProductResourceOverlays() []string {
 	return c.productVariables.ProductResourceOverlays
+}
+
+func (c *config) PlatformDisplayVersionName() string {
+	return String(c.productVariables.Platform_display_version_name)
 }
 
 func (c *config) PlatformVersionName() string {
@@ -918,7 +954,11 @@ func (c *config) PlatformPreviewSdkVersion() string {
 }
 
 func (c *config) PlatformMinSupportedTargetSdkVersion() string {
-	return String(c.productVariables.Platform_min_supported_target_sdk_version)
+	var val, ok = c.productVariables.BuildFlags["RELEASE_PLATFORM_MIN_SUPPORTED_TARGET_SDK_VERSION"]
+	if !ok {
+		return ""
+	}
+	return val
 }
 
 func (c *config) PlatformBaseOS() string {
@@ -1038,7 +1078,7 @@ func (c *config) DefaultAppCertificateDir(ctx PathContext) SourcePath {
 	if defaultCert != "" {
 		return PathForSource(ctx, filepath.Dir(defaultCert))
 	}
-	return PathForSource(ctx, "build/make/target/product/security")
+	return PathForSource(ctx, testKeyDir)
 }
 
 func (c *config) DefaultAppCertificate(ctx PathContext) (pem, key SourcePath) {
@@ -1050,10 +1090,18 @@ func (c *config) DefaultAppCertificate(ctx PathContext) (pem, key SourcePath) {
 	return defaultDir.Join(ctx, "testkey.x509.pem"), defaultDir.Join(ctx, "testkey.pk8")
 }
 
+func (c *config) BuildKeys() string {
+	defaultCert := String(c.productVariables.DefaultAppCertificate)
+	if defaultCert == "" || defaultCert == filepath.Join(testKeyDir, "testkey") {
+		return "test-keys"
+	}
+	return "dev-keys"
+}
+
 func (c *config) ApexKeyDir(ctx ModuleContext) SourcePath {
 	// TODO(b/121224311): define another variable such as TARGET_APEX_KEY_OVERRIDE
 	defaultCert := String(c.productVariables.DefaultAppCertificate)
-	if defaultCert == "" || filepath.Dir(defaultCert) == "build/make/target/product/security" {
+	if defaultCert == "" || filepath.Dir(defaultCert) == testKeyDir {
 		// When defaultCert is unset or is set to the testkeys path, use the APEX keys
 		// that is under the module dir
 		return pathForModuleSrc(ctx)
@@ -1110,6 +1158,10 @@ func (c *config) Debuggable() bool {
 
 func (c *config) Eng() bool {
 	return Bool(c.productVariables.Eng)
+}
+
+func (c *config) BuildType() string {
+	return String(c.productVariables.BuildType)
 }
 
 // DevicePrimaryArchType returns the ArchType for the first configured device architecture, or
@@ -1366,6 +1418,11 @@ func (c *config) PrevVendorApiLevel() string {
 	return strconv.Itoa(vendorApiLevel - 100)
 }
 
+func IsTrunkStableVendorApiLevel(level string) bool {
+	levelInt, err := strconv.Atoi(level)
+	return err == nil && levelInt >= 202404
+}
+
 func (c *config) VendorApiLevelFrozen() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_BOARD_API_LEVEL_FROZEN")
 }
@@ -1393,10 +1450,6 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
-func (c *deviceConfig) VndkVersion() string {
-	return String(c.config.productVariables.DeviceVndkVersion)
-}
-
 func (c *deviceConfig) RecoverySnapshotVersion() string {
 	return String(c.config.productVariables.RecoverySnapshotVersion)
 }
@@ -1407,10 +1460,6 @@ func (c *deviceConfig) RamdiskSnapshotVersion() string {
 
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 	return StringDefault(c.config.productVariables.DeviceCurrentApiLevelForVendorModules, "current")
-}
-
-func (c *deviceConfig) PlatformVndkVersion() string {
-	return String(c.config.productVariables.Platform_vndk_version)
 }
 
 func (c *deviceConfig) ExtraVndkVersions() []string {
@@ -2137,4 +2186,20 @@ func (c *config) AllApexContributions() []string {
 
 func (c *config) BuildIgnoreApexContributionContents() *bool {
 	return c.productVariables.BuildIgnoreApexContributionContents
+}
+
+func (c *config) ProductLocales() []string {
+	return c.productVariables.ProductLocales
+}
+
+func (c *config) ProductDefaultWifiChannels() []string {
+	return c.productVariables.ProductDefaultWifiChannels
+}
+
+func (c *config) BoardUseVbmetaDigestInFingerprint() bool {
+	return Bool(c.productVariables.BoardUseVbmetaDigestInFingerprint)
+}
+
+func (c *config) OemProperties() []string {
+	return c.productVariables.OemProperties
 }

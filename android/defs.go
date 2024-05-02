@@ -20,8 +20,7 @@ import (
 )
 
 var (
-	pctx         = NewPackageContext("android/soong/android")
-	exportedVars = NewExportedVariables(pctx)
+	pctx = NewPackageContext("android/soong/android")
 
 	cpPreserveSymlinks = pctx.VariableConfigMethod("cpPreserveSymlinks",
 		Config.CpPreserveSymlinksFlags)
@@ -104,16 +103,6 @@ var (
 			Description: "concatenate files to $out",
 		})
 
-	// ubuntu 14.04 offcially use dash for /bin/sh, and its builtin echo command
-	// doesn't support -e option. Therefore we force to use /bin/bash when writing out
-	// content to file.
-	writeFile = pctx.AndroidStaticRule("writeFile",
-		blueprint.RuleParams{
-			Command:     `rm -f $out && /bin/bash -c 'echo -e -n "$$0" > $out' $content`,
-			Description: "writing file $out",
-		},
-		"content")
-
 	// Used only when USE_GOMA=true is set, to restrict non-goma jobs to the local parallelism value
 	localPool = blueprint.NewBuiltinPool("local_pool")
 
@@ -130,9 +119,6 @@ func init() {
 	pctx.VariableFunc("RBEWrapper", func(ctx PackageVarContext) string {
 		return ctx.Config().RBEWrapper()
 	})
-
-	exportedVars.ExportStringList("NeverAllowNotInIncludeDir", neverallowNotInIncludeDir)
-	exportedVars.ExportStringList("NeverAllowNoUseIncludeDir", neverallowNoUseIncludeDir)
 }
 
 // GlobToListFileRule creates a rule that writes a list of files matching a pattern to a file.

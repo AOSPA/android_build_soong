@@ -21,12 +21,12 @@ import (
 	"strings"
 
 	"android/soong/testing"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
 	"android/soong/cc"
-	"android/soong/snapshot"
 	"android/soong/tradefed"
 )
 
@@ -548,5 +548,3 @@ func ShTestHostFactory() android.Module {
 }
 
 var Bool = proptools.Bool
-
-var _ snapshot.RelativeInstallPath = (*ShBinary)(nil)

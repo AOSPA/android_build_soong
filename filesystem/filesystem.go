@@ -20,6 +20,7 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"android/soong/android"
@@ -35,6 +36,7 @@ func init() {
 
 func registerBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_filesystem", filesystemFactory)
+	ctx.RegisterModuleType("android_filesystem_defaults", filesystemDefaultsFactory)
 	ctx.RegisterModuleType("android_system_image", systemImageFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer", avbAddHashFooterFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer_defaults", avbAddHashFooterDefaultsFactory)
@@ -45,6 +47,7 @@ func registerBuildComponents(ctx android.RegistrationContext) {
 type filesystem struct {
 	android.ModuleBase
 	android.PackagingBase
+	android.DefaultableModuleBase
 
 	properties filesystemProperties
 
@@ -57,7 +60,7 @@ type filesystem struct {
 	output     android.OutputPath
 	installDir android.InstallPath
 
-	// For testing. Keeps the result of CopyDepsToZip()
+	// For testing. Keeps the result of CopySpecsToDir()
 	entries []string
 }
 
@@ -80,6 +83,9 @@ type filesystemProperties struct {
 	// Hash algorithm used for avbtool (for descriptors). This is passed as hash_algorithm to
 	// avbtool. Default used by avbtool is sha1.
 	Avb_hash_algorithm *string
+
+	// The index used to prevent rollback of the image. Only used if use_avb is true.
+	Rollback_index *int64
 
 	// Name of the partition stored in vbmeta desc. Defaults to the name of this module.
 	Partition_name *string
@@ -120,6 +126,8 @@ type filesystemProperties struct {
 	// modules would be installed to the same location as a make module, they will overwrite
 	// the make version.
 	Include_make_built_files string
+
+	Fsverity fsverityProperties
 }
 
 // android_filesystem packages a set of modules and their transitive dependencies into a filesystem
@@ -137,6 +145,7 @@ func initFilesystemModule(module *filesystem) {
 	module.AddProperties(&module.properties)
 	android.InitPackageModule(module)
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
 }
 
 var dependencyTag = struct {
@@ -176,12 +185,14 @@ func (f *filesystem) installFileName() string {
 	return f.BaseModuleName() + ".img"
 }
 
+func (f *filesystem) partitionName() string {
+	return proptools.StringDefault(f.properties.Partition_name, f.Name())
+}
+
 var pctx = android.NewPackageContext("android/soong/filesystem")
 
 func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	if !android.InList(f.PartitionType(), validPartitions) {
-		ctx.PropertyErrorf("partition_type", "partition_type must be one of %s, found: %s", validPartitions, f.PartitionType())
-	}
+	validatePartitionType(ctx, f)
 	switch f.fsType(ctx) {
 	case ext4Type:
 		f.output = f.buildImageUsingBuildImage(ctx)
@@ -195,6 +206,22 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	f.installDir = android.PathForModuleInstall(ctx, "etc")
 	ctx.InstallFile(f.installDir, f.installFileName(), f.output)
+}
+
+func validatePartitionType(ctx android.ModuleContext, p partition) {
+	if !android.InList(p.PartitionType(), validPartitions) {
+		ctx.PropertyErrorf("partition_type", "partition_type must be one of %s, found: %s", validPartitions, p.PartitionType())
+	}
+
+	ctx.VisitDirectDepsWithTag(android.DefaultsDepTag, func(m android.Module) {
+		if fdm, ok := m.(*filesystemDefaults); ok {
+			if p.PartitionType() != fdm.PartitionType() {
+				ctx.PropertyErrorf("partition_type",
+					"%s doesn't match with the partition type %s of the filesystem default module %s",
+					p.PartitionType(), fdm.PartitionType(), m.Name())
+			}
+		}
+	})
 }
 
 // Copy extra files/dirs that are not from the `deps` property to `rootDir`, checking for conflicts with files
@@ -255,10 +282,12 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 	builder := android.NewRuleBuilder(pctx, ctx)
 	// Wipe the root dir to get rid of leftover files from prior builds
 	builder.Command().Textf("rm -rf %s && mkdir -p %s", rootDir, rootDir)
-	f.entries = f.CopySpecsToDir(ctx, builder, f.gatherFilteredPackagingSpecs(ctx), rebasedDir)
+	specs := f.gatherFilteredPackagingSpecs(ctx)
+	f.entries = f.CopySpecsToDir(ctx, builder, specs, rebasedDir)
 
 	f.buildNonDepsFiles(ctx, builder, rootDir)
 	f.addMakeBuiltFiles(ctx, builder, rootDir)
+	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 
 	// run host_init_verifier
 	// Ideally we should have a concept of pluggable linters that verify the generated image.
@@ -338,13 +367,19 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.
 		addStr("avb_algorithm", algorithm)
 		key := android.PathForModuleSrc(ctx, proptools.String(f.properties.Avb_private_key))
 		addPath("avb_key_path", key)
-		partitionName := proptools.StringDefault(f.properties.Partition_name, f.Name())
-		addStr("partition_name", partitionName)
+		addStr("partition_name", f.partitionName())
 		avb_add_hashtree_footer_args := "--do_not_generate_fec"
 		if hashAlgorithm := proptools.String(f.properties.Avb_hash_algorithm); hashAlgorithm != "" {
 			avb_add_hashtree_footer_args += " --hash_algorithm " + hashAlgorithm
 		}
-		securityPatchKey := "com.android.build." + partitionName + ".security_patch"
+		if f.properties.Rollback_index != nil {
+			rollbackIndex := proptools.Int(f.properties.Rollback_index)
+			if rollbackIndex < 0 {
+				ctx.PropertyErrorf("rollback_index", "Rollback index must be non-negative")
+			}
+			avb_add_hashtree_footer_args += " --rollback_index " + strconv.Itoa(rollbackIndex)
+		}
+		securityPatchKey := "com.android.build." + f.partitionName() + ".security_patch"
 		securityPatchValue := ctx.Config().PlatformSecurityPatch()
 		avb_add_hashtree_footer_args += " --prop " + securityPatchKey + ":" + securityPatchValue
 		addStr("avb_add_hashtree_footer_args", avb_add_hashtree_footer_args)
@@ -388,9 +423,11 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 	builder := android.NewRuleBuilder(pctx, ctx)
 	// Wipe the root dir to get rid of leftover files from prior builds
 	builder.Command().Textf("rm -rf %s && mkdir -p %s", rootDir, rootDir)
-	f.entries = f.CopySpecsToDir(ctx, builder, f.gatherFilteredPackagingSpecs(ctx), rebasedDir)
+	specs := f.gatherFilteredPackagingSpecs(ctx)
+	f.entries = f.CopySpecsToDir(ctx, builder, specs, rebasedDir)
 
 	f.buildNonDepsFiles(ctx, builder, rootDir)
+	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 
 	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
 	cmd := builder.Command().
@@ -448,9 +485,15 @@ func (f *filesystem) addMakeBuiltFiles(ctx android.ModuleContext, builder *andro
 		Text(android.PathForArbitraryOutput(ctx, stagingDir).String())
 }
 
+type partition interface {
+	PartitionType() string
+}
+
 func (f *filesystem) PartitionType() string {
 	return proptools.StringDefault(f.properties.Partition_type, "system")
 }
+
+var _ partition = (*filesystem)(nil)
 
 var _ android.AndroidMkEntriesProvider = (*filesystem)(nil)
 
@@ -524,4 +567,38 @@ var _ cc.UseCoverage = (*filesystem)(nil)
 
 func (*filesystem) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
 	return ctx.Device() && ctx.DeviceConfig().NativeCoverageEnabled()
+}
+
+// android_filesystem_defaults
+
+type filesystemDefaults struct {
+	android.ModuleBase
+	android.DefaultsModuleBase
+
+	properties filesystemDefaultsProperties
+}
+
+type filesystemDefaultsProperties struct {
+	// Identifies which partition this is for //visibility:any_system_image (and others) visibility
+	// checks, and will be used in the future for API surface checks.
+	Partition_type *string
+}
+
+// android_filesystem_defaults is a default module for android_filesystem and android_system_image
+func filesystemDefaultsFactory() android.Module {
+	module := &filesystemDefaults{}
+	module.AddProperties(&module.properties)
+	module.AddProperties(&android.PackagingProperties{})
+	android.InitDefaultsModule(module)
+	return module
+}
+
+func (f *filesystemDefaults) PartitionType() string {
+	return proptools.StringDefault(f.properties.Partition_type, "system")
+}
+
+var _ partition = (*filesystemDefaults)(nil)
+
+func (f *filesystemDefaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	validatePartitionType(ctx, f)
 }
