@@ -59,7 +59,7 @@ type VersionProperties struct {
 	// list of the Python libraries used only for this Python version.
 	Libs []string `android:"arch_variant"`
 
-	// whether the binary is required to be built with embedded launcher for this version, defaults to false.
+	// whether the binary is required to be built with embedded launcher for this version, defaults to true.
 	Embedded_launcher *bool // TODO(b/174041232): Remove this property
 }
 
@@ -151,6 +151,8 @@ type PythonLibraryModule struct {
 	// The zip file containing the current module's source/data files, with the
 	// source files precompiled.
 	precompiledSrcsZip android.Path
+
+	sourceProperties android.SourceProperties
 }
 
 // newModule generates new Python base module
@@ -203,7 +205,7 @@ func (p *PythonLibraryModule) getBaseProperties() *BaseProperties {
 var _ pythonDependency = (*PythonLibraryModule)(nil)
 
 func (p *PythonLibraryModule) init() android.Module {
-	p.AddProperties(&p.properties, &p.protoProperties)
+	p.AddProperties(&p.properties, &p.protoProperties, &p.sourceProperties)
 	android.InitAndroidArchModule(p, p.hod, p.multilib)
 	android.InitDefaultableModule(p)
 	return p
@@ -421,6 +423,11 @@ func (p *PythonLibraryModule) AddDepsOnPythonLauncherAndStdlib(ctx android.Botto
 func (p *PythonLibraryModule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	expandedSrcs := android.PathsForModuleSrcExcludes(ctx, p.properties.Srcs, p.properties.Exclude_srcs)
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: expandedSrcs.Strings()})
+	// Keep before any early returns.
+	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
+		TestOnly:       Bool(p.sourceProperties.Test_only),
+		TopLevelTarget: p.sourceProperties.Top_level_test_target,
+	})
 
 	// expand data files from "data" property.
 	expandedData := android.PathsForModuleSrc(ctx, p.properties.Data)
