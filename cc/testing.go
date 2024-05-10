@@ -566,6 +566,7 @@ var PrepareForTestWithCcBuildComponents = android.GroupFixturePreparers(
 		ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 
 		RegisterVndkLibraryTxtTypes(ctx)
+		RegisterLlndkLibraryTxtType(ctx)
 	}),
 
 	// Additional files needed in tests that disallow non-existent source files.
@@ -582,17 +583,17 @@ var PrepareForTestWithCcDefaultModules = android.GroupFixturePreparers(
 
 	// Additional files needed in tests that disallow non-existent source.
 	android.MockFS{
-		"defaults/cc/common/libc.map.txt":      nil,
-		"defaults/cc/common/libdl.map.txt":     nil,
-		"defaults/cc/common/libft2.map.txt":    nil,
-		"defaults/cc/common/libm.map.txt":      nil,
-		"defaults/cc/common/ndk_libc++_shared": nil,
-		"defaults/cc/common/crtbegin_so.c":     nil,
-		"defaults/cc/common/crtbegin.c":        nil,
-		"defaults/cc/common/crtend_so.c":       nil,
-		"defaults/cc/common/crtend.c":          nil,
-		"defaults/cc/common/crtbrand.c":        nil,
-		"external/compiler-rt/lib/cfi/cfi_blocklist.txt":   nil,
+		"defaults/cc/common/libc.map.txt":                nil,
+		"defaults/cc/common/libdl.map.txt":               nil,
+		"defaults/cc/common/libft2.map.txt":              nil,
+		"defaults/cc/common/libm.map.txt":                nil,
+		"defaults/cc/common/ndk_libc++_shared":           nil,
+		"defaults/cc/common/crtbegin_so.c":               nil,
+		"defaults/cc/common/crtbegin.c":                  nil,
+		"defaults/cc/common/crtend_so.c":                 nil,
+		"defaults/cc/common/crtend.c":                    nil,
+		"defaults/cc/common/crtbrand.c":                  nil,
+		"external/compiler-rt/lib/cfi/cfi_blocklist.txt": nil,
 
 		"defaults/cc/common/libclang_rt.ubsan_minimal.android_arm64.a": nil,
 		"defaults/cc/common/libclang_rt.ubsan_minimal.android_arm.a":   nil,
@@ -714,6 +715,7 @@ func CreateTestContext(config android.Config) *android.TestContext {
 	ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 
 	RegisterVndkLibraryTxtTypes(ctx)
+	RegisterLlndkLibraryTxtType(ctx)
 
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	android.RegisterPrebuiltMutators(ctx)

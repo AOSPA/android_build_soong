@@ -229,6 +229,11 @@ func (c Config) ReleaseNdkAbiMonitored() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_NDK_ABI_MONITORED")
 }
 
+// Enable read flag from new storage, for C/C++
+func (c Config) ReleaseReadFromNewStorageCc() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_READ_FROM_NEW_STORAGE_CC")
+}
+
 func (c Config) ReleaseHiddenApiExportableStubs() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS") ||
 		Bool(c.config.productVariables.HiddenapiExportableStubs)
@@ -818,12 +823,12 @@ func (c *config) GetenvWithDefault(key string, defaultValue string) string {
 }
 
 func (c *config) IsEnvTrue(key string) bool {
-	value := c.Getenv(key)
+	value := strings.ToLower(c.Getenv(key))
 	return value == "1" || value == "y" || value == "yes" || value == "on" || value == "true"
 }
 
 func (c *config) IsEnvFalse(key string) bool {
-	value := c.Getenv(key)
+	value := strings.ToLower(c.Getenv(key))
 	return value == "0" || value == "n" || value == "no" || value == "off" || value == "false"
 }
 
@@ -2156,6 +2161,7 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_IPSEC",
 		"RELEASE_APEX_CONTRIBUTIONS_MEDIA",
 		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER",
+		"RELEASE_APEX_CONTRIBUTIONS_MODULE_METADATA",
 		"RELEASE_APEX_CONTRIBUTIONS_NETWORKSTACKGOOGLE",
 		"RELEASE_APEX_CONTRIBUTIONS_NEURALNETWORKS",
 		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION",
