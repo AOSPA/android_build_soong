@@ -609,6 +609,10 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 			ccCmd = "clang++"
 			moduleFlags = cppflags
 			moduleToolingFlags = toolingCppflags
+		case ".rs":
+			// A source provider (e.g. rust_bindgen) may provide both rs and c files.
+			// Ignore the rs files.
+			continue
 		case ".h", ".hpp":
 			ctx.PropertyErrorf("srcs", "Header file %s is not supported, instead use export_include_dirs or local_include_dirs.", srcFile)
 			continue
@@ -872,8 +876,8 @@ func transformObjToDynamicBinary(ctx android.ModuleContext,
 // into a single .ldump sAbi dump file
 func transformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Paths, soFile android.Path,
 	baseName string, exportedIncludeDirs []string, symbolFile android.OptionalPath,
-	excludedSymbolVersions, excludedSymbolTags []string,
-	api string) android.Path {
+	excludedSymbolVersions, excludedSymbolTags, includedSymbolTags []string,
+	api string, isLlndk bool) android.Path {
 
 	outputFile := android.PathForModuleOut(ctx, baseName+".lsdump")
 
@@ -890,6 +894,12 @@ func transformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Path
 	}
 	for _, tag := range excludedSymbolTags {
 		symbolFilterStr += " --exclude-symbol-tag " + tag
+	}
+	for _, tag := range includedSymbolTags {
+		symbolFilterStr += " --include-symbol-tag " + tag
+	}
+	if isLlndk {
+		symbolFilterStr += " --symbol-tag-policy MatchTagOnly"
 	}
 	apiLevelsJson := android.GetApiLevelsJson(ctx)
 	implicits = append(implicits, apiLevelsJson)

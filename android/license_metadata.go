@@ -36,7 +36,7 @@ var (
 func buildLicenseMetadata(ctx ModuleContext, licenseMetadataFile WritablePath) {
 	base := ctx.Module().base()
 
-	if !base.Enabled() {
+	if !base.Enabled(ctx) {
 		return
 	}
 
@@ -62,7 +62,7 @@ func buildLicenseMetadata(ctx ModuleContext, licenseMetadataFile WritablePath) {
 		if dep == nil {
 			return
 		}
-		if !dep.Enabled() {
+		if !dep.Enabled(ctx) {
 			return
 		}
 
@@ -188,7 +188,7 @@ func isContainerFromFileExtensions(installPaths InstallPaths, builtPaths Paths) 
 
 	for _, path := range paths {
 		switch path.Ext() {
-		case ".zip", ".tar", ".tgz", ".tar.gz", ".img", ".srcszip", ".apex":
+		case ".zip", ".tar", ".tgz", ".tar.gz", ".img", ".srcszip", ".apex", ".capex":
 			return true
 		}
 	}

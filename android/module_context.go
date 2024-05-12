@@ -433,6 +433,21 @@ func (m *moduleContext) skipInstall() bool {
 	return false
 }
 
+// Tells whether this module is installed to the full install path (ex:
+// out/target/product/<name>/<partition>) or not. If this returns false, the install build rule is
+// not created and this module can only be installed to packaging modules like android_filesystem.
+func (m *moduleContext) requiresFullInstall() bool {
+	if m.skipInstall() {
+		return false
+	}
+
+	if proptools.Bool(m.module.base().commonProperties.No_full_install) {
+		return false
+	}
+
+	return true
+}
+
 func (m *moduleContext) InstallFile(installPath InstallPath, name string, srcPath Path,
 	deps ...InstallPath) InstallPath {
 	return m.installFile(installPath, name, srcPath, deps, false, nil)
@@ -465,6 +480,7 @@ func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, e
 		executable:            executable,
 		effectiveLicenseFiles: &licenseFiles,
 		partition:             fullInstallPath.partition,
+		skipInstall:           m.skipInstall(),
 	}
 	m.packagingSpecs = append(m.packagingSpecs, spec)
 	return spec
@@ -476,7 +492,7 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 	fullInstallPath := installPath.Join(m, name)
 	m.module.base().hooks.runInstallHooks(m, srcPath, fullInstallPath, false)
 
-	if !m.skipInstall() {
+	if m.requiresFullInstall() {
 		deps = append(deps, InstallPaths(m.module.base().installFilesDepSet.ToList())...)
 		deps = append(deps, m.module.base().installedInitRcPaths...)
 		deps = append(deps, m.module.base().installedVintfFragmentsPaths...)
@@ -549,7 +565,7 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 	if err != nil {
 		panic(fmt.Sprintf("Unable to generate symlink between %q and %q: %s", fullInstallPath.Base(), srcPath.Base(), err))
 	}
-	if !m.skipInstall() {
+	if m.requiresFullInstall() {
 
 		if m.Config().KatiEnabled() {
 			// When creating the symlink rule in Soong but embedding in Make, write the rule to a
@@ -586,6 +602,7 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 		symlinkTarget:    relPath,
 		executable:       false,
 		partition:        fullInstallPath.partition,
+		skipInstall:      m.skipInstall(),
 	})
 
 	return fullInstallPath
@@ -597,7 +614,7 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 	fullInstallPath := installPath.Join(m, name)
 	m.module.base().hooks.runInstallHooks(m, nil, fullInstallPath, true)
 
-	if !m.skipInstall() {
+	if m.requiresFullInstall() {
 		if m.Config().KatiEnabled() {
 			// When creating the symlink rule in Soong but embedding in Make, write the rule to a
 			// makefile instead of directly to the ninja file so that main.mk can add the
@@ -627,6 +644,7 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 		symlinkTarget:    absPath,
 		executable:       false,
 		partition:        fullInstallPath.partition,
+		skipInstall:      m.skipInstall(),
 	})
 
 	return fullInstallPath

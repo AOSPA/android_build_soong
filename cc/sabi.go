@@ -30,7 +30,6 @@ type lsdumpTag string
 const (
 	apexLsdumpTag     lsdumpTag = "APEX"
 	llndkLsdumpTag    lsdumpTag = "LLNDK"
-	ndkLsdumpTag      lsdumpTag = "NDK"
 	platformLsdumpTag lsdumpTag = "PLATFORM"
 	productLsdumpTag  lsdumpTag = "PRODUCT"
 	vendorLsdumpTag   lsdumpTag = "VENDOR"
@@ -41,8 +40,6 @@ func (tag *lsdumpTag) dirName() string {
 	switch *tag {
 	case apexLsdumpTag:
 		return "platform"
-	case ndkLsdumpTag:
-		return "ndk"
 	case llndkLsdumpTag:
 		return "vndk"
 	case platformLsdumpTag:
@@ -135,9 +132,6 @@ func classifySourceAbiDump(ctx android.BaseModuleContext) []lsdumpTag {
 	if !m.InProduct() && !m.InVendor() {
 		if m.isImplementationForLLNDKPublic() {
 			result = append(result, llndkLsdumpTag)
-		}
-		if m.IsNdk(ctx.Config()) {
-			result = append(result, ndkLsdumpTag)
 		}
 		// APEX and opt-in platform dumps are placed in the same directory.
 		if m.library.hasStubsVariants() {

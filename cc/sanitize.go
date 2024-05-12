@@ -55,7 +55,6 @@ var (
 		// higher number of "optimized out" stack variables.
 		// b/112437883.
 		"-instcombine-lower-dbg-declare=0",
-		"-hwasan-use-after-scope=1",
 		"-dom-tree-reachability-max-bbs-to-explore=128",
 	}
 
@@ -82,7 +81,8 @@ var (
 		"-fno-sanitize-recover=integer,undefined"}
 	hwasanGlobalOptions = []string{"heap_history_size=1023", "stack_history_size=512",
 		"export_memory_stats=0", "max_malloc_fill_size=131072", "malloc_fill_byte=0"}
-	memtagStackCommonFlags = []string{"-march=armv8-a+memtag", "-mllvm", "-dom-tree-reachability-max-bbs-to-explore=128"}
+	memtagStackCommonFlags = []string{"-march=armv8-a+memtag"}
+	memtagStackLlvmFlags   = []string{"-dom-tree-reachability-max-bbs-to-explore=128"}
 
 	hostOnlySanitizeFlags   = []string{"-fno-sanitize-recover=all"}
 	deviceOnlySanitizeFlags = []string{"-fsanitize-trap=all"}
@@ -176,11 +176,11 @@ func (t SanitizerType) name() string {
 
 func (t SanitizerType) registerMutators(ctx android.RegisterMutatorsContext) {
 	switch t {
-	case cfi, Hwasan, Asan, tsan, Fuzzer, scs:
+	case cfi, Hwasan, Asan, tsan, Fuzzer, scs, Memtag_stack:
 		sanitizer := &sanitizerSplitMutator{t}
 		ctx.TopDown(t.variationName()+"_markapexes", sanitizer.markSanitizableApexesMutator)
 		ctx.Transition(t.variationName(), sanitizer)
-	case Memtag_heap, Memtag_stack, Memtag_globals, intOverflow:
+	case Memtag_heap, Memtag_globals, intOverflow:
 		// do nothing
 	default:
 		panic(fmt.Errorf("unknown SanitizerType %d", t))
@@ -407,6 +407,7 @@ func init() {
 
 	android.RegisterMakeVarsProvider(pctx, cfiMakeVarsProvider)
 	android.RegisterMakeVarsProvider(pctx, hwasanMakeVarsProvider)
+	android.RegisterMakeVarsProvider(pctx, memtagStackMakeVarsProvider)
 }
 
 func (sanitize *sanitize) props() []interface{} {
@@ -719,10 +720,14 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Diag.Cfi = nil
 	}
 
-	// HWASan ramdisk (which is built from recovery) goes over some bootloader limit.
-	// Keep libc instrumented so that ramdisk / vendor_ramdisk / recovery can run hwasan-instrumented code if necessary.
-	if (ctx.inRamdisk() || ctx.inVendorRamdisk() || ctx.inRecovery()) && !strings.HasPrefix(ctx.ModuleDir(), "bionic/libc") {
-		s.Hwaddress = nil
+	if ctx.inRamdisk() || ctx.inVendorRamdisk() || ctx.inRecovery() {
+		// HWASan ramdisk (which is built from recovery) goes over some bootloader limit.
+		// Keep libc instrumented so that ramdisk / vendor_ramdisk / recovery can run hwasan-instrumented code if necessary.
+		if !strings.HasPrefix(ctx.ModuleDir(), "bionic/libc") {
+			s.Hwaddress = nil
+		}
+		// Memtag stack in ramdisk makes pKVM unhappy.
+		s.Memtag_stack = nil
 	}
 
 	if ctx.staticBinary() {
@@ -894,7 +899,7 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 		flags.Local.CFlags = append(flags.Local.CFlags, cfiCflags...)
 		flags.Local.AsFlags = append(flags.Local.AsFlags, cfiAsflags...)
-		flags.CFlagsDeps = append(flags.CFlagsDeps, android.PathForSource(ctx, cfiBlocklistPath + "/" + cfiBlocklistFilename))
+		flags.CFlagsDeps = append(flags.CFlagsDeps, android.PathForSource(ctx, cfiBlocklistPath+"/"+cfiBlocklistFilename))
 		if Bool(s.Properties.Sanitize.Config.Cfi_assembly_support) {
 			flags.Local.CFlags = append(flags.Local.CFlags, cfiAssemblySupportFlag)
 		}
@@ -915,6 +920,13 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		flags.Local.CFlags = append(flags.Local.CFlags, memtagStackCommonFlags...)
 		flags.Local.AsFlags = append(flags.Local.AsFlags, memtagStackCommonFlags...)
 		flags.Local.LdFlags = append(flags.Local.LdFlags, memtagStackCommonFlags...)
+
+		for _, flag := range memtagStackLlvmFlags {
+			flags.Local.CFlags = append(flags.Local.CFlags, "-mllvm", flag)
+		}
+		for _, flag := range memtagStackLlvmFlags {
+			flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,-mllvm,"+flag)
+		}
 	}
 
 	// TODO(b/249094918) re-enable after clang version brought back in-line with upstream
@@ -1341,6 +1353,8 @@ func (s *sanitizerSplitMutator) Mutate(mctx android.BottomUpMutatorContext, vari
 					hwasanStaticLibs(mctx.Config()).add(c, c.Module().Name())
 				} else if s.sanitizer == cfi {
 					cfiStaticLibs(mctx.Config()).add(c, c.Module().Name())
+				} else if s.sanitizer == Memtag_stack {
+					memtagStackStaticLibs(mctx.Config()).add(c, c.Module().Name());
 				}
 			}
 		} else if c.IsSanitizerEnabled(s.sanitizer) {
@@ -1409,7 +1423,7 @@ func sanitizerRuntimeDepsMutator(mctx android.TopDownMutatorContext) {
 // Add the dependency to the runtime library for each of the sanitizer variants
 func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 	if c, ok := mctx.Module().(*Module); ok && c.sanitize != nil {
-		if !c.Enabled() {
+		if !c.Enabled(mctx) {
 			return
 		}
 		var sanitizers []string
@@ -1593,7 +1607,7 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 			addStaticDeps(config.BuiltinsRuntimeLibrary(toolchain), true)
 		}
 
-		if runtimeSharedLibrary != "" && (toolchain.Bionic() || toolchain.Musl() || c.sanitize.Properties.UbsanRuntimeDep) {
+		if runtimeSharedLibrary != "" && (toolchain.Bionic() || toolchain.Musl()) {
 			// UBSan is supported on non-bionic linux host builds as well
 
 			// Adding dependency to the runtime library. We are using *FarVariation*
@@ -1756,6 +1770,14 @@ func hwasanStaticLibs(config android.Config) *sanitizerStaticLibsMap {
 	}).(*sanitizerStaticLibsMap)
 }
 
+var memtagStackStaticLibsKey = android.NewOnceKey("memtagStackStaticLibs")
+
+func memtagStackStaticLibs(config android.Config) *sanitizerStaticLibsMap {
+	return config.Once(memtagStackStaticLibsKey, func() interface{} {
+		return newSanitizerStaticLibsMap(Memtag_stack)
+	}).(*sanitizerStaticLibsMap)
+}
+
 func enableMinimalRuntime(sanitize *sanitize) bool {
 	if sanitize.isSanitizerEnabled(Asan) {
 		return false
@@ -1801,4 +1823,8 @@ func cfiMakeVarsProvider(ctx android.MakeVarsContext) {
 
 func hwasanMakeVarsProvider(ctx android.MakeVarsContext) {
 	hwasanStaticLibs(ctx.Config()).exportToMake(ctx)
+}
+
+func memtagStackMakeVarsProvider(ctx android.MakeVarsContext) {
+	memtagStackStaticLibs(ctx.Config()).exportToMake(ctx)
 }
