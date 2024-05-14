@@ -587,6 +587,7 @@ const (
 	JAVA_VERSION_9           = 9
 	JAVA_VERSION_11          = 11
 	JAVA_VERSION_17          = 17
+	JAVA_VERSION_21          = 21
 )
 
 func (v javaVersion) String() string {
@@ -605,6 +606,8 @@ func (v javaVersion) String() string {
 		return "11"
 	case JAVA_VERSION_17:
 		return "17"
+	case JAVA_VERSION_21:
+		return "21"
 	default:
 		return "unsupported"
 	}
@@ -647,6 +650,8 @@ func normalizeJavaVersion(ctx android.BaseModuleContext, javaVersion string) jav
 		return JAVA_VERSION_11
 	case "17":
 		return JAVA_VERSION_17
+	case "21":
+		return JAVA_VERSION_21
 	case "10", "12", "13", "14", "15", "16":
 		ctx.PropertyErrorf("java_version", "Java language level %s is not supported", javaVersion)
 		return JAVA_VERSION_UNSUPPORTED
@@ -886,6 +891,12 @@ func init() {
 }
 
 func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if disableSourceApexVariant(ctx) {
+		// Prebuilts are active, do not create the installation rules for the source javalib.
+		// Even though the source javalib is not used, we need to hide it to prevent duplicate installation rules.
+		// TODO (b/331665856): Implement a principled solution for this.
+		j.HideFromMake()
+	}
 	j.provideHiddenAPIPropertyInfo(ctx)
 
 	j.sdkVersion = j.SdkVersion(ctx)
