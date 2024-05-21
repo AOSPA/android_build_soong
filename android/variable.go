@@ -556,6 +556,8 @@ type ProductVariables struct {
 	BoardUseVbmetaDigestInFingerprint *bool `json:",omitempty"`
 
 	OemProperties []string `json:",omitempty"`
+
+	DisableSoongConfigTrace *bool `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {

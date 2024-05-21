@@ -1567,7 +1567,11 @@ type ModuleOutPathContext interface {
 }
 
 func pathForModuleOut(ctx ModuleOutPathContext) OutputPath {
-	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir(), ctx.SoongConfigTraceHash())
+	if ctx.Config().DisableSoongConfigTrace() {
+		return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir())
+	} else {
+		return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir(), ctx.SoongConfigTraceHash())
+	}
 }
 
 // PathForModuleOut returns a Path representing the paths... under the module's
