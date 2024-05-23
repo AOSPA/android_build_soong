@@ -33,11 +33,6 @@ python_test_host {
         "manifest_fixer_test.py",
         "manifest_fixer.py",
     ],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
     libs: [
         "manifest_utils",
     ],
@@ -218,11 +213,6 @@ python_binary_host {
     srcs: [
         "conv_linker_config.py",
     ],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
     libs: [
         "linker_config_proto",
     ],
@@ -306,20 +296,16 @@ python_binary_host {
     srcs: [
         "merge_directories.py",
     ],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
 }
 
 python_binary_host {
     name: "buildinfo",
     main: "buildinfo.py",
     srcs: ["buildinfo.py"],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
+}
+
+python_binary_host {
+    name: "extra_install_zips_file_list",
+    main: "extra_install_zips_file_list.py",
+    srcs: ["extra_install_zips_file_list.py"],
 }
