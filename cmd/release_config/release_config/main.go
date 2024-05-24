@@ -51,7 +51,7 @@ func main() {
 	flag.BoolVar(&textproto, "textproto", true, "write artifacts as text protobuf")
 	flag.BoolVar(&json, "json", true, "write artifacts as json")
 	flag.BoolVar(&pb, "pb", true, "write artifacts as binary protobuf")
-	flag.BoolVar(&allMake, "all_make", true, "write makefiles for all release configs")
+	flag.BoolVar(&allMake, "all_make", false, "write makefiles for all release configs")
 	flag.BoolVar(&useBuildVar, "use_get_build_var", false, "use get_build_var PRODUCT_RELEASE_CONFIG_MAPS")
 	flag.BoolVar(&guard, "guard", true, "whether to guard with RELEASE_BUILD_FLAGS_IN_PROTOBUF")
 
@@ -92,10 +92,10 @@ func main() {
 	}
 	if allMake {
 		// Write one makefile per release config, using the canonical release name.
-		for k, _ := range configs.ReleaseConfigs {
-			if k != targetRelease {
-				makefilePath = filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.mk", product, k))
-				err = configs.WriteMakefile(makefilePath, k)
+		for _, c := range configs.GetSortedReleaseConfigs() {
+			if c.Name != targetRelease {
+				makefilePath = filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.mk", product, c.Name))
+				err = configs.WriteMakefile(makefilePath, c.Name)
 				if err != nil {
 					panic(err)
 				}
