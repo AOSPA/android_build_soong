@@ -486,6 +486,7 @@ func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, e
 		partition:             fullInstallPath.partition,
 		skipInstall:           m.skipInstall(),
 		aconfigPaths:          m.getAconfigPaths(),
+		archType:              m.target.Arch.ArchType,
 	}
 	m.packagingSpecs = append(m.packagingSpecs, spec)
 	return spec
@@ -609,6 +610,7 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 		partition:        fullInstallPath.partition,
 		skipInstall:      m.skipInstall(),
 		aconfigPaths:     m.getAconfigPaths(),
+		archType:         m.target.Arch.ArchType,
 	})
 
 	return fullInstallPath
@@ -652,6 +654,7 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 		partition:        fullInstallPath.partition,
 		skipInstall:      m.skipInstall(),
 		aconfigPaths:     m.getAconfigPaths(),
+		archType:         m.target.Arch.ArchType,
 	})
 
 	return fullInstallPath
