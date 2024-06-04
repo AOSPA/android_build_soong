@@ -43,6 +43,36 @@ type PackagingSpec struct {
 	effectiveLicenseFiles *Paths
 
 	partition string
+
+	// Whether this packaging spec represents an installation of the srcPath (i.e. this struct
+	// is created via InstallFile or InstallSymlink) or a simple packaging (i.e. created via
+	// PackageFile).
+	skipInstall bool
+
+	// Paths of aconfig files for the built artifact
+	aconfigPaths *Paths
+
+	// ArchType of the module which produced this packaging spec
+	archType ArchType
+}
+
+func (p *PackagingSpec) Equals(other *PackagingSpec) bool {
+	if other == nil {
+		return false
+	}
+	if p.relPathInPackage != other.relPathInPackage {
+		return false
+	}
+	if p.srcPath != other.srcPath || p.symlinkTarget != other.symlinkTarget {
+		return false
+	}
+	if p.executable != other.executable {
+		return false
+	}
+	if p.partition != other.partition {
+		return false
+	}
+	return true
 }
 
 // Get file name of installed package
@@ -72,6 +102,15 @@ func (p *PackagingSpec) EffectiveLicenseFiles() Paths {
 
 func (p *PackagingSpec) Partition() string {
 	return p.partition
+}
+
+func (p *PackagingSpec) SkipInstall() bool {
+	return p.skipInstall
+}
+
+// Paths of aconfig files for the built artifact
+func (p *PackagingSpec) GetAconfigPaths() Paths {
+	return *p.aconfigPaths
 }
 
 type PackageModule interface {
@@ -224,19 +263,45 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 
 func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec {
 	m := make(map[string]PackagingSpec)
+
+	var arches []ArchType
+	for _, target := range p.getSupportedTargets(ctx) {
+		arches = append(arches, target.Arch.ArchType)
+	}
+
+	// filter out packaging specs for unsupported architecture
+	filterArch := func(ps PackagingSpec) bool {
+		for _, arch := range arches {
+			if arch == ps.archType {
+				return true
+			}
+		}
+		return false
+	}
+
 	ctx.VisitDirectDeps(func(child Module) {
 		if pi, ok := ctx.OtherModuleDependencyTag(child).(PackagingItem); !ok || !pi.IsPackagingItem() {
 			return
 		}
 		for _, ps := range child.TransitivePackagingSpecs() {
+			if !filterArch(ps) {
+				continue
+			}
+
 			if filter != nil {
 				if !filter(ps) {
 					continue
 				}
 			}
-			if _, ok := m[ps.relPathInPackage]; !ok {
-				m[ps.relPathInPackage] = ps
+			dstPath := ps.relPathInPackage
+			if existingPs, ok := m[dstPath]; ok {
+				if !existingPs.Equals(&ps) {
+					ctx.ModuleErrorf("packaging conflict at %v:\n%v\n%v", dstPath, existingPs, ps)
+				}
+				continue
 			}
+
+			m[dstPath] = ps
 		}
 	})
 	return m

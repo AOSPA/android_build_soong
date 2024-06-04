@@ -50,6 +50,7 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("sdk", sdkMutator).Parallel()
 		ctx.BottomUp("vndk", VndkMutator).Parallel()
+		ctx.BottomUp("llndk", llndkMutator).Parallel()
 		ctx.BottomUp("link", LinkageMutator).Parallel()
 		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
 		ctx.BottomUp("version", versionMutator).Parallel()
@@ -323,7 +324,7 @@ type BaseProperties struct {
 
 	// *.logtags files, to combine together in order to generate the /system/etc/event-log-tags
 	// file
-	Logtags []string
+	Logtags []string `android:"path"`
 
 	// Make this module available when building for ramdisk.
 	Ramdisk_available *bool
@@ -351,6 +352,10 @@ type BaseProperties struct {
 	// Allows this module to use non-APEX version of libraries. Useful
 	// for building binaries that are started before APEXes are activated.
 	Bootstrap *bool
+
+	// Allows this module to be included in CMake release snapshots to be built outside of Android
+	// build system and source tree.
+	Cmake_snapshot_supported *bool
 
 	// Even if DeviceConfig().VndkUseCoreVariant() is set, this module must use vendor variant.
 	// see soong/cc/config/vndk.go
@@ -587,6 +592,7 @@ type compiler interface {
 	compilerDeps(ctx DepsContext, deps Deps) Deps
 	compilerFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags
 	compilerProps() []interface{}
+	baseCompilerProps() BaseCompilerProperties
 
 	appendCflags([]string)
 	appendAsflags([]string)
@@ -601,6 +607,7 @@ type linker interface {
 	linkerDeps(ctx DepsContext, deps Deps) Deps
 	linkerFlags(ctx ModuleContext, flags Flags) Flags
 	linkerProps() []interface{}
+	baseLinkerProps() BaseLinkerProperties
 	useClangLld(actx ModuleContext) bool
 
 	link(ctx ModuleContext, flags Flags, deps PathDeps, objs Objects) android.Path
@@ -906,8 +913,7 @@ type Module struct {
 
 	hideApexVariantFromMake bool
 
-	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
-	mergedAconfigFiles map[string]android.Paths
+	logtagsPaths android.Paths
 }
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
@@ -1990,12 +1996,13 @@ func (c *Module) stubLibraryMultipleApexViolation(ctx android.ModuleContext) boo
 	return false
 }
 
-func (d *Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	android.CollectDependencyAconfigFiles(ctx, &d.mergedAconfigFiles)
-}
-
 func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	ctx := moduleContextFromAndroidModuleContext(actx, c)
+
+	c.logtagsPaths = android.PathsForModuleSrc(actx, c.Properties.Logtags)
+	android.SetProvider(ctx, android.LogtagsProviderKey, &android.LogtagsInfo{
+		Logtags: c.logtagsPaths,
+	})
 
 	// If Test_only is set on a module in bp file, respect the setting, otherwise
 	// see if is a known test module type.
@@ -2154,7 +2161,9 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
 
-	android.CollectDependencyAconfigFiles(ctx, &c.mergedAconfigFiles)
+	if Bool(c.Properties.Cmake_snapshot_supported) {
+		android.SetProvider(ctx, cmakeSnapshotSourcesProvider, android.GlobFiles(ctx, ctx.ModuleDir()+"/**/*", nil))
+	}
 
 	c.maybeInstall(ctx, apexInfo)
 
@@ -2507,7 +2516,7 @@ func (c *Module) shouldUseApiSurface() bool {
 }
 
 func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
-	if !c.Enabled() {
+	if !c.Enabled(actx) {
 		return
 	}
 
@@ -2755,7 +2764,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 }
 
 func BeginMutator(ctx android.BottomUpMutatorContext) {
-	if c, ok := ctx.Module().(*Module); ok && c.Enabled() {
+	if c, ok := ctx.Module().(*Module); ok && c.Enabled(ctx) {
 		c.beginMutator(ctx)
 	}
 }
@@ -4069,9 +4078,6 @@ type Defaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
 	android.ApexModuleBase
-
-	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
-	mergedAconfigFiles map[string]android.Paths
 }
 
 // cc_defaults provides a set of properties that can be inherited by other cc

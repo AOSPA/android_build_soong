@@ -98,6 +98,7 @@ type MakeVarsContext interface {
 	BlueprintFile(module blueprint.Module) string
 
 	ModuleErrorf(module blueprint.Module, format string, args ...interface{})
+	OtherModulePropertyErrorf(module Module, property, format string, args ...interface{})
 	Errorf(format string, args ...interface{})
 
 	VisitAllModules(visit func(Module))
@@ -265,7 +266,7 @@ func (s *makeVarsSingleton) GenerateBuildActions(ctx SingletonContext) {
 	}
 
 	ctx.VisitAllModules(func(m Module) {
-		if provider, ok := m.(ModuleMakeVarsProvider); ok && m.Enabled() {
+		if provider, ok := m.(ModuleMakeVarsProvider); ok && m.Enabled(ctx) {
 			mctx := &makeVarsContext{
 				SingletonContext: ctx,
 			}
@@ -472,7 +473,7 @@ func (s *makeVarsSingleton) writeInstalls(installs, symlinks, katiVintfManifestI
 
 # Values written by Soong to generate install rules that can be amended by Kati.
 
-
+EXTRA_INSTALL_ZIPS :=
 `)
 
 	preserveSymlinksFlag := "-d"
@@ -506,9 +507,13 @@ func (s *makeVarsSingleton) writeInstalls(installs, symlinks, katiVintfManifestI
 		if extraFiles := install.extraFiles; extraFiles != nil {
 			fmt.Fprintf(buf, "\t( unzip -qDD -d '%s' '%s' 2>&1 | grep -v \"zipfile is empty\"; exit $${PIPESTATUS[0]} ) || \\\n", extraFiles.dir.String(), extraFiles.zip.String())
 			fmt.Fprintf(buf, "\t  ( code=$$?; if [ $$code -ne 0 -a $$code -ne 1 ]; then exit $$code; fi )\n")
+			fmt.Fprintf(buf, "EXTRA_INSTALL_ZIPS += %s:%s:%s\n", install.to.String(), extraFiles.dir.String(), extraFiles.zip.String())
 		}
+
 		fmt.Fprintln(buf)
 	}
+	fmt.Fprintf(buf, ".KATI_READONLY := EXTRA_INSTALL_ZIPS\n")
+	fmt.Fprintf(buf, "$(KATI_visibility_prefix EXTRA_INSTALL_ZIPS,build/make/core/Makefile)\n")
 
 	for _, symlink := range symlinks {
 		fmt.Fprintf(buf, "%s:", symlink.to.String())

@@ -1122,7 +1122,7 @@ func AndroidMkEntriesForTest(t *testing.T, ctx *TestContext, mod blueprint.Modul
 
 	entriesList := p.AndroidMkEntries()
 	aconfigUpdateAndroidMkEntries(ctx, mod.(Module), &entriesList)
-	for i, _ := range entriesList {
+	for i := range entriesList {
 		entriesList[i].fillInEntries(ctx, mod)
 	}
 	return entriesList
@@ -1285,5 +1285,23 @@ func EnsureListContainsSuffix(t *testing.T, result []string, expected string) {
 	t.Helper()
 	if !SuffixInList(result, expected) {
 		t.Errorf("%q is not found in %v", expected, result)
+	}
+}
+
+type panickingConfigAndErrorContext struct {
+	ctx *TestContext
+}
+
+func (ctx *panickingConfigAndErrorContext) OtherModulePropertyErrorf(module Module, property, fmt string, args ...interface{}) {
+	panic(ctx.ctx.PropertyErrorf(module, property, fmt, args...).Error())
+}
+
+func (ctx *panickingConfigAndErrorContext) Config() Config {
+	return ctx.ctx.Config()
+}
+
+func PanickingConfigAndErrorContext(ctx *TestContext) ConfigAndErrorContext {
+	return &panickingConfigAndErrorContext{
+		ctx: ctx,
 	}
 }

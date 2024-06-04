@@ -60,6 +60,7 @@ type EarlyModulePathContext interface {
 
 	ModuleDir() string
 	ModuleErrorf(fmt string, args ...interface{})
+	OtherModulePropertyErrorf(module Module, property, fmt string, args ...interface{})
 }
 
 var _ EarlyModulePathContext = ModuleContext(nil)
@@ -277,6 +278,7 @@ type WritablePath interface {
 
 type genPathProvider interface {
 	genPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleGenPath
+	genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath
 }
 type objPathProvider interface {
 	objPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleObjPath
@@ -290,6 +292,16 @@ type resPathProvider interface {
 func GenPathWithExt(ctx ModuleOutPathContext, subdir string, p Path, ext string) ModuleGenPath {
 	if path, ok := p.(genPathProvider); ok {
 		return path.genPathWithExt(ctx, subdir, ext)
+	}
+	ReportPathErrorf(ctx, "Tried to create generated file from unsupported path: %s(%s)", reflect.TypeOf(p).Name(), p)
+	return PathForModuleGen(ctx)
+}
+
+// GenPathWithExtAndTrimExt derives a new file path in ctx's generated sources directory
+// from the current path, but with the new extension and trim the suffix.
+func GenPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir string, p Path, ext string, trimExt string) ModuleGenPath {
+	if path, ok := p.(genPathProvider); ok {
+		return path.genPathWithExtAndTrimExt(ctx, subdir, ext, trimExt)
 	}
 	ReportPathErrorf(ctx, "Tried to create generated file from unsupported path: %s(%s)", reflect.TypeOf(p).Name(), p)
 	return PathForModuleGen(ctx)
@@ -550,7 +562,7 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 	if module == nil {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
-	if aModule, ok := module.(Module); ok && !aModule.Enabled() {
+	if aModule, ok := module.(Module); ok && !aModule.Enabled(ctx) {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
 	if outProducer, ok := module.(OutputFileProducer); ok {
@@ -1507,6 +1519,17 @@ func (p SourcePath) genPathWithExt(ctx ModuleOutPathContext, subdir, ext string)
 	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
 
+func (p SourcePath) genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath {
+	// If Trim_extension being set, force append Output_extension without replace original extension.
+	if trimExt != "" {
+		if ext != "" {
+			return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt)+"."+ext)
+		}
+		return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt))
+	}
+	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
+}
+
 func (p SourcePath) objPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleObjPath {
 	return PathForModuleObj(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
@@ -1544,7 +1567,11 @@ type ModuleOutPathContext interface {
 }
 
 func pathForModuleOut(ctx ModuleOutPathContext) OutputPath {
-	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir(), ctx.SoongConfigTraceHash())
+	if ctx.Config().DisableSoongConfigTrace() {
+		return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir())
+	} else {
+		return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir(), ctx.SoongConfigTraceHash())
+	}
 }
 
 // PathForModuleOut returns a Path representing the paths... under the module's
@@ -1591,6 +1618,17 @@ func PathForModuleGen(ctx ModuleOutPathContext, paths ...string) ModuleGenPath {
 
 func (p ModuleGenPath) genPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleGenPath {
 	// TODO: make a different path for local vs remote generated files?
+	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
+}
+
+func (p ModuleGenPath) genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath {
+	// If Trim_extension being set, force append Output_extension without replace original extension.
+	if trimExt != "" {
+		if ext != "" {
+			return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt)+"."+ext)
+		}
+		return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt))
+	}
 	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
 

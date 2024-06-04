@@ -22,6 +22,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -36,7 +37,6 @@ const baseLibDep = "server_configurable_flags"
 const libBaseDep = "libbase"
 const libLogDep = "liblog"
 const libAconfigStorageReadApiCcDep = "libaconfig_storage_read_api_cc"
-const libAconfigStorageProtosCcDep = "libaconfig_storage_protos_cc"
 
 type CcAconfigLibraryProperties struct {
 	// name of the aconfig_declarations module to generate a library for
@@ -88,11 +88,13 @@ func (this *CcAconfigLibraryCallbacks) GeneratorDeps(ctx cc.DepsContext, deps cc
 	if mode != "force-read-only" {
 		deps.SharedLibs = append(deps.SharedLibs, baseLibDep)
 
-		deps.SharedLibs = append(deps.SharedLibs, libBaseDep)
-		deps.SharedLibs = append(deps.SharedLibs, libLogDep)
-		deps.SharedLibs = append(deps.SharedLibs, libAconfigStorageReadApiCcDep)
-		deps.SharedLibs = append(deps.SharedLibs, libAconfigStorageProtosCcDep)
 	}
+
+	// TODO: after storage migration is over, don't add these in force-read-only-mode.
+	deps.SharedLibs = append(deps.SharedLibs, libAconfigStorageReadApiCcDep)
+	deps.SharedLibs = append(deps.SharedLibs, libBaseDep)
+	deps.SharedLibs = append(deps.SharedLibs, libLogDep)
+
 	// TODO: It'd be really nice if we could reexport this library and not make everyone do it.
 
 	return deps
@@ -154,6 +156,7 @@ func (this *CcAconfigLibraryCallbacks) GeneratorBuildActions(ctx cc.ModuleContex
 		Args: map[string]string{
 			"gendir": this.generatedDir.String(),
 			"mode":   mode,
+			"debug":  strconv.FormatBool(ctx.Config().ReleaseReadFromNewStorage()),
 		},
 	})
 

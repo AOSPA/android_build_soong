@@ -15,7 +15,11 @@
 package release_config_lib
 
 import (
+	"cmp"
 	"fmt"
+	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	rc_proto "android/soong/cmd/release_config/release_config_proto"
@@ -25,7 +29,7 @@ import (
 
 // One directory's contribution to the a release config.
 type ReleaseConfigContribution struct {
-	// Paths to files providing this config.
+	// Path of the file providing this config contribution.
 	path string
 
 	// The index of the config directory where this release config
@@ -58,6 +62,10 @@ type ReleaseConfig struct {
 	// The names of release configs that we inherit
 	InheritNames []string
 
+	// True if this release config only allows inheritance and aconfig flag
+	// overrides. Build flag value overrides are an error.
+	AconfigFlagsOnly bool
+
 	// Unmarshalled flag artifacts
 	FlagArtifacts FlagArtifacts
 
@@ -66,10 +74,36 @@ type ReleaseConfig struct {
 
 	// We have begun compiling this release config.
 	compileInProgress bool
+
+	// Partitioned artifacts for {partition}/etc/build_flags.json
+	PartitionBuildFlags map[string]*rc_proto.FlagArtifacts
 }
 
 func ReleaseConfigFactory(name string, index int) (c *ReleaseConfig) {
 	return &ReleaseConfig{Name: name, DeclarationIndex: index}
+}
+
+func (config *ReleaseConfig) InheritConfig(iConfig *ReleaseConfig) error {
+	for _, fa := range iConfig.FlagArtifacts {
+		name := *fa.FlagDeclaration.Name
+		myFa, ok := config.FlagArtifacts[name]
+		if !ok {
+			return fmt.Errorf("Could not inherit flag %s from %s", name, iConfig.Name)
+		}
+		if name == "RELEASE_ACONFIG_VALUE_SETS" {
+			// If there is a value assigned, add the trace.
+			if len(fa.Value.GetStringValue()) > 0 {
+				myFa.Traces = append(myFa.Traces, fa.Traces...)
+				myFa.Value = &rc_proto.Value{Val: &rc_proto.Value_StringValue{
+					myFa.Value.GetStringValue() + " " + fa.Value.GetStringValue()}}
+			}
+		} else if len(fa.Traces) > 1 {
+			// A value was assigned. Set our value.
+			myFa.Traces = append(myFa.Traces, fa.Traces[1:]...)
+			myFa.Value = fa.Value
+		}
+	}
+	return nil
 }
 
 func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) error {
@@ -81,6 +115,10 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 	}
 	config.compileInProgress = true
 	isRoot := config.Name == "root"
+
+	// Start with only the flag declarations.
+	config.FlagArtifacts = configs.FlagArtifacts.Clone()
+	releaseAconfigValueSets := config.FlagArtifacts["RELEASE_ACONFIG_VALUE_SETS"]
 
 	// Generate any configs we need to inherit.  This will detect loops in
 	// the config.
@@ -103,55 +141,37 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 			return err
 		}
 		iConfig.GenerateReleaseConfig(configs)
-		contributionsToApply = append(contributionsToApply, iConfig.Contributions...)
+		if err := config.InheritConfig(iConfig); err != nil {
+			return err
+		}
 	}
 	contributionsToApply = append(contributionsToApply, config.Contributions...)
 
-	myAconfigValueSets := []string{}
-	myAconfigValueSetsMap := map[string]bool{}
-	myFlags := configs.FlagArtifacts.Clone()
 	workflowManual := rc_proto.Workflow(rc_proto.Workflow_MANUAL)
-	container := rc_proto.Container(rc_proto.Container_ALL)
-	releaseAconfigValueSets := FlagArtifact{
-		FlagDeclaration: &rc_proto.FlagDeclaration{
-			Name:        proto.String("RELEASE_ACONFIG_VALUE_SETS"),
-			Namespace:   proto.String("android_UNKNOWN"),
-			Description: proto.String("Aconfig value sets assembled by release-config"),
-			Workflow:    &workflowManual,
-			Container:   &container,
-			Value:       &rc_proto.Value{Val: &rc_proto.Value_StringValue{""}},
-		},
-		DeclarationIndex: -1,
-		Traces: []*rc_proto.Tracepoint{
-			&rc_proto.Tracepoint{
-				Source: proto.String("$release-config"),
-				Value:  &rc_proto.Value{Val: &rc_proto.Value_StringValue{""}},
-			},
-		},
-	}
-	myFlags["RELEASE_ACONFIG_VALUE_SETS"] = &releaseAconfigValueSets
 	myDirsMap := make(map[int]bool)
 	for _, contrib := range contributionsToApply {
-		if len(contrib.proto.AconfigValueSets) > 0 {
-			contribAconfigValueSets := []string{}
-			for _, v := range contrib.proto.AconfigValueSets {
-				if _, ok := myAconfigValueSetsMap[v]; !ok {
-					contribAconfigValueSets = append(contribAconfigValueSets, v)
-					myAconfigValueSetsMap[v] = true
-				}
-			}
-			myAconfigValueSets = append(myAconfigValueSets, contribAconfigValueSets...)
-			releaseAconfigValueSets.Traces = append(
-				releaseAconfigValueSets.Traces,
-				&rc_proto.Tracepoint{
-					Source: proto.String(contrib.path),
-					Value:  &rc_proto.Value{Val: &rc_proto.Value_StringValue{strings.Join(contribAconfigValueSets, " ")}},
-				})
+		contribAconfigValueSets := []string{}
+		// Gather the aconfig_value_sets from this contribution, allowing duplicates for simplicity.
+		for _, v := range contrib.proto.AconfigValueSets {
+			contribAconfigValueSets = append(contribAconfigValueSets, v)
 		}
+		contribAconfigValueSetsString := strings.Join(contribAconfigValueSets, " ")
+		releaseAconfigValueSets.Value = &rc_proto.Value{Val: &rc_proto.Value_StringValue{
+			releaseAconfigValueSets.Value.GetStringValue() + " " + contribAconfigValueSetsString}}
+		releaseAconfigValueSets.Traces = append(
+			releaseAconfigValueSets.Traces,
+			&rc_proto.Tracepoint{
+				Source: proto.String(contrib.path),
+				Value:  &rc_proto.Value{Val: &rc_proto.Value_StringValue{contribAconfigValueSetsString}},
+			})
+
 		myDirsMap[contrib.DeclarationIndex] = true
+		if config.AconfigFlagsOnly && len(contrib.FlagValues) > 0 {
+			return fmt.Errorf("%s does not allow build flag overrides", config.Name)
+		}
 		for _, value := range contrib.FlagValues {
 			name := *value.proto.Name
-			fa, ok := myFlags[name]
+			fa, ok := config.FlagArtifacts[name]
 			if !ok {
 				return fmt.Errorf("Setting value for undefined flag %s in %s\n", name, value.path)
 			}
@@ -168,11 +188,21 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 				return err
 			}
 			if fa.Redacted {
-				delete(myFlags, name)
+				delete(config.FlagArtifacts, name)
 			}
 		}
 	}
-	releaseAconfigValueSets.Value = &rc_proto.Value{Val: &rc_proto.Value_StringValue{strings.Join(myAconfigValueSets, " ")}}
+	// Now remove any duplicates from the actual value of RELEASE_ACONFIG_VALUE_SETS
+	myAconfigValueSets := []string{}
+	myAconfigValueSetsMap := map[string]bool{}
+	for _, v := range strings.Split(releaseAconfigValueSets.Value.GetStringValue(), " ") {
+		if myAconfigValueSetsMap[v] {
+			continue
+		}
+		myAconfigValueSetsMap[v] = true
+		myAconfigValueSets = append(myAconfigValueSets, v)
+	}
+	releaseAconfigValueSets.Value = &rc_proto.Value{Val: &rc_proto.Value_StringValue{strings.TrimSpace(strings.Join(myAconfigValueSets, " "))}}
 
 	directories := []string{}
 	for idx, confDir := range configs.configDirs {
@@ -181,13 +211,32 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 		}
 	}
 
-	config.FlagArtifacts = myFlags
+	// Now build the per-partition artifacts
+	config.PartitionBuildFlags = make(map[string]*rc_proto.FlagArtifacts)
+	for _, v := range config.FlagArtifacts {
+		artifact, err := v.MarshalWithoutTraces()
+		if err != nil {
+			return err
+		}
+		for _, container := range v.FlagDeclaration.Containers {
+			if _, ok := config.PartitionBuildFlags[container]; !ok {
+				config.PartitionBuildFlags[container] = &rc_proto.FlagArtifacts{}
+			}
+			config.PartitionBuildFlags[container].FlagArtifacts = append(config.PartitionBuildFlags[container].FlagArtifacts, artifact)
+		}
+	}
 	config.ReleaseConfigArtifact = &rc_proto.ReleaseConfigArtifact{
 		Name:       proto.String(config.Name),
 		OtherNames: config.OtherNames,
 		FlagArtifacts: func() []*rc_proto.FlagArtifact {
 			ret := []*rc_proto.FlagArtifact{}
-			for _, flag := range myFlags {
+			flagNames := []string{}
+			for k := range config.FlagArtifacts {
+				flagNames = append(flagNames, k)
+			}
+			sort.Strings(flagNames)
+			for _, flagName := range flagNames {
+				flag := config.FlagArtifacts[flagName]
 				ret = append(ret, &rc_proto.FlagArtifact{
 					FlagDeclaration: flag.FlagDeclaration,
 					Traces:          flag.Traces,
@@ -202,5 +251,18 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 	}
 
 	config.compileInProgress = false
+	return nil
+}
+
+func (config *ReleaseConfig) WritePartitionBuildFlags(outDir, product, targetRelease string) error {
+	var err error
+	for partition, flags := range config.PartitionBuildFlags {
+		slices.SortFunc(flags.FlagArtifacts, func(a, b *rc_proto.FlagArtifact) int {
+			return cmp.Compare(*a.FlagDeclaration.Name, *b.FlagDeclaration.Name)
+		})
+		if err = WriteMessage(filepath.Join(outDir, fmt.Sprintf("build_flags_%s-%s-%s.json", partition, config.Name, product)), flags); err != nil {
+			return err
+		}
+	}
 	return nil
 }

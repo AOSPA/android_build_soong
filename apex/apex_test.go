@@ -3671,34 +3671,13 @@ func ensureExactDeapexedContents(t *testing.T, ctx *android.TestContext, moduleN
 
 func vndkLibrariesTxtFiles(vers ...string) (result string) {
 	for _, v := range vers {
-		if v == "current" {
-			for _, txt := range []string{"vndkcore", "vndksp", "vndkprivate", "vndkproduct"} {
-				result += `
-					` + txt + `_libraries_txt {
-						name: "` + txt + `.libraries.txt",
-						insert_vndk_version: true,
-					}
-				`
-			}
+		for _, txt := range []string{"llndk", "vndkcore", "vndksp", "vndkprivate", "vndkproduct"} {
 			result += `
-				llndk_libraries_txt {
-					name: "llndk.libraries.txt",
-				}
-				llndk_libraries_txt_for_apex {
-					name: "llndk.libraries.txt.apex",
-					stem: "llndk.libraries.txt",
-					insert_vndk_version: true,
-				}
-			`
-		} else {
-			for _, txt := range []string{"llndk", "vndkcore", "vndksp", "vndkprivate", "vndkproduct"} {
-				result += `
 					prebuilt_etc {
 						name: "` + txt + `.libraries.` + v + `.txt",
 						src: "dummy.txt",
 					}
 				`
-			}
 		}
 	}
 	return
@@ -5622,8 +5601,21 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			compile_dex: true,
 		}
 	`
+		// This test disables libbar, which causes the ComponentDepsMutator to add
+		// deps on libbar.stubs and other sub-modules that don't exist. We can
+		// enable AllowMissingDependencies to work around that, but enabling that
+		// causes extra checks for missing source files to dex_bootjars, so add those
+		// to the mock fs as well.
+		preparer2 := android.GroupFixturePreparers(
+			preparer,
+			android.PrepareForTestWithAllowMissingDependencies,
+			android.FixtureMergeMockFs(map[string][]byte{
+				"build/soong/scripts/check_boot_jars/package_allowed_list.txt": nil,
+				"frameworks/base/config/boot-profile.txt":                      nil,
+			}),
+		)
 
-		ctx := testDexpreoptWithApexes(t, bp, "", preparer, fragment)
+		ctx := testDexpreoptWithApexes(t, bp, "", preparer2, fragment)
 		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/prebuilt_myapex.deapexer/android_common/deapexer/javalib/libfoo.jar")
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/prebuilt_myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
@@ -7167,7 +7159,7 @@ func TestJavaSDKLibrary_WithinApex(t *testing.T) {
 
 	// The bar library should depend on the implementation jar.
 	barLibrary := ctx.ModuleForTests("bar", "android_common_myapex").Rule("javac")
-	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.impl\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
 		t.Errorf("expected %q, found %#q", expected, actual)
 	}
 }
@@ -7308,7 +7300,7 @@ func TestJavaSDKLibrary_ImportPreferred(t *testing.T) {
 
 	// The bar library should depend on the implementation jar.
 	barLibrary := ctx.ModuleForTests("bar", "android_common_myapex").Rule("javac")
-	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.impl\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
 		t.Errorf("expected %q, found %#q", expected, actual)
 	}
 }
@@ -9241,7 +9233,7 @@ func TestPrebuiltStubLibDep(t *testing.T) {
 								continue
 							}
 							mod := ctx.ModuleForTests(modName, variant).Module().(*cc.Module)
-							if !mod.Enabled() || mod.IsHideFromMake() {
+							if !mod.Enabled(android.PanickingConfigAndErrorContext(ctx)) || mod.IsHideFromMake() {
 								continue
 							}
 							for _, ent := range android.AndroidMkEntriesForTest(t, ctx, mod) {
@@ -10702,6 +10694,9 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 		cc_library {
 			name: "libbase",
 			srcs: ["libbase.cc"],
+			apex_available: [
+				"myapex",
+			],
 		}
 		cc_library {
 			name: "libaconfig_storage_read_api_cc",
@@ -11543,4 +11538,43 @@ func TestAconfifDeclarationsValidation(t *testing.T) {
 	android.AssertStringDoesNotContain(t, "cache file of a lib that does not statically "+
 		"depend on java_aconfig_library not passed as an input",
 		aconfigFlagArgs, fmt.Sprintf("%s/%s/intermediate.pb", outDir, "quux"))
+}
+
+func TestMultiplePrebuiltsWithSameBase(t *testing.T) {
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			prebuilts: ["myetc", "myetc2"],
+			min_sdk_version: "29",
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		prebuilt_etc {
+			name: "myetc",
+			src: "myprebuilt",
+			filename: "myfilename",
+		}
+		prebuilt_etc {
+			name: "myetc2",
+			sub_dir: "mysubdir",
+			src: "myprebuilt",
+			filename: "myfilename",
+		}
+	`, withFiles(android.MockFS{
+		"packages/modules/common/build/allowed_deps.txt": nil,
+	}))
+
+	ab := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, ctx, ab)
+	var builder strings.Builder
+	data.Custom(&builder, ab.BaseModuleName(), "TARGET_", "", data)
+	androidMk := builder.String()
+
+	android.AssertStringDoesContain(t, "not found", androidMk, "LOCAL_MODULE := etc_myfilename.myapex")
+	android.AssertStringDoesContain(t, "not found", androidMk, "LOCAL_MODULE := etc_mysubdir_myfilename.myapex")
 }

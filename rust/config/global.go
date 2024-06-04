@@ -24,7 +24,7 @@ import (
 var (
 	pctx = android.NewPackageContext("android/soong/rust/config")
 
-	RustDefaultVersion = "1.77.1"
+	RustDefaultVersion = "1.77.1.p1"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -53,6 +53,9 @@ var (
 		"--color=always",
 		"-Z dylib-lto",
 		"-Z link-native-libraries=no",
+
+		// cfg flag to indicate that we are building in AOSP with Soong
+		"--cfg soong",
 	}
 
 	LinuxHostGlobalLinkFlags = []string{

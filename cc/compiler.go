@@ -141,6 +141,22 @@ type BaseCompilerProperties struct {
 		Flags []string
 	}
 
+	// Populated by aidl_interface CPP backend to let other modules (e.g. cc_cmake_snapshot)
+	// access actual source files and not generated cpp intermediary sources.
+	AidlInterface struct {
+		// list of aidl_interface sources
+		Sources []string `blueprint:"mutated"`
+
+		// root directory of AIDL sources
+		AidlRoot string `blueprint:"mutated"`
+
+		// AIDL backend language (e.g. "cpp", "ndk")
+		Lang string `blueprint:"mutated"`
+
+		// list of flags passed to AIDL generator
+		Flags []string `blueprint:"mutated"`
+	} `blueprint:"mutated"`
+
 	Renderscript struct {
 		// list of directories that will be added to the llvm-rs-cc include paths
 		Include_dirs []string
@@ -280,6 +296,10 @@ func (compiler *baseCompiler) appendAsflags(flags []string) {
 
 func (compiler *baseCompiler) compilerProps() []interface{} {
 	return []interface{}{&compiler.Properties, &compiler.Proto}
+}
+
+func (compiler *baseCompiler) baseCompilerProps() BaseCompilerProperties {
+	return compiler.Properties
 }
 
 func includeBuildDirectory(prop *bool) bool {

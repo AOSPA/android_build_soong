@@ -55,6 +55,9 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_usr_share", PrebuiltUserShareFactory)
 	ctx.RegisterModuleType("prebuilt_usr_share_host", PrebuiltUserShareHostFactory)
 	ctx.RegisterModuleType("prebuilt_usr_hyphendata", PrebuiltUserHyphenDataFactory)
+	ctx.RegisterModuleType("prebuilt_usr_keylayout", PrebuiltUserKeyLayoutFactory)
+	ctx.RegisterModuleType("prebuilt_usr_keychars", PrebuiltUserKeyCharsFactory)
+	ctx.RegisterModuleType("prebuilt_usr_idc", PrebuiltUserIdcFactory)
 	ctx.RegisterModuleType("prebuilt_font", PrebuiltFontFactory)
 	ctx.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
 	ctx.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
@@ -155,9 +158,6 @@ type PrebuiltEtc struct {
 	additionalDependencies *android.Paths
 
 	makeClass string
-
-	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
-	mergedAconfigFiles map[string]android.Paths
 }
 
 type Defaults struct {
@@ -418,7 +418,6 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	for _, ip := range installs {
 		ip.addInstallRules(ctx)
 	}
-	android.CollectDependencyAconfigFiles(ctx, &p.mergedAconfigFiles)
 }
 
 type installProperties struct {
@@ -483,7 +482,6 @@ func (p *PrebuiltEtc) AndroidMkEntries() []android.AndroidMkEntries {
 				if p.additionalDependencies != nil {
 					entries.AddStrings("LOCAL_ADDITIONAL_DEPENDENCIES", p.additionalDependencies.Strings()...)
 				}
-				android.SetAconfigFileMkEntries(p.AndroidModuleBase(), entries, p.mergedAconfigFiles)
 			},
 		},
 	}}
@@ -603,6 +601,39 @@ func PrebuiltUserShareHostFactory() android.Module {
 func PrebuiltUserHyphenDataFactory() android.Module {
 	module := &PrebuiltEtc{}
 	InitPrebuiltEtcModule(module, "usr/hyphen-data")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_usr_keylayout is for a prebuilt artifact that is installed in
+// <partition>/usr/keylayout/<sub_dir> directory.
+func PrebuiltUserKeyLayoutFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "usr/keylayout")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_usr_keychars is for a prebuilt artifact that is installed in
+// <partition>/usr/keychars/<sub_dir> directory.
+func PrebuiltUserKeyCharsFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "usr/keychars")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_usr_idc is for a prebuilt artifact that is installed in
+// <partition>/usr/idc/<sub_dir> directory.
+func PrebuiltUserIdcFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "usr/idc")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	android.InitDefaultableModule(module)
