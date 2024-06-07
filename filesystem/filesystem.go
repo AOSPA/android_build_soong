@@ -106,7 +106,7 @@ type filesystemProperties struct {
 	Base_dir *string
 
 	// Directories to be created under root. e.g. /dev, /proc, etc.
-	Dirs []string
+	Dirs proptools.Configurable[[]string]
 
 	// Symbolic links to be created under root with "ln -sf <target> <name>".
 	Symlinks []symlinkDefinition
@@ -152,6 +152,7 @@ func filesystemFactory() android.Module {
 func initFilesystemModule(module *filesystem) {
 	module.AddProperties(&module.properties)
 	android.InitPackageModule(module)
+	module.PackagingBase.DepsCollectFirstTargetOnly = true
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 }
@@ -242,7 +243,7 @@ func validatePartitionType(ctx android.ModuleContext, p partition) {
 // already in `rootDir`.
 func (f *filesystem) buildNonDepsFiles(ctx android.ModuleContext, builder *android.RuleBuilder, rootDir android.OutputPath) {
 	// create dirs and symlinks
-	for _, dir := range f.properties.Dirs {
+	for _, dir := range f.properties.Dirs.GetOrDefault(ctx, nil) {
 		// OutputPath.Join verifies dir
 		builder.Command().Text("mkdir -p").Text(rootDir.Join(ctx, dir).String())
 	}

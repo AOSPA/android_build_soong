@@ -1978,6 +1978,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			TargetDependencies: targetRequired,
 			HostDependencies:   hostRequired,
 			Data:               data,
+			Required:           m.RequiredModuleNames(),
 		}
 		SetProvider(ctx, ModuleInfoJSONProvider, m.moduleInfoJSON)
 	}
@@ -2152,14 +2153,34 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 			ctx.OtherModulePropertyErrorf(m, property, "release_flag requires 1 argument, found %d", condition.NumArgs())
 			return proptools.ConfigurableValueUndefined()
 		}
-		if v, ok := ctx.Config().productVariables.BuildFlags[condition.Arg(0)]; ok {
-			return proptools.ConfigurableValueString(v)
+		if ty, ok := ctx.Config().productVariables.BuildFlagTypes[condition.Arg(0)]; ok {
+			v := ctx.Config().productVariables.BuildFlags[condition.Arg(0)]
+			switch ty {
+			case "unspecified", "obsolete":
+				return proptools.ConfigurableValueUndefined()
+			case "string":
+				return proptools.ConfigurableValueString(v)
+			case "bool":
+				return proptools.ConfigurableValueBool(v == "true")
+			default:
+				panic("unhandled release flag type: " + ty)
+			}
 		}
 		return proptools.ConfigurableValueUndefined()
 	case "product_variable":
-		// TODO(b/323382414): Might add these on a case-by-case basis
-		ctx.OtherModulePropertyErrorf(m, property, "TODO(b/323382414): Product variables are not yet supported in selects")
-		return proptools.ConfigurableValueUndefined()
+		if condition.NumArgs() != 1 {
+			ctx.OtherModulePropertyErrorf(m, property, "product_variable requires 1 argument, found %d", condition.NumArgs())
+			return proptools.ConfigurableValueUndefined()
+		}
+		variable := condition.Arg(0)
+		switch variable {
+		case "debuggable":
+			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
+		default:
+			// TODO(b/323382414): Might add these on a case-by-case basis
+			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))
+			return proptools.ConfigurableValueUndefined()
+		}
 	case "soong_config_variable":
 		if condition.NumArgs() != 2 {
 			ctx.OtherModulePropertyErrorf(m, property, "soong_config_variable requires 2 arguments, found %d", condition.NumArgs())

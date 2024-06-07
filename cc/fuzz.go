@@ -127,13 +127,13 @@ func (fuzzBin *fuzzBinary) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	if ctx.Config().Getenv("FUZZ_FRAMEWORK") == "AFL" {
 		deps.HeaderLibs = append(deps.HeaderLibs, "libafl_headers")
 	} else {
-		deps.StaticLibs = append(deps.StaticLibs, config.LibFuzzerRuntimeLibrary(ctx.toolchain()))
+		deps.StaticLibs = append(deps.StaticLibs, config.LibFuzzerRuntimeLibrary())
 		// Fuzzers built with HWASAN should use the interceptors for better
 		// mutation based on signals in strcmp, memcpy, etc. This is only needed for
 		// fuzz targets, not generic HWASAN-ified binaries or libraries.
 		if module, ok := ctx.Module().(*Module); ok {
 			if module.IsSanitizerEnabled(Hwasan) {
-				deps.StaticLibs = append(deps.StaticLibs, config.LibFuzzerRuntimeInterceptors(ctx.toolchain()))
+				deps.StaticLibs = append(deps.StaticLibs, config.LibFuzzerRuntimeInterceptors())
 			}
 		}
 	}
@@ -601,7 +601,7 @@ func CollectAllSharedDependencies(ctx android.ModuleContext) (android.RuleBuilde
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 
 		// If this is a Rust module which is not rust_ffi_shared, we still want to bundle any transitive
-		// shared dependencies (even for rust_ffi_static)
+		// shared dependencies (even for rust_ffi_rlib or rust_ffi_static)
 		if rustmod, ok := child.(LinkableInterface); ok && rustmod.RustLibraryInterface() && !rustmod.Shared() {
 			if recursed[ctx.OtherModuleName(child)] {
 				return false

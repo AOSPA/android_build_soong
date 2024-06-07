@@ -19,6 +19,7 @@ package cc
 // functions.
 
 import (
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -45,18 +46,18 @@ var (
 		blueprint.RuleParams{
 			Depfile:     "${out}.d",
 			Deps:        blueprint.DepsGCC,
-			Command:     "$relPwd ${config.CcWrapper}$ccCmd -c $cFlags -MD -MF ${out}.d -o $out $in",
+			Command:     "$relPwd ${config.CcWrapper}$ccCmd -c $cFlags -MD -MF ${out}.d -o $out $in$postCmd",
 			CommandDeps: []string{"$ccCmd"},
 		},
-		"ccCmd", "cFlags")
+		"ccCmd", "cFlags", "postCmd")
 
 	// Rule to invoke gcc with given command and flags, but no dependencies.
 	ccNoDeps = pctx.AndroidStaticRule("ccNoDeps",
 		blueprint.RuleParams{
-			Command:     "$relPwd $ccCmd -c $cFlags -o $out $in",
+			Command:     "$relPwd $ccCmd -c $cFlags -o $out $in$postCmd",
 			CommandDeps: []string{"$ccCmd"},
 		},
-		"ccCmd", "cFlags")
+		"ccCmd", "cFlags", "postCmd")
 
 	// Rules to invoke ld to link binaries. Uses a .rsp file to list dependencies, as there may
 	// be many.
@@ -330,6 +331,15 @@ var (
 			CommandDeps: []string{"$cxxExtractor", "$kytheVnames"},
 		},
 		"cFlags")
+
+	// Function pointer for producting staticlibs from rlibs. Corresponds to
+	// rust.TransformRlibstoStaticlib(), initialized in soong-rust (rust/builder.go init())
+	//
+	// This is required since soong-rust depends on soong-cc, so soong-cc cannot depend on soong-rust
+	// without resulting in a circular dependency. Setting this function pointer in soong-rust allows
+	// soong-cc to call into this particular function.
+	TransformRlibstoStaticlib (func(ctx android.ModuleContext, mainSrc android.Path, deps []RustRlibDep,
+		outputFile android.WritablePath) android.Path) = nil
 )
 
 func PwdPrefix() string {
@@ -391,6 +401,7 @@ type builderFlags struct {
 	gcovCoverage  bool
 	sAbiDump      bool
 	emitXrefs     bool
+	clangVerify   bool
 
 	assemblerWithCpp bool // True if .s files should be processed with the c preprocessor.
 
@@ -582,6 +593,7 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 		var moduleToolingFlags string
 
 		var ccCmd string
+		var postCmd string
 		tidy := flags.tidy
 		coverage := flags.gcovCoverage
 		dump := flags.sAbiDump
@@ -632,6 +644,10 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 			ccCmd = "${config.ClangBin}/" + ccCmd
 		}
 
+		if flags.clangVerify {
+			postCmd = " && touch " + objFile.String()
+		}
+
 		var implicitOutputs android.WritablePaths
 		if coverage {
 			gcnoFile := android.ObjPathWithExt(ctx, subdir, srcFile, "gcno")
@@ -648,8 +664,9 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 			Implicits:       cFlagsDeps,
 			OrderOnly:       pathDeps,
 			Args: map[string]string{
-				"cFlags": shareFlags("cFlags", moduleFlags+extraFlags),
-				"ccCmd":  ccCmd, // short and not shared
+				"cFlags":  shareFlags("cFlags", moduleFlags+extraFlags),
+				"ccCmd":   ccCmd, // short and not shared
+				"postCmd": postCmd,
 			},
 		})
 
@@ -786,6 +803,47 @@ func transformObjToStaticLib(ctx android.ModuleContext,
 			},
 		})
 	}
+}
+
+// Generate a Rust staticlib from a list of rlibDeps. Returns nil if TransformRlibstoStaticlib is nil or rlibDeps is empty.
+func generateRustStaticlib(ctx android.ModuleContext, rlibDeps []RustRlibDep) android.Path {
+	if TransformRlibstoStaticlib == nil && len(rlibDeps) > 0 {
+		// This should only be reachable if a module defines static_rlibs and
+		// soong-rust hasn't been loaded alongside soong-cc (e.g. in soong-cc tests).
+		panic(fmt.Errorf("TransformRlibstoStaticlib is not set and static_rlibs is defined in %s", ctx.ModuleName()))
+	} else if len(rlibDeps) == 0 {
+		return nil
+	}
+
+	output := android.PathForModuleOut(ctx, "generated_rust_staticlib", "lib"+ctx.ModuleName()+"_rust_staticlib.a")
+	stemFile := output.ReplaceExtension(ctx, "rs")
+	crateNames := []string{}
+
+	// Collect crate names
+	for _, lib := range rlibDeps {
+		// Exclude libstd so this can support no_std builds.
+		if lib.CrateName != "libstd" {
+			crateNames = append(crateNames, lib.CrateName)
+		}
+	}
+
+	// Deduplicate any crateNames just to be safe
+	crateNames = android.FirstUniqueStrings(crateNames)
+
+	// Write the source file
+	android.WriteFileRule(ctx, stemFile, genRustStaticlibSrcFile(crateNames))
+
+	return TransformRlibstoStaticlib(ctx, stemFile, rlibDeps, output)
+}
+
+func genRustStaticlibSrcFile(crateNames []string) string {
+	lines := []string{
+		"// @Soong generated Source",
+	}
+	for _, crate := range crateNames {
+		lines = append(lines, fmt.Sprintf("extern crate %s;", crate))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Generate a rule for compiling multiple .o files, plus static libraries, whole static libraries,
