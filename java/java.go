@@ -366,14 +366,14 @@ type dependencyTag struct {
 	toolchain bool
 
 	static bool
+
+	installable bool
 }
 
-// installDependencyTag is a dependency tag that is annotated to cause the installed files of the
-// dependency to be installed when the parent module is installed.
-type installDependencyTag struct {
-	blueprint.BaseDependencyTag
-	android.InstallAlwaysNeededDependencyTag
-	name string
+var _ android.InstallNeededDependencyTag = (*dependencyTag)(nil)
+
+func (d dependencyTag) InstallDepNeeded() bool {
+	return d.installable
 }
 
 func (d dependencyTag) LicenseAnnotations() []android.LicenseAnnotation {
@@ -405,7 +405,7 @@ func makeUsesLibraryDependencyTag(sdkVersion int, optional bool) usesLibraryDepe
 }
 
 func IsJniDepTag(depTag blueprint.DependencyTag) bool {
-	return depTag == jniLibTag
+	return depTag == jniLibTag || depTag == jniInstallTag
 }
 
 var (
@@ -434,8 +434,8 @@ var (
 	javaApiContributionTag  = dependencyTag{name: "java-api-contribution"}
 	depApiSrcsTag           = dependencyTag{name: "dep-api-srcs"}
 	aconfigDeclarationTag   = dependencyTag{name: "aconfig-declaration"}
-	jniInstallTag           = installDependencyTag{name: "jni install"}
-	binaryInstallTag        = installDependencyTag{name: "binary install"}
+	jniInstallTag           = dependencyTag{name: "jni install", runtimeLinked: true, installable: true}
+	binaryInstallTag        = dependencyTag{name: "binary install", runtimeLinked: true, installable: true}
 	usesLibReqTag           = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion, false)
 	usesLibOptTag           = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion, true)
 	usesLibCompat28OptTag   = makeUsesLibraryDependencyTag(28, true)
@@ -491,6 +491,7 @@ type jniLib struct {
 	coverageFile   android.OptionalPath
 	unstrippedFile android.Path
 	partition      string
+	installPaths   android.InstallPaths
 }
 
 func sdkDeps(ctx android.BottomUpMutatorContext, sdkContext android.SdkContext, d dexer) {
@@ -566,6 +567,12 @@ func getJavaVersion(ctx android.ModuleContext, javaVersion string, sdkContext an
 		return normalizeJavaVersion(ctx, javaVersion)
 	} else if ctx.Device() {
 		return defaultJavaLanguageVersion(ctx, sdkContext.SdkVersion(ctx))
+	} else if ctx.Config().TargetsJava21() {
+		// Temporary experimental flag to be able to try and build with
+		// java version 21 options.  The flag, if used, just sets Java
+		// 21 as the default version, leaving any components that
+		// target an older version intact.
+		return JAVA_VERSION_21
 	} else {
 		return JAVA_VERSION_17
 	}
@@ -908,7 +915,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Check min_sdk_version of the transitive dependencies if this module is created from
 	// java_sdk_library.
-	if j.deviceProperties.Min_sdk_version != nil && j.SdkLibraryName() != nil {
+	if j.overridableProperties.Min_sdk_version != nil && j.SdkLibraryName() != nil {
 		j.CheckDepsMinSdkVersion(ctx)
 	}
 
@@ -1096,7 +1103,7 @@ func (p *librarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMemberCo
 
 	// If the min_sdk_version was set then add the canonical representation of the API level to the
 	// snapshot.
-	if j.deviceProperties.Min_sdk_version != nil {
+	if j.overridableProperties.Min_sdk_version != nil {
 		canonical, err := android.ReplaceFinalizedCodenames(ctx.SdkModuleContext().Config(), j.minSdkVersion.String())
 		if err != nil {
 			ctx.ModuleErrorf("%s", err)

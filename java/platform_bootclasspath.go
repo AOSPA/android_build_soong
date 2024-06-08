@@ -294,6 +294,15 @@ func (b *platformBootclasspathModule) checkApexModules(ctx android.ModuleContext
 
 // generateHiddenAPIBuildActions generates all the hidden API related build rules.
 func (b *platformBootclasspathModule) generateHiddenAPIBuildActions(ctx android.ModuleContext, modules []android.Module, fragments []android.Module) bootDexJarByModule {
+	createEmptyHiddenApiFiles := func() {
+		paths := android.OutputPaths{b.hiddenAPIFlagsCSV, b.hiddenAPIIndexCSV, b.hiddenAPIMetadataCSV}
+		for _, path := range paths {
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   android.Touch,
+				Output: path,
+			})
+		}
+	}
 
 	// Save the paths to the monolithic files for retrieval via OutputFiles().
 	b.hiddenAPIFlagsCSV = hiddenAPISingletonPaths(ctx).flags
@@ -306,13 +315,7 @@ func (b *platformBootclasspathModule) generateHiddenAPIBuildActions(ctx android.
 	// optimization that can be used to reduce the incremental build time but as its name suggests it
 	// can be unsafe to use, e.g. when the changes affect anything that goes on the bootclasspath.
 	if ctx.Config().DisableHiddenApiChecks() {
-		paths := android.OutputPaths{b.hiddenAPIFlagsCSV, b.hiddenAPIIndexCSV, b.hiddenAPIMetadataCSV}
-		for _, path := range paths {
-			ctx.Build(pctx, android.BuildParams{
-				Rule:   android.Touch,
-				Output: path,
-			})
-		}
+		createEmptyHiddenApiFiles()
 		return bootDexJarByModule
 	}
 
@@ -324,6 +327,13 @@ func (b *platformBootclasspathModule) generateHiddenAPIBuildActions(ctx android.
 	// Extract the classes jars only from those libraries that do not have corresponding fragments as
 	// the fragments will have already provided the flags that are needed.
 	classesJars := monolithicInfo.ClassesJars
+
+	if len(classesJars) == 0 {
+		// This product does not include any monolithic jars. Monolithic hiddenapi flag generation is not required.
+		// However, generate an empty file so that the dist tags in f/b/boot/Android.bp can be resolved, and `m dist` works.
+		createEmptyHiddenApiFiles()
+		return bootDexJarByModule
+	}
 
 	// Create the input to pass to buildRuleToGenerateHiddenAPIStubFlagsFile
 	input := newHiddenAPIFlagInput()
