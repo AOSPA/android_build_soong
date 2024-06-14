@@ -375,6 +375,7 @@ func loadFromConfigFile(configurable *ProductVariables, filename string) error {
 	} else {
 		// Make a decoder for it
 		jsonDecoder := json.NewDecoder(configFileReader)
+		jsonDecoder.DisallowUnknownFields()
 		err = jsonDecoder.Decode(configurable)
 		if err != nil {
 			return fmt.Errorf("config file: %s did not parse correctly: %s", filename, err.Error())
@@ -1338,10 +1339,6 @@ func (c *config) SourceRootDirs() []string {
 	return c.productVariables.SourceRootDirs
 }
 
-func (c *config) IncludeTags() []string {
-	return c.productVariables.IncludeTags
-}
-
 func (c *config) HostStaticBinaries() bool {
 	return Bool(c.productVariables.HostStaticBinaries)
 }
@@ -1398,10 +1395,6 @@ func (c *config) HasMultilibConflict(arch ArchType) bool {
 
 func (c *config) PrebuiltHiddenApiDir(_ PathContext) string {
 	return String(c.productVariables.PrebuiltHiddenApiDir)
-}
-
-func (c *config) IsVndkDeprecated() bool {
-	return !Bool(c.productVariables.KeepVndk)
 }
 
 func (c *config) VendorApiLevel() string {
@@ -1473,10 +1466,6 @@ func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 
 func (c *deviceConfig) ExtraVndkVersions() []string {
 	return c.config.productVariables.ExtraVndkVersions
-}
-
-func (c *deviceConfig) VndkUseCoreVariant() bool {
-	return Bool(c.config.productVariables.VndkUseCoreVariant) && Bool(c.config.productVariables.KeepVndk)
 }
 
 func (c *deviceConfig) SystemSdkVersions() []string {
@@ -1977,10 +1966,10 @@ func (c *deviceConfig) HostFakeSnapshotEnabled() bool {
 }
 
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
-	if c.config.productVariables.ShippingApiLevel == nil {
+	if c.config.productVariables.Shipping_api_level == nil {
 		return NoneApiLevel
 	}
-	apiLevel, _ := strconv.Atoi(*c.config.productVariables.ShippingApiLevel)
+	apiLevel, _ := strconv.Atoi(*c.config.productVariables.Shipping_api_level)
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
@@ -1994,6 +1983,10 @@ func (c *deviceConfig) BuildBrokenClangAsFlags() bool {
 
 func (c *deviceConfig) BuildBrokenClangCFlags() bool {
 	return c.config.productVariables.BuildBrokenClangCFlags
+}
+
+func (c *deviceConfig) BuildBrokenClangProperty() bool {
+	return c.config.productVariables.BuildBrokenClangProperty
 }
 
 func (c *deviceConfig) BuildBrokenEnforceSyspropOwner() bool {
@@ -2177,6 +2170,7 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
 		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC",
 		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
+		"RELEASE_APEX_CONTRIBUTIONS_TELEMETRY_TVP",
 		"RELEASE_APEX_CONTRIBUTIONS_TZDATA",
 		"RELEASE_APEX_CONTRIBUTIONS_UWB",
 		"RELEASE_APEX_CONTRIBUTIONS_WIFI",

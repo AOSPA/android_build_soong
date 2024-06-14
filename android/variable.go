@@ -55,6 +55,10 @@ type variableProperties struct {
 			Base_dir *string
 		}
 
+		Shipping_api_level struct {
+			Cflags []string
+		}
+
 		// unbundled_build is a catch-all property to annotate modules that don't build in one or
 		// more unbundled branches, usually due to dependencies missing from the manifest.
 		Unbundled_build struct {
@@ -211,6 +215,7 @@ type variableProperties struct {
 		Release_aidl_use_unfrozen struct {
 			Cflags          []string
 			Cmd             *string
+			Required        []string
 			Vintf_fragments []string
 		}
 	} `android:"arch_variant"`
@@ -302,38 +307,38 @@ type ProductVariables struct {
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 
-	Allow_missing_dependencies   *bool    `json:",omitempty"`
-	Unbundled_build              *bool    `json:",omitempty"`
-	Unbundled_build_apps         []string `json:",omitempty"`
-	Unbundled_build_image        *bool    `json:",omitempty"`
-	Always_use_prebuilt_sdks     *bool    `json:",omitempty"`
-	Skip_boot_jars_check         *bool    `json:",omitempty"`
-	Malloc_low_memory            *bool    `json:",omitempty"`
-	Malloc_zero_contents         *bool    `json:",omitempty"`
-	Malloc_pattern_fill_contents *bool    `json:",omitempty"`
-	Safestack                    *bool    `json:",omitempty"`
-	HostStaticBinaries           *bool    `json:",omitempty"`
-	Binder32bit                  *bool    `json:",omitempty"`
-	UseGoma                      *bool    `json:",omitempty"`
-	UseRBE                       *bool    `json:",omitempty"`
-	UseRBEJAVAC                  *bool    `json:",omitempty"`
-	UseRBER8                     *bool    `json:",omitempty"`
-	UseRBED8                     *bool    `json:",omitempty"`
-	Debuggable                   *bool    `json:",omitempty"`
-	Eng                          *bool    `json:",omitempty"`
-	Treble_linker_namespaces     *bool    `json:",omitempty"`
-	Enforce_vintf_manifest       *bool    `json:",omitempty"`
-	Uml                          *bool    `json:",omitempty"`
-	Arc                          *bool    `json:",omitempty"`
-	MinimizeJavaDebugInfo        *bool    `json:",omitempty"`
-	Build_from_text_stub         *bool    `json:",omitempty"`
-	Real_hal                     *bool    `json:",omitempty"`
-	Qmaa_hal                     *bool    `json:",omitempty"`
-	Device_support_hwfde         *bool    `json:",omitempty"`
-	Device_support_hwfde_perf    *bool    `json:",omitempty"`
+	Allow_missing_dependencies       *bool    `json:",omitempty"`
+	Unbundled_build                  *bool    `json:",omitempty"`
+	Unbundled_build_apps             []string `json:",omitempty"`
+	Unbundled_build_image            *bool    `json:",omitempty"`
+	Always_use_prebuilt_sdks         *bool    `json:",omitempty"`
+	Skip_boot_jars_check             *bool    `json:",omitempty"`
+	Malloc_low_memory                *bool    `json:",omitempty"`
+	Malloc_zero_contents             *bool    `json:",omitempty"`
+	Malloc_pattern_fill_contents     *bool    `json:",omitempty"`
+	Safestack                        *bool    `json:",omitempty"`
+	HostStaticBinaries               *bool    `json:",omitempty"`
+	Binder32bit                      *bool    `json:",omitempty"`
+	UseGoma                          *bool    `json:",omitempty"`
+	UseRBE                           *bool    `json:",omitempty"`
+	UseRBEJAVAC                      *bool    `json:",omitempty"`
+	UseRBER8                         *bool    `json:",omitempty"`
+	UseRBED8                         *bool    `json:",omitempty"`
+	Debuggable                       *bool    `json:",omitempty"`
+	Eng                              *bool    `json:",omitempty"`
+	Treble_linker_namespaces         *bool    `json:",omitempty"`
+	Enforce_vintf_manifest           *bool    `json:",omitempty"`
+	Uml                              *bool    `json:",omitempty"`
+	Arc                              *bool    `json:",omitempty"`
+	MinimizeJavaDebugInfo            *bool    `json:",omitempty"`
+	Build_from_text_stub             *bool    `json:",omitempty"`
+	Real_hal                         *bool    `json:",omitempty"`
+	Qmaa_hal                         *bool    `json:",omitempty"`
+	Device_support_hwfde             *bool    `json:",omitempty"`
+	Device_support_hwfde_perf        *bool    `json:",omitempty"`
 	Unbundled_build_sdks_from_source *bool    `json:",omitempty"`
-	Device_page_size_agnostic    *bool    `json:",omitempty"`
-	Pdk                          *bool    `json:",omitempty"`
+	Device_page_size_agnostic        *bool    `json:",omitempty"`
+	Pdk                              *bool    `json:",omitempty"`
 
 	BuildType *string `json:",omitempty"`
 
@@ -403,7 +408,6 @@ type ProductVariables struct {
 
 	PgoAdditionalProfileDirs []string `json:",omitempty"`
 
-	VndkUseCoreVariant         *bool `json:",omitempty"`
 	VndkSnapshotBuildArtifacts *bool `json:",omitempty"`
 
 	DirectedVendorSnapshot bool            `json:",omitempty"`
@@ -487,11 +491,12 @@ type ProductVariables struct {
 
 	PrebuiltHiddenApiDir *string `json:",omitempty"`
 
-	ShippingApiLevel *string `json:",omitempty"`
+	Shipping_api_level *string `json:",omitempty"`
 
 	BuildBrokenPluginValidation         []string `json:",omitempty"`
 	BuildBrokenClangAsFlags             bool     `json:",omitempty"`
 	BuildBrokenClangCFlags              bool     `json:",omitempty"`
+	BuildBrokenClangProperty            bool     `json:",omitempty"`
 	GenruleSandboxing                   *bool    `json:",omitempty"`
 	BuildBrokenEnforceSyspropOwner      bool     `json:",omitempty"`
 	BuildBrokenTrebleSyspropNeverallow  bool     `json:",omitempty"`
@@ -518,7 +523,6 @@ type ProductVariables struct {
 
 	IgnorePrefer32OnDevice bool `json:",omitempty"`
 
-	IncludeTags    []string `json:",omitempty"`
 	SourceRootDirs []string `json:",omitempty"`
 
 	AfdoProfiles []string `json:",omitempty"`
@@ -532,8 +536,6 @@ type ProductVariables struct {
 	ReleaseAconfigFlagDefaultPermission string `json:",omitempty"`
 
 	ReleaseDefaultModuleBuildFromSource *bool `json:",omitempty"`
-
-	KeepVndk *bool `json:",omitempty"`
 
 	CheckVendorSeappViolations *bool `json:",omitempty"`
 

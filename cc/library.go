@@ -421,11 +421,6 @@ type libraryDecorator struct {
 
 	postInstallCmds []string
 
-	// If useCoreVariant is true, the vendor variant of a VNDK library is
-	// not installed.
-	useCoreVariant       bool
-	checkSameCoreVariant bool
-
 	skipAPIDefine bool
 
 	// Decorated interfaces
@@ -1790,33 +1785,6 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 				} else {
 					library.baseInstaller.subDir = "vndk"
 				}
-			}
-
-			// In some cases we want to use core variant for VNDK-Core libs.
-			// Skip product variant since VNDKs use only the vendor variant.
-			if ctx.isVndk() && !ctx.isVndkSp() && !ctx.IsVndkExt() && !ctx.inProduct() {
-				mayUseCoreVariant := true
-
-				if ctx.mustUseVendorVariant() {
-					mayUseCoreVariant = false
-				}
-
-				if ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) {
-					mayUseCoreVariant = false
-				}
-
-				if mayUseCoreVariant {
-					library.checkSameCoreVariant = true
-					if ctx.DeviceConfig().VndkUseCoreVariant() {
-						library.useCoreVariant = true
-					}
-				}
-			}
-
-			// do not install vndk libs
-			// vndk libs are packaged into VNDK APEX
-			if ctx.isVndk() && !ctx.IsVndkExt() && !ctx.Config().IsVndkDeprecated() && !ctx.inProduct() {
-				return
 			}
 		} else if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
 			// Bionic libraries (e.g. libc.so) is installed to the bootstrap subdirectory.
