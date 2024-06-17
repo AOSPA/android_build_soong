@@ -16,6 +16,24 @@
       "message": "why??",
       "revId": "0a2b58952137f5d0b3d4fe285dd1d6247ae10bf6",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7247ed81_dbc490c0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000737
+      },
+      "writtenOn": "2024-06-17T16:47:54Z",
+      "side": 1,
+      "message": "Personal build, that\u0027s why I add DNM",
+      "parentUuid": "24464f5e_6982b795",
+      "revId": "0a2b58952137f5d0b3d4fe285dd1d6247ae10bf6",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
