@@ -1852,7 +1852,7 @@ func (j *Module) compileJavaClasses(ctx android.ModuleContext, jarName string, i
 	classes := android.PathForModuleOut(ctx, "javac", jarName).OutputPath
 	TransformJavaToClasses(ctx, classes, idx, srcFiles, srcJars, annoSrcJar, flags, extraJarDeps)
 
-	if ctx.Config().EmitXrefRules() {
+	if ctx.Config().EmitXrefRules() && ctx.Module() == ctx.PrimaryModule() {
 		extractionFile := android.PathForModuleOut(ctx, kzipName)
 		emitXrefRule(ctx, extractionFile, idx, srcFiles, srcJars, flags, extraJarDeps)
 		j.kytheFiles = append(j.kytheFiles, extractionFile)
@@ -2544,7 +2544,7 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 				case Implementation:
 					return RenameUseInclude, "info"
 				default:
-					//fmt.Printf("LJ: %v -> %v StubsLinkType unknown\n", module, m)
+					//fmt.Printf("collectDirectDepsProviders: %v -> %v StubsLinkType unknown\n", module, m)
 					// Fall through to the heuristic logic.
 				}
 				switch reflect.TypeOf(m).String() {

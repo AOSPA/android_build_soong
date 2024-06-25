@@ -96,6 +96,10 @@ func (install dexpreopterInstall) ToMakeEntries() android.AndroidMkEntries {
 	}
 }
 
+func (install dexpreopterInstall) PackageFile(ctx android.ModuleContext) android.PackagingSpec {
+	return ctx.PackageFile(install.installDirOnDevice, install.installFileOnDevice, install.outputPathOnHost)
+}
+
 type Dexpreopter struct {
 	dexpreopter
 }
@@ -310,10 +314,6 @@ func dexpreoptToolDepsMutator(ctx android.BottomUpMutatorContext) {
 		return
 	}
 	dexpreopt.RegisterToolDeps(ctx)
-}
-
-func (d *dexpreopter) odexOnSystemOther(ctx android.ModuleContext, libName string, installPath android.InstallPath) bool {
-	return dexpreopt.OdexOnSystemOtherByName(libName, android.InstallPathToOnDevicePath(ctx, installPath), dexpreopt.GetGlobalConfig(ctx))
 }
 
 // Returns the install path of the dex jar of a module.
@@ -545,12 +545,29 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 	// Use the path of the dex file to determine the library name
 	isApexSystemServerJar := global.AllApexSystemServerJars(ctx).ContainsJar(dexJarStem)
 
+	dexpreoptPartition := d.installPath.Partition()
+	// dexpreoptPartition is set to empty for dexpreopts of system APEX and system_other.
+	// In case of system APEX, however, we can set it to "system" manually.
+	// TODO(b/346662300): Let dexpreopter generate the installPath for dexpreopt files instead of
+	// using the dex location to generate the installPath.
+	if isApexSystemServerJar {
+		dexpreoptPartition = "system"
+	}
 	for _, install := range dexpreoptRule.Installs() {
 		// Remove the "/" prefix because the path should be relative to $ANDROID_PRODUCT_OUT.
 		installDir := strings.TrimPrefix(filepath.Dir(install.To), "/")
+		partition := dexpreoptPartition
+		if strings.HasPrefix(installDir, partition+"/") {
+			installDir = strings.TrimPrefix(installDir, partition+"/")
+		} else {
+			// If the partition for the installDir is different from the install partition, set the
+			// partition empty to install the dexpreopt files to the desired partition.
+			// TODO(b/346439786): Define and use the dexpreopt module type to avoid this mismatch.
+			partition = ""
+		}
 		installBase := filepath.Base(install.To)
 		arch := filepath.Base(installDir)
-		installPath := android.PathForModuleInPartitionInstall(ctx, "", installDir)
+		installPath := android.PathForModuleInPartitionInstall(ctx, partition, installDir)
 		isProfile := strings.HasSuffix(installBase, ".prof")
 
 		if isProfile {
@@ -581,6 +598,37 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 
 	if !isApexSystemServerJar {
 		d.builtInstalled = dexpreoptRule.Installs().String()
+	}
+}
+
+func getModuleInstallPathInfo(ctx android.ModuleContext, fullInstallPath string) (android.InstallPath, string, string) {
+	installPath := android.PathForModuleInstall(ctx)
+	installDir, installBase := filepath.Split(strings.TrimPrefix(fullInstallPath, "/"))
+
+	if !strings.HasPrefix(installDir, installPath.Partition()+"/") {
+		// Return empty filename if the install partition is not for the target image.
+		return installPath, "", ""
+	}
+	relDir, err := filepath.Rel(installPath.Partition(), installDir)
+	if err != nil {
+		panic(err)
+	}
+	return installPath, relDir, installBase
+}
+
+// RuleBuilder.Install() adds output-to-install copy pairs to a list for Make. To share this
+// information with PackagingSpec in soong, call PackageFile for them.
+// The install path and the target install partition of the module must be the same.
+func packageFile(ctx android.ModuleContext, install android.RuleBuilderInstall) {
+	installPath, relDir, name := getModuleInstallPathInfo(ctx, install.To)
+	// Empty name means the install partition is not for the target image.
+	// For the system image, files for "apex" and "system_other" are skipped here.
+	// The skipped "apex" files are for testing only, for example,
+	// "/apex/art_boot_images/javalib/x86/boot.vdex".
+	// TODO(b/320196894): Files for "system_other" are skipped because soong creates the system
+	// image only for now.
+	if name != "" {
+		ctx.PackageFile(installPath.Join(ctx, relDir), name, install.From)
 	}
 }
 

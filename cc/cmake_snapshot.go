@@ -187,6 +187,10 @@ func parseTemplate(templateContents string) *template.Template {
 		"getCompilerProperties": func(m *Module) BaseCompilerProperties {
 			return m.compiler.baseCompilerProps()
 		},
+		"getCflagsProperty": func(ctx android.ModuleContext, m *Module) []string {
+			cflags := m.compiler.baseCompilerProps().Cflags
+			return cflags.GetOrDefault(ctx, nil)
+		},
 		"getLinkerProperties": func(m *Module) BaseLinkerProperties {
 			return m.linker.baseLinkerProps()
 		},
@@ -488,17 +492,24 @@ func getModuleType(m *Module) string {
 	case *libraryDecorator:
 		return "library"
 	case *testBinary:
-		return "executable"
+		return "test"
+	case *benchmarkDecorator:
+		return "test"
 	}
-	panic(fmt.Sprintf("Unexpected module type: %T", m.compiler))
+	panic(fmt.Sprintf("Unexpected module type: %T", m.linker))
 }
 
 func getExtraLibs(m *Module) []string {
 	switch decorator := m.linker.(type) {
 	case *testBinary:
 		if decorator.testDecorator.gtest() {
-			return []string{"libgtest"}
+			return []string{
+				"libgtest",
+				"libgtest_main",
+			}
 		}
+	case *benchmarkDecorator:
+		return []string{"libgoogle-benchmark"}
 	}
 	return nil
 }
@@ -507,7 +518,7 @@ func getIncludeDirs(ctx android.ModuleContext, m *Module) []string {
 	moduleDir := ctx.OtherModuleDir(m) + string(filepath.Separator)
 	switch decorator := m.compiler.(type) {
 	case *libraryDecorator:
-		return sliceWithPrefix(moduleDir, decorator.flagExporter.Properties.Export_include_dirs)
+		return sliceWithPrefix(moduleDir, decorator.flagExporter.Properties.Export_include_dirs.GetOrDefault(ctx, nil))
 	}
 	return nil
 }

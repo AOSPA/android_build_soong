@@ -717,12 +717,6 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Integer_overflow = nil
 	}
 
-	// Also disable CFI for VNDK variants of components
-	if ctx.isVndk() && ctx.useVndk() {
-		s.Cfi = nil
-		s.Diag.Cfi = nil
-	}
-
 	if ctx.inRamdisk() || ctx.inVendorRamdisk() || ctx.inRecovery() {
 		// HWASan ramdisk (which is built from recovery) goes over some bootloader limit.
 		// Keep libc instrumented so that ramdisk / vendor_ramdisk / recovery can run hwasan-instrumented code if necessary.
@@ -1839,7 +1833,6 @@ type sanitizerLibrariesTxtModule struct {
 }
 
 var _ etc.PrebuiltEtcModule = (*sanitizerLibrariesTxtModule)(nil)
-var _ android.OutputFileProducer = (*sanitizerLibrariesTxtModule)(nil)
 
 func RegisterSanitizerLibrariesTxtType(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("sanitizer_libraries_txt", sanitizerLibrariesTxtFactory)
@@ -1927,6 +1920,8 @@ func (txt *sanitizerLibrariesTxtModule) GenerateAndroidBuildActions(ctx android.
 
 	installPath := android.PathForModuleInstall(ctx, "etc")
 	ctx.InstallFile(installPath, filename, txt.outputFile)
+
+	ctx.SetOutputFiles(android.Paths{txt.outputFile}, "")
 }
 
 func (txt *sanitizerLibrariesTxtModule) AndroidMkEntries() []android.AndroidMkEntries {
@@ -1934,11 +1929,6 @@ func (txt *sanitizerLibrariesTxtModule) AndroidMkEntries() []android.AndroidMkEn
 		Class:      "ETC",
 		OutputFile: android.OptionalPathForPath(txt.outputFile),
 	}}
-}
-
-// PrebuiltEtcModule interface
-func (txt *sanitizerLibrariesTxtModule) OutputFile() android.OutputPath {
-	return txt.outputFile
 }
 
 // PrebuiltEtcModule interface
