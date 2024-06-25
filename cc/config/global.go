@@ -316,6 +316,9 @@ var (
 		// New warnings to be fixed after clang-r475365
 		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
 		"-Wno-error=enum-constexpr-conversion",               // http://b/243964282
+		// New warnings to be fixed after clang-r522817
+		"-Wno-error=invalid-offsetof",
+		"-Wno-error=thread-safety-reference-return",
 
 		//Android T Vendor Compilation
 		"-Wno-reorder-init-list",
@@ -381,6 +384,9 @@ var (
 		// until then because it causes warnings in the _callers_, not the
 		// project itself.
 		"-Wno-deprecated-dynamic-exception-spec",
+
+		// Allow using VLA CXX extension.
+		"-Wno-vla-cxx-extension",
 	}
 
 	noOverride64GlobalCflags = []string{}
@@ -469,7 +475,7 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r510928"
+	ClangDefaultVersion      = "clang-r522817"
 	ClangDefaultShortVersion = "18"
 
 	// Directories with warnings from Android.bp files.
@@ -516,14 +522,14 @@ func init() {
 		// Automatically initialize any uninitialized stack variables.
 		// Prefer zero-init if multiple options are set.
 		if ctx.Config().IsEnvTrue("AUTO_ZERO_INITIALIZE") {
-			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang -Wno-unused-command-line-argument")
+			flags = append(flags, "-ftrivial-auto-var-init=zero")
 		} else if ctx.Config().IsEnvTrue("AUTO_PATTERN_INITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=pattern")
 		} else if ctx.Config().IsEnvTrue("AUTO_UNINITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=uninitialized")
 		} else {
 			// Default to zero initialization.
-			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang -Wno-unused-command-line-argument")
+			flags = append(flags, "-ftrivial-auto-var-init=zero")
 		}
 		// Workaround for ccache with clang.
 		// See http://petereisentraut.blogspot.com/2011/05/ccache-and-clang.html.
