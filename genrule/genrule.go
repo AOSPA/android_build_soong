@@ -126,7 +126,7 @@ type generatorProperties struct {
 	//  $(out): a single output file.
 	//  $(genDir): the sandbox directory for this tool; contains $(out).
 	//  $$: a literal $
-	Cmd *string
+	Cmd proptools.Configurable[string] `android:"replace_instead_of_append"`
 
 	// name of the modules (if any) that produces the host executable.   Leave empty for
 	// prebuilts or scripts that do not need a module to build them.
@@ -403,7 +403,7 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 	var outputFiles android.WritablePaths
 	var zipArgs strings.Builder
 
-	cmd := String(g.properties.Cmd)
+	cmd := g.properties.Cmd.GetOrDefault(ctx, "")
 	if g.CmdModifier != nil {
 		cmd = g.CmdModifier(ctx, cmd)
 	}
@@ -650,7 +650,7 @@ func (x noopImageInterface) VendorRamdiskVariantNeeded(android.BaseModuleContext
 func (x noopImageInterface) DebugRamdiskVariantNeeded(android.BaseModuleContext) bool    { return false }
 func (x noopImageInterface) RecoveryVariantNeeded(android.BaseModuleContext) bool        { return false }
 func (x noopImageInterface) ExtraImageVariations(ctx android.BaseModuleContext) []string { return nil }
-func (x noopImageInterface) SetImageVariation(ctx android.BaseModuleContext, variation string, module android.Module) {
+func (x noopImageInterface) SetImageVariation(ctx android.BaseModuleContext, variation string) {
 }
 
 func NewGenSrcs() *Module {

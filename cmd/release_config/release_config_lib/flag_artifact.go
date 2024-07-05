@@ -15,7 +15,9 @@
 package release_config_lib
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 
 	rc_proto "android/soong/cmd/release_config/release_config_proto"
 
@@ -45,6 +47,94 @@ type FlagArtifact struct {
 // Key is flag name.
 type FlagArtifacts map[string]*FlagArtifact
 
+func FlagArtifactFactory(declPath string) *FlagArtifact {
+	fd := &rc_proto.FlagDeclaration{}
+	fa := &FlagArtifact{
+		FlagDeclaration:  fd,
+		DeclarationIndex: -1,
+		Traces:           []*rc_proto.Tracepoint{},
+	}
+	if declPath != "" {
+		LoadMessage(declPath, fd)
+		fa.Value = fd.GetValue()
+		fa.Traces = append(fa.Traces, &rc_proto.Tracepoint{Source: proto.String(declPath), Value: fa.Value})
+	}
+	return fa
+}
+
+func FlagArtifactsFactory(artifactsPath string) *FlagArtifacts {
+	ret := make(FlagArtifacts)
+	if artifactsPath != "" {
+		fas := &rc_proto.FlagArtifacts{}
+		LoadMessage(artifactsPath, fas)
+		for _, fa_pb := range fas.FlagArtifacts {
+			fa := &FlagArtifact{}
+			fa.FlagDeclaration = fa_pb.GetFlagDeclaration()
+			if val := fa_pb.GetValue(); val != nil {
+				fa.Value = val
+			}
+			if traces := fa_pb.GetTraces(); traces != nil {
+				fa.Traces = traces
+			}
+			ret[*fa.FlagDeclaration.Name] = fa
+		}
+	}
+	return &ret
+}
+
+func (fas *FlagArtifacts) SortedFlagNames() []string {
+	var names []string
+	for k, _ := range *fas {
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func (fa *FlagArtifact) GenerateFlagDeclarationArtifact() *rc_proto.FlagDeclarationArtifact {
+	ret := &rc_proto.FlagDeclarationArtifact{
+		Name:            fa.FlagDeclaration.Name,
+		DeclarationPath: fa.Traces[0].Source,
+	}
+	if namespace := fa.FlagDeclaration.GetNamespace(); namespace != "" {
+		ret.Namespace = proto.String(namespace)
+	}
+	if description := fa.FlagDeclaration.GetDescription(); description != "" {
+		ret.Description = proto.String(description)
+	}
+	if workflow := fa.FlagDeclaration.GetWorkflow(); workflow != rc_proto.Workflow_Workflow_Unspecified {
+		ret.Workflow = &workflow
+	}
+	if containers := fa.FlagDeclaration.GetContainers(); containers != nil {
+		ret.Containers = containers
+	}
+	return ret
+}
+
+func FlagDeclarationArtifactsFactory(path string) *rc_proto.FlagDeclarationArtifacts {
+	ret := &rc_proto.FlagDeclarationArtifacts{}
+	if path != "" {
+		LoadMessage(path, ret)
+	} else {
+		ret.FlagDeclarationArtifacts = []*rc_proto.FlagDeclarationArtifact{}
+	}
+	return ret
+}
+
+func (fas *FlagArtifacts) GenerateFlagDeclarationArtifacts(intermediates []*rc_proto.FlagDeclarationArtifacts) *rc_proto.FlagDeclarationArtifacts {
+	ret := &rc_proto.FlagDeclarationArtifacts{FlagDeclarationArtifacts: []*rc_proto.FlagDeclarationArtifact{}}
+	for _, fa := range *fas {
+		ret.FlagDeclarationArtifacts = append(ret.FlagDeclarationArtifacts, fa.GenerateFlagDeclarationArtifact())
+	}
+	for _, fda := range intermediates {
+		ret.FlagDeclarationArtifacts = append(ret.FlagDeclarationArtifacts, fda.FlagDeclarationArtifacts...)
+	}
+	slices.SortFunc(ret.FlagDeclarationArtifacts, func(a, b *rc_proto.FlagDeclarationArtifact) int {
+		return cmp.Compare(*a.Name, *b.Name)
+	})
+	return ret
+}
+
 // Create a clone of the flag artifact.
 //
 // Returns:
@@ -54,9 +144,11 @@ func (src *FlagArtifact) Clone() *FlagArtifact {
 	value := &rc_proto.Value{}
 	proto.Merge(value, src.Value)
 	return &FlagArtifact{
-		FlagDeclaration: src.FlagDeclaration,
-		Traces:          src.Traces,
-		Value:           value,
+		FlagDeclaration:  src.FlagDeclaration,
+		Traces:           src.Traces,
+		Value:            value,
+		DeclarationIndex: src.DeclarationIndex,
+		Redacted:         src.Redacted,
 	}
 }
 

@@ -62,6 +62,8 @@ func GenRuleFactory() android.Module {
 
 	android.InitApexModule(module)
 
+	android.InitDefaultableModule(module)
+
 	return module
 }
 
@@ -116,5 +118,5 @@ func (g *GenruleExtraProperties) ExtraImageVariations(ctx android.BaseModuleCont
 	return variants
 }
 
-func (g *GenruleExtraProperties) SetImageVariation(ctx android.BaseModuleContext, variation string, module android.Module) {
+func (g *GenruleExtraProperties) SetImageVariation(ctx android.BaseModuleContext, variation string) {
 }

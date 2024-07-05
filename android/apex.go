@@ -37,11 +37,7 @@ var (
 // Accessible via `ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)`
 type ApexInfo struct {
 	// Name of the apex variation that this module (i.e. the apex variant of the module) is
-	// mutated into, or "" for a platform (i.e. non-APEX) variant. Note that this name and the
-	// Soong module name of the APEX can be different. That happens when there is
-	// `override_apex` that overrides `apex`. In that case, both Soong modules have the same
-	// apex variation name which usually is `com.android.foo`. This name is also the `name`
-	// in the path `/apex/<name>` where this apex is activated on at runtime.
+	// mutated into, or "" for a platform (i.e. non-APEX) variant.
 	//
 	// Also note that a module can be included in multiple APEXes, in which case, the module is
 	// mutated into one or more variants, each of which is for an APEX. The variants then can
@@ -354,7 +350,8 @@ type SkipApexAllowedDependenciesCheck interface {
 // ApexModuleBase provides the default implementation for the ApexModule interface. APEX-aware
 // modules are expected to include this struct and call InitApexModule().
 type ApexModuleBase struct {
-	ApexProperties ApexProperties
+	ApexProperties     ApexProperties
+	apexPropertiesLock sync.Mutex // protects ApexProperties during parallel apexDirectlyInAnyMutator
 
 	canHaveApexVariants bool
 
@@ -765,18 +762,22 @@ func UpdateUniqueApexVariationsForDeps(mctx BottomUpMutatorContext, am ApexModul
 
 // UpdateDirectlyInAnyApex uses the final module to store if any variant of this module is directly
 // in any APEX, and then copies the final value to all the modules. It also copies the
-// DirectlyInAnyApex value to any direct dependencies with a CopyDirectlyInAnyApexTag dependency
-// tag.
+// DirectlyInAnyApex value to any transitive dependencies with a CopyDirectlyInAnyApexTag
+// dependency tag.
 func UpdateDirectlyInAnyApex(mctx BottomUpMutatorContext, am ApexModule) {
 	base := am.apexModuleBase()
-	// Copy DirectlyInAnyApex and InAnyApex from any direct dependencies with a
+	// Copy DirectlyInAnyApex and InAnyApex from any transitive dependencies with a
 	// CopyDirectlyInAnyApexTag dependency tag.
-	mctx.VisitDirectDeps(func(dep Module) {
-		if _, ok := mctx.OtherModuleDependencyTag(dep).(CopyDirectlyInAnyApexTag); ok {
-			depBase := dep.(ApexModule).apexModuleBase()
+	mctx.WalkDeps(func(child, parent Module) bool {
+		if _, ok := mctx.OtherModuleDependencyTag(child).(CopyDirectlyInAnyApexTag); ok {
+			depBase := child.(ApexModule).apexModuleBase()
+			depBase.apexPropertiesLock.Lock()
+			defer depBase.apexPropertiesLock.Unlock()
 			depBase.ApexProperties.DirectlyInAnyApex = base.ApexProperties.DirectlyInAnyApex
 			depBase.ApexProperties.InAnyApex = base.ApexProperties.InAnyApex
+			return true
 		}
+		return false
 	})
 
 	if base.ApexProperties.DirectlyInAnyApex {

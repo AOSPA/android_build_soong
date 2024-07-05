@@ -324,6 +324,16 @@ func (scopes apiScopes) MapToIndex(accessor func(*apiScope) string) map[string]i
 	return ret
 }
 
+func (scopes apiScopes) ConvertStubsLibraryExportableToEverything(name string) string {
+	for _, scope := range scopes {
+		if strings.HasSuffix(name, scope.exportableStubsLibraryModuleNameSuffix()) {
+			return strings.TrimSuffix(name, scope.exportableStubsLibraryModuleNameSuffix()) +
+				scope.stubsLibraryModuleNameSuffix()
+		}
+	}
+	return name
+}
+
 var (
 	scopeByName    = make(map[string]*apiScope)
 	allScopeNames  []string
@@ -418,7 +428,7 @@ var (
 		},
 		kind: android.SdkSystemServer,
 	})
-	allApiScopes = apiScopes{
+	AllApiScopes = apiScopes{
 		apiScopePublic,
 		apiScopeSystem,
 		apiScopeTest,
@@ -1204,7 +1214,7 @@ func (c *commonToSdkLibraryAndImport) selectScopePaths(ctx android.BaseModuleCon
 	paths := c.findClosestScopePath(apiScope)
 	if paths == nil {
 		var scopes []string
-		for _, s := range allApiScopes {
+		for _, s := range AllApiScopes {
 			if c.findScopePaths(s) != nil {
 				scopes = append(scopes, s.name)
 			}
@@ -1421,7 +1431,7 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 	// Check to see if any scopes have been explicitly enabled. If any have then all
 	// must be.
 	anyScopesExplicitlyEnabled := false
-	for _, scope := range allApiScopes {
+	for _, scope := range AllApiScopes {
 		scopeProperties := module.scopeToProperties[scope]
 		if scopeProperties.Enabled != nil {
 			anyScopesExplicitlyEnabled = true
@@ -1431,7 +1441,7 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 
 	var generatedScopes apiScopes
 	enabledScopes := make(map[*apiScope]struct{})
-	for _, scope := range allApiScopes {
+	for _, scope := range AllApiScopes {
 		scopeProperties := module.scopeToProperties[scope]
 		// If any scopes are explicitly enabled then ignore the legacy enabled status.
 		// This is to ensure that any new usages of this module type do not rely on legacy
@@ -1451,7 +1461,7 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 
 	// Now check to make sure that any scope that is extended by an enabled scope is also
 	// enabled.
-	for _, scope := range allApiScopes {
+	for _, scope := range AllApiScopes {
 		if _, ok := enabledScopes[scope]; ok {
 			extends := scope.extends
 			if extends != nil {
@@ -1503,6 +1513,18 @@ func IsXmlPermissionsFileDepTag(depTag blueprint.DependencyTag) bool {
 }
 
 var implLibraryTag = sdkLibraryComponentTag{name: "impl-library"}
+
+var _ android.InstallNeededDependencyTag = sdkLibraryComponentTag{}
+
+// To satisfy the CopyDirectlyInAnyApexTag interface. Implementation library of the sdk library
+// in an apex is considered to be directly in the apex, as if it was listed in java_libs.
+func (t sdkLibraryComponentTag) CopyDirectlyInAnyApex() {}
+
+var _ android.CopyDirectlyInAnyApexTag = implLibraryTag
+
+func (t sdkLibraryComponentTag) InstallDepNeeded() bool {
+	return t.name == "xml-permissions-file" || t.name == "impl-library"
+}
 
 // Add the dependencies on the child modules in the component deps mutator.
 func (module *SdkLibrary) ComponentDepsMutator(ctx android.BottomUpMutatorContext) {
@@ -1649,6 +1671,14 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		module.builtInstalledForApex = module.implLibraryModule.builtInstalledForApex
 		module.dexpreopter.configPath = module.implLibraryModule.dexpreopter.configPath
 		module.dexpreopter.outputProfilePathOnHost = module.implLibraryModule.dexpreopter.outputProfilePathOnHost
+
+		// Properties required for Library.AndroidMkEntries
+		module.logtagsSrcs = module.implLibraryModule.logtagsSrcs
+		module.dexpreopter.builtInstalled = module.implLibraryModule.dexpreopter.builtInstalled
+		module.jacocoReportClassesFile = module.implLibraryModule.jacocoReportClassesFile
+		module.dexer.proguardDictionary = module.implLibraryModule.dexer.proguardDictionary
+		module.dexer.proguardUsageZip = module.implLibraryModule.dexer.proguardUsageZip
+		module.linter.reports = module.implLibraryModule.linter.reports
 
 		if !module.Host() {
 			module.hostdexInstallFile = module.implLibraryModule.hostdexInstallFile
@@ -1814,7 +1844,6 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 	props := struct {
 		Name           *string
 		Visibility     []string
-		Instrument     bool
 		Libs           []string
 		Static_libs    []string
 		Apex_available []string
@@ -1822,8 +1851,6 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 	}{
 		Name:       proptools.StringPtr(module.implLibraryModuleName()),
 		Visibility: visibility,
-		// Set the instrument property to ensure it is instrumented when instrumentation is required.
-		Instrument: true,
 
 		Libs: append(module.properties.Libs, module.sdkLibraryProperties.Impl_only_libs...),
 
@@ -1842,6 +1869,7 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 		&module.dexProperties,
 		&module.dexpreoptProperties,
 		&module.linter.properties,
+		&module.overridableProperties,
 		&props,
 		module.sdkComponentPropertiesForChildLibrary(),
 	}
@@ -2562,7 +2590,7 @@ func SdkLibraryFactory() android.Module {
 
 	// Initialize the map from scope to scope specific properties.
 	scopeToProperties := make(map[*apiScope]*ApiScopeProperties)
-	for _, scope := range allApiScopes {
+	for _, scope := range AllApiScopes {
 		scopeToProperties[scope] = scope.scopeSpecificProperties(module)
 	}
 	module.scopeToProperties = scopeToProperties
@@ -2679,7 +2707,7 @@ var allScopeStructType = createAllScopePropertiesStructType()
 // Dynamically create a structure type for each apiscope in allApiScopes.
 func createAllScopePropertiesStructType() reflect.Type {
 	var fields []reflect.StructField
-	for _, apiScope := range allApiScopes {
+	for _, apiScope := range AllApiScopes {
 		field := reflect.StructField{
 			Name: apiScope.fieldName,
 			Type: reflect.TypeOf(sdkLibraryScopeProperties{}),
@@ -2697,7 +2725,7 @@ func createPropertiesInstance() (interface{}, map[*apiScope]*sdkLibraryScopeProp
 	allScopePropertiesStruct := allScopePropertiesPtr.Elem()
 	scopeProperties := make(map[*apiScope]*sdkLibraryScopeProperties)
 
-	for _, apiScope := range allApiScopes {
+	for _, apiScope := range AllApiScopes {
 		field := allScopePropertiesStruct.FieldByName(apiScope.fieldName)
 		scopeProperties[apiScope] = field.Addr().Interface().(*sdkLibraryScopeProperties)
 	}
@@ -3224,11 +3252,6 @@ func (module *sdkLibraryXml) SubDir() string {
 	return "permissions"
 }
 
-// from android.PrebuiltEtcModule
-func (module *sdkLibraryXml) OutputFiles(tag string) (android.Paths, error) {
-	return android.OutputPaths{module.outputFilePath}.Paths(), nil
-}
-
 var _ etc.PrebuiltEtcModule = (*sdkLibraryXml)(nil)
 
 // from android.ApexModule
@@ -3372,6 +3395,8 @@ func (module *sdkLibraryXml) GenerateAndroidBuildActions(ctx android.ModuleConte
 
 	module.installDirPath = android.PathForModuleInstall(ctx, "etc", module.SubDir())
 	ctx.PackageFile(module.installDirPath, libName+".xml", module.outputFilePath)
+
+	ctx.SetOutputFiles(android.OutputPaths{module.outputFilePath}.Paths(), "")
 }
 
 func (module *sdkLibraryXml) AndroidMkEntries() []android.AndroidMkEntries {
@@ -3579,7 +3604,7 @@ func (s *sdkLibrarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMembe
 	s.Stem = sdk.distStem()
 
 	s.Scopes = make(map[*apiScope]*scopeProperties)
-	for _, apiScope := range allApiScopes {
+	for _, apiScope := range AllApiScopes {
 		paths := sdk.findScopePaths(apiScope)
 		if paths == nil {
 			continue
@@ -3641,7 +3666,7 @@ func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberCo
 
 	stem := s.Stem
 
-	for _, apiScope := range allApiScopes {
+	for _, apiScope := range AllApiScopes {
 		if properties, ok := s.Scopes[apiScope]; ok {
 			scopeSet := propertySet.AddPropertySet(apiScope.propertyName)
 

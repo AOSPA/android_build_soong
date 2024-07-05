@@ -197,6 +197,12 @@ func TestBootclasspathFragmentInArtApex(t *testing.T) {
 			updatable: false,
 		}
 
+		override_apex {
+			name: "com.mycompany.android.art",
+			base: "com.android.art",
+			min_sdk_version: "33", // mycompany overrides the min_sdk_version
+		}
+
 		apex_key {
 			name: "com.android.art.key",
 			public_key: "testkey.avbpubkey",
@@ -323,6 +329,26 @@ func TestBootclasspathFragmentInArtApex(t *testing.T) {
 		// locations for the art image.
 		module := result.ModuleForTests("dex_bootjars", "android_common")
 		checkCopiesToPredefinedLocationForArt(t, result.Config, module, "bar", "foo")
+	})
+
+	t.Run("boot image files from source of override apex", func(t *testing.T) {
+		result := android.GroupFixturePreparers(
+			commonPreparer,
+
+			// Configure some libraries in the art bootclasspath_fragment that match the source
+			// bootclasspath_fragment's contents property.
+			java.FixtureConfigureBootJars("com.android.art:foo", "com.android.art:bar"),
+			dexpreopt.FixtureSetTestOnlyArtBootImageJars("com.android.art:foo", "com.android.art:bar"),
+			addSource("foo", "bar"),
+			java.FixtureSetBootImageInstallDirOnDevice("art", "apex/com.android.art/javalib"),
+		).RunTest(t)
+
+		ensureExactContents(t, result.TestContext, "com.android.art", "android_common_com.mycompany.android.art_com.mycompany.android.art", []string{
+			"etc/boot-image.prof",
+			"etc/classpaths/bootclasspath.pb",
+			"javalib/bar.jar",
+			"javalib/foo.jar",
+		})
 	})
 
 	t.Run("generate boot image profile even if dexpreopt is disabled", func(t *testing.T) {
@@ -1338,6 +1364,91 @@ func TestBootclasspathFragment_AndroidNonUpdatable_AlwaysUsePrebuiltSdks(t *test
 	android.AssertStringDoesContain(t, "public", command, "--public-stub-classpath="+nonUpdatablePublicStubs)
 	android.AssertStringDoesContain(t, "system", command, "--system-stub-classpath="+nonUpdatableSystemStubs)
 	android.AssertStringDoesContain(t, "test", command, "--test-stub-classpath="+nonUpdatableTestStubs)
+}
+
+func TestBootclasspathFragmentProtoContainsMinSdkVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForTestWithBootclasspathFragment,
+		prepareForTestWithMyapex,
+		// Configure bootclasspath jars to ensure that hidden API encoding is performed on them.
+		java.FixtureConfigureApexBootJars("myapex:foo", "myapex:bar"),
+		// Make sure that the frameworks/base/Android.bp file exists as otherwise hidden API encoding
+		// is disabled.
+		android.FixtureAddTextFile("frameworks/base/Android.bp", ""),
+
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.FixtureWithLastReleaseApis("foo", "bar"),
+	).RunTestWithBp(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			bootclasspath_fragments: [
+				"mybootclasspathfragment",
+			],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_sdk_library {
+			name: "foo",
+			srcs: ["b.java"],
+			shared_library: false,
+			public: {enabled: true},
+			apex_available: [
+				"myapex",
+			],
+			min_sdk_version: "33",
+		}
+
+		java_sdk_library {
+			name: "bar",
+			srcs: ["b.java"],
+			shared_library: false,
+			public: {enabled: true},
+			apex_available: [
+				"myapex",
+			],
+			min_sdk_version: "34",
+		}
+
+		bootclasspath_fragment {
+			name: "mybootclasspathfragment",
+			contents: [
+				"foo",
+				"bar",
+			],
+			apex_available: [
+				"myapex",
+			],
+			hidden_api: {
+				split_packages: ["*"],
+			},
+		}
+	`)
+
+	fragment := result.ModuleForTests("mybootclasspathfragment", "android_common_apex10000")
+	classPathProtoContent := android.ContentFromFileRuleForTests(t, result.TestContext, fragment.Output("bootclasspath.pb.textproto"))
+	// foo
+	ensureContains(t, classPathProtoContent, `jars {
+path: "/apex/myapex/javalib/foo.jar"
+classpath: BOOTCLASSPATH
+min_sdk_version: "33"
+max_sdk_version: ""
+}
+`)
+	// bar
+	ensureContains(t, classPathProtoContent, `jars {
+path: "/apex/myapex/javalib/bar.jar"
+classpath: BOOTCLASSPATH
+min_sdk_version: "34"
+max_sdk_version: ""
+}
+`)
 }
 
 // TODO(b/177892522) - add test for host apex.

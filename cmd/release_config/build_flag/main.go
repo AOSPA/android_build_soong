@@ -48,6 +48,11 @@ type Flags struct {
 
 	// Panic on errors.
 	debug bool
+
+	// Allow missing release config.
+	// If true, and we cannot find the named release config, values for
+	// `trunk_staging` will be used.
+	allowMissing bool
 }
 
 type CommandFunc func(*rc_lib.ReleaseConfigs, Flags, string, []string) error
@@ -158,6 +163,7 @@ func GetCommand(configs *rc_lib.ReleaseConfigs, commonFlags Flags, cmd string, a
 		for _, fa := range configs.FlagArtifacts {
 			args = append(args, *fa.FlagDeclaration.Name)
 		}
+		slices.Sort(args)
 	}
 
 	var maxVariableNameLen, maxReleaseNameLen int
@@ -227,7 +233,7 @@ func GetCommand(configs *rc_lib.ReleaseConfigs, commonFlags Flags, cmd string, a
 			} else {
 				outputOneLine(arg, config.Name, "REDACTED", "%s")
 			}
-			if isTrace {
+			if err == nil && isTrace {
 				for _, trace := range config.FlagArtifacts[arg].Traces {
 					fmt.Printf("  => \"%s\" in %s\n", rc_lib.MarshalValue(trace.Value), *trace.Source)
 				}
@@ -239,6 +245,8 @@ func GetCommand(configs *rc_lib.ReleaseConfigs, commonFlags Flags, cmd string, a
 
 func SetCommand(configs *rc_lib.ReleaseConfigs, commonFlags Flags, cmd string, args []string) error {
 	var valueDir string
+	var redacted bool
+	var value string
 	if len(commonFlags.targetReleases) > 1 {
 		return fmt.Errorf("set command only allows one --release argument.  Got: %s", strings.Join(commonFlags.targetReleases, " "))
 	}
@@ -246,13 +254,20 @@ func SetCommand(configs *rc_lib.ReleaseConfigs, commonFlags Flags, cmd string, a
 
 	setFlags := flag.NewFlagSet("set", flag.ExitOnError)
 	setFlags.StringVar(&valueDir, "dir", "", "Directory in which to place the value")
+	setFlags.BoolVar(&redacted, "redacted", false, "Whether the flag should be redacted")
 	setFlags.Parse(args)
 	setArgs := setFlags.Args()
-	if len(setArgs) != 2 {
+	if redacted {
+		if len(setArgs) != 1 {
+			return fmt.Errorf("set command expected '--redacted=true flag', got: --redacted=true %s", strings.Join(setArgs, " "))
+		}
+	} else if len(setArgs) != 2 {
 		return fmt.Errorf("set command expected flag and value, got: %s", strings.Join(setArgs, " "))
 	}
 	name := setArgs[0]
-	value := setArgs[1]
+	if !redacted {
+		value = setArgs[1]
+	}
 	release, err := configs.GetReleaseConfig(targetRelease)
 	targetRelease = release.Name
 	if err != nil {
@@ -273,9 +288,30 @@ func SetCommand(configs *rc_lib.ReleaseConfigs, commonFlags Flags, cmd string, a
 		valueDir = mapDir
 	}
 
+	var updatedFiles []string
+	rcPath := filepath.Join(valueDir, "release_configs", fmt.Sprintf("%s.textproto", targetRelease))
+	// Create the release config declaration only if necessary.
+	if _, err = os.Stat(rcPath); err != nil {
+		if err = os.MkdirAll(filepath.Dir(rcPath), 0775); err != nil {
+			return err
+		}
+		rcValue := &rc_proto.ReleaseConfig{
+			Name: proto.String(targetRelease),
+		}
+		err = rc_lib.WriteMessage(rcPath, rcValue)
+		if err != nil {
+			return err
+		}
+		updatedFiles = append(updatedFiles, rcPath)
+	}
+
 	flagValue := &rc_proto.FlagValue{
-		Name:  proto.String(name),
-		Value: rc_lib.UnmarshalValue(value),
+		Name: proto.String(name),
+	}
+	if redacted {
+		flagValue.Redacted = proto.Bool(true)
+	} else {
+		flagValue.Value = rc_lib.UnmarshalValue(value)
 	}
 	flagPath := filepath.Join(valueDir, "flag_values", targetRelease, fmt.Sprintf("%s.textproto", name))
 	err = rc_lib.WriteMessage(flagPath, flagValue)
@@ -284,15 +320,16 @@ func SetCommand(configs *rc_lib.ReleaseConfigs, commonFlags Flags, cmd string, a
 	}
 
 	// Reload the release configs.
-	configs, err = rc_lib.ReadReleaseConfigMaps(commonFlags.maps, commonFlags.targetReleases[0], commonFlags.useGetBuildVar)
+	configs, err = rc_lib.ReadReleaseConfigMaps(commonFlags.maps, commonFlags.targetReleases[0], commonFlags.useGetBuildVar, commonFlags.allowMissing)
 	if err != nil {
 		return err
 	}
-	err = GetCommand(configs, commonFlags, cmd, args[0:1])
+	err = GetCommand(configs, commonFlags, cmd, []string{name})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Updated: %s\n", flagPath)
+	updatedFiles = append(updatedFiles, flagPath)
+	fmt.Printf("Added/Updated: %s\n", strings.Join(updatedFiles, " "))
 	return nil
 }
 
@@ -307,6 +344,7 @@ func main() {
 	flag.Var(&commonFlags.maps, "map", "path to a release_config_map.textproto. may be repeated")
 	flag.StringVar(&commonFlags.outDir, "out-dir", rc_lib.GetDefaultOutDir(), "basepath for the output. Multiple formats are created")
 	flag.Var(&commonFlags.targetReleases, "release", "TARGET_RELEASE for this build")
+	flag.BoolVar(&commonFlags.allowMissing, "allow-missing", false, "Use trunk_staging values if release not found")
 	flag.BoolVar(&commonFlags.allReleases, "all-releases", false, "operate on all releases. (Ignored for set command)")
 	flag.BoolVar(&commonFlags.useGetBuildVar, "use-get-build-var", true, "use get_build_var PRODUCT_RELEASE_CONFIG_MAPS to get needed maps")
 	flag.BoolVar(&commonFlags.debug, "debug", false, "turn on debugging output for errors")
@@ -342,7 +380,7 @@ func main() {
 	if relName == "--all" || relName == "-all" {
 		commonFlags.allReleases = true
 	}
-	configs, err = rc_lib.ReadReleaseConfigMaps(commonFlags.maps, relName, commonFlags.useGetBuildVar)
+	configs, err = rc_lib.ReadReleaseConfigMaps(commonFlags.maps, relName, commonFlags.useGetBuildVar, commonFlags.allowMissing)
 	if err != nil {
 		errorExit(err)
 	}

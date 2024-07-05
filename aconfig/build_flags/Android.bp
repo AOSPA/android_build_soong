@@ -1,0 +1,24 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+bootstrap_go_package {
+    name: "soong-aconfig-build_flags",
+    pkgPath: "android/soong/aconfig/build_flags",
+    deps: [
+        "blueprint",
+        "blueprint-pathtools",
+        "sbox_proto",
+        "soong",
+        "soong-android",
+    ],
+    srcs: [
+        "all_build_flag_declarations.go",
+        "build_flags.go",
+        "declarations.go",
+        "init.go",
+    ],
+    testSrcs: [
+    ],
+    pluginFor: ["soong_build"],
+}

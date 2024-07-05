@@ -59,6 +59,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_usr_keychars", PrebuiltUserKeyCharsFactory)
 	ctx.RegisterModuleType("prebuilt_usr_idc", PrebuiltUserIdcFactory)
 	ctx.RegisterModuleType("prebuilt_font", PrebuiltFontFactory)
+	ctx.RegisterModuleType("prebuilt_overlay", PrebuiltOverlayFactory)
 	ctx.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
 	ctx.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
 	ctx.RegisterModuleType("prebuilt_rfsa", PrebuiltRFSAFactory)
@@ -73,11 +74,11 @@ var PrepareForTestWithPrebuiltEtc = android.FixtureRegisterWithContext(RegisterP
 type prebuiltEtcProperties struct {
 	// Source file of this prebuilt. Can reference a genrule type module with the ":module" syntax.
 	// Mutually exclusive with srcs.
-	Src *string `android:"path,arch_variant"`
+	Src proptools.Configurable[string] `android:"path,arch_variant,replace_instead_of_append"`
 
 	// Source files of this prebuilt. Can reference a genrule type module with the ":module" syntax.
 	// Mutually exclusive with src. When used, filename_from_src is set to true.
-	Srcs []string `android:"path,arch_variant"`
+	Srcs proptools.Configurable[[]string] `android:"path,arch_variant"`
 
 	// Optional name for the installed file. If unspecified, name of the module is used as the file
 	// name. Only available when using a single source (src).
@@ -132,10 +133,6 @@ type PrebuiltEtcModule interface {
 
 	// Returns the sub install directory relative to BaseDir().
 	SubDir() string
-
-	// Returns an android.OutputPath to the intermediate file, which is the renamed prebuilt source
-	// file.
-	OutputFiles(tag string) (android.Paths, error)
 }
 
 type PrebuiltEtc struct {
@@ -156,6 +153,8 @@ type PrebuiltEtc struct {
 	socInstallDirBase      string
 	installDirPath         android.InstallPath
 	additionalDependencies *android.Paths
+
+	usedSrcsProperty bool
 
 	makeClass string
 }
@@ -242,14 +241,14 @@ func (p *PrebuiltEtc) ExtraImageVariations(ctx android.BaseModuleContext) []stri
 	return nil
 }
 
-func (p *PrebuiltEtc) SetImageVariation(ctx android.BaseModuleContext, variation string, module android.Module) {
+func (p *PrebuiltEtc) SetImageVariation(ctx android.BaseModuleContext, variation string) {
 }
 
 func (p *PrebuiltEtc) SourceFilePath(ctx android.ModuleContext) android.Path {
-	if len(p.properties.Srcs) > 0 {
+	if len(p.properties.Srcs.GetOrDefault(ctx, nil)) > 0 {
 		panic(fmt.Errorf("SourceFilePath not available on multi-source prebuilt %q", p.Name()))
 	}
-	return android.PathForModuleSrc(ctx, proptools.String(p.properties.Src))
+	return android.PathForModuleSrc(ctx, p.properties.Src.GetOrDefault(ctx, ""))
 }
 
 func (p *PrebuiltEtc) InstallDirPath() android.InstallPath {
@@ -263,21 +262,10 @@ func (p *PrebuiltEtc) SetAdditionalDependencies(paths android.Paths) {
 }
 
 func (p *PrebuiltEtc) OutputFile() android.OutputPath {
-	if len(p.properties.Srcs) > 0 {
+	if p.usedSrcsProperty {
 		panic(fmt.Errorf("OutputFile not available on multi-source prebuilt %q", p.Name()))
 	}
 	return p.outputFilePaths[0]
-}
-
-var _ android.OutputFileProducer = (*PrebuiltEtc)(nil)
-
-func (p *PrebuiltEtc) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return p.outputFilePaths.Paths(), nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
 }
 
 func (p *PrebuiltEtc) SubDir() string {
@@ -318,7 +306,9 @@ func (p *PrebuiltEtc) installBaseDir(ctx android.ModuleContext) string {
 func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var installs []installProperties
 
-	if p.properties.Src != nil && len(p.properties.Srcs) > 0 {
+	srcProperty := p.properties.Src.Get(ctx)
+	srcsProperty := p.properties.Srcs.GetOrDefault(ctx, nil)
+	if srcProperty.IsPresent() && len(srcsProperty) > 0 {
 		ctx.PropertyErrorf("src", "src is set. Cannot set srcs")
 	}
 
@@ -330,8 +320,8 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	filename := proptools.String(p.properties.Filename)
 	filenameFromSrc := proptools.Bool(p.properties.Filename_from_src)
-	if p.properties.Src != nil {
-		p.sourceFilePaths = android.PathsForModuleSrc(ctx, []string{proptools.String(p.properties.Src)})
+	if srcProperty.IsPresent() {
+		p.sourceFilePaths = android.PathsForModuleSrc(ctx, []string{srcProperty.Get()})
 		// If the source was not found, set a fake source path to
 		// support AllowMissingDependencies executions.
 		if len(p.sourceFilePaths) == 0 {
@@ -366,7 +356,8 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			symlinks:       p.properties.Symlinks,
 		}
 		installs = append(installs, ip)
-	} else if len(p.properties.Srcs) > 0 {
+	} else if len(srcsProperty) > 0 {
+		p.usedSrcsProperty = true
 		if filename != "" {
 			ctx.PropertyErrorf("filename", "filename cannot be set when using srcs")
 		}
@@ -376,7 +367,7 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if p.properties.Filename_from_src != nil {
 			ctx.PropertyErrorf("filename_from_src", "filename_from_src is implicitly set to true when using srcs")
 		}
-		p.sourceFilePaths = android.PathsForModuleSrc(ctx, p.properties.Srcs)
+		p.sourceFilePaths = android.PathsForModuleSrc(ctx, srcsProperty)
 		for _, src := range p.sourceFilePaths {
 			filename := src.Base()
 			output := android.PathForModuleOut(ctx, filename).OutputPath
@@ -418,6 +409,8 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	for _, ip := range installs {
 		ip.addInstallRules(ctx)
 	}
+
+	ctx.SetOutputFiles(p.outputFilePaths.Paths(), "")
 }
 
 type installProperties struct {
@@ -647,6 +640,15 @@ func PrebuiltFontFactory() android.Module {
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_overlay is for a prebuilt artifact in <partition>/overlay directory.
+func PrebuiltOverlayFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "overlay")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	return module
 }
 

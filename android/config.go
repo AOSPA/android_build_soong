@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,9 +36,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android/soongconfig"
-	"android/soong/bazel"
 	"android/soong/remoteexec"
-	"android/soong/starlark_fmt"
 )
 
 // Bool re-exports proptools.Bool for the android package.
@@ -375,6 +372,7 @@ func loadFromConfigFile(configurable *ProductVariables, filename string) error {
 	} else {
 		// Make a decoder for it
 		jsonDecoder := json.NewDecoder(configFileReader)
+		jsonDecoder.DisallowUnknownFields()
 		err = jsonDecoder.Decode(configurable)
 		if err != nil {
 			return fmt.Errorf("config file: %s did not parse correctly: %s", filename, err.Error())
@@ -417,7 +415,7 @@ func loadFromConfigFile(configurable *ProductVariables, filename string) error {
 			proptools.StringPtr(String(configurable.Platform_sdk_codename))
 	}
 
-	return saveToBazelConfigFile(configurable, filepath.Dir(filename))
+	return nil
 }
 
 // atomically writes the config file in case two copies of soong_build are running simultaneously
@@ -449,81 +447,6 @@ func saveToConfigFile(config *ProductVariables, filename string) error {
 	os.Rename(f.Name(), filename)
 
 	return nil
-}
-
-type productVariableStarlarkRepresentation struct {
-	soongType   string
-	selectable  bool
-	archVariant bool
-}
-
-func saveToBazelConfigFile(config *ProductVariables, outDir string) error {
-	dir := filepath.Join(outDir, bazel.SoongInjectionDirName, "product_config")
-	err := createDirIfNonexistent(dir, os.ModePerm)
-	if err != nil {
-		return fmt.Errorf("Could not create dir %s: %s", dir, err)
-	}
-
-	allProductVariablesType := reflect.TypeOf((*ProductVariables)(nil)).Elem()
-	productVariablesInfo := make(map[string]productVariableStarlarkRepresentation)
-	p := variableProperties{}
-	t := reflect.TypeOf(p.Product_variables)
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		archVariant := proptools.HasTag(f, "android", "arch_variant")
-		if mainProductVariablesStructField, ok := allProductVariablesType.FieldByName(f.Name); ok {
-			productVariablesInfo[f.Name] = productVariableStarlarkRepresentation{
-				soongType:   stringRepresentationOfSimpleType(mainProductVariablesStructField.Type),
-				selectable:  true,
-				archVariant: archVariant,
-			}
-		} else {
-			panic("Unknown variable " + f.Name)
-		}
-	}
-
-	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variable_constants.bzl"), []byte(fmt.Sprintf(`
-# product_var_constant_info is a map of product variables to information about them. The fields are:
-# - soongType: The type of the product variable as it appears in soong's ProductVariables struct.
-#              examples are string, bool, int, *bool, *string, []string, etc. This may be an overly
-#              conservative estimation of the type, for example a *bool could oftentimes just be a
-#              bool that defaults to false.
-# - selectable: if this product variable can be selected on in Android.bp/build files. This means
-#               it's listed in the "variableProperties" soong struct. Currently all variables in
-#               this list are selectable because we only need the selectable ones at the moment,
-#               but the list may be expanded later.
-# - archVariant: If the variable is tagged as arch variant in the "variableProperties" struct.
-product_var_constant_info = %s
-product_var_constraints = [k for k, v in product_var_constant_info.items() if v.selectable]
-arch_variant_product_var_constraints = [k for k, v in product_var_constant_info.items() if v.selectable and v.archVariant]
-`, starlark_fmt.PrintAny(productVariablesInfo, 0))), 0644)
-	if err != nil {
-		return fmt.Errorf("Could not write .bzl config file %s", err)
-	}
-	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "BUILD"),
-		[]byte(bazel.GeneratedBazelFileWarning), 0644)
-	if err != nil {
-		return fmt.Errorf("Could not write BUILD config file %s", err)
-	}
-
-	return nil
-}
-
-func stringRepresentationOfSimpleType(ty reflect.Type) string {
-	switch ty.Kind() {
-	case reflect.String:
-		return "string"
-	case reflect.Bool:
-		return "bool"
-	case reflect.Int:
-		return "int"
-	case reflect.Slice:
-		return "[]" + stringRepresentationOfSimpleType(ty.Elem())
-	case reflect.Pointer:
-		return "*" + stringRepresentationOfSimpleType(ty.Elem())
-	default:
-		panic("unimplemented type: " + ty.Kind().String())
-	}
 }
 
 // NullConfig returns a mostly empty Config for use by standalone tools like dexpreopt_gen that
@@ -830,6 +753,10 @@ func (c *config) IsEnvTrue(key string) bool {
 func (c *config) IsEnvFalse(key string) bool {
 	value := strings.ToLower(c.Getenv(key))
 	return value == "0" || value == "n" || value == "no" || value == "off" || value == "false"
+}
+
+func (c *config) TargetsJava21() bool {
+	return c.IsEnvTrue("EXPERIMENTAL_TARGET_JAVA_VERSION_21")
 }
 
 // EnvDeps returns the environment variables this build depends on. The first
@@ -1334,10 +1261,6 @@ func (c *config) SourceRootDirs() []string {
 	return c.productVariables.SourceRootDirs
 }
 
-func (c *config) IncludeTags() []string {
-	return c.productVariables.IncludeTags
-}
-
 func (c *config) HostStaticBinaries() bool {
 	return Bool(c.productVariables.HostStaticBinaries)
 }
@@ -1394,10 +1317,6 @@ func (c *config) HasMultilibConflict(arch ArchType) bool {
 
 func (c *config) PrebuiltHiddenApiDir(_ PathContext) string {
 	return String(c.productVariables.PrebuiltHiddenApiDir)
-}
-
-func (c *config) IsVndkDeprecated() bool {
-	return !Bool(c.productVariables.KeepVndk)
 }
 
 func (c *config) VendorApiLevel() string {
@@ -1469,10 +1388,6 @@ func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 
 func (c *deviceConfig) ExtraVndkVersions() []string {
 	return c.config.productVariables.ExtraVndkVersions
-}
-
-func (c *deviceConfig) VndkUseCoreVariant() bool {
-	return Bool(c.config.productVariables.VndkUseCoreVariant) && Bool(c.config.productVariables.KeepVndk)
 }
 
 func (c *deviceConfig) SystemSdkVersions() []string {
@@ -1973,10 +1888,10 @@ func (c *deviceConfig) HostFakeSnapshotEnabled() bool {
 }
 
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
-	if c.config.productVariables.ShippingApiLevel == nil {
+	if c.config.productVariables.Shipping_api_level == nil {
 		return NoneApiLevel
 	}
-	apiLevel, _ := strconv.Atoi(*c.config.productVariables.ShippingApiLevel)
+	apiLevel, _ := strconv.Atoi(*c.config.productVariables.Shipping_api_level)
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
@@ -1990,6 +1905,10 @@ func (c *deviceConfig) BuildBrokenClangAsFlags() bool {
 
 func (c *deviceConfig) BuildBrokenClangCFlags() bool {
 	return c.config.productVariables.BuildBrokenClangCFlags
+}
+
+func (c *deviceConfig) BuildBrokenClangProperty() bool {
+	return c.config.productVariables.BuildBrokenClangProperty
 }
 
 func (c *deviceConfig) BuildBrokenEnforceSyspropOwner() bool {
@@ -2173,6 +2092,7 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
 		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC",
 		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
+		"RELEASE_APEX_CONTRIBUTIONS_TELEMETRY_TVP",
 		"RELEASE_APEX_CONTRIBUTIONS_TZDATA",
 		"RELEASE_APEX_CONTRIBUTIONS_UWB",
 		"RELEASE_APEX_CONTRIBUTIONS_WIFI",

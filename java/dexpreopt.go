@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/blueprint/proptools"
+
 	"android/soong/android"
 	"android/soong/dexpreopt"
 )
@@ -94,6 +96,10 @@ func (install dexpreopterInstall) ToMakeEntries() android.AndroidMkEntries {
 	}
 }
 
+func (install dexpreopterInstall) PackageFile(ctx android.ModuleContext) android.PackagingSpec {
+	return ctx.PackageFile(install.installDirOnDevice, install.installFileOnDevice, install.outputPathOnHost)
+}
+
 type Dexpreopter struct {
 	dexpreopter
 }
@@ -139,6 +145,10 @@ type dexpreopter struct {
 	// The path to the profile that dexpreopter accepts. It must be in the binary format. If this is
 	// set, it overrides the profile settings in `dexpreoptProperties`.
 	inputProfilePathOnHost android.Path
+
+	// The path to the profile that matches the dex optimized by r8/d8. It is in text format. If this is
+	// set, it will be converted to a binary profile which will be subsequently used for dexpreopt.
+	rewrittenProfile android.Path
 }
 
 type DexpreoptProperties struct {
@@ -158,6 +168,11 @@ type DexpreoptProperties struct {
 		// defaults to searching for a file that matches the name of this module in the default
 		// profile location set by PRODUCT_DEX_PREOPT_PROFILE_DIR, or empty if not found.
 		Profile *string `android:"path"`
+
+		// If set to true, r8/d8 will use `profile` as input to generate a new profile that matches
+		// the optimized dex.
+		// The new profile will be subsequently used as the profile to dexpreopt the dex file.
+		Enable_profile_rewriting *bool
 	}
 
 	Dex_preopt_result struct {
@@ -262,6 +277,20 @@ func (d *dexpreopter) dexpreoptDisabled(ctx android.BaseModuleContext, libName s
 		if !isApexSystemServerJar {
 			return true
 		}
+		ai, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+		allApexInfos := []android.ApexInfo{}
+		if allApexInfosProvider, ok := android.ModuleProvider(ctx, android.AllApexInfoProvider); ok {
+			allApexInfos = allApexInfosProvider.ApexInfos
+		}
+		if len(allApexInfos) > 0 && !ai.MinSdkVersion.EqualTo(allApexInfos[0].MinSdkVersion) {
+			// Apex system server jars are dexpreopted and installed on to the system image.
+			// Since we can have BigAndroid and Go variants of system server jar providing apexes,
+			// and these two variants can have different min_sdk_versions, hide one of the apex variants
+			// from make to prevent collisions.
+			//
+			// Unlike cc, min_sdk_version does not have an effect on the build actions of java libraries.
+			ctx.Module().MakeUninstallable()
+		}
 	} else {
 		// Don't preopt the platform variant of an APEX system server jar to avoid conflicts.
 		if isApexSystemServerJar {
@@ -285,10 +314,6 @@ func dexpreoptToolDepsMutator(ctx android.BottomUpMutatorContext) {
 		return
 	}
 	dexpreopt.RegisterToolDeps(ctx)
-}
-
-func (d *dexpreopter) odexOnSystemOther(ctx android.ModuleContext, libName string, installPath android.InstallPath) bool {
-	return dexpreopt.OdexOnSystemOtherByName(libName, android.InstallPathToOnDevicePath(ctx, installPath), dexpreopt.GetGlobalConfig(ctx))
 }
 
 // Returns the install path of the dex jar of a module.
@@ -407,13 +432,17 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 	if d.inputProfilePathOnHost != nil {
 		profileClassListing = android.OptionalPathForPath(d.inputProfilePathOnHost)
 	} else if BoolDefault(d.dexpreoptProperties.Dex_preopt.Profile_guided, true) && !forPrebuiltApex(ctx) {
-		// If dex_preopt.profile_guided is not set, default it based on the existence of the
-		// dexprepot.profile option or the profile class listing.
-		if String(d.dexpreoptProperties.Dex_preopt.Profile) != "" {
+		// If enable_profile_rewriting is set, use the rewritten profile instead of the checked-in profile
+		if d.EnableProfileRewriting() {
+			profileClassListing = android.OptionalPathForPath(d.GetRewrittenProfile())
+			profileIsTextListing = true
+		} else if profile := d.GetProfile(); profile != "" {
+			// If dex_preopt.profile_guided is not set, default it based on the existence of the
+			// dexprepot.profile option or the profile class listing.
 			profileClassListing = android.OptionalPathForPath(
-				android.PathForModuleSrc(ctx, String(d.dexpreoptProperties.Dex_preopt.Profile)))
+				android.PathForModuleSrc(ctx, profile))
 			profileBootListing = android.ExistentPathForSource(ctx,
-				ctx.ModuleDir(), String(d.dexpreoptProperties.Dex_preopt.Profile)+"-boot")
+				ctx.ModuleDir(), profile+"-boot")
 			profileIsTextListing = true
 		} else if global.ProfileDir != "" {
 			profileClassListing = android.ExistentPathForSource(ctx,
@@ -502,7 +531,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 	// Prebuilts are active, do not copy the dexpreopt'd source javalib to out/soong/system_server_dexjars
 	// The javalib from the deapexed prebuilt will be copied to this location.
 	// TODO (b/331665856): Implement a principled solution for this.
-	copyApexSystemServerJarDex := !disableSourceApexVariant(ctx)
+	copyApexSystemServerJarDex := !disableSourceApexVariant(ctx) && !ctx.Module().IsHideFromMake()
 	dexpreoptRule, err := dexpreopt.GenerateDexpreoptRule(
 		ctx, globalSoong, global, dexpreoptConfig, appProductPackages, copyApexSystemServerJarDex)
 	if err != nil {
@@ -516,12 +545,29 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 	// Use the path of the dex file to determine the library name
 	isApexSystemServerJar := global.AllApexSystemServerJars(ctx).ContainsJar(dexJarStem)
 
+	dexpreoptPartition := d.installPath.Partition()
+	// dexpreoptPartition is set to empty for dexpreopts of system APEX and system_other.
+	// In case of system APEX, however, we can set it to "system" manually.
+	// TODO(b/346662300): Let dexpreopter generate the installPath for dexpreopt files instead of
+	// using the dex location to generate the installPath.
+	if isApexSystemServerJar {
+		dexpreoptPartition = "system"
+	}
 	for _, install := range dexpreoptRule.Installs() {
 		// Remove the "/" prefix because the path should be relative to $ANDROID_PRODUCT_OUT.
 		installDir := strings.TrimPrefix(filepath.Dir(install.To), "/")
+		partition := dexpreoptPartition
+		if strings.HasPrefix(installDir, partition+"/") {
+			installDir = strings.TrimPrefix(installDir, partition+"/")
+		} else {
+			// If the partition for the installDir is different from the install partition, set the
+			// partition empty to install the dexpreopt files to the desired partition.
+			// TODO(b/346439786): Define and use the dexpreopt module type to avoid this mismatch.
+			partition = ""
+		}
 		installBase := filepath.Base(install.To)
 		arch := filepath.Base(installDir)
-		installPath := android.PathForModuleInPartitionInstall(ctx, "", installDir)
+		installPath := android.PathForModuleInPartitionInstall(ctx, partition, installDir)
 		isProfile := strings.HasSuffix(installBase, ".prof")
 
 		if isProfile {
@@ -555,6 +601,37 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 	}
 }
 
+func getModuleInstallPathInfo(ctx android.ModuleContext, fullInstallPath string) (android.InstallPath, string, string) {
+	installPath := android.PathForModuleInstall(ctx)
+	installDir, installBase := filepath.Split(strings.TrimPrefix(fullInstallPath, "/"))
+
+	if !strings.HasPrefix(installDir, installPath.Partition()+"/") {
+		// Return empty filename if the install partition is not for the target image.
+		return installPath, "", ""
+	}
+	relDir, err := filepath.Rel(installPath.Partition(), installDir)
+	if err != nil {
+		panic(err)
+	}
+	return installPath, relDir, installBase
+}
+
+// RuleBuilder.Install() adds output-to-install copy pairs to a list for Make. To share this
+// information with PackagingSpec in soong, call PackageFile for them.
+// The install path and the target install partition of the module must be the same.
+func packageFile(ctx android.ModuleContext, install android.RuleBuilderInstall) {
+	installPath, relDir, name := getModuleInstallPathInfo(ctx, install.To)
+	// Empty name means the install partition is not for the target image.
+	// For the system image, files for "apex" and "system_other" are skipped here.
+	// The skipped "apex" files are for testing only, for example,
+	// "/apex/art_boot_images/javalib/x86/boot.vdex".
+	// TODO(b/320196894): Files for "system_other" are skipped because soong creates the system
+	// image only for now.
+	if name != "" {
+		ctx.PackageFile(installPath.Join(ctx, relDir), name, install.From)
+	}
+}
+
 func (d *dexpreopter) DexpreoptBuiltInstalledForApex() []dexpreopterInstall {
 	return d.builtInstalledForApex
 }
@@ -573,4 +650,24 @@ func (d *dexpreopter) OutputProfilePathOnHost() android.Path {
 
 func (d *dexpreopter) disableDexpreopt() {
 	d.shouldDisableDexpreopt = true
+}
+
+func (d *dexpreopter) EnableProfileRewriting() bool {
+	return proptools.Bool(d.dexpreoptProperties.Dex_preopt.Enable_profile_rewriting)
+}
+
+func (d *dexpreopter) GetProfile() string {
+	return proptools.String(d.dexpreoptProperties.Dex_preopt.Profile)
+}
+
+func (d *dexpreopter) GetProfileGuided() bool {
+	return proptools.Bool(d.dexpreoptProperties.Dex_preopt.Profile_guided)
+}
+
+func (d *dexpreopter) GetRewrittenProfile() android.Path {
+	return d.rewrittenProfile
+}
+
+func (d *dexpreopter) SetRewrittenProfile(p android.Path) {
+	d.rewrittenProfile = p
 }

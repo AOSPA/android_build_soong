@@ -596,8 +596,7 @@ func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *a
 	}
 	if apiVersions != nil {
 		cmd.FlagWithArg("--current-version ", ctx.Config().PlatformSdkVersion().String())
-		// STOPSHIP: RESTORE THIS LOGIC WHEN DECLARING "REL" BUILD
-		// cmd.FlagWithArg("--current-codename ", ctx.Config().PlatformSdkCodename())
+		cmd.FlagWithArg("--current-codename ", ctx.Config().PlatformSdkCodename())
 		cmd.FlagWithInput("--apply-api-levels ", apiVersions)
 	}
 }
@@ -994,6 +993,7 @@ func (d *Droidstubs) everythingStubCmd(ctx android.ModuleContext, params stubsCo
 func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, doApiLint bool, doCheckReleased bool) {
 
 	// Add API lint options.
+	treatDocumentationIssuesAsErrors := false
 	if doApiLint {
 		var newSince android.Paths
 		if d.properties.Check_api.Api_lint.New_since != nil {
@@ -1007,7 +1007,7 @@ func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *andro
 		// TODO(b/154317059): Clean up this allowlist by baselining and/or checking in last-released.
 		if d.Name() != "android.car-system-stubs-docs" &&
 			d.Name() != "android.car-stubs-docs" {
-			cmd.Flag("--lints-as-errors")
+			treatDocumentationIssuesAsErrors = true
 			cmd.Flag("--warnings-as-errors") // Most lints are actually warnings.
 		}
 
@@ -1053,6 +1053,10 @@ func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *andro
 		cmd.FlagWithArg("--error-message:api-lint ", msg)
 	}
 
+	if !treatDocumentationIssuesAsErrors {
+		treatDocumentationIssuesAsWarningErrorWhenNew(cmd)
+	}
+
 	// Add "check released" options. (Detect incompatible API changes from the last public release)
 	if doCheckReleased {
 		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Last_released.Baseline_file)
@@ -1076,6 +1080,22 @@ func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *andro
 		currentApiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Current.Api_file))
 		cmd.FlagWithInput("--use-same-format-as ", currentApiFile)
 	}
+}
+
+// HIDDEN_DOCUMENTATION_ISSUES is the set of documentation related issues that should always be
+// hidden as they are very noisy and provide little value.
+var HIDDEN_DOCUMENTATION_ISSUES = []string{
+	"Deprecated",
+	"IntDef",
+	"Nullable",
+}
+
+func treatDocumentationIssuesAsWarningErrorWhenNew(cmd *android.RuleBuilderCommand) {
+	// Treat documentation issues as warnings, but error when new.
+	cmd.Flag("--error-when-new-category").Flag("Documentation")
+
+	// Hide some documentation issues that generated a lot of noise for little benefit.
+	cmd.FlagForEachArg("--hide ", HIDDEN_DOCUMENTATION_ISSUES)
 }
 
 // Sandbox rule for generating exportable stubs and other artifacts
@@ -1147,6 +1167,9 @@ func (d *Droidstubs) optionalStubCmd(ctx android.ModuleContext, params stubsComm
 			cmd.FlagWithInput("--baseline:api-lint ", baselineFile.Path())
 		}
 	}
+
+	// Treat documentation issues as warnings, but error when new.
+	treatDocumentationIssuesAsWarningErrorWhenNew(cmd)
 
 	if params.stubConfig.generateStubs {
 		rule.Command().

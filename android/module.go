@@ -914,6 +914,10 @@ type ModuleBase struct {
 	// moduleInfoJSON can be filled out by GenerateAndroidBuildActions to write a JSON file that will
 	// be included in the final module-info.json produced by Make.
 	moduleInfoJSON *ModuleInfoJSON
+
+	// outputFiles stores the output of a module by tag and is used to set
+	// the OutputFilesProvider in GenerateBuildActions
+	outputFiles OutputFilesInfo
 }
 
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
@@ -1072,6 +1076,12 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 			InList(target.Arch.ArchType.Multilib, []string{"lib32", "lib64"})
 		sameBitness := ctx.Arch().ArchType.Multilib == target.Arch.ArchType.Multilib
 		if bothInAndroid && nativeArch && !sameBitness {
+			return
+		}
+
+		// ... also don't make a dependency between native bridge arch and non-native bridge
+		// arches. b/342945184
+		if ctx.Target().NativeBridge != target.NativeBridge {
 			return
 		}
 
@@ -1978,6 +1988,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			TargetDependencies: targetRequired,
 			HostDependencies:   hostRequired,
 			Data:               data,
+			Required:           m.RequiredModuleNames(),
 		}
 		SetProvider(ctx, ModuleInfoJSONProvider, m.moduleInfoJSON)
 	}
@@ -1985,6 +1996,10 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	m.buildParams = ctx.buildParams
 	m.ruleParams = ctx.ruleParams
 	m.variables = ctx.variables
+
+	if m.outputFiles.DefaultOutputFiles != nil || m.outputFiles.TaggedOutputFiles != nil {
+		SetProvider(ctx, OutputFilesProvider, m.outputFiles)
+	}
 }
 
 func SetJarJarPrefixHandler(handler func(ModuleContext)) {
@@ -2152,14 +2167,34 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 			ctx.OtherModulePropertyErrorf(m, property, "release_flag requires 1 argument, found %d", condition.NumArgs())
 			return proptools.ConfigurableValueUndefined()
 		}
-		if v, ok := ctx.Config().productVariables.BuildFlags[condition.Arg(0)]; ok {
-			return proptools.ConfigurableValueString(v)
+		if ty, ok := ctx.Config().productVariables.BuildFlagTypes[condition.Arg(0)]; ok {
+			v := ctx.Config().productVariables.BuildFlags[condition.Arg(0)]
+			switch ty {
+			case "unspecified", "obsolete":
+				return proptools.ConfigurableValueUndefined()
+			case "string":
+				return proptools.ConfigurableValueString(v)
+			case "bool":
+				return proptools.ConfigurableValueBool(v == "true")
+			default:
+				panic("unhandled release flag type: " + ty)
+			}
 		}
 		return proptools.ConfigurableValueUndefined()
 	case "product_variable":
-		// TODO(b/323382414): Might add these on a case-by-case basis
-		ctx.OtherModulePropertyErrorf(m, property, "TODO(b/323382414): Product variables are not yet supported in selects")
-		return proptools.ConfigurableValueUndefined()
+		if condition.NumArgs() != 1 {
+			ctx.OtherModulePropertyErrorf(m, property, "product_variable requires 1 argument, found %d", condition.NumArgs())
+			return proptools.ConfigurableValueUndefined()
+		}
+		variable := condition.Arg(0)
+		switch variable {
+		case "debuggable":
+			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
+		default:
+			// TODO(b/323382414): Might add these on a case-by-case basis
+			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))
+			return proptools.ConfigurableValueUndefined()
+		}
 	case "soong_config_variable":
 		if condition.NumArgs() != 2 {
 			ctx.OtherModulePropertyErrorf(m, property, "soong_config_variable requires 2 arguments, found %d", condition.NumArgs())
@@ -2414,11 +2449,15 @@ func OutputFileForModule(ctx PathContext, module blueprint.Module, tag string) P
 }
 
 func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
+	outputFilesFromProvider, err := outputFilesForModuleFromProvider(ctx, module, tag)
+	if outputFilesFromProvider != nil || err != nil {
+		return outputFilesFromProvider, err
+	}
 	if outputFileProducer, ok := module.(OutputFileProducer); ok {
 		paths, err := outputFileProducer.OutputFiles(tag)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get output file from module %q: %s",
-				pathContextName(ctx, module), err.Error())
+			return nil, fmt.Errorf("failed to get output file from module %q at tag %q: %s",
+				pathContextName(ctx, module), tag, err.Error())
 		}
 		return paths, nil
 	} else if sourceFileProducer, ok := module.(SourceFileProducer); ok {
@@ -2428,9 +2467,53 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 		paths := sourceFileProducer.Srcs()
 		return paths, nil
 	} else {
-		return nil, fmt.Errorf("module %q is not an OutputFileProducer", pathContextName(ctx, module))
+		return nil, fmt.Errorf("module %q is not an OutputFileProducer or SourceFileProducer", pathContextName(ctx, module))
 	}
 }
+
+// This method uses OutputFilesProvider for output files
+// *inter-module-communication*.
+// If mctx module is the same as the param module the output files are obtained
+// from outputFiles property of module base, to avoid both setting and
+// reading OutputFilesProvider before  GenerateBuildActions is finished. Also
+// only empty-string-tag is supported in this case.
+// If a module doesn't have the OutputFilesProvider, nil is returned.
+func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
+	// TODO: support OutputFilesProvider for singletons
+	mctx, ok := ctx.(ModuleContext)
+	if !ok {
+		return nil, nil
+	}
+	if mctx.Module() != module {
+		if outputFilesProvider, ok := OtherModuleProvider(mctx, module, OutputFilesProvider); ok {
+			if tag == "" {
+				return outputFilesProvider.DefaultOutputFiles, nil
+			} else if taggedOutputFiles, hasTag := outputFilesProvider.TaggedOutputFiles[tag]; hasTag {
+				return taggedOutputFiles, nil
+			} else {
+				return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+			}
+		}
+	} else {
+		if tag == "" {
+			return mctx.Module().base().outputFiles.DefaultOutputFiles, nil
+		} else {
+			return nil, fmt.Errorf("unsupported tag %q for module getting its own output files", tag)
+		}
+	}
+	// TODO: Add a check for param module not having OutputFilesProvider set
+	return nil, nil
+}
+
+type OutputFilesInfo struct {
+	// default output files when tag is an empty string ""
+	DefaultOutputFiles Paths
+
+	// the corresponding output files for given tags
+	TaggedOutputFiles map[string]Paths
+}
+
+var OutputFilesProvider = blueprint.NewProvider[OutputFilesInfo]()
 
 // Modules can implement HostToolProvider and return a valid OptionalPath from HostToolPath() to
 // specify that they can be used as a tool by a genrule module.

@@ -31,10 +31,10 @@ func main() {
 	var outputDir string
 	var err error
 	var configs *rc_lib.ReleaseConfigs
-	var json, pb, textproto bool
+	var json, pb, textproto, inheritance bool
 	var product string
 	var allMake bool
-	var useBuildVar bool
+	var useBuildVar, allowMissing bool
 	var guard bool
 
 	defaultRelease := os.Getenv("TARGET_RELEASE")
@@ -47,11 +47,13 @@ func main() {
 	flag.BoolVar(&quiet, "quiet", false, "disable warning messages")
 	flag.Var(&releaseConfigMapPaths, "map", "path to a release_config_map.textproto. may be repeated")
 	flag.StringVar(&targetRelease, "release", defaultRelease, "TARGET_RELEASE for this build")
+	flag.BoolVar(&allowMissing, "allow-missing", false, "Use trunk_staging values if release not found")
 	flag.StringVar(&outputDir, "out_dir", rc_lib.GetDefaultOutDir(), "basepath for the output. Multiple formats are created")
 	flag.BoolVar(&textproto, "textproto", true, "write artifacts as text protobuf")
 	flag.BoolVar(&json, "json", true, "write artifacts as json")
 	flag.BoolVar(&pb, "pb", true, "write artifacts as binary protobuf")
 	flag.BoolVar(&allMake, "all_make", false, "write makefiles for all release configs")
+	flag.BoolVar(&inheritance, "inheritance", true, "write inheritance graph")
 	flag.BoolVar(&useBuildVar, "use_get_build_var", false, "use get_build_var PRODUCT_RELEASE_CONFIG_MAPS")
 	flag.BoolVar(&guard, "guard", true, "whether to guard with RELEASE_BUILD_FLAGS_IN_PROTOBUF")
 
@@ -64,7 +66,7 @@ func main() {
 	if err = os.Chdir(top); err != nil {
 		panic(err)
 	}
-	configs, err = rc_lib.ReadReleaseConfigMaps(releaseConfigMapPaths, targetRelease, useBuildVar)
+	configs, err = rc_lib.ReadReleaseConfigMaps(releaseConfigMapPaths, targetRelease, useBuildVar, allowMissing)
 	if err != nil {
 		panic(err)
 	}
@@ -77,7 +79,7 @@ func main() {
 		panic(err)
 	}
 
-	makefilePath := filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.mk", product, targetRelease))
+	makefilePath := filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.varmk", product, targetRelease))
 	useProto, ok := config.FlagArtifacts["RELEASE_BUILD_FLAGS_IN_PROTOBUF"]
 	if guard && (!ok || rc_lib.MarshalValue(useProto.Value) == "") {
 		// We were told to guard operation and either we have no build flag, or it is False.
@@ -86,7 +88,7 @@ func main() {
 		return
 	}
 	// Write the makefile where release_config.mk is going to look for it.
-	err = configs.WriteMakefile(makefilePath, targetRelease)
+	err = config.WriteMakefile(makefilePath, targetRelease, configs)
 	if err != nil {
 		panic(err)
 	}
@@ -94,12 +96,19 @@ func main() {
 		// Write one makefile per release config, using the canonical release name.
 		for _, c := range configs.GetSortedReleaseConfigs() {
 			if c.Name != targetRelease {
-				makefilePath = filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.mk", product, c.Name))
-				err = configs.WriteMakefile(makefilePath, c.Name)
+				makefilePath = filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.varmk", product, c.Name))
+				err = config.WriteMakefile(makefilePath, c.Name, configs)
 				if err != nil {
 					panic(err)
 				}
 			}
+		}
+	}
+	if inheritance {
+		inheritPath := filepath.Join(outputDir, fmt.Sprintf("inheritance_graph-%s.dot", product))
+		err = configs.WriteInheritanceGraph(inheritPath)
+		if err != nil {
+			panic(err)
 		}
 	}
 	if json {
@@ -120,7 +129,7 @@ func main() {
 			panic(err)
 		}
 	}
-	if err = config.WritePartitionBuildFlags(outputDir, product, targetRelease); err != nil {
+	if err = config.WritePartitionBuildFlags(outputDir); err != nil {
 		panic(err)
 	}
 

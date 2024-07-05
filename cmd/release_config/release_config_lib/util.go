@@ -22,8 +22,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
+	"github.com/google/blueprint/pathtools"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 )
@@ -58,13 +60,41 @@ func (l *StringList) String() string {
 //
 //	error: any error encountered.
 func WriteMessage(path string, message proto.Message) (err error) {
+	format := filepath.Ext(path)
+	if len(format) > 1 {
+		// Strip any leading dot.
+		format = format[1:]
+	}
+	return WriteFormattedMessage(path, format, message)
+}
+
+// Write a marshalled message to a file.
+//
+// Marshal the message using the given format.
+//
+// Args:
+//
+//	path string: the path of the file to write to.  Directories are not created.
+//	  Supported extensions are: ".json", ".pb", and ".textproto".
+//	format string: one of "json", "pb", or "textproto".
+//	message proto.Message: the message to write.
+//
+// Returns:
+//
+//	error: any error encountered.
+func WriteFormattedMessage(path, format string, message proto.Message) (err error) {
 	var data []byte
-	switch filepath.Ext(path) {
-	case ".json":
+	if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		if err = os.MkdirAll(filepath.Dir(path), 0775); err != nil {
+			return err
+		}
+	}
+	switch format {
+	case "json":
 		data, err = json.MarshalIndent(message, "", "  ")
-	case ".pb":
+	case "pb", "binaryproto", "protobuf":
 		data, err = proto.Marshal(message)
-	case ".textproto":
+	case "textproto":
 		data, err = prototext.MarshalOptions{Multiline: true}.Marshal(message)
 	default:
 		return fmt.Errorf("Unknown message format for %s", path)
@@ -72,7 +102,7 @@ func WriteMessage(path string, message proto.Message) (err error) {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return pathtools.WriteFileIfChanged(path, data, 0644)
 }
 
 // Read a message from a file.
@@ -95,7 +125,7 @@ func LoadMessage(path string, message proto.Message) error {
 	switch filepath.Ext(path) {
 	case ".json":
 		return json.Unmarshal(data, message)
-	case ".pb":
+	case ".pb", ".protobuf", ".binaryproto":
 		return proto.Unmarshal(data, message)
 	case ".textproto":
 		return prototext.Unmarshal(data, message)
@@ -126,11 +156,23 @@ func DisableWarnings() {
 	disableWarnings = true
 }
 
+// warnf will log to stdout if warnings are enabled. In make code,
+// stdout is redirected to a file, so the warnings will not be shown
+// in the terminal.
 func warnf(format string, args ...any) (n int, err error) {
 	if !disableWarnings {
-		return fmt.Fprintf(os.Stderr, format, args...)
+		return fmt.Printf(format, args...)
 	}
 	return 0, nil
+}
+
+func SortedMapKeys(inputMap map[string]bool) []string {
+	ret := []string{}
+	for k := range inputMap {
+		ret = append(ret, k)
+	}
+	slices.Sort(ret)
+	return ret
 }
 
 func validContainer(container string) bool {
@@ -193,6 +235,7 @@ func GetDefaultMapPaths(queryMaps bool) (defaultMapPaths StringList, err error) 
 		var stdout strings.Builder
 		getBuildVar.Stdin = strings.NewReader("")
 		getBuildVar.Stdout = &stdout
+		getBuildVar.Stderr = os.Stderr
 		err = getBuildVar.Run()
 		if err != nil {
 			return

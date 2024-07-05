@@ -308,6 +308,7 @@ func commonDefaultModules() string {
 			system_shared_libs: [],
 			stl: "none",
 			vendor_available: true,
+			vendor_ramdisk_available: true,
 			product_available: true,
 			recovery_available: true,
 			ramdisk_available: true,
@@ -566,7 +567,6 @@ var PrepareForTestWithCcBuildComponents = android.GroupFixturePreparers(
 		ctx.RegisterModuleType("cc_test_library", TestLibraryFactory)
 		ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 
-		RegisterVndkLibraryTxtTypes(ctx)
 		RegisterLlndkLibraryTxtType(ctx)
 	}),
 
@@ -715,7 +715,6 @@ func CreateTestContext(config android.Config) *android.TestContext {
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 
-	RegisterVndkLibraryTxtTypes(ctx)
 	RegisterLlndkLibraryTxtType(ctx)
 
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)

@@ -197,6 +197,7 @@ func (p *prebuiltCommon) initApexFilesForAndroidMk(ctx android.ModuleContext) {
 	// If this apex contains a system server jar, then the dexpreopt artifacts should be added as required
 	for _, install := range p.Dexpreopter.DexpreoptBuiltInstalledForApex() {
 		p.requiredModuleNames = append(p.requiredModuleNames, install.FullModuleName())
+		install.PackageFile(ctx)
 	}
 }
 
@@ -848,7 +849,9 @@ func validateApexClasspathFragments(ctx android.ModuleContext) {
 
 func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Validate contents of classpath fragments
-	validateApexClasspathFragments(ctx)
+	if !p.IsHideFromMake() {
+		validateApexClasspathFragments(ctx)
+	}
 
 	p.apexKeysPath = writeApexKeys(ctx, p)
 	// TODO(jungjw): Check the key validity.
@@ -1074,7 +1077,9 @@ func (a *ApexSet) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 
 func (a *ApexSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Validate contents of classpath fragments
-	validateApexClasspathFragments(ctx)
+	if !a.IsHideFromMake() {
+		validateApexClasspathFragments(ctx)
+	}
 
 	a.apexKeysPath = writeApexKeys(ctx, a)
 	a.installFilename = a.InstallFilename()
