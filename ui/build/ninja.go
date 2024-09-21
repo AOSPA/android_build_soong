@@ -140,6 +140,7 @@ func runNinjaForBuild(ctx Context, config Config) {
 			"HOME",
 			"JAVA_HOME",
 			"LANG",
+			"LD_LIBRARY_PATH",
 			"LC_MESSAGES",
 			"OUT_DIR",
 			"PATH",
