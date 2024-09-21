@@ -1,4 +1,5 @@
-#!/bin/bash -eu
+#!/usr/bin/env bash
+set -eu
 #
 # Copyright 2017 Google Inc. All rights reserved.
 #
