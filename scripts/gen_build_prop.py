@@ -121,6 +121,8 @@ def parse_args():
   if config["BuildNumber"].startswith("eng."):
     config["BuildNumber"] = config["DateUtc"]
 
+  config["AospaDevice"] = config["DeviceName"]
+
   override_config(config)
 
   append_additional_system_props(args)
@@ -267,6 +269,12 @@ def generate_build_info(args):
   print(f"ro.build.description?={config['BuildDesc']}")
   if "BuildThumbprint" in config:
     print(f"ro.build.thumbprint={config['BuildThumbprint']}")
+
+  print(f"ro.aospa.device={config['AospaDevice']}")
+  print(f"ro.aospa.version={config['AospaDisplayVersion']}")
+  print(f"ro.aospa.version.major={config['AospaMajorVersion']}")
+  print(f"ro.aospa.version.minor={config['AospaMinorVersion']}")
+  print(f"ro.aospa.build.variant={config['AospaBuildVariant']}")
 
   print(f"# end build properties")
 

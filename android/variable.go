@@ -235,6 +235,11 @@ type ProductVariables struct {
 	BuildThumbprintFile  *string `json:",omitempty"`
 	DisplayBuildNumber   *bool   `json:",omitempty"`
 
+	AospaDisplayVersion *string `json:",omitempty"`
+	AospaMajorVersion   *string `json:",omitempty"`
+	AospaMinorVersion   *string `json:",omitempty"`
+	AospaBuildVariant   *string `json:",omitempty"`
+
 	Platform_display_version_name          *string  `json:",omitempty"`
 	Platform_version_name                  *string  `json:",omitempty"`
 	Platform_sdk_version                   *int     `json:",omitempty"`
