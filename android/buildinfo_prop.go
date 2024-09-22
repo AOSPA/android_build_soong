@@ -144,6 +144,12 @@ func (p *buildinfoPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		cmd.Flag("--display-build-number")
 	}
 
+	cmd.FlagWithArg("--aospa-device=", config.AospaDevice())
+	cmd.FlagWithArg("--aospa-display-version=", config.AospaDisplayVersion())
+	cmd.FlagWithArg("--aospa-major-version=", config.AospaMajorVersion())
+	cmd.FlagWithArg("--aospa-minor-version=", config.AospaMinorVersion())
+	cmd.FlagWithArg("--aospa-build-variant=", config.AospaBuildVariant())
+
 	cmd.FlagWithArg("--platform-base-os=", config.PlatformBaseOS())
 	cmd.FlagWithArg("--platform-display-version=", config.PlatformDisplayVersionName())
 	cmd.FlagWithArg("--platform-min-supported-target-sdk-version=", config.PlatformMinSupportedTargetSdkVersion())
