@@ -140,6 +140,12 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 
 	cmd := rule.Command().BuiltTool("gen_build_prop")
 
+	cmd.FlagWithArg("--aospa-device=", config.AospaDevice())
+	cmd.FlagWithArg("--aospa-display-version=", config.AospaDisplayVersion())
+	cmd.FlagWithArg("--aospa-major-version=", config.AospaMajorVersion())
+	cmd.FlagWithArg("--aospa-minor-version=", config.AospaMinorVersion())
+	cmd.FlagWithArg("--aospa-build-variant=", config.AospaBuildVariant())
+
 	cmd.FlagWithInput("--build-hostname-file=", config.BuildHostnameFile(ctx))
 	cmd.FlagWithInput("--build-number-file=", config.BuildNumberFile(ctx))
 	// shouldn't depend on BuildFingerprintFile and BuildThumbprintFile to prevent from rebuilding

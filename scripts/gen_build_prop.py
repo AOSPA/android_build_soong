@@ -66,6 +66,12 @@ def override_config(config):
 def parse_args():
   """Parse commandline arguments."""
   parser = argparse.ArgumentParser()
+  parser.add_argument('--aospa-device', required=True)
+  parser.add_argument('--aospa-display-version', required=True)
+  parser.add_argument('--aospa-major-version', required=True)
+  parser.add_argument('--aospa-minor-version', required=True)
+  parser.add_argument('--aospa-build-variant', required=True)
+
   parser.add_argument("--build-fingerprint-file", required=True, type=argparse.FileType("r"))
   parser.add_argument("--build-hostname-file", required=True, type=argparse.FileType("r"))
   parser.add_argument("--build-number-file", required=True, type=argparse.FileType("r"))
@@ -267,6 +273,17 @@ def generate_build_info(args):
   print(f"ro.build.description?={config['BuildDesc']}")
   if "BuildThumbprint" in config:
     print(f"ro.build.thumbprint={config['BuildThumbprint']}")
+
+  if option.aospa_device:
+      print(f"ro.aospa.device={option.aospa_device}")
+  if option.aospa_display_version:
+      print(f"ro.aospa.version={option.aospa_display_version}")
+  if option.aospa_major_version:
+      print(f"ro.aospa.version.major={option.aospa_major_version}")
+  if option.aospa_minor_version:
+      print(f"ro.aospa.version.minor={option.aospa_minor_version}")
+  if option.aospa_build_variant:
+      print(f"ro.aospa.build.variant={option.aospa_build_variant}")
 
   print(f"# end build properties")
 
