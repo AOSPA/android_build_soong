@@ -54,6 +54,11 @@ def parse_args():
   parser.add_argument('--platform-version-known-codenames', required=True)
   parser.add_argument('--platform-version-last-stable', required=True)
   parser.add_argument('--product', required=True)
+  parser.add_argument('--aospa-device', required=True)
+  parser.add_argument('--aospa-display-version', required=True)
+  parser.add_argument('--aospa-major-version', required=True)
+  parser.add_argument('--aospa-minor-version', required=True)
+  parser.add_argument('--aospa-build-variant', required=True)
 
   parser.add_argument('--out', required=True, type=argparse.FileType('w'))
 
@@ -149,6 +154,17 @@ def main():
     if option.build_thumbprint_file:
       build_thumbprint = option.build_thumbprint_file.read().strip()
       print(f"ro.build.thumbprint={build_thumbprint}")
+
+    if option.aospa_device:
+      print(f"ro.aospa.device={option.aospa_device}")
+    if option.aospa_display_version:
+      print(f"ro.aospa.version={option.aospa_display_version}")
+    if option.aospa_major_version:
+      print(f"ro.aospa.version.major={option.aospa_major_version}")
+    if option.aospa_minor_version:
+      print(f"ro.aospa.version.minor={option.aospa_minor_version}")
+    if option.aospa_build_variant:
+      print(f"ro.aospa.build.variant={option.aospa_build_variant}")
 
     print(f"# end build properties")
 

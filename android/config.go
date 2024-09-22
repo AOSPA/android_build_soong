@@ -784,6 +784,26 @@ func (c *config) DisplayBuildNumber() bool {
 	return Bool(c.productVariables.DisplayBuildNumber)
 }
 
+func (c *config) AospaDevice() string {
+	return String(c.productVariables.AospaDevice)
+}
+
+func (c *config) AospaDisplayVersion() string {
+	return String(c.productVariables.AospaDisplayVersion)
+}
+
+func (c *config) AospaMajorVersion() string {
+	return String(c.productVariables.AospaMajorVersion)
+}
+
+func (c *config) AospaMinorVersion() string {
+	return String(c.productVariables.AospaMinorVersion)
+}
+
+func (c *config) AospaBuildVariant() string {
+	return String(c.productVariables.AospaBuildVariant)
+}
+
 // BuildNumberFile returns the path to a text file containing metadata
 // representing the current build's number.
 //
