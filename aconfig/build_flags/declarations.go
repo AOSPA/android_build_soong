@@ -35,7 +35,7 @@ type DeclarationsModule struct {
 
 	// Properties for "aconfig_declarations"
 	properties struct {
-		// aconfig files, relative to this Android.bp file
+		// build flag declaration files, relative to this Android.bp file
 		Srcs []string `android:"path"`
 	}
 }

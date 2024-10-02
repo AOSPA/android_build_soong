@@ -244,6 +244,18 @@ func (configs *ReleaseConfigs) GetFlagValueDirectory(config *ReleaseConfig, flag
 	return configs.configDirs[index], nil
 }
 
+// Return the (unsorted) release configs contributed to by `dir`.
+func EnumerateReleaseConfigs(dir string) ([]string, error) {
+	var ret []string
+	err := WalkTextprotoFiles(dir, "release_configs", func(path string, d fs.DirEntry, err error) error {
+		// Strip off the trailing `.textproto` from the name.
+		name := filepath.Base(path)
+		ret = append(ret, name[:len(name)-10])
+		return err
+	})
+	return ret, err
+}
+
 func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex int) error {
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("%s does not exist\n", path)

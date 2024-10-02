@@ -17,6 +17,7 @@ bootstrap_go_package {
         "build_flags_singleton.go",
         "declarations.go",
         "init.go",
+        "release_configs.go",
     ],
     testSrcs: [
     ],

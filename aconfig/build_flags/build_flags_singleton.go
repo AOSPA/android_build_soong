@@ -30,49 +30,94 @@ func AllBuildFlagDeclarationsFactory() android.Singleton {
 }
 
 type allBuildFlagDeclarationsSingleton struct {
-	intermediateBinaryProtoPath android.OutputPath
-	intermediateTextProtoPath   android.OutputPath
+	flagsBinaryProtoPath   android.OutputPath
+	flagsTextProtoPath     android.OutputPath
+	configsBinaryProtoPath android.OutputPath
+	configsTextProtoPath   android.OutputPath
 }
 
 func (this *allBuildFlagDeclarationsSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	// Find all of the build_flag_declarations modules
-	var intermediateFiles android.Paths
+	var flagsFiles android.Paths
+	// Find all of the release_config_contribution modules
+	var contributionDirs android.Paths
 	ctx.VisitAllModules(func(module android.Module) {
 		decl, ok := android.SingletonModuleProvider(ctx, module, BuildFlagDeclarationsProviderKey)
-		if !ok {
-			return
+		if ok {
+			flagsFiles = append(flagsFiles, decl.IntermediateCacheOutputPath)
 		}
-		intermediateFiles = append(intermediateFiles, decl.IntermediateCacheOutputPath)
+
+		contrib, ok := android.SingletonModuleProvider(ctx, module, ReleaseConfigContributionsProviderKey)
+		if ok {
+			contributionDirs = append(contributionDirs, contrib.ContributionDir)
+		}
 	})
 
 	// Generate build action for build_flag (binary proto output)
-	this.intermediateBinaryProtoPath = android.PathForIntermediates(ctx, "all_build_flag_declarations.pb")
+	this.flagsBinaryProtoPath = android.PathForIntermediates(ctx, "all_build_flag_declarations.pb")
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        allDeclarationsRule,
-		Inputs:      intermediateFiles,
-		Output:      this.intermediateBinaryProtoPath,
+		Inputs:      flagsFiles,
+		Output:      this.flagsBinaryProtoPath,
 		Description: "all_build_flag_declarations",
 		Args: map[string]string{
-			"intermediates": android.JoinPathsWithPrefix(intermediateFiles, "--intermediate "),
+			"intermediates": android.JoinPathsWithPrefix(flagsFiles, "--intermediate "),
 		},
 	})
-	ctx.Phony("all_build_flag_declarations", this.intermediateBinaryProtoPath)
+	ctx.Phony("all_build_flag_declarations", this.flagsBinaryProtoPath)
 
 	// Generate build action for build_flag (text proto output)
-	this.intermediateTextProtoPath = android.PathForIntermediates(ctx, "all_build_flag_declarations.textproto")
+	this.flagsTextProtoPath = android.PathForIntermediates(ctx, "all_build_flag_declarations.textproto")
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        allDeclarationsRuleTextProto,
-		Input:       this.intermediateBinaryProtoPath,
-		Output:      this.intermediateTextProtoPath,
+		Input:       this.flagsBinaryProtoPath,
+		Output:      this.flagsTextProtoPath,
 		Description: "all_build_flag_declarations_textproto",
 	})
-	ctx.Phony("all_build_flag_declarations_textproto", this.intermediateTextProtoPath)
+	ctx.Phony("all_build_flag_declarations_textproto", this.flagsTextProtoPath)
+
+	// Generate build action for release_configs (binary proto output)
+	this.configsBinaryProtoPath = android.PathForIntermediates(ctx, "all_release_config_contributions.pb")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        allReleaseConfigContributionsRule,
+		Inputs:      contributionDirs,
+		Output:      this.configsBinaryProtoPath,
+		Description: "all_release_config_contributions",
+		Args: map[string]string{
+			"dirs":   android.JoinPathsWithPrefix(contributionDirs, "--dir "),
+			"format": "pb",
+		},
+	})
+	ctx.Phony("all_release_config_contributions", this.configsBinaryProtoPath)
+
+	this.configsTextProtoPath = android.PathForIntermediates(ctx, "all_release_config_contributions.textproto")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        allReleaseConfigContributionsRule,
+		Inputs:      contributionDirs,
+		Output:      this.configsTextProtoPath,
+		Description: "all_release_config_contributions_textproto",
+		Args: map[string]string{
+			"dirs":   android.JoinPathsWithPrefix(contributionDirs, "--dir "),
+			"format": "textproto",
+		},
+	})
+	ctx.Phony("all_release_config_contributions_textproto", this.configsTextProtoPath)
+
+	// Add a simple target for ci/build_metadata to use.
+	ctx.Phony("release_config_metadata",
+		this.flagsBinaryProtoPath,
+		this.flagsTextProtoPath,
+		this.configsBinaryProtoPath,
+		this.configsTextProtoPath,
+	)
 }
 
 func (this *allBuildFlagDeclarationsSingleton) MakeVars(ctx android.MakeVarsContext) {
-	ctx.DistForGoal("droid", this.intermediateBinaryProtoPath)
+	ctx.DistForGoal("droid", this.flagsBinaryProtoPath)
 	for _, goal := range []string{"docs", "droid", "sdk"} {
-		ctx.DistForGoalWithFilename(goal, this.intermediateBinaryProtoPath, "build_flags/all_flags.pb")
-		ctx.DistForGoalWithFilename(goal, this.intermediateTextProtoPath, "build_flags/all_flags.textproto")
+		ctx.DistForGoalWithFilename(goal, this.flagsBinaryProtoPath, "build_flags/all_flags.pb")
+		ctx.DistForGoalWithFilename(goal, this.flagsTextProtoPath, "build_flags/all_flags.textproto")
+		ctx.DistForGoalWithFilename(goal, this.configsBinaryProtoPath, "build_flags/all_release_config_contributions.pb")
+		ctx.DistForGoalWithFilename(goal, this.configsTextProtoPath, "build_flags/all_release_config_contributions.textproto")
 	}
 }

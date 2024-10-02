@@ -65,15 +65,32 @@ var (
 				"${buildFlagDeclarations}",
 			},
 		})
+
+	allReleaseConfigContributionsRule = pctx.AndroidStaticRule("all-release-config-contributions-dump",
+		blueprint.RuleParams{
+			Command: `${releaseConfigContributions} ${dirs} --format ${format} --output ${out}`,
+			CommandDeps: []string{
+				"${releaseConfigContributions}",
+			},
+		}, "dirs", "format")
+	allReleaseConfigContributionsRuleText = pctx.AndroidStaticRule("all-release-config-contributions-dumptext",
+		blueprint.RuleParams{
+			Command: `${releaseConfigContributions} ${dirs} --format ${format} --output ${out}`,
+			CommandDeps: []string{
+				"${releaseConfigContributions}",
+			},
+		}, "dirs", "format")
 )
 
 func init() {
 	RegisterBuildComponents(android.InitRegistrationContext)
 	pctx.Import("android/soong/android")
 	pctx.HostBinToolVariable("buildFlagDeclarations", "build-flag-declarations")
+	pctx.HostBinToolVariable("releaseConfigContributions", "release-config-contributions")
 }
 
 func RegisterBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("build_flag_declarations", DeclarationsFactory)
+	ctx.RegisterModuleType("release_config_contributions", ReleaseConfigContributionsFactory)
 	ctx.RegisterParallelSingletonType("all_build_flag_declarations", AllBuildFlagDeclarationsFactory)
 }
