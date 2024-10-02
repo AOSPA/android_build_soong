@@ -13,8 +13,8 @@ bootstrap_go_package {
         "soong-android",
     ],
     srcs: [
-        "all_build_flag_declarations.go",
         "build_flags.go",
+        "build_flags_singleton.go",
         "declarations.go",
         "init.go",
     ],
