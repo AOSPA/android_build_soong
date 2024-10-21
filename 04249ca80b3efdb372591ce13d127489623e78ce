@@ -16,6 +16,24 @@
       "message": "Um, why?",
       "revId": "04249ca80b3efdb372591ce13d127489623e78ce",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f2715520_925a966d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000165
+      },
+      "writtenOn": "2024-10-21T16:54:36Z",
+      "side": 1,
+      "message": "Tidy is not needed when building and it could cause build errors in some cases.",
+      "parentUuid": "55edeb89_940b18f7",
+      "revId": "04249ca80b3efdb372591ce13d127489623e78ce",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
