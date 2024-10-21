@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3887af06_497640ba",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000062
+      },
+      "writtenOn": "2024-10-21T15:08:08Z",
+      "side": 1,
+      "message": "@gh0strider.2k18.reborn@gmail.com\nIs this safe on recent Android versions? IIRC we didn\u0027t ship this recently.",
+      "revId": "442ce699b844e0b4f7456e7b04478a3d93252585",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
