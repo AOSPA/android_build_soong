@@ -16,6 +16,24 @@
       "message": "The commit message and the actual code seem to contradict itself? Unrestricted highmem processes are outside of all if scopes. What are you tweaking exactly?",
       "revId": "d216b701330f3b44003423ed752fa5d3b9b3c95f",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "aa74991d_04c6f417",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000165
+      },
+      "writtenOn": "2024-10-21T17:31:36Z",
+      "side": 1,
+      "message": "Ah, yes, you\u0027re right, I meant one thing and wrote something else into the commit message. Restricting the highmem tasks to 4 on \u003c64G avoids OOM situations but on \u003e64G still leaves it unrestricted.",
+      "parentUuid": "72fa35c0_0fb90551",
+      "revId": "d216b701330f3b44003423ed752fa5d3b9b3c95f",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
