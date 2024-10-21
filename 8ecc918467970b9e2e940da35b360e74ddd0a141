@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "74b7e635_5723532d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000062
+      },
+      "writtenOn": "2024-10-21T14:59:00Z",
+      "side": 1,
+      "message": "Unnecessary churn. Everything uses /bin/bash.",
+      "revId": "8ecc918467970b9e2e940da35b360e74ddd0a141",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
