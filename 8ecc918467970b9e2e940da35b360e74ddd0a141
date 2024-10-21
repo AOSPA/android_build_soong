@@ -16,6 +16,24 @@
       "message": "Unnecessary churn. Everything uses /bin/bash.",
       "revId": "8ecc918467970b9e2e940da35b360e74ddd0a141",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d204cdbd_8d980ca0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000165
+      },
+      "writtenOn": "2024-10-21T17:09:51Z",
+      "side": 1,
+      "message": "Incorrect:\n\n~ …\n➜ /bin/bash\nzsh: no such file or directory: /bin/bash\n\n~ …\n➜ cat /etc/os-release\nANSI_COLOR\u003d\"1;34\"\nBUG_REPORT_URL\u003d\"https://github.com/NixOS/nixpkgs/issues\"\nBUILD_ID\u003d\"24.05.5744.dc2e0028d274\"\nDOCUMENTATION_URL\u003d\"https://nixos.org/learn.html\"\nHOME_URL\u003d\"https://nixos.org/\"\nID\u003dnixos\nIMAGE_ID\u003d\"\"\nIMAGE_VERSION\u003d\"\"\nLOGO\u003d\"nix-snowflake\"\nNAME\u003dNixOS\nPRETTY_NAME\u003d\"NixOS 24.05 (Uakari)\"\nSUPPORT_END\u003d\"2024-12-31\"\nSUPPORT_URL\u003d\"https://nixos.org/community.html\"\nVERSION\u003d\"24.05 (Uakari)\"\nVERSION_CODENAME\u003duakari\nVERSION_ID\u003d\"24.05\"\n\nAnd Google even accepted this into android-cuttlefish:\n\nhttps://github.com/google/android-cuttlefish/commit/ef72c8b2a3da2a06ffabfdcedf61b18cae0ffb93",
+      "parentUuid": "74b7e635_5723532d",
+      "revId": "8ecc918467970b9e2e940da35b360e74ddd0a141",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
