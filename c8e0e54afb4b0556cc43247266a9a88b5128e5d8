@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "88dd3900_3a6945bd",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000062
+      },
+      "writtenOn": "2024-10-21T15:00:21Z",
+      "side": 1,
+      "message": "Does this actually fix something? I\u0027m not familiar with NixOS, but if it uses non-standard system library path, the linker should figure out on its own without the need of this separate env.",
+      "revId": "c8e0e54afb4b0556cc43247266a9a88b5128e5d8",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
