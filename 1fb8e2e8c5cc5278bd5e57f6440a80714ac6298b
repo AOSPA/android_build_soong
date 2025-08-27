@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2bafe369_5a33522a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000012
+      },
+      "writtenOn": "2025-08-27T02:02:58Z",
+      "side": 1,
+      "message": "I don\u0027t see why we need this and Omkar doesn\u0027t either.",
+      "revId": "1fb8e2e8c5cc5278bd5e57f6440a80714ac6298b",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
