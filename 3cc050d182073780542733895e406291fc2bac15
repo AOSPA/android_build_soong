@@ -16,6 +16,24 @@
       "message": "slight -1.  I don\u0027t agree with the description entirely.  If we do ever support devices with SVE, we would revert or partially revert this and create new targets for no-SVE.  In the meantime though, this change makes sense for the devices we expect to support.  It doesn\u0027t make sense to deviate from AOSP twice here.",
       "revId": "3cc050d182073780542733895e406291fc2bac15",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "68825e16_15ff6cb5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000730
+      },
+      "writtenOn": "2026-03-11T08:17:50Z",
+      "side": 1,
+      "message": "Resolved it thanks!",
+      "parentUuid": "398e027e_6e007190",
+      "revId": "3cc050d182073780542733895e406291fc2bac15",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
