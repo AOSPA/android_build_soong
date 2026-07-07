@@ -16,6 +16,24 @@
       "message": "caf doesnt use bootjar allowlisting",
       "revId": "a2b833ad5f3779a96c5f95b83717ca583fc89a27",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0431aaec_561065d2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1001176
+      },
+      "writtenOn": "2026-07-07T05:59:15Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "7f8a4f25_a69fe199",
+      "revId": "a2b833ad5f3779a96c5f95b83717ca583fc89a27",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
