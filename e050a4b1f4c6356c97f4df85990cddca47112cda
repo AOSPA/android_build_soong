@@ -16,6 +16,24 @@
       "message": "I dont see this in product out on a full build",
       "revId": "e050a4b1f4c6356c97f4df85990cddca47112cda",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "915ad194_ff903de3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1001176
+      },
+      "writtenOn": "2026-08-26T04:35:09Z",
+      "side": 1,
+      "message": "❯ find -name \"install\"\n./obj/PACKAGING/target_files_intermediates/aospa_avalon-target_files/RECOVERY/RAMDISK/system/bin/install\n./obj/PACKAGING/target_files_intermediates/aospa_avalon-target_files/SYSTEM/bin/install\n./obj/PACKAGING/target_files_intermediates/aospa_avalon-target_files/VENDOR/bin/install\n./system/bin/install\n./recovery/root/system/bin/install\n./vendor/bin/install\n\n\nThough these are symlinks to toybox",
+      "parentUuid": "8ace6066_1cca536f",
+      "revId": "e050a4b1f4c6356c97f4df85990cddca47112cda",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
