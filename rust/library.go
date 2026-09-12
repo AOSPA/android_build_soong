@@ -880,6 +880,7 @@ func (library *libraryDecorator) getApiStubsCcFlags(ctx ModuleContext) cc.Flags 
 	ccFlags = cc.CommonLibraryLinkerFlags(ctx, ccFlags, toolchain, library.getStem(ctx))
 	ccFlags = cc.AddStubLibraryCompilerFlags(ccFlags)
 	ccFlags = cc.AddTargetFlags(ctx, ccFlags, toolchain, minSdkVersion, false, false)
+	ccFlags = cc.AddStubLibraryLinkerFlags(ctx, ccFlags)
 
 	return ccFlags
 }
